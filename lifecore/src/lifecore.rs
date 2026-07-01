@@ -1,12 +1,17 @@
 use indexmap::IndexSet;
 use itertools::Itertools;
 use jiff::{Unit, Zoned};
-use std::{collections::HashMap, ops::Index};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    ops::Index,
+};
 use strum::VariantNames;
 use whoami::{hostname, username};
 
 use crate::{
-    Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, Payload, PayloadExt, SmallTable, StringIndex, analyzer::AnalysisSuite, to_map
+    Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody, Payload,
+    PayloadExt, SerializedExt, SmallTable, StringIndex, analyzer::AnalysisSuite, to_map,
 };
 
 impl Index<&StringIndex> for LifeCore {
@@ -66,25 +71,23 @@ impl Index<CircumstanceIndex> for LifeCore {
 impl LifeCore {
     // TODO bootstrap types
     pub fn new() -> Self {
-        let mut r = Self {
+        Self {
             event: vec![],
             circumstance: vec![],
             circumstance_table: IndexSet::new(),
             string_table: IndexSet::new(),
-            analyzer: AnalysisSuite(vec![])
-        };
-        r.add(
-            "Node_Type",
-            to_map(&[("Type_Name", PayloadExt::Text("Node_Type".to_string()))]),
-            None,
-        )
-        .unwrap();
-        r
+            analyzer: AnalysisSuite(vec![]),
+        }
     }
 
-    pub fn upper(&self) -> EventIndex {
+    // get the INDEX for the last event
+    pub fn last(&self) -> EventIndex {
         assert!(!self.event.is_empty());
-        EventIndex((self.event.len() - 1) as u64)
+        EventIndex((self.total_event_count() - 1) as u64)
+    }
+
+    pub fn total_event_count(&self) -> usize {
+        self.event.len()
     }
 
     pub fn connect(
@@ -120,7 +123,7 @@ impl LifeCore {
         }));
         self.circumstance.push(current_circumstance_index);
         assert!(self.basic_validation().is_ok());
-        Ok(self.upper())
+        Ok(self.last())
     }
 
     pub fn add(
@@ -140,6 +143,9 @@ impl LifeCore {
                         PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
                         PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
                         PayloadExt::Number(i) => Payload::Number(*i),
+                        PayloadExt::Serialized(s) => {
+                            Payload::Serialized(t.get_or_insert_string(&s.to_string()))
+                        }
                     }
                 };
                 r.insert(smalltable_key, smalltable_value);
@@ -174,7 +180,25 @@ impl LifeCore {
         self.circumstance.push(circumstance_index);
 
         assert!(self.basic_validation().is_ok());
-        Ok(self.upper())
+        Ok(self.last())
+    }
+
+    pub fn resolve(&self, t: &SmallTable<StringIndex, Payload>) -> NodeBody {
+        let mut r = HashMap::<String, PayloadExt>::new();
+        for (k, v) in t.0.iter().filter(|x| x.is_some()).map(|x| x.unwrap()) {
+            r.insert(self[k].to_string(), {
+                match v {
+                    Payload::PreciseTime(timestamp) => PayloadExt::PreciseTime(timestamp),
+                    Payload::Text(string_index) => PayloadExt::Text(self[string_index].to_string()),
+                    Payload::Number(i) => PayloadExt::Number(i),
+                    Payload::Serialized(string_index) => PayloadExt::Serialized(
+                        SerializedExt::try_from(serde_json::Value::from(&self[string_index]))
+                            .unwrap(),
+                    ),
+                }
+            });
+        }
+        NodeBody(r)
     }
 
     pub fn get_or_insert_current_session_circumstance(
@@ -224,12 +248,33 @@ impl LifeCore {
         }
     }
 
+    // Accessor Zoo
+
+    pub fn node(&self, e: EventIndex) -> Node {
+        self[e].clone().try_as_node().unwrap()
+    }
+
+    pub fn edge(&self, e: EventIndex) -> Edge {
+        self[e].clone().try_as_edge().unwrap()
+    }
+
+    pub fn root_of(&self, e: EventIndex) -> Option<EventIndex> {
+        if self[e].is_edge() {
+            return None;
+        }
+        let mut r = e;
+        while let Some(parent_event) = self.node(r).parent {
+            r = parent_event;
+        }
+        Some(r)
+    }
+
     pub fn edges(&self) -> impl Iterator<Item = (EventIndex, Edge)> {
         self.event
             .iter()
             .enumerate()
             .filter(|x| x.1.is_edge())
-            .map(|x| (EventIndex(x.0 as u64), x.1.clone().try_as_edge().unwrap()))
+            .map(|x| (x.0.into(), self.edge(x.0.into())))
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = (EventIndex, Node)> {
@@ -237,46 +282,125 @@ impl LifeCore {
             .iter()
             .enumerate()
             .filter(|x| x.1.is_node())
-            .map(|x| (EventIndex(x.0 as u64), x.1.clone().try_as_node().unwrap()))
+            .map(|x| (x.0.into(), self.node(x.0.into())))
     }
 
-    pub fn total_event_count(&self) -> usize {
-        self.event.len()
-    }
-
-    // Get nodes in the first `count` events
-    pub fn nodes_up_to(&self, count: usize) -> impl Iterator<Item = (EventIndex, Node)> {
-        // NOTE if we attempt to implement it like this:
-        // ```
-        //      self.event.iter().enumerate().filter(|(i,x)| ...)
-        // ```
-        // You will get a lifetime error because the closure now has to keep a reference to `count`
-        // This way it's simpler.
-        self.event[..count]
+    pub fn nodes_in_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Node)> {
+        assert!(range.end >= range.start);
+        self.event
             .iter()
             .enumerate()
+            .skip(range.start)
+            .take(range.end - range.start)
             .filter(|x| x.1.is_node())
-            .map(|x| (EventIndex(x.0 as u64), x.1.clone().try_as_node().unwrap()))
+            .map(|x| (x.0.into(), x.1.clone().try_as_node().unwrap()))
     }
 
-    // Get edges in the first `count` events
-    pub fn edges_up_to(&self, count: usize) -> impl Iterator<Item = (EventIndex, Edge)> {
-        self.event[..count]
+    pub fn edges_in_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+        assert!(range.end >= range.start);
+        self.event
             .iter()
             .enumerate()
+            .skip(range.start)
+            .take(range.end - range.start)
             .filter(|x| x.1.is_edge())
             .map(|x| (EventIndex(x.0 as u64), x.1.clone().try_as_edge().unwrap()))
     }
 
-    // Check whether a `e` has become stale within `0..upper+1` (upper inclusive)
+    pub fn fresh_nodes_in_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Node)> {
+        self.nodes_in_range(range.clone()).filter(move |(e, _)| {
+            !(range.clone().count() >= 1
+                && self
+                    .is_stale_by_and_including(*e, EventIndex::from(range.clone().last().unwrap())))
+        })
+    }
+
+    pub fn fresh_edges_in_range(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+        self.edges_in_range(range.clone()).filter(move |(e, _)| {
+            !(range.clone().count() >= 1
+                && self
+                    .is_stale_by_and_including(*e, EventIndex::from(range.clone().last().unwrap())))
+        })
+    }
+
+    pub fn nodes_in_range_of_type(
+        &self,
+        ty: &str,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Node)> {
+        range
+            .clone()
+            .into_iter()
+            .filter(move |e| self.event[*e].is_node() && &self[self.node(e.into()).ty] == ty)
+            .map(|x| (x.into(), self.node(x.into())))
+    }
+
+    pub fn edges_in_range_of_type(
+        &self,
+        ty: &str,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+        range
+            .clone()
+            .into_iter()
+            .filter(move |e| self.event[*e].is_edge() && &self[self.edge(e.into()).ty] == ty)
+            .map(|x| (x.into(), self.edge(x.into())))
+    }
+
+    pub fn fresh_nodes_in_range_of_type(
+        &self,
+        ty: &str,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Node)> {
+        range
+            .clone()
+            .into_iter()
+            .filter(move |e| {
+                self.event[*e].is_node()
+                    && &self[self.edge(e.into()).ty] == ty
+                    && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
+            })
+            .map(|x| (x.into(), self.node(x.into())))
+    }
+
+    pub fn fresh_edges_in_range_of_type(
+        &self,
+        ty: &str,
+        range: std::ops::Range<usize>,
+    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+        // NOTE if range.count() >= 1 then (range.end - 1) is always valid
+        range
+            .clone()
+            .into_iter()
+            .filter(move |e| {
+                self.event[*e].is_edge()
+                    && &self[self.edge(e.into()).ty] == ty
+                    && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
+            })
+            .map(|x| (x.into(), self.edge(x.into())))
+    }
+
+    // Check whether a `e` has become stale within `0..=upper` (upper inclusive)
     // Stale Node means a newer node has it as its parent
     // Stale Edge means at least one end is a Stale Node
     // NOTE in Stale Node case, upper could refer to the child that makes `e` stale (parent of upper == e)
     // TODO check if the above fact is considered where this is called
-    pub fn is_stale_by(&self, e: EventIndex, upper: EventIndex) -> bool {
+    pub fn is_stale_by_and_including(&self, e: EventIndex, upper: EventIndex) -> bool {
         match self[e] {
             Event::Node(_) => {
-                let window = &self.event[(e.0 as usize)..(upper.0 + 1) as usize];
+                let window = &self.event[upper.before_and_including()];
                 for interim_node in window
                     .iter()
                     .filter(|x| x.is_node())
@@ -290,12 +414,40 @@ impl LifeCore {
                 }
             }
             Event::Edge(Edge { ty: _, from, to }) => {
-                if self.is_stale_by(from, upper) || self.is_stale_by(to, upper) {
+                if self.is_stale_by_and_including(from, upper)
+                    || self.is_stale_by_and_including(to, upper)
+                {
                     return true;
                 }
             }
         }
         false
+    }
+
+    pub fn is_stale(&self, e: EventIndex) -> bool {
+        self.is_stale_by_and_including(e, self.last())
+    }
+
+    // Return nodes that have a predecessor, with the predecessors
+    // TODO no easy way of keeping borrowchecker happy without .collect_vec
+    // TODO PERF
+    pub fn non_solo_families(&self) -> Vec<Vec<EventIndex>> {
+        self.nodes()
+            .into_group_map_by(|x| self.root_of(x.0))
+            .into_values()
+            .filter(|x| x.len() > 1)
+            .map(|x| x.into_iter().map(|x| x.0).collect_vec())
+            .collect_vec()
+    }
+
+    // TODO appeasing the borrow checker to use an iterator instead PERF
+    pub fn nodes_by_type(&self, ty: &str) -> Vec<(EventIndex, Node)> {
+        self.nodes().filter(|x| &self[x.1.ty] == ty).collect_vec()
+    }
+
+    // TODO PERF
+    pub fn edges_by_type(&self, ty: &str) -> Vec<(EventIndex, Edge)> {
+        self.edges().filter(|x| &self[x.1.ty] == ty).collect_vec()
     }
 
     pub fn basic_validation(&self) -> anyhow::Result<()> {
@@ -312,6 +464,7 @@ impl LifeCore {
             }
 
             // Any Circumstance in CircumstanceTable is referenced at least once
+            // ... and not repeated
             {
                 // TODO
             }
@@ -373,7 +526,7 @@ impl LifeCore {
                         }
                     };
 
-                    if self.is_stale_by(older.0, newer.0) {
+                    if self.is_stale_by_and_including(older.0, newer.0) {
                         eprintln!(
                             "Duplicate nodes, but older one was invalidated later (still discouraged). EventIndex {} and {}",
                             older.0.0, newer.0.0
@@ -436,9 +589,12 @@ impl LifeCore {
 
         // Rule: after a node has been overriden (that is, a new 'child' node has been added) it cannot be a part of a new edge. "Stale Rule"
         {
-            for (idx, edge) in self.edges() {
-                if self.is_stale_by(edge.from, idx) || self.is_stale_by(edge.to, idx) {
-                    anyhow::bail!("Edge {} violates Stale Rule", idx.0)
+            for (edge_added_later, edge) in self.edges() {
+                assert!(edge_added_later.0 > edge.from.0 && edge_added_later.0 > edge.to.0);
+                if self.is_stale_by_and_including(edge.from, edge_added_later)
+                    || self.is_stale_by_and_including(edge.to, edge_added_later)
+                {
+                    anyhow::bail!("Edge {} violates Stale Rule", edge_added_later.0)
                 }
             }
         }

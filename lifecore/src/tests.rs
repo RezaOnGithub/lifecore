@@ -1,4 +1,7 @@
-use crate::*;
+use crate::{
+    analyzer::typecheck::{NodeType, describe_self},
+    *,
+};
 
 #[test]
 fn new_is_valid() {
@@ -28,9 +31,7 @@ fn basic_01() {
 }
 
 #[test]
-fn basic_02() {
-    
-}
+fn basic_02() {}
 
 #[test]
 #[should_panic]
@@ -134,4 +135,16 @@ fn stale_rule_02() {
         )
         .unwrap();
     let _e = lc.connect(child, "", parent).unwrap();
+}
+
+#[test]
+fn node_deserialization01() {
+    let nt_describe_json = serde_json::to_string(&describe_self()).unwrap();
+    eprintln!("nt_describe_json\t{}", nt_describe_json.as_str());
+
+    let nt_describe_hashmap =
+        serde_json::from_str::<NodeBody>(nt_describe_json.as_str()).unwrap();
+    eprintln!("nt_describe_hashmap\t{:#?}", &nt_describe_hashmap);
+
+    let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();
 }

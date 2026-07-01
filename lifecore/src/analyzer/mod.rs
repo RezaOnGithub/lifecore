@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use strum::EnumDiscriminants;
 
-mod dagcheck;
-mod typecheck;
+pub(crate) mod dagcheck;
+pub(crate) mod typecheck;
 
 use crate::analyzer::dagcheck::DAGCheck;
 use crate::analyzer::typecheck::TypeCheck;

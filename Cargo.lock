@@ -322,24 +322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lc-sketch"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrayvec",
- "clap",
- "indexmap",
- "itertools",
- "jiff",
- "rusqlite",
- "serde",
- "serde_json",
- "strum",
- "thiserror",
- "whoami",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -362,6 +344,39 @@ checksum = "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db"
 dependencies = [
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "lifecore"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrayvec",
+ "clap",
+ "indexmap",
+ "itertools",
+ "jiff",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror",
+ "whoami",
+]
+
+[[package]]
+name = "lifecore-cli"
+version = "0.1.0"
+dependencies = [
+ "lifecore",
+]
+
+[[package]]
+name = "lifecore-derive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -444,9 +459,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]
