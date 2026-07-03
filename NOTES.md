@@ -1,3 +1,7 @@
+# Learning
+
+- Making PayloadExt `#[serde(transparent)]` -- _terrible_ mistake. Wasted hours trying to reconcile data that gets deserialized to Text with Serialized. Just accept that JSON repr is going to be very noisy
+
 # TODO
 
 - Investigate a mechanism to to "parse" node SmallTable by converting to HashMap, then JSON, then to another type
@@ -6,11 +10,6 @@
 - Finish typechecking, and start testing by writing out "common" scenarios
 
 - Change basic_validation so that MOCK events can reside at the end, and can be arbitrarily many (though emit a Warning that they are present.)
-
-- Due to how fields are very tightly typecheched, having an array as a node type field fails miserably because serde can't just "magically" convert it into a string. So the course of action now is:
-  - a node type has a " very external representation" (native types) and an "external representation" (PayloadExt)
-  and performs conversion on its own.
-  - main lifecore module converts from "external representation" to the weird internal thing I devised as premature optimization...
 
 
 # Backlog

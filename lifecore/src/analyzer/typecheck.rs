@@ -41,11 +41,12 @@
 //! can be overriden and effectively disabled.
 
 use crate::{
-    AnalysisReport, LifeCore, LifeCoreError, NodeBody, PayloadExt, PayloadType, analyzer::Analyzer,
+    AnalysisReport, Event, EventIndex, LifeCore, LifeCoreError, NodeBody, PayloadExt, PayloadType,
+    analyzer::Analyzer,
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum NodeTypeClass {
@@ -64,15 +65,13 @@ pub enum NodeTypeFieldStatus {
     Optional,
 }
 
+// TODO some system of deriving From/Into between a concrete body and NodeBody
+// Somehow, it should be smart enough to use "native" types for some fields and serialize the rest
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct NodeType {
-    // This is a field that is gonna get deserialized as PayloadExt::Text.
-    // This is intended. No problem.
+    // This should become PayloadExt::Text
     name: String,
-    // This is also a field that will be deserialized to Payload::Text
-    // This was not intended! How to deserialized correctly?
-    //      - try with the string,
-    //      - if that fails, try with SerializedExt
+    // These should be serialized
     class: NodeTypeClass,
     from_end: Vec<String>,
     to_end: Vec<String>,
@@ -85,11 +84,12 @@ impl TryFrom<&NodeBody> for NodeType {
 
     fn try_from(v: &NodeBody) -> Result<Self, Self::Error> {
         let name = v.get_text("name")?;
-        let class: NodeTypeClass = v.get_serialized("class")?;
-        let from_end: Vec<String> = v.get_serialized("form_end")?;
-        let to_end: Vec<String> = v.get_serialized("to_end")?;
-        let additional_override: Vec<String> = v.get_serialized("additional_override")?;
-        let field: Vec<(String, (PayloadType, NodeTypeFieldStatus))> = v.get_serialized("field")?;
+        let class: NodeTypeClass = v.get_deserialized("class")?;
+        let from_end: Vec<String> = v.get_deserialized("from_end")?;
+        let to_end: Vec<String> = v.get_deserialized("to_end")?;
+        let additional_override: Vec<String> = v.get_deserialized("additional_override")?;
+        let field: Vec<(String, (PayloadType, NodeTypeFieldStatus))> =
+            v.get_deserialized("field")?;
 
         Ok(Self {
             name,
@@ -138,15 +138,15 @@ pub(crate) fn describe_self() -> NodeBody {
     };
     NodeBody(
         vec![
-            ("name", PayloadExt::create(nt.name)),
-            ("class", PayloadExt::create(nt.class)),
-            ("from_end", PayloadExt::create(nt.from_end)),
-            ("to_end", PayloadExt::create(nt.to_end)),
+            ("name", PayloadExt::Text(nt.name)),
+            ("class", PayloadExt::serialized_from(nt.class)),
+            ("from_end", PayloadExt::serialized_from(nt.from_end)),
+            ("to_end", PayloadExt::serialized_from(nt.to_end)),
             (
                 "additional_override",
-                PayloadExt::create(nt.additional_override),
+                PayloadExt::serialized_from(nt.additional_override),
             ),
-            ("field", PayloadExt::create(nt.field)),
+            ("field", PayloadExt::serialized_from(nt.field)),
         ]
         .into_iter()
         .map(|(x, y)| (x.to_string(), y))
@@ -161,20 +161,64 @@ impl Analyzer for TypeCheck {
         todo!()
     }
 
+    // TODO PERF
     fn analyze(self, lc: &LifeCore) -> Vec<crate::AnalysisReport> {
         let mut r = Vec::<AnalysisReport>::new();
-        for upper in lc.last().before_and_including() {
+        for last in lc.last().before_and_including() {
             // For every self.event[0..X]
             //      - Get the effective types at that point
             //      - Get first event S where effective type is one we currently have
             //      - All fresh nodes in self.event[0..X] must typecheck against those types
+            let window = EventIndex(last as u64).before_and_including();
             let types = lc
-                .fresh_nodes_in_range_of_type("Node_Type", 0..(upper + 1))
+                .fresh_nodes_in_range_of_type("Node_Type", window.clone())
                 .map(|(_, x)| {
                     let t = NodeType::try_from(&lc.resolve(&x.payload)).unwrap();
                     (t.name.clone(), t)
                 })
                 .collect::<HashMap<String, NodeType>>();
+            for e in lc.fresh_events_in_range(window) {
+                match e.1 {
+                    Event::Node(node) => {
+                        let body = lc.resolve(&node.payload);
+                        let ty = &lc[node.ty];
+                        if !types.contains_key(ty) {
+                            // Unknown Type!
+                            // TODO
+                            // r.push( );
+                            continue;
+                        }
+                        let resolved_type = &types[ty];
+
+                        // Fields that may be present and mandatory
+                        for field in resolved_type.field.iter() {
+                            match field.1.1 {
+                                NodeTypeFieldStatus::Mandatory => todo!(),
+                                NodeTypeFieldStatus::Encouraged => todo!(),
+                                NodeTypeFieldStatus::Deprecated => todo!(),
+                                NodeTypeFieldStatus::Optional => todo!(),
+                            }
+                        }
+
+                        // Extraneous fields
+                        for extra_field in body.0.keys().filter(|x| {
+                            !resolved_type
+                                .field
+                                .iter()
+                                .map(|x| x.0.clone())
+                                .collect::<HashSet<String>>()
+                                .contains(x.as_str())
+                        }) {
+                            // We don't allow extra field!
+                            // TODO
+                        }
+                    }
+                    Event::Edge(edge) => {
+                        // from end -> "outgoing" relative to that node
+                        // to end -> "incoming" relative to that node
+                    }
+                }
+            }
         }
         r
     }

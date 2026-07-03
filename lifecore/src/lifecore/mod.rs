@@ -5,14 +5,20 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
     ops::Index,
+    str::FromStr,
 };
 use strum::VariantNames;
 use whoami::{hostname, username};
 
 use crate::{
     Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody, Payload,
-    PayloadExt, SerializedExt, SmallTable, StringIndex, analyzer::AnalysisSuite, to_map,
+    PayloadExt, SmallTable, StringIndex,
+    analyzer::{AnalysisSuite, typecheck},
+    to_map,
 };
+
+pub mod accessors;
+pub use crate::lifecore::accessors::*;
 
 impl Index<&StringIndex> for LifeCore {
     type Output = str;
@@ -86,8 +92,20 @@ impl LifeCore {
         EventIndex((self.total_event_count() - 1) as u64)
     }
 
+    // get the COUNT of all events
     pub fn total_event_count(&self) -> usize {
         self.event.len()
+    }
+
+    // Get both the circumstance and the event for an index
+    pub fn get(&self, i: &EventIndex) -> (Circumstance, Event) {
+        (
+            self.circumstance_table
+                .get_index(self.circumstance[i.0 as usize].0 as usize)
+                .expect("CirucmstanceIndex out of range")
+                .clone(),
+            self[i].clone(),
+        )
     }
 
     pub fn connect(
@@ -97,7 +115,6 @@ impl LifeCore {
         to: EventIndex,
     ) -> anyhow::Result<EventIndex> {
         // Perform action on a copy. If it is valid, perform it on self
-        // NOTE: we do not insert a new Circumstance yet as the checks could take a long time- and we rely on the fact that there is minimal validation around Circumstance
         {
             let mut t = self.clone();
 
@@ -192,8 +209,7 @@ impl LifeCore {
                     Payload::Text(string_index) => PayloadExt::Text(self[string_index].to_string()),
                     Payload::Number(i) => PayloadExt::Number(i),
                     Payload::Serialized(string_index) => PayloadExt::Serialized(
-                        SerializedExt::try_from(serde_json::Value::from(&self[string_index]))
-                            .unwrap(),
+                        serde_json::Value::from_str(&self[string_index]).unwrap(),
                     ),
                 }
             });
@@ -248,150 +264,6 @@ impl LifeCore {
         }
     }
 
-    // Accessor Zoo
-
-    pub fn node(&self, e: EventIndex) -> Node {
-        self[e].clone().try_as_node().unwrap()
-    }
-
-    pub fn edge(&self, e: EventIndex) -> Edge {
-        self[e].clone().try_as_edge().unwrap()
-    }
-
-    pub fn root_of(&self, e: EventIndex) -> Option<EventIndex> {
-        if self[e].is_edge() {
-            return None;
-        }
-        let mut r = e;
-        while let Some(parent_event) = self.node(r).parent {
-            r = parent_event;
-        }
-        Some(r)
-    }
-
-    pub fn edges(&self) -> impl Iterator<Item = (EventIndex, Edge)> {
-        self.event
-            .iter()
-            .enumerate()
-            .filter(|x| x.1.is_edge())
-            .map(|x| (x.0.into(), self.edge(x.0.into())))
-    }
-
-    pub fn nodes(&self) -> impl Iterator<Item = (EventIndex, Node)> {
-        self.event
-            .iter()
-            .enumerate()
-            .filter(|x| x.1.is_node())
-            .map(|x| (x.0.into(), self.node(x.0.into())))
-    }
-
-    pub fn nodes_in_range(
-        &self,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
-        assert!(range.end >= range.start);
-        self.event
-            .iter()
-            .enumerate()
-            .skip(range.start)
-            .take(range.end - range.start)
-            .filter(|x| x.1.is_node())
-            .map(|x| (x.0.into(), x.1.clone().try_as_node().unwrap()))
-    }
-
-    pub fn edges_in_range(
-        &self,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
-        assert!(range.end >= range.start);
-        self.event
-            .iter()
-            .enumerate()
-            .skip(range.start)
-            .take(range.end - range.start)
-            .filter(|x| x.1.is_edge())
-            .map(|x| (EventIndex(x.0 as u64), x.1.clone().try_as_edge().unwrap()))
-    }
-
-    pub fn fresh_nodes_in_range(
-        &self,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
-        self.nodes_in_range(range.clone()).filter(move |(e, _)| {
-            !(range.clone().count() >= 1
-                && self
-                    .is_stale_by_and_including(*e, EventIndex::from(range.clone().last().unwrap())))
-        })
-    }
-
-    pub fn fresh_edges_in_range(
-        &self,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
-        self.edges_in_range(range.clone()).filter(move |(e, _)| {
-            !(range.clone().count() >= 1
-                && self
-                    .is_stale_by_and_including(*e, EventIndex::from(range.clone().last().unwrap())))
-        })
-    }
-
-    pub fn nodes_in_range_of_type(
-        &self,
-        ty: &str,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
-        range
-            .clone()
-            .into_iter()
-            .filter(move |e| self.event[*e].is_node() && &self[self.node(e.into()).ty] == ty)
-            .map(|x| (x.into(), self.node(x.into())))
-    }
-
-    pub fn edges_in_range_of_type(
-        &self,
-        ty: &str,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
-        range
-            .clone()
-            .into_iter()
-            .filter(move |e| self.event[*e].is_edge() && &self[self.edge(e.into()).ty] == ty)
-            .map(|x| (x.into(), self.edge(x.into())))
-    }
-
-    pub fn fresh_nodes_in_range_of_type(
-        &self,
-        ty: &str,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
-        range
-            .clone()
-            .into_iter()
-            .filter(move |e| {
-                self.event[*e].is_node()
-                    && &self[self.edge(e.into()).ty] == ty
-                    && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
-            })
-            .map(|x| (x.into(), self.node(x.into())))
-    }
-
-    pub fn fresh_edges_in_range_of_type(
-        &self,
-        ty: &str,
-        range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
-        // NOTE if range.count() >= 1 then (range.end - 1) is always valid
-        range
-            .clone()
-            .into_iter()
-            .filter(move |e| {
-                self.event[*e].is_edge()
-                    && &self[self.edge(e.into()).ty] == ty
-                    && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
-            })
-            .map(|x| (x.into(), self.edge(x.into())))
-    }
-
     // Check whether a `e` has become stale within `0..=upper` (upper inclusive)
     // Stale Node means a newer node has it as its parent
     // Stale Edge means at least one end is a Stale Node
@@ -426,28 +298,6 @@ impl LifeCore {
 
     pub fn is_stale(&self, e: EventIndex) -> bool {
         self.is_stale_by_and_including(e, self.last())
-    }
-
-    // Return nodes that have a predecessor, with the predecessors
-    // TODO no easy way of keeping borrowchecker happy without .collect_vec
-    // TODO PERF
-    pub fn non_solo_families(&self) -> Vec<Vec<EventIndex>> {
-        self.nodes()
-            .into_group_map_by(|x| self.root_of(x.0))
-            .into_values()
-            .filter(|x| x.len() > 1)
-            .map(|x| x.into_iter().map(|x| x.0).collect_vec())
-            .collect_vec()
-    }
-
-    // TODO appeasing the borrow checker to use an iterator instead PERF
-    pub fn nodes_by_type(&self, ty: &str) -> Vec<(EventIndex, Node)> {
-        self.nodes().filter(|x| &self[x.1.ty] == ty).collect_vec()
-    }
-
-    // TODO PERF
-    pub fn edges_by_type(&self, ty: &str) -> Vec<(EventIndex, Edge)> {
-        self.edges().filter(|x| &self[x.1.ty] == ty).collect_vec()
     }
 
     pub fn basic_validation(&self) -> anyhow::Result<()> {
@@ -602,3 +452,4 @@ impl LifeCore {
         anyhow::Result::Ok(())
     }
 }
+
