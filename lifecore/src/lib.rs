@@ -22,8 +22,7 @@ use std::{collections::HashMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 use thiserror;
 
-pub use crate::analyzer::AnalysisSuite;
-pub use crate::graphviz::{GraphVizConfig, GraphVizConfigParentMode, graphviz};
+pub use crate::lifecore::*;
 
 // Used for "internal" representation of NodeBody
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
@@ -88,7 +87,7 @@ pub struct LifeCore {
     // Analyzers added so far. An analyzer has 2 pieces of state:
     // - initial config (just a small short string)
     // - nodes and edges that may get added as part of encouragement through AnalysisReport (may indicate "progression")
-    analyzer: AnalysisSuite,
+    configured_analyzer: AnalysisSuiteConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, thiserror::Error)]
@@ -102,6 +101,9 @@ pub enum LifeCoreError {
     FieldNotFound { field_name: String },
     #[error("Field {field_name:?} is not the type we expected it to be")]
     FieldContainsUnexpectedType { field_name: String },
+    #[error("Potentially different analyzers under the same name {dupe_name:?}")]
+    DuplicateAnalyzer {dupe_name: String}
+
 }
 
 #[derive(Serialize, Deserialize, EnumIs, EnumTryAs, Clone, PartialEq, Eq, Hash)]
@@ -188,6 +190,9 @@ pub enum AnalysisReport {
     // Actual suggestions for things to add. Must be a concrete action (add this node, or edge, or delete this)
     Suggestion(ConstraintSystemMessage, SuggestedAction),
 }
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct AnalysisOutput(pub Vec<AnalysisReport>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct ConstraintSystemMessage {
@@ -347,6 +352,12 @@ impl Display for PayloadExt {
     }
 }
 
+impl AnalysisOutput {
+    // TODO
+    // has_error
+    // first_error
+}
+
 impl From<&usize> for EventIndex {
     fn from(value: &usize) -> Self {
         Self(*value as u64)
@@ -379,8 +390,7 @@ impl Index<&str> for NodeBody {
     }
 }
 
-pub(crate) mod analyzer;
-mod graphviz;
+pub mod analysis;
 mod lifecore;
 #[cfg(test)]
 mod tests;

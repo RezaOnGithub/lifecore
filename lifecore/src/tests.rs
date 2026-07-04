@@ -147,3 +147,17 @@ fn node_deserialization01() {
 
     let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();
 }
+
+#[test]
+#[should_panic]
+fn no_bootstrap_typecheck() {
+    let mut lc = LifeCore::new();
+    let _ = lc
+        .add(
+            "",
+            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            None,
+        )
+        .unwrap();
+    
+}

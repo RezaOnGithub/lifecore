@@ -11,10 +11,7 @@ use strum::VariantNames;
 use whoami::{hostname, username};
 
 use crate::{
-    Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody, Payload,
-    PayloadExt, SmallTable, StringIndex,
-    analyzer::{AnalysisSuite, typecheck},
-    to_map,
+    AnalysisReport, Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody, Payload, PayloadExt, SmallTable, StringIndex, analyzer::{AnalysisSuiteConfig, Analyzer, AnalyzerKind, typecheck}, to_map
 };
 
 pub mod accessors;
@@ -82,7 +79,7 @@ impl LifeCore {
             circumstance: vec![],
             circumstance_table: IndexSet::new(),
             string_table: IndexSet::new(),
-            analyzer: AnalysisSuite(vec![]),
+            configured_analyzer: AnalysisSuiteConfig(vec![]),
         }
     }
 
@@ -450,5 +447,15 @@ impl LifeCore {
         }
 
         anyhow::Result::Ok(())
+    }
+
+    pub fn add_system(&mut self, kind: AnalyzerKind, config: &str) {
+        self.configured_analyzer.0.push((kind, config.to_string()))
+    }
+
+    pub fn init_analyzer(&self) -> Vec<AnalysisReport> {
+        let mut r : Vec<AnalysisReport> = vec![];
+        
+        r
     }
 }

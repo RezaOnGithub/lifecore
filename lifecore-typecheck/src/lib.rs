@@ -1,3 +1,7 @@
+use lifecore::*;
+use lifecore::analyzer::*;
+
+
 //! "Type System" Constraint System
 //!
 //! This implements a basic type checking system that is compatible with the limited VCS capabilities.
@@ -41,8 +45,7 @@
 //! can be overriden and effectively disabled.
 
 use crate::{
-    AnalysisReport, ConstraintSystemMessage, Event, EventIndex, LifeCore, LifeCoreError, NodeBody,
-    PayloadExt, PayloadType, analyzer::Analyzer,
+    AnalysisOutput, AnalysisReport, ConstraintSystemMessage, Event, EventIndex, LifeCore, LifeCoreError, NodeBody, PayloadExt, PayloadType, analyzer::Analyzer
 };
 use indexmap::IndexSet;
 use itertools::Itertools;
@@ -162,18 +165,16 @@ pub struct TypeCheck {
 }
 
 impl Analyzer for TypeCheck {
-    fn initialize(lc: &mut crate::LifeCore, config: &str) -> Result<Self, crate::LifeCoreError> {
-        Ok(Self {
-            config: config.to_string(),
-        })
+    fn initialize(lc: &mut crate::LifeCore, config: &str) -> AnalysisOutput {
+        AnalysisOutput(vec![])
     }
 
     // TODO PERF
     // TODO needs to be modified to return a "relevance_check" field on CSMessage to decide the messages we should be seeing.
     // Errors are always relevant, of course, but warnings less so because we may have resolved them in a future window.
     // Relevance check should be a commandline toggle
-    fn analyze(self, lc: &LifeCore) -> Vec<crate::AnalysisReport> {
-        let mut r = Vec::<AnalysisReport>::new();
+    fn analyze(self, lc: &LifeCore) -> AnalysisOutput {
+        let mut r = AnalysisOutput(vec![]);
         for last in lc.last().before_and_including() {
             // For every self.event[0..X]
             //      - Get the effective types at that point
@@ -198,13 +199,13 @@ impl Analyzer for TypeCheck {
                 // Not lambdas because variadics
                 macro_rules! warn {
                     ($($y:expr),+) => (
-                        r.push(AnalysisReport::Warning(message_template.new_message(
+                        r.0.push(AnalysisReport::Warning(message_template.new_message(
                             format!($($y),+)
                     )));)
                 }
                 macro_rules! err {
                     ($($y:expr),+) => (
-                        r.push(AnalysisReport::Inconsistency(message_template.new_message(
+                        r.0.push(AnalysisReport::Inconsistency(message_template.new_message(
                             format!($($y),+)
                     )));)
                 }
