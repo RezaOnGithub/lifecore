@@ -142,8 +142,7 @@ fn node_deserialization01() {
     let nt_describe_json = serde_json::to_string(&describe_self()).unwrap();
     eprintln!("nt_describe_json\t{}", nt_describe_json.as_str());
 
-    let nt_describe_hashmap =
-        serde_json::from_str::<NodeBody>(nt_describe_json.as_str()).unwrap();
+    let nt_describe_hashmap = serde_json::from_str::<NodeBody>(nt_describe_json.as_str()).unwrap();
     eprintln!("nt_describe_hashmap\t{:#?}", &nt_describe_hashmap);
 
     let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();

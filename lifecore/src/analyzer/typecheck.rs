@@ -41,9 +41,10 @@
 //! can be overriden and effectively disabled.
 
 use crate::{
-    AnalysisReport, Event, EventIndex, LifeCore, LifeCoreError, NodeBody, PayloadExt, PayloadType,
-    analyzer::Analyzer,
+    AnalysisReport, ConstraintSystemMessage, Event, EventIndex, LifeCore, LifeCoreError, NodeBody,
+    PayloadExt, PayloadType, analyzer::Analyzer,
 };
+use indexmap::IndexSet;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::{HashMap, HashSet};
@@ -73,8 +74,8 @@ pub struct NodeType {
     name: String,
     // These should be serialized
     class: NodeTypeClass,
-    from_end: Vec<String>,
-    to_end: Vec<String>,
+    outgoing: Vec<String>,
+    incoming: Vec<String>,
     additional_override: Vec<String>,
     field: Vec<(String, (PayloadType, NodeTypeFieldStatus))>,
 }
@@ -94,8 +95,8 @@ impl TryFrom<&NodeBody> for NodeType {
         Ok(Self {
             name,
             class,
-            from_end,
-            to_end,
+            outgoing: from_end,
+            incoming: to_end,
             additional_override,
             field,
         })
@@ -110,8 +111,8 @@ pub(crate) fn describe_self() -> NodeBody {
     let nt = NodeType {
         name: "Node_Type".into(),
         class: NodeTypeClass::Regular,
-        from_end: vec![],
-        to_end: vec![],
+        outgoing: vec![],
+        incoming: vec![],
         additional_override: vec![],
         field: vec![
             (
@@ -140,8 +141,8 @@ pub(crate) fn describe_self() -> NodeBody {
         vec![
             ("name", PayloadExt::Text(nt.name)),
             ("class", PayloadExt::serialized_from(nt.class)),
-            ("from_end", PayloadExt::serialized_from(nt.from_end)),
-            ("to_end", PayloadExt::serialized_from(nt.to_end)),
+            ("from_end", PayloadExt::serialized_from(nt.outgoing)),
+            ("to_end", PayloadExt::serialized_from(nt.incoming)),
             (
                 "additional_override",
                 PayloadExt::serialized_from(nt.additional_override),
@@ -154,14 +155,23 @@ pub(crate) fn describe_self() -> NodeBody {
     )
 }
 
-pub struct TypeCheck;
+const TYPECHECK_NAME: &'static str = "TypeCheck";
+
+pub struct TypeCheck {
+    config: String,
+}
 
 impl Analyzer for TypeCheck {
     fn initialize(lc: &mut crate::LifeCore, config: &str) -> Result<Self, crate::LifeCoreError> {
-        todo!()
+        Ok(Self {
+            config: config.to_string(),
+        })
     }
 
     // TODO PERF
+    // TODO needs to be modified to return a "relevance_check" field on CSMessage to decide the messages we should be seeing.
+    // Errors are always relevant, of course, but warnings less so because we may have resolved them in a future window.
+    // Relevance check should be a commandline toggle
     fn analyze(self, lc: &LifeCore) -> Vec<crate::AnalysisReport> {
         let mut r = Vec::<AnalysisReport>::new();
         for last in lc.last().before_and_including() {
@@ -170,53 +180,162 @@ impl Analyzer for TypeCheck {
             //      - Get first event S where effective type is one we currently have
             //      - All fresh nodes in self.event[0..X] must typecheck against those types
             let window = EventIndex(last as u64).before_and_including();
-            let types = lc
+            let type_table = lc
                 .fresh_nodes_in_range_of_type("Node_Type", window.clone())
-                .map(|(_, x)| {
+                .map(|(e, x)| {
                     let t = NodeType::try_from(&lc.resolve(&x.payload)).unwrap();
-                    (t.name.clone(), t)
+                    (t.name.clone(), (e, t))
                 })
-                .collect::<HashMap<String, NodeType>>();
-            for e in lc.fresh_events_in_range(window) {
+                .collect::<HashMap<String, (EventIndex, NodeType)>>();
+            // Check nodes for their fields, Check edges for their connectivity
+            for e in lc.fresh_events_in_range(window.clone()) {
+                let message_template = ConstraintSystemMessage {
+                    offending_event: e.0,
+                    system_name: TYPECHECK_NAME.to_string(),
+                    system_config: self.config.clone(),
+                    message: String::new(),
+                };
+                // Not lambdas because variadics
+                macro_rules! warn {
+                    ($($y:expr),+) => (
+                        r.push(AnalysisReport::Warning(message_template.new_message(
+                            format!($($y),+)
+                    )));)
+                }
+                macro_rules! err {
+                    ($($y:expr),+) => (
+                        r.push(AnalysisReport::Inconsistency(message_template.new_message(
+                            format!($($y),+)
+                    )));)
+                }
                 match e.1 {
-                    Event::Node(node) => {
-                        let body = lc.resolve(&node.payload);
-                        let ty = &lc[node.ty];
-                        if !types.contains_key(ty) {
-                            // Unknown Type!
-                            // TODO
-                            // r.push( );
-                            continue;
-                        }
-                        let resolved_type = &types[ty];
+                Event::Node(node) => {
+                    let body = lc.resolve(&node.payload);
+                    let type_name = &lc[node.ty];
+                    if !type_table.contains_key(type_name) {
+                        err!(
+                            "Corresponding Node_Type not found in window {}..{}",
+                            window.start,
+                            window.end
+                        );
+                        continue;
+                    }
+                    let resolved_type = &type_table[type_name].1;
 
-                        // Fields that may be present and mandatory
-                        for field in resolved_type.field.iter() {
-                            match field.1.1 {
-                                NodeTypeFieldStatus::Mandatory => todo!(),
-                                NodeTypeFieldStatus::Encouraged => todo!(),
-                                NodeTypeFieldStatus::Deprecated => todo!(),
-                                NodeTypeFieldStatus::Optional => todo!(),
+                    // Fields that may be present and mandatory
+                    for (field_name, (field_type, field_policy)) in resolved_type.field.iter() {
+                        match field_policy {
+                        NodeTypeFieldStatus::Mandatory => {
+                            if !body.0.contains_key(field_name) {
+                                err!("Node does not have the mandatory field {}", field_name);
                             }
                         }
-
-                        // Extraneous fields
-                        for extra_field in body.0.keys().filter(|x| {
-                            !resolved_type
-                                .field
-                                .iter()
-                                .map(|x| x.0.clone())
-                                .collect::<HashSet<String>>()
-                                .contains(x.as_str())
-                        }) {
-                            // We don't allow extra field!
-                            // TODO
+                        NodeTypeFieldStatus::Encouraged => {
+                            if !body.0.contains_key(field_name) {
+                                warn!(
+                                    "It is encouraged to fill the field {} on this node",
+                                    field_name
+                                );
+                            }
+                        }
+                        NodeTypeFieldStatus::Deprecated => {
+                            if body.0.contains_key(field_name) {
+                                warn!(
+                                    "Field {} is deprecated on this node type! Consider clearing it.",
+                                    field_name
+                                );
+                            }
+                        }
+                        NodeTypeFieldStatus::Optional => {
+                            // Nothing to do.
+                        }
+                        }
+                        if body.0.contains_key(field_name)
+                            && body.0[field_name].discriminant() != *field_type
+                        {
+                            err!("Field {} has the wrong type!", field_name);
                         }
                     }
-                    Event::Edge(edge) => {
-                        // from end -> "outgoing" relative to that node
-                        // to end -> "incoming" relative to that node
+
+                    // Extraneous fields
+                    for extra_field in body.0.keys().filter(|body_field| {
+                        !resolved_type
+                            .field
+                            .iter()
+                            .map(|x| &x.0)
+                            .contains(body_field)
+                    }) {
+                        err!("Extraneous field {} not allowed!", extra_field);
                     }
+
+                    // Override Logic. SUS
+                    if node.parent.is_some() {
+                        let parent_type_name = &lc[&lc.node(node.parent.unwrap()).ty];
+                        if !type_table.contains_key(parent_type_name) {
+                            // We have bigger problems, and this should be reported elsewhere
+                            continue;
+                        }
+                        let parent_type = &type_table[parent_type_name].1;
+                        if !(parent_type.name == resolved_type.name
+                            || parent_type
+                                .additional_override
+                                .contains(&resolved_type.name))
+                        {
+                            err!(
+                                "Node of type {} overrides a node of type {} but the latter does not allow children of the former type",
+                                resolved_type.name,
+                                parent_type.name
+                            );
+                        }
+                    }
+                }
+                Event::Edge(edge) => {
+                    // from end -> "outgoing" relative to that node
+                    // to end -> "incoming" relative to that node
+                    let outgoing_type_name = &lc[lc.node(edge.from).ty];
+                    let incoming_type_name = &lc[lc.node(edge.to).ty];
+                    if !type_table.contains_key(outgoing_type_name) {
+                        err!(
+                            "Edge head is at a Node with non-existent type {}",
+                            outgoing_type_name
+                        );
+                        continue;
+                    }
+                    if !type_table.contains_key(incoming_type_name) {
+                        err!(
+                            "Edge tail is at a Node with non-existent type {}",
+                            incoming_type_name
+                        );
+                        continue;
+                    }
+                    let outgoing_type = &type_table[outgoing_type_name].1;
+                    let incoming_type = &type_table[incoming_type_name].1;
+                    let edge_type_name = &lc[edge.ty];
+                    if !outgoing_type
+                        .outgoing
+                        .iter()
+                        .map(String::as_str)
+                        .contains(edge_type_name)
+                    {
+                        err!(
+                            "Edge head of type {} does not allow outgoing edge of type {}",
+                            outgoing_type_name,
+                            edge_type_name
+                        );
+                    }
+                    if !incoming_type
+                        .incoming
+                        .iter()
+                        .map(String::as_str)
+                        .contains(edge_type_name)
+                    {
+                        err!(
+                            "Edge tail of type {} does not allow incoming edge of type {}",
+                            incoming_type_name,
+                            edge_type_name
+                        );
+                    }
+                }
                 }
             }
         }

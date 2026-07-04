@@ -157,12 +157,12 @@ impl LifeCore {
                 let smalltable_key = t.get_or_insert_string(k);
                 let smalltable_value = {
                     match v {
-                        PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
-                        PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
-                        PayloadExt::Number(i) => Payload::Number(*i),
-                        PayloadExt::Serialized(s) => {
-                            Payload::Serialized(t.get_or_insert_string(&s.to_string()))
-                        }
+                    PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
+                    PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
+                    PayloadExt::Number(i) => Payload::Number(*i),
+                    PayloadExt::Serialized(s) => {
+                        Payload::Serialized(t.get_or_insert_string(&s.to_string()))
+                    }
                     }
                 };
                 r.insert(smalltable_key, smalltable_value);
@@ -205,12 +205,12 @@ impl LifeCore {
         for (k, v) in t.0.iter().filter(|x| x.is_some()).map(|x| x.unwrap()) {
             r.insert(self[k].to_string(), {
                 match v {
-                    Payload::PreciseTime(timestamp) => PayloadExt::PreciseTime(timestamp),
-                    Payload::Text(string_index) => PayloadExt::Text(self[string_index].to_string()),
-                    Payload::Number(i) => PayloadExt::Number(i),
-                    Payload::Serialized(string_index) => PayloadExt::Serialized(
-                        serde_json::Value::from_str(&self[string_index]).unwrap(),
-                    ),
+                Payload::PreciseTime(timestamp) => PayloadExt::PreciseTime(timestamp),
+                Payload::Text(string_index) => PayloadExt::Text(self[string_index].to_string()),
+                Payload::Number(i) => PayloadExt::Number(i),
+                Payload::Serialized(string_index) => PayloadExt::Serialized(
+                    serde_json::Value::from_str(&self[string_index]).unwrap(),
+                ),
                 }
             });
         }
@@ -271,27 +271,27 @@ impl LifeCore {
     // TODO check if the above fact is considered where this is called
     pub fn is_stale_by_and_including(&self, e: EventIndex, upper: EventIndex) -> bool {
         match self[e] {
-            Event::Node(_) => {
-                let window = &self.event[upper.before_and_including()];
-                for interim_node in window
-                    .iter()
-                    .filter(|x| x.is_node())
-                    .map(|x| x.clone().try_as_node().unwrap())
-                {
-                    if let Some(idx) = interim_node.parent
-                        && idx == e
-                    {
-                        return true;
-                    }
-                }
-            }
-            Event::Edge(Edge { ty: _, from, to }) => {
-                if self.is_stale_by_and_including(from, upper)
-                    || self.is_stale_by_and_including(to, upper)
+        Event::Node(_) => {
+            let window = &self.event[upper.before_and_including()];
+            for interim_node in window
+                .iter()
+                .filter(|x| x.is_node())
+                .map(|x| x.clone().try_as_node().unwrap())
+            {
+                if let Some(idx) = interim_node.parent
+                    && idx == e
                 {
                     return true;
                 }
             }
+        }
+        Event::Edge(Edge { ty: _, from, to }) => {
+            if self.is_stale_by_and_including(from, upper)
+                || self.is_stale_by_and_including(to, upper)
+            {
+                return true;
+            }
+        }
         }
         false
     }
@@ -411,28 +411,28 @@ impl LifeCore {
             for e in self.event.iter().enumerate() {
                 let idx_in_range = |idx: &EventIndex| (idx.0 as usize) < e.0;
                 match e.1 {
-                    Event::Node(Node {
-                        ty: _,
-                        parent,
-                        payload: _,
-                    }) => {
-                        if let Some(idx) = parent {
-                            if !idx_in_range(idx) {
-                                anyhow::bail!("Node {} has parent EventIndex out of range", idx.0);
-                            }
-                            if self[idx].is_edge() {
-                                anyhow::bail!("Node {} has an edge parent", e.0);
-                            }
+                Event::Node(Node {
+                    ty: _,
+                    parent,
+                    payload: _,
+                }) => {
+                    if let Some(idx) = parent {
+                        if !idx_in_range(idx) {
+                            anyhow::bail!("Node {} has parent EventIndex out of range", idx.0);
+                        }
+                        if self[idx].is_edge() {
+                            anyhow::bail!("Node {} has an edge parent", e.0);
                         }
                     }
-                    Event::Edge(Edge { ty: _, from, to }) => {
-                        if !idx_in_range(from) || !idx_in_range(to) {
-                            anyhow::bail!("Edge {} has an end out of range", e.0);
-                        }
-                        if self[from].is_edge() || self[to].is_edge() {
-                            anyhow::bail!("Edge {} has an end that is not a node", e.0);
-                        }
+                }
+                Event::Edge(Edge { ty: _, from, to }) => {
+                    if !idx_in_range(from) || !idx_in_range(to) {
+                        anyhow::bail!("Edge {} has an end out of range", e.0);
                     }
+                    if self[from].is_edge() || self[to].is_edge() {
+                        anyhow::bail!("Edge {} has an end that is not a node", e.0);
+                    }
+                }
                 }
             }
         }
@@ -452,4 +452,3 @@ impl LifeCore {
         anyhow::Result::Ok(())
     }
 }
-

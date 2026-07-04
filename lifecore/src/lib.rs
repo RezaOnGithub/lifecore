@@ -173,37 +173,37 @@ impl PayloadExt {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub enum AnalysisReport {
-    Warning(AnalysisReportWarning),
-    Suggestion(AnalysisReportSuggestion),
-    LogInfo(AnalysisReportLog),
-    Inconsistent(AnalysisReportInconsistent),
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub enum AnalysisReportWarning {
-    Deprecation {
-        is_node: bool,
-        e: EventIndex,
-        field: Option<String>,
-    },
-}
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-
-pub enum AnalysisReportSuggestion {
-    AddNode { ty: String, field: NodeBody },
-}
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub enum AnalysisReportInconsistent {
-    BasicValidationFailure {
+    BasicError {
         offending_event: EventIndex,
         reason: BasicValidationFailureScenario,
     },
+    LogInfo {
+        offending_event: EventIndex,
+        message: String,
+    },
+    // Errors from Constraint systems
+    Inconsistency(ConstraintSystemMessage),
+    // Information that ought to be acted upon.
+    Warning(ConstraintSystemMessage),
+    // Actual suggestions for things to add. Must be a concrete action (add this node, or edge, or delete this)
+    Suggestion(ConstraintSystemMessage, SuggestedAction),
 }
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct ConstraintSystemMessage {
+    offending_event: EventIndex,
+    system_name: String,
+    system_config: String,
+    message: String,
+}
+
+// TODO
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub enum BasicValidationFailureScenario {}
 
+// TODO
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub enum AnalysisReportLog {}
+pub enum SuggestedAction {}
 
 // Misc/Boilerplate
 
@@ -316,13 +316,33 @@ impl NodeBody {
     }
 }
 
+impl PayloadExt {
+    pub fn discriminant(&self) -> PayloadType {
+        match self {
+        PayloadExt::PreciseTime(_) => PayloadType::PreciseTime,
+        PayloadExt::Text(_) => PayloadType::Text,
+        PayloadExt::Number(_) => PayloadType::Number,
+        PayloadExt::Serialized(_) => PayloadType::Serialized,
+        }
+    }
+}
+
+impl ConstraintSystemMessage {
+    pub fn new_message(&self, message: String) -> Self {
+        Self {
+            message,
+            ..self.clone()
+        }
+    }
+}
+
 impl Display for PayloadExt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PayloadExt::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
-            PayloadExt::Text(s) => f.write_fmt(format_args!("\"{}\"", s.as_str())),
-            PayloadExt::Number(i) => f.write_fmt(format_args!("{}", i)),
-            PayloadExt::Serialized(s) => f.write_fmt(format_args!("<{}>", s)),
+        PayloadExt::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
+        PayloadExt::Text(s) => f.write_fmt(format_args!("\"{}\"", s.as_str())),
+        PayloadExt::Number(i) => f.write_fmt(format_args!("{}", i)),
+        PayloadExt::Serialized(s) => f.write_fmt(format_args!("<{}>", s)),
         }
     }
 }

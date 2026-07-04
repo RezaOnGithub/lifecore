@@ -42,17 +42,17 @@ macro_rules! assert_impl_all {
 impl AnalysisSuiteInstance {
     pub fn new(lc: &mut LifeCore, ty: AnalyzerKind, config: String) -> Result<Self, LifeCoreError> {
         match ty {
-            // COPY_PASTE
-            AnalyzerKind::TypeCheck => {
-                assert_impl_all!(TypeCheck: Analyzer);
-                let checker = TypeCheck::initialize(lc, config.as_str())?;
-                Ok(Self::TypeCheck { checker, config })
-            }
-            AnalyzerKind::DAGCheck => {
-                assert_impl_all!(DAGCheck: Analyzer);
-                let checker = DAGCheck::initialize(lc, config.as_str())?;
-                Ok(Self::DAGCheck { checker, config })
-            }
+        // COPY_PASTE
+        AnalyzerKind::TypeCheck => {
+            assert_impl_all!(TypeCheck: Analyzer);
+            let checker = TypeCheck::initialize(lc, config.as_str())?;
+            Ok(Self::TypeCheck { checker, config })
+        }
+        AnalyzerKind::DAGCheck => {
+            assert_impl_all!(DAGCheck: Analyzer);
+            let checker = DAGCheck::initialize(lc, config.as_str())?;
+            Ok(Self::DAGCheck { checker, config })
+        }
         }
     }
 }
@@ -64,8 +64,8 @@ impl Analyzer for AnalysisSuiteInstance {
 
     fn analyze(self, lc: &LifeCore) -> Vec<AnalysisReport> {
         match self {
-            AnalysisSuiteInstance::TypeCheck { checker, config: _ } => checker.analyze(lc),
-            AnalysisSuiteInstance::DAGCheck { checker, config: _ } => checker.analyze(lc),
+        AnalysisSuiteInstance::TypeCheck { checker, config: _ } => checker.analyze(lc),
+        AnalysisSuiteInstance::DAGCheck { checker, config: _ } => checker.analyze(lc),
         }
     }
 }
