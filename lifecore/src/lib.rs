@@ -22,6 +22,7 @@ use std::{collections::HashMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 use thiserror;
 
+use crate::analysis::AnalysisSuiteConfig;
 pub use crate::lifecore::*;
 
 // Used for "internal" representation of NodeBody
@@ -87,7 +88,7 @@ pub struct LifeCore {
     // Analyzers added so far. An analyzer has 2 pieces of state:
     // - initial config (just a small short string)
     // - nodes and edges that may get added as part of encouragement through AnalysisReport (may indicate "progression")
-    configured_analyzer: AnalysisSuiteConfig,
+    pub(crate) configured_analyzer: AnalysisSuiteConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, thiserror::Error)]
@@ -102,8 +103,9 @@ pub enum LifeCoreError {
     #[error("Field {field_name:?} is not the type we expected it to be")]
     FieldContainsUnexpectedType { field_name: String },
     #[error("Potentially different analyzers under the same name {dupe_name:?}")]
-    DuplicateAnalyzer {dupe_name: String}
-
+    DuplicateAnalyzer { dupe_name: String },
+    #[error("Analyzer {name:?} not found")]
+    AnalyzerNotFound { name: String },
 }
 
 #[derive(Serialize, Deserialize, EnumIs, EnumTryAs, Clone, PartialEq, Eq, Hash)]
