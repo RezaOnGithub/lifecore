@@ -24,6 +24,7 @@ use thiserror;
 
 use crate::analysis::AnalysisSuiteConfig;
 pub use crate::lifecore::*;
+use crate::typecheck::NodeType;
 
 // Used for "internal" representation of NodeBody
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
@@ -109,19 +110,19 @@ pub enum LifeCoreError {
 }
 
 #[derive(Serialize, Deserialize, EnumIs, EnumTryAs, Clone, PartialEq, Eq, Hash)]
-pub enum Event {
+pub(crate) enum Event {
     Node(Node),
     Edge(Edge),
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Node {
+pub(crate) struct Node {
     pub ty: StringIndex,
     pub parent: Option<EventIndex>,
     pub payload: SmallTable<StringIndex, Payload>,
 }
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Edge {
+pub(crate) struct Edge {
     pub ty: StringIndex,
     pub from: EventIndex,
     pub to: EventIndex,
@@ -142,7 +143,7 @@ pub struct Edge {
 #[strum_discriminants(name(PayloadType))]
 #[strum_discriminants(vis(pub))]
 #[strum_discriminants(derive(Serialize, Deserialize, Hash))]
-pub enum Payload {
+pub(crate) enum Payload {
     PreciseTime(Timestamp),
     Text(StringIndex),
     Number(i64),
@@ -173,6 +174,27 @@ impl PayloadExt {
     pub fn serialized_from<T: Serialize>(x: T) -> Self {
         Self::Serialized(serde_json::to_value(x).unwrap())
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct NodeExt {
+    ty: Option<NodeType>,
+    ty_name: String,
+    field: NodeBody,
+    parent: Option<EventIndex>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct EdgeExt {
+    ty_name: String,
+    from: EventIndex,
+    to: EventIndex,
+}
+
+#[derive(EnumIs, EnumTryAs, Clone, PartialEq, Eq)]
+pub enum EventExt {
+    Node(NodeExt),
+    Edge(EdgeExt),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -211,7 +233,9 @@ pub enum BasicValidationFailureScenario {}
 
 // TODO
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub enum SuggestedAction {}
+pub enum SuggestedAction {
+    AddSpecificNode(Node),
+}
 
 // Misc/Boilerplate
 
@@ -394,3 +418,4 @@ impl Index<&str> for NodeBody {
 
 pub mod analysis;
 mod lifecore;
+pub mod typecheck;

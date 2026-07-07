@@ -50,12 +50,12 @@
 //! Otherwise, error.
 
 use itertools::Itertools;
-use lifecore::analysis::*;
-use lifecore::*;
+use crate::analysis::*;
+use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub enum NodeTypeClass {
     Spike,
     Hub,
@@ -64,7 +64,7 @@ pub enum NodeTypeClass {
     Regular,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub enum NodeTypeFieldStatus {
     Mandatory,
     Encouraged,
@@ -78,7 +78,7 @@ pub trait TypedBody<'a>: Into<NodeBody> + TryFrom<&'a NodeBody> {
 
 // TODO some system of deriving From/Into between a concrete body and NodeBody
 // Somehow, it should be smart enough to use "native" types for some fields and serialize the rest
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub struct NodeType {
     // This should become PayloadExt::Text
     pub name: String,
@@ -222,6 +222,9 @@ impl Analyzer for TypeCheck {
                 })
                 .collect::<HashMap<String, (EventIndex, NodeType)>>();
             // Check that override types exist
+            // TODO I'm not sure whether this should be an error or not.
+            // What it's causing at the moment is that interrelated Node_Types have to complete
+            // a ritual to allow overriding each othe. I'm demoting this to a warning for now.
             for (ty_event, ty) in type_table.values() {
                 for override_ty in ty.additional_override.iter() {
                     let message_template = ConstraintSystemMessage {
@@ -232,7 +235,7 @@ impl Analyzer for TypeCheck {
                         message: String::new(),
                     };
                     if !type_table.contains_key(override_ty) {
-                        r.0.push(AnalysisReport::Inconsistency(message_template.new_message(
+                        r.0.push(AnalysisReport::Warning(message_template.new_message(
                             format!(
                                 "Type {} has an unknown override type {}",
                                 ty.name.as_str(),
@@ -251,7 +254,6 @@ impl Analyzer for TypeCheck {
                     system_config: self.config.clone(),
                     message: String::new(),
                 };
-                // Not lambdas because variadics
                 macro_rules! warn {
                     ($($y:expr),+) => (
                         r.0.push(AnalysisReport::Warning(message_template.new_message(
@@ -270,9 +272,7 @@ impl Analyzer for TypeCheck {
                     let type_name = &lc[node.ty];
                     if !type_table.contains_key(type_name) {
                         err!(
-                            "Corresponding Node_Type not found in window {}..{}",
-                            window.start,
-                            window.end
+                            "Corresponding Node_Type not found"
                         );
                         continue;
                     }
@@ -324,15 +324,18 @@ impl Analyzer for TypeCheck {
                         err!("Extraneous field {} not allowed!", extra_field);
                     }
 
-                    // Override Logic. SUS
+                    // Override Logic. TODO
                     // First, check if the override types even exist
 
-                    if node.parent.is_some() {
+                    if false && node.parent.is_some() {
                         let parent_type_name = &lc[&lc.node(node.parent.unwrap()).ty];
                         if !type_table.contains_key(parent_type_name) {
-                            // We have bigger problems, and this should be reported elsewhere
+                            // TODO in what scenarios is this valid? After all, parent is no longer fresh, and
+                            // its type may have been overriden in the current window as well.
                             continue;
                         }
+                        // This is actually completely wrong. We should look at the type of the parent in the 
+                        // window from 0..child and decide based on that, not the window we currently have
                         let parent_type = &type_table[parent_type_name].1;
                         if !(parent_type.name == resolved_type.name
                             || parent_type

@@ -1,4 +1,4 @@
 [workspace]
 resolver = "3"
-members = ["lifecore", "lifecore-cli", "lifecore-derive", "lifecore-test", "lifecore-typecheck"]
+members = ["lifecore", "lifecore-cli", "lifecore-derive", "lifecore-test"]
 

@@ -395,6 +395,7 @@ name = "lifecore-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "itertools",
  "lifecore",
 ]
@@ -412,17 +413,6 @@ name = "lifecore-test"
 version = "0.1.0"
 dependencies = [
  "lifecore",
- "lifecore-typecheck",
- "serde_json",
-]
-
-[[package]]
-name = "lifecore-typecheck"
-version = "0.1.0"
-dependencies = [
- "itertools",
- "lifecore",
- "serde",
  "serde_json",
 ]
 

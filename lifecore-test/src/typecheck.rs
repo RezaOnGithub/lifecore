@@ -2,7 +2,7 @@ use lifecore::{
     LifeCore, NodeBody, PayloadExt,
     analysis::{AnalysisRunner, Analyzer, AnalyzerFactory},
 };
-use lifecore_typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
+use lifecore::typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
 
 #[test]
 fn node_deserialization01() {
@@ -51,32 +51,32 @@ fn bad_bootstrap() {
     assert!(!typecheck.initialize(&lc).0.is_empty());
 }
 
-#[test]
-fn tombstone01() {
-    let mut lc = LifeCore::new();
-    let nt_node_type = lc.add("Node_Type", NodeType::describe_self().into(), None).unwrap();
-    let nt_tombstone = lc
-        .add(
-            "Node_Type",
-            NodeType {
-                name: "Tombstone".to_string(),
-                class: lifecore_typecheck::NodeTypeClass::Regular,
-                outgoing: vec![],
-                incoming: vec![],
-                additional_override: vec![],
-                field: vec![],
-            }
-            .into(),
-            None,
-        )
-        .unwrap();
-    let nt_node_type_2 = lc.add("Node_Type", payload, parent)
-    let mut runner = AnalysisRunner::new();
-    lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
-    runner
-        .register_analyzer_kind(Box::new(TypeCheckFactory {}))
-        .unwrap();
+// #[test]
+// fn tombstone01() {
+//     let mut lc = LifeCore::new();
+//     let nt_node_type = lc.add("Node_Type", NodeType::describe_self().into(), None).unwrap();
+//     let nt_tombstone = lc
+//         .add(
+//             "Node_Type",
+//             NodeType {
+//                 name: "Tombstone".to_string(),
+//                 class: lifecore::typecheck::NodeTypeClass::Regular,
+//                 outgoing: vec![],
+//                 incoming: vec![],
+//                 additional_override: vec![],
+//                 field: vec![],
+//             }
+//             .into(),
+//             None,
+//         )
+//         .unwrap();
+//     let nt_node_type_2 = lc.add("Node_Type", payload, parent)
+//     let mut runner = AnalysisRunner::new();
+//     lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
+//     runner
+//         .register_analyzer_kind(Box::new(TypeCheckFactory {}))
+//         .unwrap();
 
-    let output = runner.run(&lc).unwrap();
-    assert!(output.0.is_empty())
-}
+//     let output = runner.run(&lc).unwrap();
+//     assert!(output.0.is_empty())
+// }

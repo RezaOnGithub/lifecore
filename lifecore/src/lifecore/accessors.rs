@@ -1,16 +1,38 @@
 //! Accessor Zoo
 
+use crate::{Edge, EdgeExt, Event, EventIndex, LifeCore, Node, NodeExt, typecheck::NodeType};
 use itertools::Itertools;
 
-use crate::{Edge, Event, EventIndex, LifeCore, Node};
-
 impl LifeCore {
-    pub fn node(&self, e: EventIndex) -> Node {
-        self[e].clone().try_as_node().unwrap()
+    pub fn node(&self, e: EventIndex) -> NodeExt {
+        let raw_node = self[e].clone().try_as_node().unwrap();
+        let ty = {
+            if let Some((_, (_, ty))) = self
+                .types_just_before(e)
+                .filter(|(name, _)| name.as_str() == &self[raw_node.ty])
+                .nth(0)
+            {
+                Some(ty)
+            } else {
+                None
+            }
+        };
+        let body = self.resolve(&raw_node.payload);
+        NodeExt {
+            ty,
+            ty_name: self[raw_node.ty].to_string(),
+            field: body,
+            parent: raw_node.parent,
+        }
     }
 
-    pub fn edge(&self, e: EventIndex) -> Edge {
-        self[e].clone().try_as_edge().unwrap()
+    pub fn edge(&self, e: EventIndex) -> EdgeExt {
+        let raw_edge = self[e].clone().try_as_edge().unwrap();
+        EdgeExt {
+            ty_name: self[raw_edge.ty].to_string(),
+            from: raw_edge.from,
+            to: raw_edge.to,
+        }
     }
 
     pub fn root_of(&self, e: EventIndex) -> Option<EventIndex> {
@@ -24,7 +46,7 @@ impl LifeCore {
         Some(r)
     }
 
-    pub fn edges(&self) -> impl Iterator<Item = (EventIndex, Edge)> {
+    pub fn edges(&self) -> impl Iterator<Item = (EventIndex, EdgeExt)> {
         self.event
             .iter()
             .enumerate()
@@ -32,7 +54,7 @@ impl LifeCore {
             .map(|x| (x.0.into(), self.edge(x.0.into())))
     }
 
-    pub fn nodes(&self) -> impl Iterator<Item = (EventIndex, Node)> {
+    pub fn nodes(&self) -> impl Iterator<Item = (EventIndex, NodeExt)> {
         self.event
             .iter()
             .enumerate()
@@ -43,39 +65,39 @@ impl LifeCore {
     pub fn nodes_in_range(
         &self,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
+    ) -> impl Iterator<Item = (EventIndex, NodeExt)> {
         range
             .into_iter()
             .map(|x| EventIndex(x as u64))
             .map(|x| (x, self[x].clone()))
             .filter(|(_, e)| e.is_node())
-            .map(|(i, e)| (i, e.try_as_node().unwrap()))
+            .map(|(i, _)| (i, self.node(i)))
     }
 
     pub fn edges_in_range(
         &self,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+    ) -> impl Iterator<Item = (EventIndex, EdgeExt)> {
         range
             .into_iter()
             .map(|x| EventIndex(x as u64))
             .map(|x| (x, self[x].clone()))
             .filter(|(_, e)| e.is_edge())
-            .map(|(i, e)| (i, e.try_as_edge().unwrap()))
+            .map(|(i, _)| (i, self.edge(i)))
     }
 
-    pub fn nodes_by_type(&self, ty: &str) -> impl Iterator<Item = (EventIndex, Node)> {
-        self.nodes().filter(move |x| &self[x.1.ty] == ty)
+    pub fn nodes_by_type(&self, ty: &str) -> impl Iterator<Item = (EventIndex, NodeExt)> {
+        self.nodes().filter(move |x| x.1.ty_name.as_str() == ty)
     }
 
-    pub fn edges_by_type(&self, ty: &str) -> impl Iterator<Item = (EventIndex, Edge)> {
-        self.edges().filter(move |x| &self[x.1.ty] == ty)
+    pub fn edges_by_type(&self, ty: &str) -> impl Iterator<Item = (EventIndex, EdgeExt)> {
+        self.edges().filter(move |x| x.1.ty_name.as_str() == ty)
     }
 
     pub fn fresh_nodes_in_range(
         &self,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
+    ) -> impl Iterator<Item = (EventIndex, NodeExt)> {
         self.nodes_in_range(range.clone()).filter(move |(e, _)| {
             !(range.clone().count() >= 1
                 && self
@@ -86,7 +108,7 @@ impl LifeCore {
     pub fn fresh_edges_in_range(
         &self,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+    ) -> impl Iterator<Item = (EventIndex, EdgeExt)> {
         self.edges_in_range(range.clone()).filter(move |(e, _)| {
             !(range.clone().count() >= 1
                 && self
@@ -98,10 +120,10 @@ impl LifeCore {
         &self,
         ty: &str,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
+    ) -> impl Iterator<Item = (EventIndex, NodeExt)> {
         range
             .into_iter()
-            .filter(move |e| self.event[*e].is_node() && &self[self.node(e.into()).ty] == ty)
+            .filter(move |e| self.event[*e].is_node() && self.node(e.into()).ty_name.as_str() == ty)
             .map(|x| (x.into(), self.node(x.into())))
     }
 
@@ -109,10 +131,10 @@ impl LifeCore {
         &self,
         ty: &str,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+    ) -> impl Iterator<Item = (EventIndex, EdgeExt)> {
         range
             .into_iter()
-            .filter(move |e| self.event[*e].is_edge() && &self[self.edge(e.into()).ty] == ty)
+            .filter(move |e| self.event[*e].is_edge() && self.edge(e.into()).ty_name.as_str() == ty)
             .map(|x| (x.into(), self.edge(x.into())))
     }
 
@@ -162,6 +184,36 @@ impl LifeCore {
                     && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
             })
             .map(|x| (x.into(), self.edge(x.into())))
+    }
+
+    // Return all the fresh types in 0..e
+    // Types are woven into the system at this point; special-cased accessors just make life easier
+    pub fn types_just_before(
+        &self,
+        upper_exclusive: EventIndex,
+    ) -> impl Iterator<Item = (String, (EventIndex, NodeType))> {
+        let window = upper_exclusive.before();
+        let last = {
+            if let Some(x) = window.clone().last() {
+                Some(EventIndex::from(x))
+            } else {
+                None
+            }
+        };
+        window
+            .clone()
+            .into_iter()
+            .filter(move |e| {
+                self.event[*e].is_node()
+                    && !self.is_stale_by_and_including(e.into(), last.unwrap())
+                    && &self[self.event[*e].clone().try_as_node().unwrap().ty] == "Node_Type"
+            })
+            .map(|e| {
+                let raw_node = self[EventIndex::from(e)].clone().try_as_node().unwrap();
+                let body = self.resolve(&raw_node.payload);
+                let ty = NodeType::try_from(&body).unwrap();
+                (ty.name.clone(), (EventIndex::from(e), ty))
+            })
     }
 
     // Return nodes that have a predecessor, with the predecessors
