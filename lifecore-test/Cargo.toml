@@ -1,0 +1,9 @@
+[package]
+name = "lifecore-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lifecore = { path = "../lifecore" }
+lifecore-typecheck = { path = "../lifecore-typecheck" }
+serde_json = "1.0.150"

@@ -141,7 +141,7 @@ impl LifeCore {
             .into_iter()
             .filter(move |e| {
                 self.event[*e].is_node()
-                    && &self[self.edge(e.into()).ty] == ty
+                    && &self[self.node(e.into()).ty] == ty
                     && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
             })
             .map(|x| (x.into(), self.node(x.into())))

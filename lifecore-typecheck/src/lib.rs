@@ -1,7 +1,3 @@
-use lifecore::*;
-use lifecore::analyzer::*;
-
-
 //! "Type System" Constraint System
 //!
 //! This implements a basic type checking system that is compatible with the limited VCS capabilities.
@@ -43,14 +39,21 @@ use lifecore::analyzer::*;
 //!
 //! One type that needs to be practically, immediately added is Tombstone type, so that Node_Type and any other node
 //! can be overriden and effectively disabled.
+//!
+//! Derive Macro
+//! ============
+//!
+//! There should be a derive macro that creates a NodeType based on its body struct.
+//!     - Basic types (like Timestamp, i64, String) get serialized as their own
+//!     - Option becomes Optional, additional attributes for Encouraged and Deprecated
+//!     - the rest are Serialized if they impl Serialize
+//! Otherwise, error.
 
-use crate::{
-    AnalysisOutput, AnalysisReport, ConstraintSystemMessage, Event, EventIndex, LifeCore, LifeCoreError, NodeBody, PayloadExt, PayloadType, analyzer::Analyzer
-};
-use indexmap::IndexSet;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::collections::{HashMap, HashSet};
+use lifecore::analysis::*;
+use lifecore::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum NodeTypeClass {
@@ -69,18 +72,81 @@ pub enum NodeTypeFieldStatus {
     Optional,
 }
 
+pub trait TypedBody<'a>: Into<NodeBody> + TryFrom<&'a NodeBody> {
+    fn describe_self() -> NodeType;
+}
+
 // TODO some system of deriving From/Into between a concrete body and NodeBody
 // Somehow, it should be smart enough to use "native" types for some fields and serialize the rest
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct NodeType {
     // This should become PayloadExt::Text
-    name: String,
+    pub name: String,
     // These should be serialized
-    class: NodeTypeClass,
-    outgoing: Vec<String>,
-    incoming: Vec<String>,
-    additional_override: Vec<String>,
-    field: Vec<(String, (PayloadType, NodeTypeFieldStatus))>,
+    pub class: NodeTypeClass,
+    pub outgoing: Vec<String>,
+    pub incoming: Vec<String>,
+    pub additional_override: Vec<String>,
+    pub field: Vec<(String, (PayloadType, NodeTypeFieldStatus))>,
+}
+
+impl<'a> TypedBody<'a> for NodeType {
+    fn describe_self() -> NodeType {
+        NodeType {
+            name: "Node_Type".into(),
+            class: NodeTypeClass::Regular,
+            outgoing: vec![],
+            incoming: vec![],
+            additional_override: vec!["Tombstone".to_string()],
+            field: vec![
+                (
+                    "name".to_string(),
+                    (PayloadType::Text, NodeTypeFieldStatus::Mandatory),
+                ),
+                (
+                    "class".to_string(),
+                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                ),
+                (
+                    "from_end".to_string(),
+                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                ),
+                (
+                    "to_end".to_string(),
+                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                ),
+                (
+                    "additional_override".to_string(),
+                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                ),
+                (
+                    "field".to_string(),
+                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                ),
+            ],
+        }
+    }
+}
+
+impl Into<NodeBody> for NodeType {
+    fn into(self) -> NodeBody {
+        NodeBody(
+            vec![
+                ("name", PayloadExt::Text(self.name)),
+                ("class", PayloadExt::serialized_from(self.class)),
+                ("from_end", PayloadExt::serialized_from(self.outgoing)),
+                ("to_end", PayloadExt::serialized_from(self.incoming)),
+                (
+                    "additional_override",
+                    PayloadExt::serialized_from(self.additional_override),
+                ),
+                ("field", PayloadExt::serialized_from(self.field)),
+            ]
+            .into_iter()
+            .map(|(x, y)| (x.to_string(), y))
+            .collect::<HashMap<String, PayloadExt>>(),
+        )
+    }
 }
 
 impl TryFrom<&NodeBody> for NodeType {
@@ -106,66 +172,33 @@ impl TryFrom<&NodeBody> for NodeType {
     }
 }
 
-// Due to the very strict and picky system I've come up with, the very first event MUST be a node that
-// declares that there is gonna be nodes that specify types; that is, a node of type "Node_Type" that
-// declares "Node_Type". This bootstrap process needs to happen, and a non-stale node of type "Node_Type"
-// declaring "Node_Type" must always exist at any EventIndex
-pub(crate) fn describe_self() -> NodeBody {
-    let nt = NodeType {
-        name: "Node_Type".into(),
-        class: NodeTypeClass::Regular,
-        outgoing: vec![],
-        incoming: vec![],
-        additional_override: vec![],
-        field: vec![
-            (
-                "name".to_string(),
-                (PayloadType::Text, NodeTypeFieldStatus::Mandatory),
-            ),
-            (
-                "class".to_string(),
-                (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-            ),
-            (
-                "from_end".to_string(),
-                (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-            ),
-            (
-                "to_end".to_string(),
-                (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-            ),
-            (
-                "field".to_string(),
-                (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-            ),
-        ],
-    };
-    NodeBody(
-        vec![
-            ("name", PayloadExt::Text(nt.name)),
-            ("class", PayloadExt::serialized_from(nt.class)),
-            ("from_end", PayloadExt::serialized_from(nt.outgoing)),
-            ("to_end", PayloadExt::serialized_from(nt.incoming)),
-            (
-                "additional_override",
-                PayloadExt::serialized_from(nt.additional_override),
-            ),
-            ("field", PayloadExt::serialized_from(nt.field)),
-        ]
-        .into_iter()
-        .map(|(x, y)| (x.to_string(), y))
-        .collect::<HashMap<String, PayloadExt>>(),
-    )
+const TYPECHECK_NAME: &'static str = "Type_Check";
+
+pub struct TypeCheckFactory;
+impl AnalyzerFactory for TypeCheckFactory {
+    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        Ok(Box::new(TypeCheck {
+            config: config.to_string(),
+        }))
+    }
+
+    fn analyzer_name(&self) -> &'static str {
+        TYPECHECK_NAME
+    }
 }
 
-const TYPECHECK_NAME: &'static str = "TypeCheck";
-
 pub struct TypeCheck {
-    config: String,
+    pub config: String,
 }
 
 impl Analyzer for TypeCheck {
-    fn initialize(lc: &mut crate::LifeCore, config: &str) -> AnalysisOutput {
+    // Due to the very strict and picky system I've come up with, the very first event MUST be a node that
+    // declares that there is gonna be nodes that specify types; that is, a node of type "Node_Type" that
+    // declares "Node_Type". This bootstrap process needs to happen, and a non-stale node of type "Node_Type"
+    // declaring "Node_Type" must always exist at any EventIndex
+    // Additionally, this should strongly suggest some of the essential node types to add. Currently, Tombstone is very
+    // important, but maybe in the future we need more special-cased node types
+    fn initialize(&mut self, lc: &LifeCore) -> AnalysisOutput {
         AnalysisOutput(vec![])
     }
 
@@ -173,7 +206,7 @@ impl Analyzer for TypeCheck {
     // TODO needs to be modified to return a "relevance_check" field on CSMessage to decide the messages we should be seeing.
     // Errors are always relevant, of course, but warnings less so because we may have resolved them in a future window.
     // Relevance check should be a commandline toggle
-    fn analyze(self, lc: &LifeCore) -> AnalysisOutput {
+    fn analyze(&self, lc: &LifeCore) -> AnalysisOutput {
         let mut r = AnalysisOutput(vec![]);
         for last in lc.last().before_and_including() {
             // For every self.event[0..X]
@@ -188,10 +221,32 @@ impl Analyzer for TypeCheck {
                     (t.name.clone(), (e, t))
                 })
                 .collect::<HashMap<String, (EventIndex, NodeType)>>();
+            // Check that override types exist
+            for (ty_event, ty) in type_table.values() {
+                for override_ty in ty.additional_override.iter() {
+                    let message_template = ConstraintSystemMessage {
+                        offending_event: *ty_event,
+                        window: window.clone(),
+                        system_name: TYPECHECK_NAME.to_string(),
+                        system_config: self.config.clone(),
+                        message: String::new(),
+                    };
+                    if !type_table.contains_key(override_ty) {
+                        r.0.push(AnalysisReport::Inconsistency(message_template.new_message(
+                            format!(
+                                "Type {} has an unknown override type {}",
+                                ty.name.as_str(),
+                                override_ty
+                            ),
+                        )))
+                    }
+                }
+            }
             // Check nodes for their fields, Check edges for their connectivity
             for e in lc.fresh_events_in_range(window.clone()) {
                 let message_template = ConstraintSystemMessage {
                     offending_event: e.0,
+                    window: window.clone(),
                     system_name: TYPECHECK_NAME.to_string(),
                     system_config: self.config.clone(),
                     message: String::new(),
@@ -270,6 +325,8 @@ impl Analyzer for TypeCheck {
                     }
 
                     // Override Logic. SUS
+                    // First, check if the override types even exist
+
                     if node.parent.is_some() {
                         let parent_type_name = &lc[&lc.node(node.parent.unwrap()).ty];
                         if !type_table.contains_key(parent_type_name) {

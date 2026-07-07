@@ -1,10 +1,11 @@
 //! This particular design is just an excuse to learn about "dyn". It is absolutely not an ideal design
 //! (But it could serve as a sketch for a future plugin system)
 
-use std::collections::HashMap;
+use std::{arch::x86_64, collections::HashMap};
 
 use crate::{AnalysisOutput, AnalysisReport, LifeCore, LifeCoreError};
-use rayon::iter::ParallelIterator;
+use itertools::Itertools;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,13 +17,16 @@ pub struct AnalysisConfig {
     pub config: String,
 }
 
+// The idea behind `initialize` is that if some pre-condition is not quite correct, analyzer can
+// disable itself.
 pub trait Analyzer {
     fn initialize(&mut self, lc: &LifeCore) -> AnalysisOutput;
-    fn analyze(&mut self, lc: &LifeCore) -> AnalysisOutput;
+    fn analyze(&self, lc: &LifeCore) -> AnalysisOutput;
 }
 
 pub trait AnalyzerFactory {
     fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError>;
+    fn analyzer_name(&self) -> &'static str;
 }
 
 pub struct AnalysisRunner {
@@ -40,19 +44,19 @@ impl AnalysisRunner {
 
     pub fn register_analyzer_kind(
         &mut self,
-        name: &str,
         factory: Box<dyn AnalyzerFactory>,
     ) -> Result<(), LifeCoreError> {
-        if self.factory.contains_key(name) {
+        if self.factory.contains_key(factory.analyzer_name()) {
             return Err(LifeCoreError::DuplicateAnalyzer {
-                dupe_name: name.to_string(),
+                dupe_name: factory.analyzer_name().to_string(),
             });
         }
-        self.factory.insert(name.to_string(), factory);
+        self.factory
+            .insert(factory.analyzer_name().to_string(), factory);
         Ok(())
     }
 
-    pub fn run(&mut self, lc: &LifeCore) -> Result<Vec<AnalysisReport>, LifeCoreError> {
+    pub fn run(&mut self, lc: &LifeCore) -> Result<AnalysisOutput, LifeCoreError> {
         let mut analyzer: Vec<Box<dyn Analyzer>> = vec![];
         for x in lc.configured_analyzer.0.iter() {
             if self.factory.contains_key(&x.name) {
@@ -68,7 +72,27 @@ impl AnalysisRunner {
                 });
             }
         }
-        let mut r: Vec<AnalysisReport> = vec![];
-        Ok(r)
+        let mut r: Vec<AnalysisReport> =
+            analyzer
+                .iter_mut()
+                .map(|x| x.initialize(lc).0)
+                .fold(vec![], |acc, x| {
+                    let mut t = vec![];
+                    t.extend(acc.into_iter());
+                    t.extend(x.into_iter());
+                    t
+                });
+        r.extend(
+            analyzer
+                .into_iter()
+                .map(|x| x.analyze(lc).0)
+                .fold(vec![], |acc, x| {
+                    let mut t = vec![];
+                    t.extend(acc.into_iter());
+                    t.extend(x.into_iter());
+                    t
+                }),
+        );
+        Ok(AnalysisOutput(r))
     }
 }

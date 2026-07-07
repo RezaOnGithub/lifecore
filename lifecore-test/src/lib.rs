@@ -1,7 +1,8 @@
-use crate::{
-    analyzer::typecheck::{NodeType, describe_self},
-    *,
-};
+#![cfg(test)]
+
+use lifecore::{LifeCore, PayloadExt, NodeBody};
+
+mod typecheck;
 
 #[test]
 fn new_is_valid() {
@@ -15,14 +16,14 @@ fn basic_01() {
     let n0 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let n1 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("orange".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("orange".to_string()))]),
             None,
         )
         .unwrap();
@@ -40,14 +41,14 @@ fn no_dupe_node() {
     let _n0 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let _n1 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
@@ -60,14 +61,14 @@ fn no_dupe_edge() {
     let n0 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let n1 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("orange".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("orange".to_string()))]),
             None,
         )
         .unwrap();
@@ -81,14 +82,14 @@ fn dupe_parent_and_child() {
     let n0 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let n1 = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             Some(n0),
         )
         .unwrap();
@@ -102,14 +103,14 @@ fn stale_rule_01() {
     let parent = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let child = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             Some(parent),
         )
         .unwrap();
@@ -123,41 +124,16 @@ fn stale_rule_02() {
     let parent = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let child = lc
         .add(
             "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             Some(parent),
         )
         .unwrap();
     let _e = lc.connect(child, "", parent).unwrap();
-}
-
-#[test]
-fn node_deserialization01() {
-    let nt_describe_json = serde_json::to_string(&describe_self()).unwrap();
-    eprintln!("nt_describe_json\t{}", nt_describe_json.as_str());
-
-    let nt_describe_hashmap = serde_json::from_str::<NodeBody>(nt_describe_json.as_str()).unwrap();
-    eprintln!("nt_describe_hashmap\t{:#?}", &nt_describe_hashmap);
-
-    let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();
-}
-
-#[test]
-#[should_panic]
-fn no_bootstrap_typecheck() {
-    let mut lc = LifeCore::new();
-    let _ = lc
-        .add(
-            "",
-            to_map(&[("date", PayloadExt::Text("yellow".to_string()))]),
-            None,
-        )
-        .unwrap();
-    
 }

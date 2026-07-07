@@ -11,7 +11,9 @@ use strum::VariantNames;
 use whoami::{hostname, username};
 
 use crate::{
-    AnalysisReport, Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody, Payload, PayloadExt, SmallTable, StringIndex, analyzer::{AnalysisSuiteConfig, Analyzer, AnalyzerKind, typecheck}, to_map
+    AnalysisReport, Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node,
+    NodeBody, Payload, PayloadExt, SmallTable, StringIndex,
+    analysis::{AnalysisConfig, AnalysisSuiteConfig, Analyzer},
 };
 
 pub mod accessors;
@@ -83,6 +85,13 @@ impl LifeCore {
         }
     }
 
+    pub fn add_analyzer(&mut self, name: &str, config: &str) {
+        self.configured_analyzer.0.push(AnalysisConfig {
+            name: name.to_string(),
+            config: config.to_string(),
+        });
+    }
+
     // get the INDEX for the last event
     pub fn last(&self) -> EventIndex {
         assert!(!self.event.is_empty());
@@ -143,15 +152,15 @@ impl LifeCore {
     pub fn add(
         &mut self,
         ty: &str,
-        payload: HashMap<&str, PayloadExt>,
+        payload: NodeBody,
         parent: Option<EventIndex>,
     ) -> anyhow::Result<EventIndex> {
         let insert_all_strings = |t: &mut Self,
-                                  payload: &HashMap<&str, PayloadExt>|
+                                  payload: &NodeBody|
          -> SmallTable<StringIndex, Payload> {
             let mut r: SmallTable<StringIndex, Payload> = SmallTable::new();
-            for (k, v) in payload {
-                let smalltable_key = t.get_or_insert_string(k);
+            for (k, v) in payload.0.iter() {
+                let smalltable_key = t.get_or_insert_string(&k);
                 let smalltable_value = {
                     match v {
                     PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
@@ -447,15 +456,5 @@ impl LifeCore {
         }
 
         anyhow::Result::Ok(())
-    }
-
-    pub fn add_system(&mut self, kind: AnalyzerKind, config: &str) {
-        self.configured_analyzer.0.push((kind, config.to_string()))
-    }
-
-    pub fn init_analyzer(&self) -> Vec<AnalysisReport> {
-        let mut r : Vec<AnalysisReport> = vec![];
-        
-        r
     }
 }

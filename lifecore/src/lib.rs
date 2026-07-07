@@ -17,7 +17,7 @@ use itertools::Itertools;
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fmt::Display;
-use std::ops::Index;
+use std::ops::{Index, Range};
 use std::{collections::HashMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 use thiserror;
@@ -32,7 +32,7 @@ pub struct SmallTable<K: Eq + Hash, V>([Option<(K, V)>; 32]);
 // Used for "external" convenient usage
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub struct NodeBody(HashMap<String, PayloadExt>);
+pub struct NodeBody(pub HashMap<String, PayloadExt>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct CircumstanceIndex(u64);
@@ -41,7 +41,7 @@ pub struct CircumstanceIndex(u64);
 pub struct StringIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct EventIndex(u64);
+pub struct EventIndex(pub u64);
 
 impl EventIndex {
     pub fn before(&self) -> std::ops::Range<usize> {
@@ -88,7 +88,7 @@ pub struct LifeCore {
     // Analyzers added so far. An analyzer has 2 pieces of state:
     // - initial config (just a small short string)
     // - nodes and edges that may get added as part of encouragement through AnalysisReport (may indicate "progression")
-    pub(crate) configured_analyzer: AnalysisSuiteConfig,
+    configured_analyzer: AnalysisSuiteConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, thiserror::Error)]
@@ -116,15 +116,15 @@ pub enum Event {
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Node {
-    ty: StringIndex,
-    parent: Option<EventIndex>,
-    payload: SmallTable<StringIndex, Payload>,
+    pub ty: StringIndex,
+    pub parent: Option<EventIndex>,
+    pub payload: SmallTable<StringIndex, Payload>,
 }
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Edge {
-    ty: StringIndex,
-    from: EventIndex,
-    to: EventIndex,
+    pub ty: StringIndex,
+    pub from: EventIndex,
+    pub to: EventIndex,
 }
 
 // This is for the internal representation of Node Payload
@@ -198,10 +198,11 @@ pub struct AnalysisOutput(pub Vec<AnalysisReport>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct ConstraintSystemMessage {
-    offending_event: EventIndex,
-    system_name: String,
-    system_config: String,
-    message: String,
+    pub offending_event: EventIndex,
+    pub window: Range<usize>,
+    pub system_name: String,
+    pub system_config: String,
+    pub message: String,
 }
 
 // TODO
@@ -244,20 +245,19 @@ impl<K: Eq + Hash, V> SmallTable<K, V> {
     }
 }
 
-pub fn to_map<K: Eq + Hash + Clone, V: Clone>(x: &[(K, V)]) -> HashMap<K, V> {
-    let mut r = HashMap::<K, V>::new();
-    assert!(
-        x.iter().map(|y| &y.0).counts().len() == x.len(),
-        "Supplied list has a repeated key (not a proper set!)"
-    );
-    for (k, v) in x.into_iter() {
-        r.insert(k.clone(), v.clone());
-    }
-    r
-}
-
 // NOTE one helper method per Payload type
 impl NodeBody {
+    pub fn from(x: &[(&str, PayloadExt)]) -> Self {
+        let mut r = HashMap::<String, PayloadExt>::new();
+        assert!(
+            x.iter().map(|y| &y.0).counts().len() == x.len(),
+            "Supplied list has a repeated key (not a proper set!)"
+        );
+        for (k, v) in x.into_iter() {
+            r.insert(k.to_string(), v.clone());
+        }
+        Self(r)
+    }
     pub fn get_precise_time(&self, name: &str) -> Result<Timestamp, LifeCoreError> {
         if !self.0.contains_key(name) {
             Result::<Timestamp, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
@@ -394,5 +394,3 @@ impl Index<&str> for NodeBody {
 
 pub mod analysis;
 mod lifecore;
-#[cfg(test)]
-mod tests;

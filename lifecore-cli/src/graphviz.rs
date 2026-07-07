@@ -6,7 +6,7 @@ use std::{
 
 use itertools::Itertools;
 
-use crate::{EventIndex, LifeCore, NodeBody, PayloadExt, SmallTable};
+use lifecore::{EventIndex, LifeCore, NodeBody, PayloadExt, SmallTable};
 
 // GraphViz Visualization Config. Can be configured to draw a subset of the graph in multiple passes.
 // If an event E passes any of these tests, it is drawn.
