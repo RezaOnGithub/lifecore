@@ -1,77 +1,17 @@
 use indexmap::IndexSet;
 use itertools::Itertools;
 use jiff::{Unit, Zoned};
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-    ops::Index,
-    str::FromStr,
-};
+use std::{collections::HashMap, ops::Index, str::FromStr};
 use strum::VariantNames;
 use whoami::{hostname, username};
 
 use crate::{
-    AnalysisReport, Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node,
-    NodeBody, Payload, PayloadExt, SmallTable, StringIndex,
-    analysis::{AnalysisConfig, AnalysisSuiteConfig, Analyzer},
+    Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody,
+    NodeBodyExt, Payload, PayloadExt, StringIndex,
+    analysis::{AnalysisConfig, AnalysisSuiteConfig},
 };
 
-pub mod accessors;
-pub use crate::lifecore::accessors::*;
-
-impl Index<&StringIndex> for LifeCore {
-    type Output = str;
-
-    fn index(&self, index: &StringIndex) -> &Self::Output {
-        self.string_table
-            .get_index(index.0 as usize)
-            .expect("StringIndex out of range")
-    }
-}
-
-impl Index<StringIndex> for LifeCore {
-    type Output = str;
-
-    fn index(&self, index: StringIndex) -> &Self::Output {
-        &self[&index]
-    }
-}
-
-impl Index<&EventIndex> for LifeCore {
-    type Output = Event;
-
-    fn index(&self, index: &EventIndex) -> &Self::Output {
-        self.event
-            .get(index.0 as usize)
-            .expect("EventIndex out of range")
-    }
-}
-
-impl Index<EventIndex> for LifeCore {
-    type Output = Event;
-
-    fn index(&self, index: EventIndex) -> &Self::Output {
-        &self[&index]
-    }
-}
-
-impl Index<&CircumstanceIndex> for LifeCore {
-    type Output = Circumstance;
-
-    fn index(&self, index: &CircumstanceIndex) -> &Self::Output {
-        self.circumstance_table
-            .get_index(index.0 as usize)
-            .expect("StringIndex out of range")
-    }
-}
-
-impl Index<CircumstanceIndex> for LifeCore {
-    type Output = Circumstance;
-
-    fn index(&self, index: CircumstanceIndex) -> &Self::Output {
-        &self[&index]
-    }
-}
+mod accessors;
 
 impl LifeCore {
     // TODO bootstrap types
@@ -101,17 +41,6 @@ impl LifeCore {
     // get the COUNT of all events
     pub fn total_event_count(&self) -> usize {
         self.event.len()
-    }
-
-    // Get both the circumstance and the event for an index
-    pub fn get(&self, i: &EventIndex) -> (Circumstance, Event) {
-        (
-            self.circumstance_table
-                .get_index(self.circumstance[i.0 as usize].0 as usize)
-                .expect("CirucmstanceIndex out of range")
-                .clone(),
-            self[i].clone(),
-        )
     }
 
     pub fn connect(
@@ -152,29 +81,28 @@ impl LifeCore {
     pub fn add(
         &mut self,
         ty: &str,
-        payload: NodeBody,
+        payload: NodeBodyExt,
         parent: Option<EventIndex>,
     ) -> anyhow::Result<EventIndex> {
-        let insert_all_strings = |t: &mut Self,
-                                  payload: &NodeBody|
-         -> SmallTable<StringIndex, Payload> {
-            let mut r: SmallTable<StringIndex, Payload> = SmallTable::new();
-            for (k, v) in payload.0.iter() {
-                let smalltable_key = t.get_or_insert_string(&k);
-                let smalltable_value = {
-                    match v {
-                    PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
-                    PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
-                    PayloadExt::Number(i) => Payload::Number(*i),
-                    PayloadExt::Serialized(s) => {
-                        Payload::Serialized(t.get_or_insert_string(&s.to_string()))
-                    }
-                    }
-                };
-                r.insert(smalltable_key, smalltable_value);
-            }
-            r
-        };
+        let insert_all_strings =
+            |t: &mut Self, payload: &NodeBodyExt| -> NodeBody<StringIndex, Payload> {
+                let mut r: NodeBody<StringIndex, Payload> = NodeBody::new();
+                for (k, v) in payload.0.iter() {
+                    let smalltable_key = t.get_or_insert_string(&k);
+                    let smalltable_value = {
+                        match v {
+                        PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
+                        PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
+                        PayloadExt::Number(i) => Payload::Number(*i),
+                        PayloadExt::Serialized(s) => {
+                            Payload::Serialized(t.get_or_insert_string(&s.to_string()))
+                        }
+                        }
+                    };
+                    r.insert(smalltable_key, smalltable_value);
+                }
+                r
+            };
 
         {
             let mut t = self.clone();
@@ -206,7 +134,7 @@ impl LifeCore {
         Ok(self.last())
     }
 
-    pub fn resolve(&self, t: &SmallTable<StringIndex, Payload>) -> NodeBody {
+    pub(crate) fn resolve(&self, t: &NodeBody<StringIndex, Payload>) -> NodeBodyExt {
         let mut r = HashMap::<String, PayloadExt>::new();
         for (k, v) in t.0.iter().filter(|x| x.is_some()).map(|x| x.unwrap()) {
             r.insert(self[k].to_string(), {
@@ -220,10 +148,10 @@ impl LifeCore {
                 }
             });
         }
-        NodeBody(r)
+        NodeBodyExt(r)
     }
 
-    pub fn get_or_insert_current_session_circumstance(
+    pub(crate) fn get_or_insert_current_session_circumstance(
         &mut self,
     ) -> anyhow::Result<(CircumstanceIndex, Circumstance)> {
         let now = Zoned::now().round(Unit::Hour)?;
@@ -248,7 +176,7 @@ impl LifeCore {
         }
     }
 
-    pub fn get_or_insert_mock_circumstance(&mut self) -> (CircumstanceIndex, Circumstance) {
+    pub(crate) fn get_or_insert_mock_circumstance(&mut self) -> (CircumstanceIndex, Circumstance) {
         if let Some(idx) = self.circumstance_table.get_index_of(&Circumstance::Mock) {
             (CircumstanceIndex(idx as u64), Circumstance::Mock)
         } else {
@@ -260,7 +188,7 @@ impl LifeCore {
         }
     }
 
-    pub fn get_or_insert_string(&mut self, s: &str) -> StringIndex {
+    pub(crate) fn get_or_insert_string(&mut self, s: &str) -> StringIndex {
         let x = self.string_table.get_index_of(s);
         if x.is_some() {
             StringIndex(x.unwrap() as u64)
@@ -359,14 +287,14 @@ impl LifeCore {
         {
             // Easy part: check edges
             let edge_count = self.edges().count();
-            let unique_edge_count = self.edges().map(|x| x.1).unique().count();
+            let unique_edge_count = self.raw_edges().map(|x| x.1).unique().count();
             if edge_count != unique_edge_count {
                 anyhow::bail!("Duplicate Edges!")
             }
 
             // Hard part: check nodes
             let dupe_class = self
-                .nodes()
+                .raw_nodes()
                 .into_group_map_by(|x| x.1.clone())
                 .into_values()
                 .filter(|bucket| bucket.len() > 1)
@@ -456,5 +384,59 @@ impl LifeCore {
         }
 
         anyhow::Result::Ok(())
+    }
+}
+
+impl Index<&StringIndex> for LifeCore {
+    type Output = str;
+
+    fn index(&self, index: &StringIndex) -> &Self::Output {
+        self.string_table
+            .get_index(index.0 as usize)
+            .expect("StringIndex out of range")
+    }
+}
+
+impl Index<StringIndex> for LifeCore {
+    type Output = str;
+
+    fn index(&self, index: StringIndex) -> &Self::Output {
+        &self[&index]
+    }
+}
+
+impl Index<&EventIndex> for LifeCore {
+    type Output = Event;
+
+    fn index(&self, index: &EventIndex) -> &Self::Output {
+        self.event
+            .get(index.0 as usize)
+            .expect("EventIndex out of range")
+    }
+}
+
+impl Index<EventIndex> for LifeCore {
+    type Output = Event;
+
+    fn index(&self, index: EventIndex) -> &Self::Output {
+        &self[&index]
+    }
+}
+
+impl Index<&CircumstanceIndex> for LifeCore {
+    type Output = Circumstance;
+
+    fn index(&self, index: &CircumstanceIndex) -> &Self::Output {
+        self.circumstance_table
+            .get_index(index.0 as usize)
+            .expect("StringIndex out of range")
+    }
+}
+
+impl Index<CircumstanceIndex> for LifeCore {
+    type Output = Circumstance;
+
+    fn index(&self, index: CircumstanceIndex) -> &Self::Output {
+        &self[&index]
     }
 }

@@ -6,7 +6,7 @@ use std::{
 
 use itertools::Itertools;
 
-use lifecore::{EventIndex, LifeCore, NodeBody, PayloadExt, SmallTable};
+use lifecore::{EventIndex, LifeCore, NodeBodyExt, PayloadExt, SmallTable};
 
 // GraphViz Visualization Config. Can be configured to draw a subset of the graph in multiple passes.
 // If an event E passes any of these tests, it is drawn.
@@ -38,7 +38,7 @@ pub fn graphviz<'a, 'b>(lc: &'a LifeCore, config: GraphVizConfig<'b>) -> anyhow:
 where
     'b: 'a,
 {
-    fn node_label(e: EventIndex, ty: &str, payload: NodeBody) -> String {
+    fn node_label(e: EventIndex, ty: &str, payload: NodeBodyExt) -> String {
         let mut pl = "".to_string();
         for (k, v) in payload
             .0

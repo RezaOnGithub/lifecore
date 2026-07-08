@@ -1,24 +1,8 @@
-//! Rumination Regarding Node Payload Field Types
-//! =============================================
-//!
-//! A complete disaster. Initially I wanted to keep field types to a handful but that hit a wall immediately;
-//! Everything became stringly-typed! It possible to remedy this by introducing a handful more of useful types
-//! and constructing nodes only from those; however I've already hit a wall with Node_Type: should I add
-//! collection types? Collection types containing what? It's a very brittle system.
-//!
-//! An alternative design would be having every node type register "itself" beforehand, with a validation function.
-//! Ah.
-//!
-//! Because I value being able to know beforehand what a Node contains, we will go with a more straightforward approach
-//! of explicitly declaring screwy data fields. i.e. Payload::Serialized
-
 use indexmap::IndexSet;
 use itertools::Itertools;
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::fmt::Display;
-use std::ops::{Index, Range};
-use std::{collections::HashMap, hash::Hash};
+use std::{collections::HashMap, fmt::Display, hash::Hash, ops::{Index, Range}};
 use strum::{EnumIs, EnumTryAs};
 use thiserror;
 
@@ -28,40 +12,37 @@ use crate::typecheck::NodeType;
 
 // Used for "internal" representation of NodeBody
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
-pub struct SmallTable<K: Eq + Hash, V>([Option<(K, V)>; 32]);
+pub(crate) struct NodeBody([Option<(StringIndex, Payload)>; 32]);
 
 // Used for "external" convenient usage
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub struct NodeBody(pub HashMap<String, PayloadExt>);
+pub struct NodeBodyExt(pub HashMap<String, PayloadExt>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct CircumstanceIndex(u64);
+pub(crate) struct CircumstanceIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct StringIndex(u64);
+pub(crate) struct StringIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct EventIndex(pub u64);
+pub(crate) struct EventIndex(pub u64);
 
-impl EventIndex {
-    pub fn before(&self) -> std::ops::Range<usize> {
-        0..(self.0 as usize)
-    }
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 
-    pub fn before_and_including(&self) -> std::ops::Range<usize> {
-        // Can't use RangeInclusive because it can't be converted to Range easily
-        0..((self.0 + 1) as usize)
-    }
+pub struct EventContext {
+    // Inclusive start.
+    // By default, None means "since the beginning"
+    // NOTE rarely if ever we'll need to constrain the start. Perhaps later when optimizing?
+    start: Option<usize>,
+    // Exclusive! `start..end` basically
+    // Used to calculate type, check for staleness etc
+    // By default, None means "till forever" (goes to infinity)
+    end: Option<usize>,
 
-    pub fn between_inclusive(&self, other: Self) -> std::ops::Range<usize> {
-        // Can't use RangeInclusive because it can't be converted to Range easily
-        if self.0 > other.0 {
-            (other.0 as usize)..((self.0 + 1) as usize)
-        } else {
-            (self.0 as usize)..((other.0 + 1) as usize)
-        }
-    }
+    // What was the object of inspection?
+    // Ought to be in start..end
+    thing: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -119,7 +100,7 @@ pub(crate) enum Event {
 pub(crate) struct Node {
     pub ty: StringIndex,
     pub parent: Option<EventIndex>,
-    pub payload: SmallTable<StringIndex, Payload>,
+    pub payload: NodeBody,
 }
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Edge {
@@ -147,6 +128,9 @@ pub(crate) enum Payload {
     PreciseTime(Timestamp),
     Text(StringIndex),
     Number(i64),
+
+    // NOTE this should be a last resort for users. As time goes on, we may need to expand
+    // the list of primitve types. Serialized LOBs are discouraged.
     Serialized(StringIndex),
 }
 
@@ -167,6 +151,9 @@ pub enum PayloadExt {
     PreciseTime(Timestamp),
     Text(String),
     Number(i64),
+
+    // NOTE this should be a last resort for users. As time goes on, we may need to expand
+    // the list of primitve types. Serialized LOBs are discouraged.
     Serialized(serde_json::Value),
 }
 
@@ -176,19 +163,28 @@ impl PayloadExt {
     }
 }
 
+// TODO this may have been a bad decision: Type depends on the context and can evolve,
+// so now use an `EventContext` to the type to keep track of at which point in time we meant it.
+// Of course, this adds another validity issue: corresponding EventIndex must be valid in this
+// window!
+// NOTE `ty` may fail to resolve too! so just in case we also include `ty_name`
+// _Usually_, ty.is_none() indicates a bigger problem but dealing with it
+// is not the responsibility of users, for now.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NodeExt {
+    e: EventContext,
     ty: Option<NodeType>,
     ty_name: String,
-    field: NodeBody,
+    field: NodeBodyExt,
     parent: Option<EventIndex>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct EdgeExt {
+    e: EventContext,
     ty_name: String,
-    from: EventIndex,
-    to: EventIndex,
+    from: EventContext,
+    to: EventContext,
 }
 
 #[derive(EnumIs, EnumTryAs, Clone, PartialEq, Eq)]
@@ -199,12 +195,12 @@ pub enum EventExt {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub enum AnalysisReport {
-    BasicError {
-        offending_event: EventIndex,
+    BasicValidationFailure {
+        offending_event: EventContext,
         reason: BasicValidationFailureScenario,
     },
     LogInfo {
-        offending_event: EventIndex,
+        offending_event: EventContext,
         message: String,
     },
     // Errors from Constraint systems
@@ -220,10 +216,15 @@ pub struct AnalysisOutput(pub Vec<AnalysisReport>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct ConstraintSystemMessage {
-    pub offending_event: EventIndex,
+    pub offending_event: EventContext,
     pub window: Range<usize>,
     pub system_name: String,
     pub system_config: String,
+    // Errors are always relevant, of course, but warnings less so because we may have resolved them in a future window.
+    // The UI may choose to ignore this message if N members of `relevance` are stale (for some sensible N)
+    // Additionally, UI may implement a `barklist` where messages of a certain hash are dismissed.
+    // (This lead to needing a custom Hash implementation that specifically sorts this list)
+    pub relevance: Vec<EventIndex>,
     pub message: String,
 }
 
@@ -237,185 +238,278 @@ pub enum SuggestedAction {
     AddSpecificNode(Node),
 }
 
-// Misc/Boilerplate
+mod boilerplate {
+    use super::*;
+    impl NodeBody {
+        pub fn new() -> Self {
+            Self([const { None }; 32])
+        }
 
-impl<K: Eq + Hash, V> SmallTable<K, V> {
-    pub fn new() -> Self {
-        Self([const { None }; 32])
-    }
+        pub fn insert(&mut self, key: StringIndex, val: Payload) {
+            let first_empty = {
+                let x = self
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|x| x.1.is_none())
+                    .take(1)
+                    .collect_vec();
+                if x.is_empty() { None } else { Some(x[0].0) }
+            }
+            .expect("Payload table has at least one empty slot.");
+            self.0[first_empty] = Some((key, val));
+        }
 
-    pub fn insert(&mut self, key: K, val: V) {
-        let first_empty = {
-            let x = self
-                .0
-                .iter()
-                .enumerate()
-                .filter(|x| x.1.is_none())
-                .take(1)
-                .collect_vec();
-            if x.is_empty() { None } else { Some(x[0].0) }
-        }
-        .expect("Payload table has at least one empty slot.");
-        self.0[first_empty] = Some((key, val));
-    }
-
-    pub fn from(tab: HashMap<K, V>) -> Self {
-        assert!(tab.len() <= 32, "HashMap too large!");
-        let mut r = Self::new();
-        for x in tab.into_iter() {
-            r.insert(x.0, x.1);
-        }
-        return r;
-    }
-}
-
-// NOTE one helper method per Payload type
-impl NodeBody {
-    pub fn from(x: &[(&str, PayloadExt)]) -> Self {
-        let mut r = HashMap::<String, PayloadExt>::new();
-        assert!(
-            x.iter().map(|y| &y.0).counts().len() == x.len(),
-            "Supplied list has a repeated key (not a proper set!)"
-        );
-        for (k, v) in x.into_iter() {
-            r.insert(k.to_string(), v.clone());
-        }
-        Self(r)
-    }
-    pub fn get_precise_time(&self, name: &str) -> Result<Timestamp, LifeCoreError> {
-        if !self.0.contains_key(name) {
-            Result::<Timestamp, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
-                field_name: name.to_string(),
-            })
-        } else if !self.0[name].is_precise_time() {
-            Result::<Timestamp, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
-                field_name: name.to_string(),
-            })
-        } else {
-            Result::<Timestamp, LifeCoreError>::Ok(
-                self.0[name].clone().try_as_precise_time().unwrap(),
-            )
-        }
-    }
-    pub fn get_number(&self, name: &str) -> Result<i64, LifeCoreError> {
-        if !self.0.contains_key(name) {
-            Result::<i64, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
-                field_name: name.to_string(),
-            })
-        } else if !self.0[name].is_number() {
-            Result::<i64, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
-                field_name: name.to_string(),
-            })
-        } else {
-            Result::<i64, LifeCoreError>::Ok(self.0[name].clone().try_as_number().unwrap())
-        }
-    }
-    pub fn get_text(&self, name: &str) -> Result<String, LifeCoreError> {
-        if !self.0.contains_key(name) {
-            Result::<String, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
-                field_name: name.to_string(),
-            })
-        } else if !self.0[name].is_text() {
-            Result::<String, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
-                field_name: name.to_string(),
-            })
-        } else {
-            Result::<String, LifeCoreError>::Ok(self.0[name].clone().try_as_text().unwrap())
+        pub fn from(tab: HashMap<StringIndex, Payload>) -> Self {
+            assert!(tab.len() <= 32, "HashMap too large!");
+            let mut r = Self::new();
+            for x in tab.into_iter() {
+                r.insert(x.0, x.1);
+            }
+            return r;
         }
     }
 
-    pub fn get_deserialized<T: DeserializeOwned>(&self, name: &str) -> Result<T, LifeCoreError> {
-        if !self.0.contains_key(name) {
-            Result::<T, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
-                field_name: name.to_string(),
-            })
-        } else if !self.0[name].is_serialized() {
-            Result::<T, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
-                field_name: name.to_string(),
-            })
-        } else {
-            if let Result::Ok(x) =
-                serde_json::from_value::<T>(self.0[name].clone().try_as_serialized().unwrap())
-            {
-                Result::<T, LifeCoreError>::Ok(x)
-            } else {
-                Result::<T, LifeCoreError>::Err(LifeCoreError::FieldDeserializationFailed {
+    impl NodeBodyExt {
+        pub fn from(x: &[(&str, PayloadExt)]) -> Self {
+            let mut r = HashMap::<String, PayloadExt>::new();
+            assert!(
+                x.iter().map(|y| &y.0).counts().len() == x.len(),
+                "Supplied list has a repeated key (not a proper set!)"
+            );
+            for (k, v) in x.into_iter() {
+                r.insert(k.to_string(), v.clone());
+            }
+            Self(r)
+        }
+
+        // NOTE one helper method per Payload type
+        pub fn get_precise_time(&self, name: &str) -> Result<Timestamp, LifeCoreError> {
+            if !self.0.contains_key(name) {
+                Result::<Timestamp, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
                     field_name: name.to_string(),
                 })
+            } else if !self.0[name].is_precise_time() {
+                Result::<Timestamp, LifeCoreError>::Err(
+                    LifeCoreError::FieldContainsUnexpectedType {
+                        field_name: name.to_string(),
+                    },
+                )
+            } else {
+                Result::<Timestamp, LifeCoreError>::Ok(
+                    self.0[name].clone().try_as_precise_time().unwrap(),
+                )
+            }
+        }
+        pub fn get_number(&self, name: &str) -> Result<i64, LifeCoreError> {
+            if !self.0.contains_key(name) {
+                Result::<i64, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+                    field_name: name.to_string(),
+                })
+            } else if !self.0[name].is_number() {
+                Result::<i64, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+                    field_name: name.to_string(),
+                })
+            } else {
+                Result::<i64, LifeCoreError>::Ok(self.0[name].clone().try_as_number().unwrap())
+            }
+        }
+        pub fn get_text(&self, name: &str) -> Result<String, LifeCoreError> {
+            if !self.0.contains_key(name) {
+                Result::<String, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+                    field_name: name.to_string(),
+                })
+            } else if !self.0[name].is_text() {
+                Result::<String, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+                    field_name: name.to_string(),
+                })
+            } else {
+                Result::<String, LifeCoreError>::Ok(self.0[name].clone().try_as_text().unwrap())
+            }
+        }
+
+        pub fn get_deserialized<T: DeserializeOwned>(
+            &self,
+            name: &str,
+        ) -> Result<T, LifeCoreError> {
+            if !self.0.contains_key(name) {
+                Result::<T, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+                    field_name: name.to_string(),
+                })
+            } else if !self.0[name].is_serialized() {
+                Result::<T, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+                    field_name: name.to_string(),
+                })
+            } else {
+                if let Result::Ok(x) =
+                    serde_json::from_value::<T>(self.0[name].clone().try_as_serialized().unwrap())
+                {
+                    Result::<T, LifeCoreError>::Ok(x)
+                } else {
+                    Result::<T, LifeCoreError>::Err(LifeCoreError::FieldDeserializationFailed {
+                        field_name: name.to_string(),
+                    })
+                }
+            }
+        }
+    }
+
+    impl PayloadExt {
+        pub fn discriminant(&self) -> PayloadType {
+            match self {
+            PayloadExt::PreciseTime(_) => PayloadType::PreciseTime,
+            PayloadExt::Text(_) => PayloadType::Text,
+            PayloadExt::Number(_) => PayloadType::Number,
+            PayloadExt::Serialized(_) => PayloadType::Serialized,
+            }
+        }
+    }
+
+    impl ConstraintSystemMessage {
+        pub fn new_message(&self, message: String) -> Self {
+            Self {
+                message,
+                ..self.clone()
+            }
+        }
+    }
+
+    // Special-Case Hash: relevance list should be sorted first
+    impl Hash for ConstraintSystemMessage {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.offending_event.hash(state);
+            self.window.hash(state);
+            self.system_name.hash(state);
+            self.system_config.hash(state);
+            self.relevance.clone().sort().hash(state);
+            self.message.hash(state);
+        }
+    }
+
+    impl Display for PayloadExt {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+            PayloadExt::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
+            PayloadExt::Text(s) => f.write_fmt(format_args!("\"{}\"", s.as_str())),
+            PayloadExt::Number(i) => f.write_fmt(format_args!("{}", i)),
+            PayloadExt::Serialized(s) => f.write_fmt(format_args!("<{}>", s)),
+            }
+        }
+    }
+
+    impl AnalysisOutput {
+        // TODO
+        // has_error
+        // first_error
+    }
+
+    impl From<&usize> for EventIndex {
+        fn from(value: &usize) -> Self {
+            Self(*value as u64)
+        }
+    }
+
+    impl From<usize> for EventIndex {
+        fn from(value: usize) -> Self {
+            Self::from(&value)
+        }
+    }
+
+    impl Into<usize> for &EventIndex {
+        fn into(self) -> usize {
+            self.0 as usize
+        }
+    }
+
+    impl Into<usize> for EventIndex {
+        fn into(self) -> usize {
+            (&self).into()
+        }
+    }
+
+    impl Index<&str> for NodeBodyExt {
+        type Output = PayloadExt;
+
+        fn index(&self, index: &str) -> &Self::Output {
+            self.0.index(index)
+        }
+    }
+
+    impl EventIndex {
+        pub fn before(&self) -> EventContext {
+            EventContext::from(0..(self.0 as usize), Some(self.0 as usize))
+        }
+
+        pub fn before_and_including(&self) -> EventContext {
+            // Can't use RangeInclusive because it can't be converted to Range easily
+            EventContext::from(0..((self.0 + 1) as usize), Some(self.0 as usize))
+        }
+    }
+
+    impl EventContext {
+        fn range(&self) -> Range<usize> {
+            self.start.unwrap_or(0)..self.end.unwrap_or(usize::MAX)
+        }
+
+        fn validate(&self) -> bool {
+            self.thing.is_none() || self.range().contains(&self.thing.unwrap())
+        }
+
+        pub(in crate::boilerplate) fn from(r: Range<usize>, thing: Option<usize>) -> Self {
+            Self {
+                start: Some(r.start),
+                end: Some(r.end),
+                thing,
+            }
+        }
+
+        pub fn last(&self) -> EventIndex {
+            assert!(self.is_bounded() && !self.is_empty() && self.validate());
+            return EventIndex::from(self.end.unwrap() - 1);
+        }
+
+        pub fn first(&self) -> EventIndex {
+            assert!(!self.is_empty() && self.validate());
+            return EventIndex::from(self.start.unwrap_or(0));
+        }
+
+        pub fn into_iter(self) -> impl Iterator<Item = EventIndex> {
+            assert!(self.validate());
+            self.range().into_iter().map(|x| EventIndex::from(x))
+        }
+
+        pub fn is_bounded(&self) -> bool {
+            assert!(self.validate());
+
+            self.end.is_some()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            assert!(self.validate());
+
+            self.range().is_empty()
+        }
+
+        pub fn look(&self, e: EventIndex) -> Self {
+            assert!(self.validate());
+            let mut r = self.clone();
+            r.thing = Some(e.0 as usize);
+            assert!(r.validate());
+            r
+        }
+
+        pub fn intersect(&self, rhs: &Self) -> Self {
+            assert!(self.validate() && rhs.validate() && self.thing == rhs.thing);
+            let start = std::cmp::min(self.start.unwrap_or(0), rhs.start.unwrap_or(0));
+            let end = std::cmp::min(self.end.unwrap_or(0), rhs.end.unwrap_or(0));
+            Self {
+                start: Some(start),
+                end: Some(end),
+                thing: self.thing,
             }
         }
     }
 }
-
-impl PayloadExt {
-    pub fn discriminant(&self) -> PayloadType {
-        match self {
-        PayloadExt::PreciseTime(_) => PayloadType::PreciseTime,
-        PayloadExt::Text(_) => PayloadType::Text,
-        PayloadExt::Number(_) => PayloadType::Number,
-        PayloadExt::Serialized(_) => PayloadType::Serialized,
-        }
-    }
-}
-
-impl ConstraintSystemMessage {
-    pub fn new_message(&self, message: String) -> Self {
-        Self {
-            message,
-            ..self.clone()
-        }
-    }
-}
-
-impl Display for PayloadExt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-        PayloadExt::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
-        PayloadExt::Text(s) => f.write_fmt(format_args!("\"{}\"", s.as_str())),
-        PayloadExt::Number(i) => f.write_fmt(format_args!("{}", i)),
-        PayloadExt::Serialized(s) => f.write_fmt(format_args!("<{}>", s)),
-        }
-    }
-}
-
-impl AnalysisOutput {
-    // TODO
-    // has_error
-    // first_error
-}
-
-impl From<&usize> for EventIndex {
-    fn from(value: &usize) -> Self {
-        Self(*value as u64)
-    }
-}
-
-impl From<usize> for EventIndex {
-    fn from(value: usize) -> Self {
-        Self::from(&value)
-    }
-}
-
-impl Into<usize> for &EventIndex {
-    fn into(self) -> usize {
-        self.0 as usize
-    }
-}
-
-impl Into<usize> for EventIndex {
-    fn into(self) -> usize {
-        (&self).into()
-    }
-}
-
-impl Index<&str> for NodeBody {
-    type Output = PayloadExt;
-
-    fn index(&self, index: &str) -> &Self::Output {
-        self.0.index(index)
-    }
-}
-
 pub mod analysis;
 mod lifecore;
 pub mod typecheck;

@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use lifecore::{LifeCore, PayloadExt, NodeBody};
+use lifecore::{LifeCore, NodeBodyExt, PayloadExt};
 
 mod typecheck;
 
@@ -16,14 +16,14 @@ fn basic_01() {
     let n0 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let n1 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("orange".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("orange".to_string()))]),
             None,
         )
         .unwrap();
@@ -41,14 +41,14 @@ fn no_dupe_node() {
     let _n0 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let _n1 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
@@ -61,14 +61,14 @@ fn no_dupe_edge() {
     let n0 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let n1 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("orange".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("orange".to_string()))]),
             None,
         )
         .unwrap();
@@ -82,14 +82,14 @@ fn dupe_parent_and_child() {
     let n0 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let n1 = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             Some(n0),
         )
         .unwrap();
@@ -103,14 +103,14 @@ fn stale_rule_01() {
     let parent = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let child = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             Some(parent),
         )
         .unwrap();
@@ -124,14 +124,14 @@ fn stale_rule_02() {
     let parent = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();
     let child = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             Some(parent),
         )
         .unwrap();

@@ -1,14 +1,54 @@
 //! Accessor Zoo
 
-use crate::{Edge, EdgeExt, Event, EventIndex, LifeCore, Node, NodeExt, typecheck::NodeType};
+use std::ops::Range;
+
+use crate::{
+    Circumstance, Edge, EdgeExt, Event, EventIndex, LifeCore, Node, NodeExt, typecheck::NodeType,
+};
 use itertools::Itertools;
 
 impl LifeCore {
-    pub fn node(&self, e: EventIndex) -> NodeExt {
+    // Helper accessors. Returning Node, Edge, and more internal types
+    pub(crate) fn get(&self, i: &EventIndex) -> (Circumstance, Event) {
+        (
+            self.circumstance_table
+                .get_index(self.circumstance[i.0 as usize].0 as usize)
+                .expect("CirucmstanceIndex out of range")
+                .clone(),
+            self[i].clone(),
+        )
+    }
+
+    pub(crate) fn raw_node(&self, i: &EventIndex) -> Node {
+        self[i].clone().try_as_node().unwrap()
+    }
+
+    pub(crate) fn raw_edge(&self, i: &EventIndex) -> Edge {
+        self[i].clone().try_as_edge().unwrap()
+    }
+
+    pub(crate) fn raw_nodes(&self) -> impl Iterator<Item = (EventIndex, Node)> {
+        self.event
+            .iter()
+            .enumerate()
+            .filter(|x| x.1.is_node())
+            .map(|x| (x.0.into(), x.1.clone().try_as_node().unwrap()))
+    }
+
+    pub(crate) fn raw_edges(&self) -> impl Iterator<Item = (EventIndex, Edge)> {
+        self.event
+            .iter()
+            .enumerate()
+            .filter(|x| x.1.is_edge())
+            .map(|x| (x.0.into(), x.1.clone().try_as_edge().unwrap()))
+    }
+
+    // Public Interface. Returning NodeExt and EdgeExt
+    pub fn node_in_context(&self, e: EventIndex, window: Range<usize>) -> NodeExt {
         let raw_node = self[e].clone().try_as_node().unwrap();
         let ty = {
             if let Some((_, (_, ty))) = self
-                .types_just_before(e)
+                .types_in_window(e.before_and_including())
                 .filter(|(name, _)| name.as_str() == &self[raw_node.ty])
                 .nth(0)
             {
@@ -157,13 +197,13 @@ impl LifeCore {
         &self,
         ty: &str,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Node)> {
+    ) -> impl Iterator<Item = (EventIndex, NodeExt)> {
         range
             .clone()
             .into_iter()
             .filter(move |e| {
                 self.event[*e].is_node()
-                    && &self[self.node(e.into()).ty] == ty
+                    && self.node(e.into()).ty_name.as_str() == ty
                     && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
             })
             .map(|x| (x.into(), self.node(x.into())))
@@ -173,14 +213,14 @@ impl LifeCore {
         &self,
         ty: &str,
         range: std::ops::Range<usize>,
-    ) -> impl Iterator<Item = (EventIndex, Edge)> {
+    ) -> impl Iterator<Item = (EventIndex, EdgeExt)> {
         // NOTE if range.count() >= 1 then (range.end - 1) is always valid
         range
             .clone()
             .into_iter()
             .filter(move |e| {
                 self.event[*e].is_edge()
-                    && &self[self.edge(e.into()).ty] == ty
+                    && self.edge(e.into()).ty_name.as_str() == ty
                     && !self.is_stale_by_and_including(e.into(), (range.end - 1).into())
             })
             .map(|x| (x.into(), self.edge(x.into())))
@@ -188,11 +228,11 @@ impl LifeCore {
 
     // Return all the fresh types in 0..e
     // Types are woven into the system at this point; special-cased accessors just make life easier
-    pub fn types_just_before(
+    pub fn types_in_window(
         &self,
-        upper_exclusive: EventIndex,
+        window: Range<usize>,
     ) -> impl Iterator<Item = (String, (EventIndex, NodeType))> {
-        let window = upper_exclusive.before();
+        assert!(window.start == 0, "Not Well Understood");
         let last = {
             if let Some(x) = window.clone().last() {
                 Some(EventIndex::from(x))

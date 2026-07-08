@@ -1,16 +1,17 @@
+use lifecore::typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
 use lifecore::{
-    LifeCore, NodeBody, PayloadExt,
+    LifeCore, NodeBodyExt, PayloadExt,
     analysis::{AnalysisRunner, Analyzer, AnalyzerFactory},
 };
-use lifecore::typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
 
 #[test]
 fn node_deserialization01() {
     let nt_describe_json =
-        serde_json::to_string(&Into::<NodeBody>::into(NodeType::describe_self())).unwrap();
+        serde_json::to_string(&Into::<NodeBodyExt>::into(NodeType::describe_self())).unwrap();
     eprintln!("nt_describe_json\t{}", nt_describe_json.as_str());
 
-    let nt_describe_hashmap = serde_json::from_str::<NodeBody>(nt_describe_json.as_str()).unwrap();
+    let nt_describe_hashmap =
+        serde_json::from_str::<NodeBodyExt>(nt_describe_json.as_str()).unwrap();
     eprintln!("nt_describe_hashmap\t{:#?}", &nt_describe_hashmap);
 
     let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();
@@ -22,7 +23,7 @@ fn no_bootstrap_typecheck() {
     let _ = lc
         .add(
             "",
-            NodeBody::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
         .unwrap();

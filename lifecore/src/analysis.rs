@@ -1,12 +1,9 @@
 //! This particular design is just an excuse to learn about "dyn". It is absolutely not an ideal design
 //! (But it could serve as a sketch for a future plugin system)
 
-use std::{arch::x86_64, collections::HashMap};
-
 use crate::{AnalysisOutput, AnalysisReport, LifeCore, LifeCoreError};
-use itertools::Itertools;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnalysisSuiteConfig(pub Vec<AnalysisConfig>);
@@ -17,8 +14,8 @@ pub struct AnalysisConfig {
     pub config: String,
 }
 
-// The idea behind `initialize` is that if some pre-condition is not quite correct, analyzer can
-// disable itself.
+// The idea behind `initialize` is that if some pre-condition is not quite correct, the
+// analyzer can disable itself.
 pub trait Analyzer {
     fn initialize(&mut self, lc: &LifeCore) -> AnalysisOutput;
     fn analyze(&self, lc: &LifeCore) -> AnalysisOutput;
