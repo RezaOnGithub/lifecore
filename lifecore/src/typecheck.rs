@@ -10,44 +10,7 @@
 //! that is older or the same age; That is, if a node type X is overriden at E, all non-stale X nodes by E must
 //! typecheck against the new type X' that overrode X.
 //!
-//! This can be terribly inefficient, and of course there is a streaming approach but correctness for now. PERF
-//!
-//! Some Design Considerations
-//! ==========================
-//!
-//! Imagine a scenario where a type with an associated constraint system has to be updated. Now constraint system can only:
-//!         - Make a previously mandatory field optional
-//!         - Add a new optional field
-//! And outside of these two contrived scenarios, the constraint system now has to be forked and an entirely new types
-//! should be used. With a different name also! Because names are important.
-//!
-//! One way of achieving a bit of sanity could be appending the "system version" to the node type, but it does not
-//! address the main point of fragility of updating constraint systems: old validation should still work.
-//!
-//! If we had reusable system pieces and could encode the constraint in the graph itself using maybe script bytecode,
-//! this could be addressed, and some people were crazy enough to do something like this on the neo-FreeNet if I
-//! remember correctly.
-//!
-//! So in that hypothetical scenario, the constraint system could be encoded just like the types here and validated with
-//! a similar algorithm: applying to all events before the current version of itself and after the previous version
-//!
-//! Override Field
-//! ==============
-//!
-//! An additional thing for types: they have to declare the node types that can override them, and this node type should
-//! be a valid nodetype at the time of definiton. Haven't considered effects of this decision yet...
-//!
-//! One type that needs to be practically, immediately added is Tombstone type, so that Node_Type and any other node
-//! can be overriden and effectively disabled.
-//!
-//! Derive Macro
-//! ============
-//!
-//! There should be a derive macro that creates a NodeType based on its body struct.
-//!     - Basic types (like Timestamp, i64, String) get serialized as their own
-//!     - Option becomes Optional, additional attributes for Encouraged and Deprecated
-//!     - the rest are Serialized if they impl Serialize
-//! Otherwise, error.
+//! This can be terribly inefficient, and of course there is a streaming approach but correctness for now. NOTDO PERF
 
 use crate::analysis::*;
 use crate::*;
@@ -74,15 +37,12 @@ pub enum NodeTypeFieldStatus {
 
 pub trait TypedBody<'a>: Into<NodeBodyExt> + TryFrom<&'a NodeBodyExt> {
     fn describe_self() -> NodeType;
+    fn name() -> &'static str;
 }
 
-// TODO some system of deriving From/Into between a concrete body and NodeBody
-// Somehow, it should be smart enough to use "native" types for some fields and serialize the rest
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
 pub struct NodeType {
-    // This should become PayloadExt::Text
     pub name: String,
-    // These should be serialized
     pub class: NodeTypeClass,
     pub outgoing: Vec<String>,
     pub incoming: Vec<String>,
@@ -93,7 +53,7 @@ pub struct NodeType {
 impl<'a> TypedBody<'a> for NodeType {
     fn describe_self() -> NodeType {
         NodeType {
-            name: "Node_Type".into(),
+            name: Self::name().to_string(),
             class: NodeTypeClass::Regular,
             outgoing: vec![],
             incoming: vec![],
@@ -125,6 +85,10 @@ impl<'a> TypedBody<'a> for NodeType {
                 ),
             ],
         }
+    }
+
+    fn name() -> &'static str {
+        "Node_Type"
     }
 }
 
@@ -204,193 +168,251 @@ impl Analyzer for TypeCheck {
 
     fn analyze(&self, lc: &LifeCore) -> AnalysisOutput {
         let mut r = AnalysisOutput(vec![]);
+        macro_rules! warn {
+            (
+                $e0:expr,
+                $($x:expr),+
+                $(; $($y:expr),* $(,)?)?
+                $(,)?
+            ) => {
+                r.0.push(AnalysisReport::Warning(ConstraintSystemMessage {
+                    offending_event: $e0,
+                    system_name: TYPECHECK_NAME.to_string(),
+                    system_config: self.config.clone(),
+                    relevance: vec![ $($($y),*)? ],
+                    message: format!($($x),+),
+                }));
+            };
+        }
+        macro_rules! err {
+            (
+                $e0:expr,
+                $($x:expr),+
+            ) => {
+                r.0.push(AnalysisReport::Inconsistency(ConstraintSystemMessage {
+                    offending_event: $e0,
+                    system_name: TYPECHECK_NAME.to_string(),
+                    system_config: self.config.clone(),
+                    relevance: vec![],
+                    message: format!($($x),+),
+                }));
+            };
+        }
 
-        // Rolling window check
-        for last in lc.last().before_and_including().into_iter() {
-            // For every self.event[0..X]
-            //      - Get the effective types at that point
-            //      - Get first event S where effective type is one we currently have
-            //      - All fresh nodes in self.event[0..X] must typecheck against those types
-            let window = EventIndex(last as u64).before_and_including();
+        // check whether a Node_Type declaring some type X is not clashing with an older but non-stale
+        // Node_Type declaring a type of the same name.
+        for (node_type_index, node_type_raw) in lc
+            .raw_nodes(EventContext::universe())
+            .filter(|(_, node)| &lc[node.ty] == NodeType::name())
+        {
             let type_table = lc
-                .types_in_window(window.clone())
-                .collect::<HashMap<String, (EventIndex, NodeType)>>();
+                .types(node_type_index.before())
+                .collect::<HashMap<_, _>>();
+            let node_type = NodeType::try_from(&lc.resolve(&node_type_raw.payload)).unwrap();
+            if let Some((older_type_index, older_type)) = type_table.get(node_type.name.as_str()) {
+                // The only scenario this is valid is if the new node override the old one
+                if !node_type_raw.parent.is_some_and(|x| x == *older_type_index) {
+                    err!(
+                        node_type_index
+                            .before_and_including()
+                            .look_at(node_type_index),
+                        "Cannot have a Node_Type declaring {} which was already declared",
+                        node_type.name.as_str()
+                    );
+                }
+            }
+        }
+
+        // Check overrides in types
+        for last in 0..lc.total_event_count() {
+            let ctx = EventIndex::from(last).before_and_including();
+            let type_table = lc.types(ctx.clone()).collect::<HashMap<_, _>>();
             // Check that override types exist
             // TODO I'm not sure whether this should be an error or not.
             // What it's causing at the moment is that interrelated Node_Types have to complete
             // a ritual to allow overriding each othe. I'm demoting this to a warning for now.
             for (ty_event, ty) in type_table.values() {
                 for override_ty in ty.additional_override.iter() {
-                    let message_template = ConstraintSystemMessage {
-                        offending_event: *ty_event,
-                        window: window.clone(),
-                        system_name: TYPECHECK_NAME.to_string(),
-                        system_config: self.config.clone(),
-                        message: String::new(),
-                    };
                     if !type_table.contains_key(override_ty) {
-                        r.0.push(AnalysisReport::Warning(message_template.new_message(
-                            format!(
-                                "Type {} has an unknown override type {}",
-                                ty.name.as_str(),
-                                override_ty
-                            ),
-                        )))
-                    }
-                }
-            }
-            // Check nodes for their fields, Check edges for their connectivity
-            for e in lc.fresh_events_in_range(window.clone()) {
-                let message_template = ConstraintSystemMessage {
-                    offending_event: e.0,
-                    window: window.clone(),
-                    system_name: TYPECHECK_NAME.to_string(),
-                    system_config: self.config.clone(),
-                    message: String::new(),
-                };
-                macro_rules! warn {
-                    ($($y:expr),+) => (
-                        r.0.push(AnalysisReport::Warning(message_template.new_message(
-                            format!($($y),+)
-                    )));)
-                }
-                macro_rules! err {
-                    ($($y:expr),+) => (
-                        r.0.push(AnalysisReport::Inconsistency(message_template.new_message(
-                            format!($($y),+)
-                    )));)
-                }
-                match e.1 {
-                Event::Node(_) => {
-                    let node = lc.node(e.0);
-                    if node.ty.is_none() {
-                        err!("Node_Type {} not found!", node.ty_name.as_str());
-                        continue;
-                    }
-
-                    // Fields that may be present and mandatory
-                    for (field_name, (field_type, field_policy)) in node.ty.unwrap().field.iter() {
-                        match field_policy {
-                        NodeTypeFieldStatus::Mandatory => {
-                            if !node.field.0.contains_key(field_name) {
-                                err!("Node does not have the mandatory field {}", field_name);
-                            }
-                        }
-                        NodeTypeFieldStatus::Encouraged => {
-                            if !node.field.0.contains_key(field_name) {
-                                warn!(
-                                    "It is encouraged to fill the field {} on this node",
-                                    field_name
-                                );
-                            }
-                        }
-                        NodeTypeFieldStatus::Deprecated => {
-                            if node.field.0.contains_key(field_name) {
-                                warn!(
-                                    "Field {} is deprecated on this node type! Consider clearing it.",
-                                    field_name
-                                );
-                            }
-                        }
-                        NodeTypeFieldStatus::Optional => {
-                            // Nothing to do.
-                        }
-                        }
-                        if node.field.0.contains_key(field_name)
-                            && node.field.0[field_name].discriminant() != *field_type
-                        {
-                            err!("Field {} has the wrong type!", field_name);
-                        }
-                    }
-
-                    // Extraneous fields
-                    for extra_field in node.field.0.keys().filter(|body_field| {
-                        !node
-                            .ty
-                            .unwrap()
-                            .field
-                            .iter()
-                            .map(|x| &x.0)
-                            .contains(body_field)
-                    }) {
-                        err!("Extraneous field {} not allowed!", extra_field);
-                    }
-                }
-                Event::Edge(edge) => {
-                    // from end -> "outgoing" relative to that node
-                    // to end -> "incoming" relative to that node
-                    let outgoing_type_name = lc.node(edge.from).ty_name.clone();
-                    let incoming_type_name = lc.node(edge.to).ty_name.clone();
-                    if !type_table.contains_key(outgoing_type_name.as_str()) {
-                        err!(
-                            "Edge head is at a Node with non-existent type {}",
-                            outgoing_type_name
-                        );
-                        continue;
-                    }
-                    if !type_table.contains_key(incoming_type_name.as_str()) {
-                        err!(
-                            "Edge tail is at a Node with non-existent type {}",
-                            incoming_type_name
-                        );
-                        continue;
-                    }
-                    let outgoing_type = &type_table[outgoing_type_name.as_str()].1;
-                    let incoming_type = &type_table[incoming_type_name.as_str()].1;
-                    let edge_type_name = &lc[edge.ty];
-                    if !outgoing_type
-                        .outgoing
-                        .iter()
-                        .map(String::as_str)
-                        .contains(edge_type_name)
-                    {
-                        err!(
-                            "Edge head of type {} does not allow outgoing edge of type {}",
-                            outgoing_type_name,
-                            edge_type_name
+                        warn!(
+                            ctx.look_at(*ty_event),
+                            "Override {} on type {} does not (yet) exist",
+                            override_ty,
+                            ty.name.as_str();
+                            *ty_event
                         );
                     }
-                    if !incoming_type
-                        .incoming
-                        .iter()
-                        .map(String::as_str)
-                        .contains(edge_type_name)
-                    {
-                        err!(
-                            "Edge tail of type {} does not allow incoming edge of type {}",
-                            incoming_type_name,
-                            edge_type_name
-                        );
-                    }
-                }
                 }
             }
         }
-        // Override Logic. TODO
-        // First, check if the override types even exist
-        for (eidx, node) in lc.nodes() {
-            if node.parent.is_some() {
-                let parent_type_name = lc.node(node.parent.unwrap()).ty_name.clone();
-                if !type_table.contains_key(parent_type_name.as_str()) {
-                    // TODO in what scenarios is this valid? After all, parent is no longer fresh, and
-                    // its type may have been overriden in the current window as well.
+
+        // Check nodes for their fields
+        for last in 0..lc.total_event_count() {
+            let ctx = EventIndex::from(last).before_and_including();
+            for pointed_context in ctx
+                .clone()
+                .index_iter()
+                .filter(|e| !lc.is_stale(*e) && lc[e.thing()].is_node())
+            {
+                let node = lc.node(pointed_context);
+                if node.ty.is_none() {
+                    err!(
+                        pointed_context,
+                        "Type {} does not exist",
+                        node.ty_name.as_str()
+                    );
                     continue;
                 }
-                // This is actually completely wrong. We should look at the type of the parent in the
-                // window from 0..child and decide based on that, not the window we currently have
-                let parent_type = &type_table[parent_type_name.as_str()].1;
-                if !(parent_type.name == resolved_type.name
-                    || parent_type
-                        .additional_override
-                        .contains(&resolved_type.name))
+                let node_type = node.ty.unwrap();
+
+                // Fields that may be present and mandatory
+                for (field_name, (field_type, field_policy)) in node_type.field.iter() {
+                    match field_policy {
+                    NodeTypeFieldStatus::Mandatory => {
+                        if !node.field.0.contains_key(field_name) {
+                            err!(
+                                pointed_context,
+                                "Node of type {} does not have the mandatory field {}",
+                                node.ty.unwrap().name.as_str(),
+                                field_name
+                            );
+                        }
+                    }
+                    NodeTypeFieldStatus::Encouraged => {
+                        if !node.field.0.contains_key(field_name) {
+                            warn!(
+                                pointed_context,
+                                "It is encouraged to fill the field {} on this node", field_name
+                            );
+                        }
+                    }
+                    NodeTypeFieldStatus::Deprecated => {
+                        if node.field.0.contains_key(field_name) {
+                            warn!(
+                                pointed_context,
+                                "Field {} is deprecated on this node type! Consider clearing it.",
+                                field_name
+                            );
+                        }
+                    }
+                    NodeTypeFieldStatus::Optional => {
+                        // Nothing to do.
+                    }
+                    }
+                    if node
+                        .field
+                        .0
+                        .get(field_name)
+                        .is_some_and(|x| x.discriminant() != *field_type)
+                    {
+                        err!(pointed_context, "Field {} has the wrong type!", field_name);
+                    }
+                }
+
+                // Extraneous fields
+                for extra_field in
+                    node.field.0.keys().filter(|body_field| {
+                        !node_type.field.iter().map(|x| &x.0).contains(body_field)
+                    })
                 {
                     err!(
-                        "Node of type {} overrides a node of type {} but the latter does not allow children of the former type",
-                        resolved_type.name,
-                        parent_type.name
+                        pointed_context,
+                        "Extraneous field {} not allowed!",
+                        extra_field
                     );
                 }
             }
+        }
+
+        // Check edges ends so that they allow for that edge
+        for last in 0..lc.total_event_count() {
+            let ctx = EventIndex::from(last).before_and_including();
+            let type_table = lc.types(ctx.clone()).collect::<HashMap<_, _>>();
+
+            for pointed_context in ctx
+                .clone()
+                .index_iter()
+                .filter(|e| !lc.is_stale(*e) && lc[e.thing()].is_edge())
+            {
+                // from end -> "outgoing" relative to that node
+                // to end -> "incoming" relative to that node
+                let edge = lc.edge(pointed_context);
+                let outgoing_node = lc.node(edge.from);
+                let incoming_node = lc.node(edge.to);
+
+                let mut end_types_can_resolve = true;
+                if !type_table.contains_key(outgoing_node.ty_name.as_str()) {
+                    err!(
+                        pointed_context,
+                        "Edge head is at a Node with non-existent type {}",
+                        outgoing_node.ty_name.as_str()
+                    );
+                    assert!(outgoing_node.ty.is_none());
+                    end_types_can_resolve = false;
+                }
+                // COPY_PASTE
+                if !type_table.contains_key(incoming_node.ty_name.as_str()) {
+                    err!(
+                        pointed_context,
+                        "Edge tail is at a Node with non-existent type {}",
+                        incoming_node.ty_name.as_str()
+                    );
+                    assert!(incoming_node.ty.is_none());
+                    end_types_can_resolve = false;
+                }
+
+                if !end_types_can_resolve {
+                    continue;
+                }
+
+                if !outgoing_node
+                    .ty
+                    .unwrap()
+                    .outgoing
+                    .iter()
+                    .map(String::as_str)
+                    .contains(edge.ty_name.as_str())
+                {
+                    err!(
+                        pointed_context,
+                        "Edge head node of type {} does not allow outgoing edge of type {}",
+                        outgoing_node.ty_name.as_str(),
+                        edge.ty_name.as_str()
+                    );
+                }
+                // COPY_PASTE
+                if !incoming_node
+                    .ty
+                    .unwrap()
+                    .outgoing
+                    .iter()
+                    .map(String::as_str)
+                    .contains(edge.ty_name.as_str())
+                {
+                    err!(
+                        pointed_context,
+                        "Edge head node of type {} does not allow outgoing edge of type {}",
+                        incoming_node.ty_name.as_str(),
+                        edge.ty_name.as_str()
+                    );
+                }
+            }
+        }
+
+        // Check whether a child is allowed to override parent at the point of override
+        for last in 0..lc.total_event_count() {
+            let last = EventIndex::from(last);
+            let ctx = last.before_and_including();
+            let type_table = lc.types(ctx);
+
+            if lc[last].is_edge() || lc.raw_node(&last).parent.is_none() {
+                continue;
+            }
+
+            let current_node = lc.node(ctx.look_at(last));
+            let parent_node = lc.node(last.before().look_at(lc.raw_node(&last).parent.unwrap()));
+
+            
         }
         r
     }

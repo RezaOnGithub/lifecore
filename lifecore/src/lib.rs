@@ -2,13 +2,17 @@ use indexmap::IndexSet;
 use itertools::Itertools;
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{collections::HashMap, fmt::Display, hash::Hash, ops::{Index, Range}};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    hash::Hash,
+    ops::{Index, Range},
+};
 use strum::{EnumIs, EnumTryAs};
 use thiserror;
 
 use crate::analysis::AnalysisSuiteConfig;
-pub use crate::lifecore::*;
-use crate::typecheck::NodeType;
+pub use crate::typecheck::NodeType;
 
 // Used for "internal" representation of NodeBody
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
@@ -26,7 +30,7 @@ pub(crate) struct CircumstanceIndex(u64);
 pub(crate) struct StringIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub(crate) struct EventIndex(pub u64);
+pub struct EventIndex(pub u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 
@@ -69,24 +73,22 @@ pub struct LifeCore {
 
     // Analyzers added so far. An analyzer has 2 pieces of state:
     // - initial config (just a small short string)
-    // - nodes and edges that may get added as part of encouragement through AnalysisReport (may indicate "progression")
+    // - nodes and edges that may get added as a part of the suggestions through AnalysisReport (may indicate "progression")
     configured_analyzer: AnalysisSuiteConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, thiserror::Error)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum LifeCoreError {
-    #[error(
-        "Field {field_name:?} Couldn't Be Deserialized! (either to JSON or to the target type)"
-    )]
+    #[error("Field {field_name:?} Couldn't Be Deserialized!")]
     FieldDeserializationFailed { field_name: String },
     #[error("Field {field_name:?} was not found!")]
     FieldNotFound { field_name: String },
-    #[error("Field {field_name:?} is not the type we expected it to be")]
+    #[error("Field {field_name:?} is not the type we expected it to be!")]
     FieldContainsUnexpectedType { field_name: String },
-    #[error("Potentially different analyzers under the same name {dupe_name:?}")]
+    #[error("Potentially different analyzers under the same name {dupe_name:?}!")]
     DuplicateAnalyzer { dupe_name: String },
-    #[error("Analyzer {name:?} not found")]
+    #[error("Analyzer {name:?} not found!")]
     AnalyzerNotFound { name: String },
 }
 
@@ -129,8 +131,9 @@ pub(crate) enum Payload {
     Text(StringIndex),
     Number(i64),
 
-    // NOTE this should be a last resort for users. As time goes on, we may need to expand
-    // the list of primitve types. Serialized LOBs are discouraged.
+    // NOTE this should be a last resort for users. As time goes on, we expand
+    // the list of primitve types to further minimize its use.
+    // Serialized LOBs are discouraged.
     Serialized(StringIndex),
 }
 
@@ -152,15 +155,10 @@ pub enum PayloadExt {
     Text(String),
     Number(i64),
 
-    // NOTE this should be a last resort for users. As time goes on, we may need to expand
-    // the list of primitve types. Serialized LOBs are discouraged.
+    // NOTE this should be a last resort for users. As time goes on, we expand
+    // the list of primitve types to further minimize its use.
+    // Serialized LOBs are discouraged.
     Serialized(serde_json::Value),
-}
-
-impl PayloadExt {
-    pub fn serialized_from<T: Serialize>(x: T) -> Self {
-        Self::Serialized(serde_json::to_value(x).unwrap())
-    }
 }
 
 // TODO this may have been a bad decision: Type depends on the context and can evolve,
@@ -216,8 +214,8 @@ pub struct AnalysisOutput(pub Vec<AnalysisReport>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct ConstraintSystemMessage {
+    // Contains the event that was problematic and the neighborhood that the error happened
     pub offending_event: EventContext,
-    pub window: Range<usize>,
     pub system_name: String,
     pub system_config: String,
     // Errors are always relevant, of course, but warnings less so because we may have resolved them in a future window.
@@ -238,8 +236,21 @@ pub enum SuggestedAction {
     AddSpecificNode(Node),
 }
 
+pub mod analysis;
+mod lifecore;
+pub mod typecheck;
+
 mod boilerplate {
+    use std::fmt::Write;
+
     use super::*;
+
+    impl PayloadExt {
+        pub fn serialized_from<T: Serialize>(x: T) -> Self {
+            Self::Serialized(serde_json::to_value(x).unwrap())
+        }
+    }
+
     impl NodeBody {
         pub fn new() -> Self {
             Self([const { None }; 32])
@@ -365,24 +376,20 @@ mod boilerplate {
         }
     }
 
-    impl ConstraintSystemMessage {
-        pub fn new_message(&self, message: String) -> Self {
-            Self {
-                message,
-                ..self.clone()
-            }
-        }
-    }
-
     // Special-Case Hash: relevance list should be sorted first
     impl Hash for ConstraintSystemMessage {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
             self.offending_event.hash(state);
-            self.window.hash(state);
             self.system_name.hash(state);
             self.system_config.hash(state);
             self.relevance.clone().sort().hash(state);
             self.message.hash(state);
+        }
+    }
+
+    impl ConstraintSystemMessage {
+        pub fn validate(&self) -> bool {
+            self.offending_event.validate() && self.offending_event.thing.is_some()
         }
     }
 
@@ -444,6 +451,10 @@ mod boilerplate {
             // Can't use RangeInclusive because it can't be converted to Range easily
             EventContext::from(0..((self.0 + 1) as usize), Some(self.0 as usize))
         }
+
+        pub(crate) fn i(self) -> usize {
+            self.0 as usize
+        }
     }
 
     impl EventContext {
@@ -453,6 +464,11 @@ mod boilerplate {
 
         fn validate(&self) -> bool {
             self.thing.is_none() || self.range().contains(&self.thing.unwrap())
+        }
+
+        pub fn thing(&self) -> EventIndex {
+            assert!(self.validate() && self.thing.is_some());
+            EventIndex::from(self.thing.unwrap())
         }
 
         pub(in crate::boilerplate) fn from(r: Range<usize>, thing: Option<usize>) -> Self {
@@ -473,9 +489,44 @@ mod boilerplate {
             return EventIndex::from(self.start.unwrap_or(0));
         }
 
-        pub fn into_iter(self) -> impl Iterator<Item = EventIndex> {
+        pub fn index_iter(self) -> impl Iterator<Item = Self> {
             assert!(self.validate());
-            self.range().into_iter().map(|x| EventIndex::from(x))
+            let ctx = self.clone();
+            self.range()
+                .into_iter()
+                .map(move |x| ctx.look_at(EventIndex::from(x)))
+        }
+
+        pub fn inclusive_right(self) -> impl Iterator<Item = Self> {
+            assert!(self.validate() && self.thing.is_some());
+            let ctx = self.clone();
+            (self.thing.unwrap()..self.end.unwrap_or(usize::MAX))
+                .into_iter()
+                .map(move |x| ctx.look_at(EventIndex::from(x)))
+        }
+
+        pub fn inclusive_left(self) -> impl Iterator<Item = Self> {
+            assert!(self.validate() && self.thing.is_some());
+            let ctx = self.clone();
+            (self.start.unwrap_or(0)..(self.thing.unwrap() + 1))
+                .into_iter()
+                .map(move |x| ctx.look_at(EventIndex::from(x)))
+        }
+
+        pub fn exclusive_right(self) -> impl Iterator<Item = Self> {
+            assert!(self.validate() && self.thing.is_some());
+            let ctx = self.clone();
+            ((self.thing.unwrap() + 1)..self.end.unwrap_or(usize::MAX))
+                .into_iter()
+                .map(move |x| ctx.look_at(EventIndex::from(x)))
+        }
+
+        pub fn exclusive_left(self) -> impl Iterator<Item = Self> {
+            assert!(self.validate() && self.thing.is_some());
+            let ctx = self.clone();
+            (self.start.unwrap_or(0)..self.thing.unwrap())
+                .into_iter()
+                .map(move |x| ctx.look_at(EventIndex::from(x)))
         }
 
         pub fn is_bounded(&self) -> bool {
@@ -490,7 +541,11 @@ mod boilerplate {
             self.range().is_empty()
         }
 
-        pub fn look(&self, e: EventIndex) -> Self {
+        // Builders
+        // Take care to write an interface that minimizes usage mistakes
+
+        // NOTE does not adjust the upper bound!
+        pub fn look_at(&self, e: EventIndex) -> Self {
             assert!(self.validate());
             let mut r = self.clone();
             r.thing = Some(e.0 as usize);
@@ -508,8 +563,67 @@ mod boilerplate {
                 thing: self.thing,
             }
         }
+
+        pub fn universe() -> Self {
+            Self {
+                start: None,
+                end: None,
+                thing: None,
+            }
+        }
+    }
+
+    impl Event {
+        pub(crate) fn as_raw_node(&self) -> Node {
+            self.clone().try_as_node().unwrap()
+        }
+
+        pub(crate) fn as_raw_edge(&self) -> Edge {
+            self.clone().try_as_edge().unwrap()
+        }
+    }
+
+    impl EventExt {
+        pub fn as_node(&self) -> NodeExt {
+            self.clone().try_as_node().unwrap()
+        }
+
+        pub fn as_edge(&self) -> EdgeExt {
+            self.clone().try_as_edge().unwrap()
+        }
+    }
+
+    impl Display for EventIndex {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(format!("EventIndex({})", self.0 as usize).as_str())
+        }
+    }
+
+    impl Display for EventContext {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(
+                format!(
+                    "EventContext[{}, <{}>, {})",
+                    self.start.unwrap_or(0),
+                    {
+                        if let Some(x) = self.thing {
+                            format!("{}", x)
+                        } else {
+                            "NONE".to_string()
+                        }
+                    }
+                    .as_str(),
+                    {
+                        if let Some(x) = self.end {
+                            format!("{}", x)
+                        } else {
+                            "INF".to_string()
+                        }
+                    }
+                    .as_str()
+                )
+                .as_str(),
+            )
+        }
     }
 }
-pub mod analysis;
-mod lifecore;
-pub mod typecheck;

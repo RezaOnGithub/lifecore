@@ -6,15 +6,14 @@ use strum::VariantNames;
 use whoami::{hostname, username};
 
 use crate::{
-    Circumstance, CircumstanceIndex, Edge, Event, EventIndex, LifeCore, Node, NodeBody,
-    NodeBodyExt, Payload, PayloadExt, StringIndex,
+    Circumstance, CircumstanceIndex, Edge, Event, EventContext, EventIndex, LifeCore, Node,
+    NodeBody, NodeBodyExt, Payload, PayloadExt, StringIndex,
     analysis::{AnalysisConfig, AnalysisSuiteConfig},
 };
 
 mod accessors;
 
 impl LifeCore {
-    // TODO bootstrap types
     pub fn new() -> Self {
         Self {
             event: vec![],
@@ -84,25 +83,24 @@ impl LifeCore {
         payload: NodeBodyExt,
         parent: Option<EventIndex>,
     ) -> anyhow::Result<EventIndex> {
-        let insert_all_strings =
-            |t: &mut Self, payload: &NodeBodyExt| -> NodeBody<StringIndex, Payload> {
-                let mut r: NodeBody<StringIndex, Payload> = NodeBody::new();
-                for (k, v) in payload.0.iter() {
-                    let smalltable_key = t.get_or_insert_string(&k);
-                    let smalltable_value = {
-                        match v {
-                        PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
-                        PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
-                        PayloadExt::Number(i) => Payload::Number(*i),
-                        PayloadExt::Serialized(s) => {
-                            Payload::Serialized(t.get_or_insert_string(&s.to_string()))
-                        }
-                        }
-                    };
-                    r.insert(smalltable_key, smalltable_value);
-                }
-                r
-            };
+        let insert_all_strings = |t: &mut Self, payload: &NodeBodyExt| -> NodeBody {
+            let mut r = NodeBody::new();
+            for (k, v) in payload.0.iter() {
+                let smalltable_key = t.get_or_insert_string(&k);
+                let smalltable_value = {
+                    match v {
+                    PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
+                    PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
+                    PayloadExt::Number(i) => Payload::Number(*i),
+                    PayloadExt::Serialized(s) => {
+                        Payload::Serialized(t.get_or_insert_string(&s.to_string()))
+                    }
+                    }
+                };
+                r.insert(smalltable_key, smalltable_value);
+            }
+            r
+        };
 
         {
             let mut t = self.clone();
@@ -134,7 +132,7 @@ impl LifeCore {
         Ok(self.last())
     }
 
-    pub(crate) fn resolve(&self, t: &NodeBody<StringIndex, Payload>) -> NodeBodyExt {
+    pub(crate) fn resolve(&self, t: &NodeBody) -> NodeBodyExt {
         let mut r = HashMap::<String, PayloadExt>::new();
         for (k, v) in t.0.iter().filter(|x| x.is_some()).map(|x| x.unwrap()) {
             r.insert(self[k].to_string(), {
@@ -168,7 +166,10 @@ impl LifeCore {
         if let Some(idx) = self.circumstance_table.get_index_of(&circumstance) {
             anyhow::Result::Ok((CircumstanceIndex(idx as u64), circumstance))
         } else {
-            self.circumstance_table.insert(circumstance.clone());
+            assert!(
+                !self.circumstance_table.insert(circumstance.clone()),
+                "Circumstance should not be present. We just checked!"
+            );
             anyhow::Result::Ok((
                 CircumstanceIndex((self.circumstance_table.len() - 1) as u64),
                 circumstance,
@@ -180,7 +181,10 @@ impl LifeCore {
         if let Some(idx) = self.circumstance_table.get_index_of(&Circumstance::Mock) {
             (CircumstanceIndex(idx as u64), Circumstance::Mock)
         } else {
-            self.circumstance_table.insert(Circumstance::Mock);
+            assert!(
+                !self.circumstance_table.insert(Circumstance::Mock),
+                "Circumstance should not be present. We just checked!"
+            );
             (
                 CircumstanceIndex((self.circumstance_table.len() - 1) as u64),
                 Circumstance::Mock,
@@ -193,36 +197,39 @@ impl LifeCore {
         if x.is_some() {
             StringIndex(x.unwrap() as u64)
         } else {
-            self.string_table.insert(s.to_string());
+            assert!(!self.string_table.insert(s.to_string()));
             StringIndex((self.string_table.len() - 1) as u64)
         }
     }
 
-    // Check whether a `e` has become stale within `0..=upper` (upper inclusive)
-    // Stale Node means a newer node has it as its parent
+    pub(crate) fn window<I>(&self, i: I) -> impl Iterator<Item = &Event>
+    where
+        I: IntoIterator<Item = EventContext>,
+    {
+        i.into_iter().map_while(|x| self.event.get(x.thing().i()))
+    }
+
+    // Check whether `e.thing` is stale within context
+    // Stale Node means a newer node has it as its parent within context
     // Stale Edge means at least one end is a Stale Node
-    // NOTE in Stale Node case, upper could refer to the child that makes `e` stale (parent of upper == e)
-    // TODO check if the above fact is considered where this is called
-    pub fn is_stale_by_and_including(&self, e: EventIndex, upper: EventIndex) -> bool {
-        match self[e] {
+    pub fn is_stale(&self, e: EventContext) -> bool {
+        match self[e.thing()] {
         Event::Node(_) => {
-            let window = &self.event[upper.before_and_including()];
-            for interim_node in window
-                .iter()
+            for potential_child in self
+                .window(e.exclusive_right())
                 .filter(|x| x.is_node())
-                .map(|x| x.clone().try_as_node().unwrap())
+                .map(|x| x.as_raw_node())
             {
-                if let Some(idx) = interim_node.parent
-                    && idx == e
+                if let Some(idx) = potential_child.parent
+                    && idx == e.thing()
                 {
                     return true;
                 }
             }
         }
         Event::Edge(Edge { ty: _, from, to }) => {
-            if self.is_stale_by_and_including(from, upper)
-                || self.is_stale_by_and_including(to, upper)
-            {
+            // SUS
+            if self.is_stale(e.look_at(from)) || self.is_stale(e.look_at(to)) {
                 return true;
             }
         }
@@ -230,11 +237,12 @@ impl LifeCore {
         false
     }
 
-    pub fn is_stale(&self, e: EventIndex) -> bool {
-        self.is_stale_by_and_including(e, self.last())
-    }
-
+    // TODO update this to the new AnalysisOutput system
     pub fn basic_validation(&self) -> anyhow::Result<()> {
+        // Applies to all events, past and present.
+        // NOTDO PERF
+        let ctx = || EventContext::universe();
+
         // Non-Rules. Have little to do with the meaning of the graph, but more related to data integrity
         {
             // Payload and PayloadExt cover the same types
@@ -261,7 +269,7 @@ impl LifeCore {
             }
 
             // Only a SINGLE Circumstance::Mock is allowed. This is only for running validation code before adding a new event
-            // TODO modify this so that only TAIL Circumstance::Mock is allowed.
+            // TODO modify this so that only TAIL Circumstance::Mock are allowed.
             {
                 if self.circumstance_table.contains(&Circumstance::Mock) {
                     let mock_index = self
@@ -283,18 +291,19 @@ impl LifeCore {
         }
 
         // Rule: exact edge duplicate events are forbidden.
-        // Rule: exact node duplicate events are forbidden if both are valid within a neighborhood; node duplicates are only discouraged otherwise
+        // Rule: exact node duplicate events are forbidden if both are valid within a neighborhood; node duplicates are _only discouraged_ otherwise
         {
             // Easy part: check edges
-            let edge_count = self.edges().count();
-            let unique_edge_count = self.raw_edges().map(|x| x.1).unique().count();
+            // TODO not so easy! Give a proper error message as to what duplicate edges were found
+            let edge_count = self.edges(ctx()).count();
+            let unique_edge_count = self.raw_edges(ctx()).map(|x| x.1).unique().count();
             if edge_count != unique_edge_count {
                 anyhow::bail!("Duplicate Edges!")
             }
 
             // Hard part: check nodes
             let dupe_class = self
-                .raw_nodes()
+                .raw_nodes(ctx())
                 .into_group_map_by(|x| x.1.clone())
                 .into_values()
                 .filter(|bucket| bucket.len() > 1)
@@ -302,7 +311,7 @@ impl LifeCore {
 
             for dupe in dupe_class {
                 for pair in dupe.iter().combinations(2) {
-                    let (older, newer) = {
+                    let ((older_index, _older_node), (newer_index, newer_node)) = {
                         if pair[0].0 < pair[1].0 {
                             (pair[0], pair[1])
                         } else {
@@ -310,18 +319,18 @@ impl LifeCore {
                         }
                     };
 
-                    if self.is_stale_by_and_including(older.0, newer.0) {
+                    if self.is_stale(newer_index.before().look_at(*older_index)) {
                         eprintln!(
-                            "Duplicate nodes, but older one was invalidated later (still discouraged). EventIndex {} and {}",
-                            older.0.0, newer.0.0
+                            "Duplicate nodes, but older one was invalidated before the new one was added (discouraged). EventIndex {} and {}",
+                            older_index.0, newer_index.0
                         );
                     } else {
                         assert!({
-                            // The check should pass even if an identical node overrides the parent
+                            // The check above should pass if an identical node overrides the parent
                             // What is the application of overriding a node with an exact copy?
-                            // (Maybe counters, or means of reconsidering Stale Edges)
-                            if let Some(idx) = newer.1.parent
-                                && idx == older.0
+                            // (Maybe counters, or means of correcting edges or getting rid of stale edges)
+                            if let Some(idx) = newer_node.parent
+                                && idx == *older_index
                             {
                                 false
                             } else {
@@ -330,15 +339,15 @@ impl LifeCore {
                         });
                         anyhow::bail!(
                             "Exact Duplicate Nodes! EventIndex {} and {}",
-                            older.0.0,
-                            newer.0.0
+                            older_index.0,
+                            newer_index.0
                         )
                     }
                 }
             }
         }
 
-        // Rule: events are sorted, nodes and edges cannot refer to themselves or future
+        // Rule: events are sorted, nodes and edges cannot refer to themselves or the future
         // Rule: Edges can only be between nodes
         // Rule: Node parent can only be another node
         {
@@ -373,12 +382,13 @@ impl LifeCore {
 
         // Rule: after a node has been overriden (that is, a new 'child' node has been added) it cannot be a part of a new edge. "Stale Rule"
         {
-            for (edge_added_later, edge) in self.edges() {
-                assert!(edge_added_later.0 > edge.from.0 && edge_added_later.0 > edge.to.0);
-                if self.is_stale_by_and_including(edge.from, edge_added_later)
-                    || self.is_stale_by_and_including(edge.to, edge_added_later)
-                {
-                    anyhow::bail!("Edge {} violates Stale Rule", edge_added_later.0)
+            for (edge_context, edge) in self.raw_edges(ctx()) {
+                // Throw away the loop context. Now we are looking at 0..edge_index
+                // (inclusive or exclusive doesn't matter in this particular case)
+                let ctx = edge_context.thing().before();
+                assert!(edge_context.thing().0 > edge.from.0 && edge_context.thing().0 > edge.to.0);
+                if self.is_stale(ctx.look_at(edge.from)) || self.is_stale(ctx.look_at(edge.to)) {
+                    anyhow::bail!("Edge {} violates Stale Rule", edge_context.thing())
                 }
             }
         }

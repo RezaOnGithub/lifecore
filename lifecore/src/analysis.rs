@@ -14,8 +14,8 @@ pub struct AnalysisConfig {
     pub config: String,
 }
 
-// The idea behind `initialize` is that if some pre-condition is not quite correct, the
-// analyzer can disable itself.
+// The idea behind `initialize` is that if some pre-condition is not quite correct, or
+// if we are "done" in some sense, analyzer can disable itself and maybe issue a warning.
 pub trait Analyzer {
     fn initialize(&mut self, lc: &LifeCore) -> AnalysisOutput;
     fn analyze(&self, lc: &LifeCore) -> AnalysisOutput;
