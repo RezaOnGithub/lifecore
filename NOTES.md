@@ -1,8 +1,5 @@
 # Conventions
 
-- NEVER derive or implement Debug in production. Prefer
-  `#[cfg_attr(debug_assertions, derive(Debug))]` during development if needed.
-
 - Special comment words
 
 | Word       | Meaning                             | Suggested Action                                                                                                                        |

@@ -19,8 +19,7 @@ pub use crate::typecheck::NodeType;
 pub(crate) struct NodeBody([Option<(StringIndex, Payload)>; 32]);
 
 // Used for "external" convenient usage
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct NodeBodyExt(pub HashMap<String, PayloadExt>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -77,8 +76,7 @@ pub struct LifeCore {
     configured_analyzer: AnalysisSuiteConfig,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, thiserror::Error)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, thiserror::Error, Debug)]
 pub enum LifeCoreError {
     #[error("Field {field_name:?} Couldn't Be Deserialized!")]
     FieldDeserializationFailed { field_name: String },
@@ -92,8 +90,11 @@ pub enum LifeCoreError {
     AnalyzerNotFound { name: String },
 }
 
+// NOTDO due to Index<EventIndex> trait implementation, this must be public, but
+// ideally this should NOT be public! But it'll take some work to get rid of it
+// (and some thinking to replace it with something readable)
 #[derive(Serialize, Deserialize, EnumIs, EnumTryAs, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum Event {
+pub enum Event {
     Node(Node),
     Edge(Edge),
 }
@@ -148,8 +149,8 @@ pub(crate) enum Payload {
     strum::VariantNames,
     strum::EnumIs,
     strum::EnumTryAs,
+    Debug,
 )]
-#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum PayloadExt {
     PreciseTime(Timestamp),
     Text(String),
@@ -191,7 +192,7 @@ pub enum EventExt {
     Edge(EdgeExt),
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, EnumIs)]
 pub enum AnalysisReport {
     BasicValidationFailure {
         offending_event: EventContext,
@@ -405,9 +406,22 @@ mod boilerplate {
     }
 
     impl AnalysisOutput {
-        // TODO
-        // has_error
-        // first_error
+        pub fn has_error(&self) -> bool {
+            for x in self.0.iter() {
+                match x {
+                AnalysisReport::BasicValidationFailure { .. } => return true,
+                AnalysisReport::LogInfo { .. } => continue,
+                AnalysisReport::Inconsistency(_) => return true,
+                AnalysisReport::Warning(_) => continue,
+                AnalysisReport::Suggestion(_, _) => continue,
+                }
+            }
+            false
+        }
+
+        pub fn success(&self) -> bool {
+            !self.has_error()
+        }
     }
 
     impl From<&usize> for EventIndex {
@@ -444,7 +458,7 @@ mod boilerplate {
 
     impl EventIndex {
         pub fn before(&self) -> EventContext {
-            EventContext::from(0..(self.0 as usize), Some(self.0 as usize))
+            EventContext::from(0..(self.0 as usize), None)
         }
 
         pub fn before_and_including(&self) -> EventContext {
@@ -527,6 +541,32 @@ mod boilerplate {
             (self.start.unwrap_or(0)..self.thing.unwrap())
                 .into_iter()
                 .map(move |x| ctx.look_at(EventIndex::from(x)))
+        }
+
+        pub fn inclusive_left_context(&self) -> Self {
+            assert!(self.validate() && self.thing.is_some());
+            // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
+            // We can safely increment self.thing and use it as the upper bound
+            let r = Self {
+                start: self.start,
+                end: Some(self.thing.unwrap() + 1),
+                thing: None,
+            };
+            assert!(r.validate());
+            r
+        }
+
+        pub fn exclusive_left_context(&self) -> Self {
+            assert!(self.validate() && self.thing.is_some());
+            // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
+            // We can safely pass self.thing as the upper bound
+            let r = Self {
+                start: self.start,
+                end: self.thing,
+                thing: None,
+            };
+            assert!(r.validate());
+            r
         }
 
         pub fn is_bounded(&self) -> bool {

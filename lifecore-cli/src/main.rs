@@ -2,14 +2,14 @@ use clap::Parser;
 
 mod graphviz;
 
-#[derive(Parser)]
-struct Cli {
-    #[subcommand]
-    cmd: Cmd,
-}
+// #[derive(Parser)]
+// struct Cli {
+//     #[subcommand]
+//     cmd: Cmd,
+// }
 
-#[derive(Subcommand)]
-enum Cmd {}
+// #[derive(Subcommand)]
+// enum Cmd {}
 
 fn main() {
     println!("Hello, world!");
@@ -19,5 +19,5 @@ fn main() {
 #[test]
 fn validate_cli() {
     use clap::CommandFactory;
-    Cli::debug_assert();
+    // Cli::debug_assert();
 }

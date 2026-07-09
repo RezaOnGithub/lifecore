@@ -80,16 +80,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "cc"
-version = "1.2.64"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
-dependencies = [
- "find-msvc-tools",
- "shlex",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -142,31 +132,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "crossbeam-deque"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
-dependencies = [
- "crossbeam-epoch",
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
-
-[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -177,30 +142,6 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "fallible-iterator"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
-
-[[package]]
-name = "fallible-streaming-iterator"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
-
-[[package]]
-name = "find-msvc-tools"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
-
-[[package]]
-name = "foldhash"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "futures-core"
@@ -228,30 +169,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "foldhash",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-dependencies = [
- "foldhash",
-]
-
-[[package]]
-name = "hashlink"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5081f264ed7adee96ea4b4778b6bb9da0a7228b084587aa3bd3ff05da7c5a3b"
-dependencies = [
- "hashbrown 0.17.1",
-]
 
 [[package]]
 name = "heck"
@@ -266,7 +186,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.1",
+ "hashbrown",
  "serde",
  "serde_core",
 ]
@@ -300,12 +220,10 @@ checksum = "4603d3033e49e2b0e31229fcab20a5d40089c607d975cd9c80551dc69eed9102"
 dependencies = [
  "jiff-static",
  "jiff-tzdb-platform",
- "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "wasm-bindgen",
  "windows-link",
 ]
 
@@ -362,16 +280,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libsqlite3-sys"
-version = "0.38.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db"
-dependencies = [
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
 name = "lifecore"
 version = "0.1.0"
 dependencies = [
@@ -381,8 +289,6 @@ dependencies = [
  "indexmap",
  "itertools",
  "jiff",
- "rayon",
- "rusqlite",
  "serde",
  "serde_json",
  "strum",
@@ -465,12 +371,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pkg-config"
-version = "0.3.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
-
-[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,52 +401,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "rayon"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
-dependencies = [
- "either",
- "rayon-core",
-]
-
-[[package]]
-name = "rayon-core"
-version = "1.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
-dependencies = [
- "crossbeam-deque",
- "crossbeam-utils",
-]
-
-[[package]]
-name = "rsqlite-vfs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
-dependencies = [
- "hashbrown 0.16.1",
- "thiserror",
-]
-
-[[package]]
-name = "rusqlite"
-version = "0.40.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11438310b19e3109b6446c33d1ed5e889428cf2e278407bc7896bc4aaea43323"
-dependencies = [
- "bitflags",
- "fallible-iterator",
- "fallible-streaming-iterator",
- "hashlink",
- "jiff",
- "libsqlite3-sys",
- "smallvec",
- "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -599,34 +453,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "shlex"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "smallvec"
-version = "1.15.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
-
-[[package]]
-name = "sqlite-wasm-rs"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
-dependencies = [
- "cc",
- "js-sys",
- "rsqlite-vfs",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "strsim"
@@ -697,12 +527,6 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
-
-[[package]]
-name = "vcpkg"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "wasi"

@@ -34,13 +34,13 @@ fn no_bootstrap_typecheck() {
         .unwrap();
 
     let output = runner.run(&lc).unwrap();
-    assert!(!output.0.is_empty())
+    assert!(output.has_error())
 }
 
 #[test]
 // Node_Type declares Tombstone as an additional override, which not defined
 // Proper bootstrap is through the Suggestion system.
-fn bad_bootstrap() {
+fn bootstrap() {
     let mut lc = LifeCore::new();
     let _ = lc
         .add("Node_Type", NodeType::describe_self().into(), None)
@@ -48,8 +48,9 @@ fn bad_bootstrap() {
     let mut typecheck = TypeCheck {
         config: String::new(),
     };
-    assert!(!typecheck.analyze(&lc).0.is_empty());
+    
     assert!(!typecheck.initialize(&lc).0.is_empty());
+    assert!(!typecheck.analyze(&lc).0.is_empty());
 }
 
 // #[test]

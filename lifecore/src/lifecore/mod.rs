@@ -167,7 +167,7 @@ impl LifeCore {
             anyhow::Result::Ok((CircumstanceIndex(idx as u64), circumstance))
         } else {
             assert!(
-                !self.circumstance_table.insert(circumstance.clone()),
+                self.circumstance_table.insert(circumstance.clone()),
                 "Circumstance should not be present. We just checked!"
             );
             anyhow::Result::Ok((
@@ -182,7 +182,7 @@ impl LifeCore {
             (CircumstanceIndex(idx as u64), Circumstance::Mock)
         } else {
             assert!(
-                !self.circumstance_table.insert(Circumstance::Mock),
+                self.circumstance_table.insert(Circumstance::Mock),
                 "Circumstance should not be present. We just checked!"
             );
             (
@@ -197,7 +197,7 @@ impl LifeCore {
         if x.is_some() {
             StringIndex(x.unwrap() as u64)
         } else {
-            assert!(!self.string_table.insert(s.to_string()));
+            assert!(self.string_table.insert(s.to_string()));
             StringIndex((self.string_table.len() - 1) as u64)
         }
     }
@@ -319,10 +319,14 @@ impl LifeCore {
                         }
                     };
 
-                    if self.is_stale(newer_index.before().look_at(*older_index)) {
+                    if self.is_stale(
+                        newer_index
+                            .exclusive_left_context()
+                            .look_at(older_index.thing()),
+                    ) {
                         eprintln!(
                             "Duplicate nodes, but older one was invalidated before the new one was added (discouraged). EventIndex {} and {}",
-                            older_index.0, newer_index.0
+                            older_index, newer_index
                         );
                     } else {
                         assert!({
@@ -330,18 +334,14 @@ impl LifeCore {
                             // What is the application of overriding a node with an exact copy?
                             // (Maybe counters, or means of correcting edges or getting rid of stale edges)
                             if let Some(idx) = newer_node.parent
-                                && idx == *older_index
+                                && idx == older_index.thing()
                             {
                                 false
                             } else {
                                 true
                             }
                         });
-                        anyhow::bail!(
-                            "Exact Duplicate Nodes! EventIndex {} and {}",
-                            older_index.0,
-                            newer_index.0
-                        )
+                        anyhow::bail!("Exact Duplicate Nodes! {} and {}", older_index, newer_index)
                     }
                 }
             }

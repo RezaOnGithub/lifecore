@@ -206,16 +206,16 @@ impl Analyzer for TypeCheck {
             .filter(|(_, node)| &lc[node.ty] == NodeType::name())
         {
             let type_table = lc
-                .types(node_type_index.before())
+                .types(node_type_index.exclusive_left_context())
                 .collect::<HashMap<_, _>>();
             let node_type = NodeType::try_from(&lc.resolve(&node_type_raw.payload)).unwrap();
             if let Some((older_type_index, older_type)) = type_table.get(node_type.name.as_str()) {
                 // The only scenario this is valid is if the new node override the old one
-                if !node_type_raw.parent.is_some_and(|x| x == *older_type_index) {
+                if !node_type_raw.parent.is_some_and(|x| x == older_type_index.thing()) {
                     err!(
                         node_type_index
-                            .before_and_including()
-                            .look_at(node_type_index),
+                            .inclusive_left_context()
+                            .look_at(node_type_index.thing()),
                         "Cannot have a Node_Type declaring {} which was already declared",
                         node_type.name.as_str()
                     );
@@ -235,11 +235,11 @@ impl Analyzer for TypeCheck {
                 for override_ty in ty.additional_override.iter() {
                     if !type_table.contains_key(override_ty) {
                         warn!(
-                            ctx.look_at(*ty_event),
+                            *ty_event,
                             "Override {} on type {} does not (yet) exist",
                             override_ty,
                             ty.name.as_str();
-                            *ty_event
+                            ty_event.thing()
                         );
                     }
                 }
@@ -273,7 +273,7 @@ impl Analyzer for TypeCheck {
                             err!(
                                 pointed_context,
                                 "Node of type {} does not have the mandatory field {}",
-                                node.ty.unwrap().name.as_str(),
+                                node_type.name.as_str(),
                                 field_name
                             );
                         }
