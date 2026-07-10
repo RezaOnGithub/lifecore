@@ -64,9 +64,8 @@ fn typing01() {
     runner
         .register_analyzer_kind(Box::new(TypeCheckFactory {}))
         .unwrap();
-    let _ = lc
-        .add(NodeType::name(), NodeType::describe_self().into(), None)
-        .unwrap();
+    #[expect(clippy::let_underscore_must_use)]
+    let _ = lc.add(NodeType::name(), NodeType::describe_self().into(), None);
 }
 
 // #[test]

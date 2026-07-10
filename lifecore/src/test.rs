@@ -1,6 +1,5 @@
 use crate::{LifeCore, NodeBodyExt, PayloadExt};
 
-mod typecheck;
 
 #[test]
 fn new_is_valid() {

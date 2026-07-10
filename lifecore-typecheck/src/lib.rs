@@ -12,131 +12,17 @@
 //!
 //! This can be terribly inefficient, and of course there is a streaming approach but correctness for now. NOTDO PERF
 
-use crate::analysis::*;
+use crate::internal::PayloadType;
+use crate::{analysis::*, internal::EventIndex};
 use crate::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-pub enum NodeTypeClass {
-    Spike,
-    Hub,
-    Toothpick,
-    EdgeNode,
-    Regular,
-}
+#[cfg(test)]
+mod test;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-pub enum NodeTypeFieldStatus {
-    Mandatory,
-    Encouraged,
-    Deprecated,
-    Optional,
-}
-
-pub trait TypedBody<'a>: Into<NodeBodyExt> + TryFrom<&'a NodeBodyExt> {
-    fn describe_self() -> NodeType;
-    fn name() -> &'static str;
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-pub struct NodeType {
-    pub name: String,
-    pub class: NodeTypeClass,
-    pub outgoing: Vec<String>,
-    pub incoming: Vec<String>,
-    pub additional_override: Vec<String>,
-    pub field: Vec<(String, (PayloadType, NodeTypeFieldStatus))>,
-}
-
-impl<'a> TypedBody<'a> for NodeType {
-    fn describe_self() -> NodeType {
-        NodeType {
-            name: Self::name().to_string(),
-            class: NodeTypeClass::Regular,
-            outgoing: vec![],
-            incoming: vec![],
-            additional_override: vec!["Tombstone".to_string()],
-            field: vec![
-                (
-                    "name".to_string(),
-                    (PayloadType::Text, NodeTypeFieldStatus::Mandatory),
-                ),
-                (
-                    "class".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-                ),
-                (
-                    "from_end".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-                ),
-                (
-                    "to_end".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-                ),
-                (
-                    "additional_override".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-                ),
-                (
-                    "field".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
-                ),
-            ],
-        }
-    }
-
-    fn name() -> &'static str {
-        "Node_Type"
-    }
-}
-
-impl Into<NodeBodyExt> for NodeType {
-    fn into(self) -> NodeBodyExt {
-        NodeBodyExt(
-            vec![
-                ("name", PayloadExt::Text(self.name)),
-                ("class", PayloadExt::serialized_from(self.class)),
-                ("from_end", PayloadExt::serialized_from(self.outgoing)),
-                ("to_end", PayloadExt::serialized_from(self.incoming)),
-                (
-                    "additional_override",
-                    PayloadExt::serialized_from(self.additional_override),
-                ),
-                ("field", PayloadExt::serialized_from(self.field)),
-            ]
-            .into_iter()
-            .map(|(x, y)| (x.to_string(), y))
-            .collect::<HashMap<String, PayloadExt>>(),
-        )
-    }
-}
-
-impl TryFrom<&NodeBodyExt> for NodeType {
-    type Error = LifeCoreError;
-
-    fn try_from(v: &NodeBodyExt) -> Result<Self, Self::Error> {
-        let name = v.get_text("name")?;
-        let class: NodeTypeClass = v.get_deserialized("class")?;
-        let from_end: Vec<String> = v.get_deserialized("from_end")?;
-        let to_end: Vec<String> = v.get_deserialized("to_end")?;
-        let additional_override: Vec<String> = v.get_deserialized("additional_override")?;
-        let field: Vec<(String, (PayloadType, NodeTypeFieldStatus))> =
-            v.get_deserialized("field")?;
-
-        Ok(Self {
-            name,
-            class,
-            outgoing: from_end,
-            incoming: to_end,
-            additional_override,
-            field,
-        })
-    }
-}
-
-const TYPECHECK_NAME: &'static str = "Type_Check";
+const TYPECHECK_NAME: &str = "Type_Check";
 
 pub struct TypeCheckFactory;
 impl AnalyzerFactory for TypeCheckFactory {
@@ -162,7 +48,7 @@ impl Analyzer for TypeCheck {
     // declaring "Node_Type" must always exist at any EventIndex
     // Additionally, this should strongly suggest some of the essential node types to add. Currently, Tombstone is very
     // important, but maybe in the future we need more special-cased node types
-    fn initialize(&mut self, lc: &LifeCore) -> AnalysisOutput {
+    fn initialize(&mut self, _lc: &LifeCore) -> AnalysisOutput {
         AnalysisOutput(vec![])
     }
 
@@ -209,9 +95,12 @@ impl Analyzer for TypeCheck {
                 .types(node_type_index.exclusive_left_context())
                 .collect::<HashMap<_, _>>();
             let node_type = NodeType::try_from(&lc.resolve(&node_type_raw.payload)).unwrap();
-            if let Some((older_type_index, older_type)) = type_table.get(node_type.name.as_str()) {
+            if let Some((older_type_index, _older_type)) = type_table.get(node_type.name.as_str()) {
                 // The only scenario this is valid is if the new node override the old one
-                if !node_type_raw.parent.is_some_and(|x| x == older_type_index.thing()) {
+                if node_type_raw
+                    .parent
+                    .is_none_or(|x| x != older_type_index.thing())
+                {
                     err!(
                         node_type_index
                             .inclusive_left_context()
@@ -224,9 +113,9 @@ impl Analyzer for TypeCheck {
         }
 
         // Check overrides in types
-        for last in 0..lc.total_event_count() {
-            let ctx = EventIndex::from(last).before_and_including();
-            let type_table = lc.types(ctx.clone()).collect::<HashMap<_, _>>();
+        for last in lc.last().inclusive_left() {
+            let ctx = last.inclusive_left_context();
+            let type_table = lc.types(ctx).collect::<HashMap<_, _>>();
             // Check that override types exist
             // TODO I'm not sure whether this should be an error or not.
             // What it's causing at the moment is that interrelated Node_Types have to complete
@@ -239,7 +128,7 @@ impl Analyzer for TypeCheck {
                             "Override {} on type {} does not (yet) exist",
                             override_ty,
                             ty.name.as_str();
-                            ty_event.thing()
+                            *ty_event
                         );
                     }
                 }
@@ -250,7 +139,6 @@ impl Analyzer for TypeCheck {
         for last in 0..lc.total_event_count() {
             let ctx = EventIndex::from(last).before_and_including();
             for pointed_context in ctx
-                .clone()
                 .index_iter()
                 .filter(|e| !lc.is_stale(*e) && lc[e.thing()].is_node())
             {
@@ -327,10 +215,9 @@ impl Analyzer for TypeCheck {
         // Check edges ends so that they allow for that edge
         for last in 0..lc.total_event_count() {
             let ctx = EventIndex::from(last).before_and_including();
-            let type_table = lc.types(ctx.clone()).collect::<HashMap<_, _>>();
+            let type_table = lc.types(ctx).collect::<HashMap<_, _>>();
 
             for pointed_context in ctx
-                .clone()
                 .index_iter()
                 .filter(|e| !lc.is_stale(*e) && lc[e.thing()].is_edge())
             {
@@ -403,16 +290,14 @@ impl Analyzer for TypeCheck {
         for last in 0..lc.total_event_count() {
             let last = EventIndex::from(last);
             let ctx = last.before_and_including();
-            let type_table = lc.types(ctx);
+            let _type_table = lc.types(ctx);
 
             if lc[last].is_edge() || lc.raw_node(&last).parent.is_none() {
                 continue;
             }
 
-            let current_node = lc.node(ctx.look_at(last));
-            let parent_node = lc.node(last.before().look_at(lc.raw_node(&last).parent.unwrap()));
-
-            
+            let _current_node = lc.node(ctx.look_at(last));
+            let _parent_node = lc.node(last.before().look_at(lc.raw_node(&last).parent.unwrap()));
         }
         r
     }

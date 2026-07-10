@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lifecore", "lifecore-cli", "lifecore-derive", "lifecore-kman", "lifecore-prod", "lifecore-test"]
+members = ["lifecore", "lifecore-cli", "lifecore-derive", "lifecore-kman", "lifecore-prod", "lifecore-test", "lifecore-typecheck"]
 
 
 [workspace.lints.rust]
@@ -8,7 +8,8 @@ unused_must_use = "warn"
 
 [workspace.lints.clippy]
 let_underscore_must_use = "warn"
-let_unit_value = "deny"
-
+new_without_default = "allow"
+large_enum_variant = "allow" # NOTDO get rid of these issues
+#private_interfaces = "allow" # TODO get rid of these issues
 
 
