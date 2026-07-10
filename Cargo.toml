@@ -1,4 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["lifecore", "lifecore-cli", "lifecore-derive", "lifecore-test"]
+members = ["lifecore", "lifecore-cli", "lifecore-derive", "lifecore-kman", "lifecore-prod", "lifecore-test"]
+
+
+[workspace.lints.rust]
+unused_must_use = "warn"
+
+[workspace.lints.clippy]
+let_underscore_must_use = "warn"
+let_unit_value = "deny"
+
+
 

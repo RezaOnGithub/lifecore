@@ -42,6 +42,7 @@ impl LifeCore {
         self.event.len()
     }
 
+    #[must_use]
     pub fn connect(
         &mut self,
         from: EventIndex,
@@ -77,6 +78,7 @@ impl LifeCore {
         Ok(self.last())
     }
 
+    #[must_use]
     pub fn add(
         &mut self,
         ty: &str,

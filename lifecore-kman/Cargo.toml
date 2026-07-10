@@ -1,0 +1,10 @@
+[package]
+name = "lifecore-kman"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lifecore = { path = "../lifecore" }
+
+[lints]
+workspace = true

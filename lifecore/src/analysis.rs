@@ -16,7 +16,7 @@ pub struct AnalysisConfig {
 
 // The idea behind `initialize` is that if some pre-condition is not quite correct, or
 // if we are "done" in some sense, analyzer can disable itself and maybe issue a warning.
-pub trait Analyzer {
+pub trait Analyzer : Send + Sync {
     fn initialize(&mut self, lc: &LifeCore) -> AnalysisOutput;
     fn analyze(&self, lc: &LifeCore) -> AnalysisOutput;
 }
@@ -39,6 +39,7 @@ impl AnalysisRunner {
         }
     }
 
+    #[must_use]
     pub fn register_analyzer_kind(
         &mut self,
         factory: Box<dyn AnalyzerFactory>,

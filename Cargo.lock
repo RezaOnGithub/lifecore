@@ -315,10 +315,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifecore-kman"
+version = "0.1.0"
+dependencies = [
+ "lifecore",
+]
+
+[[package]]
+name = "lifecore-prod"
+version = "0.1.0"
+dependencies = [
+ "lifecore",
+]
+
+[[package]]
 name = "lifecore-test"
 version = "0.1.0"
 dependencies = [
  "lifecore",
+ "lifecore-cli",
+ "lifecore-derive",
+ "lifecore-kman",
+ "lifecore-prod",
  "serde_json",
 ]
 

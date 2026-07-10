@@ -1,5 +1,5 @@
-use lifecore::typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
-use lifecore::{
+use crate::typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
+use crate::{
     LifeCore, NodeBodyExt, PayloadExt,
     analysis::{AnalysisRunner, Analyzer, AnalyzerFactory},
 };
@@ -18,11 +18,12 @@ fn node_deserialization01() {
 }
 
 #[test]
+#[should_panic]
 fn no_bootstrap_typecheck() {
     let mut lc = LifeCore::new();
     let _ = lc
         .add(
-            "",
+            "xyz",
             NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
             None,
         )
@@ -33,24 +34,39 @@ fn no_bootstrap_typecheck() {
         .register_analyzer_kind(Box::new(TypeCheckFactory {}))
         .unwrap();
 
-    let output = runner.run(&lc).unwrap();
-    assert!(output.has_error())
+    runner.run(&lc).unwrap().unwrap();
 }
 
 #[test]
-// Node_Type declares Tombstone as an additional override, which not defined
-// Proper bootstrap is through the Suggestion system.
+// Under current typing rules, this should only give a warning
 fn bootstrap() {
     let mut lc = LifeCore::new();
     let _ = lc
-        .add("Node_Type", NodeType::describe_self().into(), None)
+        .add(NodeType::name(), NodeType::describe_self().into(), None)
         .unwrap();
-    let mut typecheck = TypeCheck {
-        config: String::new(),
-    };
-    
-    assert!(!typecheck.initialize(&lc).0.is_empty());
-    assert!(!typecheck.analyze(&lc).0.is_empty());
+    let mut runner = AnalysisRunner::new();
+    lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
+    #[expect(clippy::let_underscore_must_use)]
+    let _ = runner
+        .register_analyzer_kind(Box::new(TypeCheckFactory {}))
+        .unwrap();
+
+    let r = runner.run(&lc).unwrap();
+    let _ = r.clone().unwrap();
+    assert!(r.has_warning())
+}
+
+#[test]
+fn typing01() {
+    let mut lc = LifeCore::new();
+    let mut runner = AnalysisRunner::new();
+    lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
+    runner
+        .register_analyzer_kind(Box::new(TypeCheckFactory {}))
+        .unwrap();
+    let _ = lc
+        .add(NodeType::name(), NodeType::describe_self().into(), None)
+        .unwrap();
 }
 
 // #[test]

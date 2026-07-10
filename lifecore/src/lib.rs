@@ -278,7 +278,7 @@ mod boilerplate {
             for x in tab.into_iter() {
                 r.insert(x.0, x.1);
             }
-            return r;
+            r
         }
     }
 
@@ -383,7 +383,11 @@ mod boilerplate {
             self.offending_event.hash(state);
             self.system_name.hash(state);
             self.system_config.hash(state);
-            self.relevance.clone().sort().hash(state);
+            {
+                let mut sorted = self.relevance.clone();
+                sorted.sort();
+                sorted.hash(state);
+            }
             self.message.hash(state);
         }
     }
@@ -419,8 +423,26 @@ mod boilerplate {
             false
         }
 
-        pub fn success(&self) -> bool {
+        #[cfg(test)]
+        pub fn unwrap(self) {
+            assert!(self.is_success())
+        }
+
+        pub fn is_success(&self) -> bool {
             !self.has_error()
+        }
+
+        pub fn has_warning(&self) -> bool {
+            for x in self.0.iter() {
+                match x {
+                AnalysisReport::BasicValidationFailure { .. } => continue,
+                AnalysisReport::LogInfo { .. } => continue,
+                AnalysisReport::Inconsistency(_) => continue,
+                AnalysisReport::Warning(_) => return true,
+                AnalysisReport::Suggestion(_, _) => continue,
+                }
+            }
+            false
         }
     }
 
@@ -495,12 +517,12 @@ mod boilerplate {
 
         pub fn last(&self) -> EventIndex {
             assert!(self.is_bounded() && !self.is_empty() && self.validate());
-            return EventIndex::from(self.end.unwrap() - 1);
+            EventIndex::from(self.end.unwrap() - 1)
         }
 
         pub fn first(&self) -> EventIndex {
             assert!(!self.is_empty() && self.validate());
-            return EventIndex::from(self.start.unwrap_or(0));
+            EventIndex::from(self.start.unwrap_or(0))
         }
 
         pub fn index_iter(self) -> impl Iterator<Item = Self> {
@@ -667,3 +689,6 @@ mod boilerplate {
         }
     }
 }
+
+#[cfg(test)]
+mod test;
