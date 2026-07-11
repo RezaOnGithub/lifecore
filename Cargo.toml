@@ -9,7 +9,4 @@ unused_must_use = "warn"
 [workspace.lints.clippy]
 let_underscore_must_use = "warn"
 new_without_default = "allow"
-large_enum_variant = "allow" # NOTDO get rid of these issues
-#private_interfaces = "allow" # TODO get rid of these issues
-
 

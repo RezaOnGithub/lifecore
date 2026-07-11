@@ -14,13 +14,12 @@
 
 use itertools::Itertools;
 use lifecore::{
-    AnalysisConfig, AnalysisOutput, AnalysisReport, Analyzer, AnalyzerFactory,
-    ConstraintSystemMessage, EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeFieldStatus,
-    PayloadType, TypedBody,
+    AnalysisOutput, AnalysisReport, Analyzer, AnalyzerFactory, EventContext, LifeCore,
+    LifeCoreError, NodeType, NodeTypeFieldStatus, TypedBody, ConstraintSystemMessage,
 };
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, marker::PhantomData};
 
+#[cfg(test)]
 mod test;
 
 const TYPECHECK_NAME: &str = "Type_Check";
@@ -105,6 +104,7 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
             let type_table = lc
                 .types(index.exclusive_left_context())
                 .collect::<HashMap<_, _>>();
+
             let some_type_at_some_point =
                 NodeType::try_from(&some_type_at_some_point_node.field).unwrap();
             if let Some((older_type_index, _older_type)) =

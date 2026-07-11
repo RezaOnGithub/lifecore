@@ -1,6 +1,20 @@
 use crate::{TypeCheck, TypeCheckFactory};
+use env_logger;
 use lifecore::{AnalysisRunner, AnalyzerFactory, LifeCore, LifeCoreList, NodeBodyExt, PayloadExt};
 use lifecore::{NodeType, TypedBody};
+use std::sync::Once;
+
+fn init_test_logging() {
+    static LOG_INIT: Once = Once::new();
+    LOG_INIT.call_once(|| {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+            .format_timestamp_millis()
+            .is_test(false) // comment out when debugging crashes
+            .target(env_logger::Target::Stderr)
+            .try_init()
+            .expect("Could not initialize logger");
+    });
+}
 
 #[test]
 fn node_deserialization01() {
@@ -37,6 +51,8 @@ fn no_bootstrap_typecheck() {
 #[test]
 // Under current typing rules, this should only give a warning
 fn bootstrap() {
+    init_test_logging();
+
     let mut lc = LifeCoreList::new();
     let _ = lc
         .add(NodeType::name(), NodeType::describe_self().into(), None)

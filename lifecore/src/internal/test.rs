@@ -14,7 +14,7 @@ fn init_test_logging() {
     LOG_INIT.call_once(|| {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
             .format_timestamp_millis()
-            .is_test(false)
+            .is_test(false) // comment out when debugging crashes
             .target(env_logger::Target::Stderr)
             .try_init()
             .expect("Could not initialize logger");
@@ -34,21 +34,7 @@ fn raw_edge_window() {
     let mut n: Vec<NodeExt> = vec![];
     let mut e: Vec<EdgeExt> = vec![];
 
-    log::debug!("Alive 0");
-    {
-        let ty = lc.get_or_insert_string("Some_Node");
-        lc.event.push(Event::Node(Node {
-            ty,
-            parent: None,
-            payload: NodeBody::new(),
-        }));
-        log::debug!("Aha");
-        for x in lc.window(EventContext::universe().index_iter()) {
-            log::debug!("Hrm {:#?}", x);
-        }
-    }
-    for x in 0..2 {
-        log::debug!("Loop");
+    for x in 0..10 {
         n.push(
             lc.add(format!("N{}", x).as_str(), NodeBodyExt::from(&[]), None)
                 .unwrap(),
@@ -57,28 +43,17 @@ fn raw_edge_window() {
 
     let w = || EventContext::universe().index_iter();
 
-    // assert_eq!(lc.window(w()).count(), 10);
-    log::warn!("Alive 1");
+    assert_eq!(lc.window(w()).count(), 10);
+    assert_eq!(lc.edges(EventContext::universe()).count(), 0);
+    assert_eq!(lc.raw_edges(EventContext::universe()).count(), 0);
+    assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 0);
 
-    // assert_eq!(lc.edges(EventContext::universe()).count(), 0);
-    // log::warn!("Alive 2");
-
-    // assert_eq!(lc.raw_edges(EventContext::universe()).count(), 0);
-    // log::warn!("Alive 3");
-
-    // assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 0);
-    // log::warn!("Alive 4");
-
-    let ty = lc.get_or_insert_string("Some_Edge");
-    lc.event.push(Event::Edge(Edge {
-        ty,
-        from: n[0].e.into(),
-        to: n[1].e.into(),
-    }));
+    e.push(
+        lc.connect(n[0].e, "Some_Edge", n[1].e).unwrap()
+    );
     assert!(lc.basic_validation().is_success());
-
-    // assert_eq!(w().zip(lc.window(w())).count(), 11);
-    // assert_eq!(lc.raw_edges(EventContext::universe()).count(), 1);
-    // assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 1);
-    // assert_eq!(lc.edges(EventContext::universe()).count(), 1);
+    assert_eq!(w().zip(lc.window(w())).count(), 11);
+    assert_eq!(lc.raw_edges(EventContext::universe()).count(), 1);
+    assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 1);
+    assert_eq!(lc.edges(EventContext::universe()).count(), 1);
 }

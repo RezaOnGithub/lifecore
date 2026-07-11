@@ -9,7 +9,8 @@ use whoami::{hostname, username};
 
 use crate::{
     AnalysisConfig, AnalysisSuiteConfig, BasicValidationFailureScenario, EdgeExt, EventContext,
-    LifeCore, LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, Timestamp, Zoned,
+    LifeCore, LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, Timestamp, TypedBody,
+    Zoned,
 };
 
 #[cfg(test)]
@@ -185,17 +186,10 @@ impl LifeCore for LifeCoreList {
             let p = insert_all_strings(&mut t, &payload);
             t.event.push(Event::Node(Node {
                 ty: ty_str_index,
-                parent: {
-                    if let Some(x) = parent {
-                        Some(x.into())
-                    } else {
-                        None
-                    }
-                },
+                parent: parent.map(|x| x.into()),
                 payload: p,
             }));
             t.circumstance.push(circumstance_index);
-
             let r = t.basic_validation();
             if r.has_error() {
                 return Err(r.err());
@@ -209,13 +203,7 @@ impl LifeCore for LifeCoreList {
         let p = insert_all_strings(self, &payload);
         self.event.push(Event::Node(Node {
             ty: ty_str_index,
-            parent: {
-                if let Some(x) = parent {
-                    Some(x.into())
-                } else {
-                    None
-                }
-            },
+            parent: parent.map(|x| x.into()),
             payload: p,
         }));
         self.circumstance.push(circumstance_index);
@@ -327,7 +315,7 @@ impl LifeCore for LifeCoreList {
                     err!(
                         EventContext::universe(),
                         BasicValidationFailureScenario::InternalError {
-                            message: format!("Circumstance list does not match up with Event list")
+                            message: "Circumstance list does not match up with Event list".to_string()
                         }
                     );
                 }
@@ -510,13 +498,7 @@ impl LifeCore for LifeCoreList {
             ty,
             ty_name: self[raw_node.ty].to_string(),
             field: body,
-            parent: {
-                if let Some(x) = raw_node.parent {
-                    Some(x.into())
-                } else {
-                    None
-                }
-            },
+            parent: raw_node.parent.map(|x| x.into()),
             e: ctx,
         }
     }
@@ -561,17 +543,19 @@ impl LifeCore for LifeCoreList {
     }
 
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))> {
-        let w = || e.index_iter();
-        w().zip(self.window(w()))
-            .filter(move |(index, x)| {
-                x.is_node()
-                    && !self.is_stale(e.look_at(*index))
-                    && x.as_node().ty_name == "Node_Type"
-            })
-            .map(|(index, x)| {
-                let node = x.as_node();
-                let ty = NodeType::try_from(&node.field).unwrap();
-                (ty.name.clone(), (index, ty))
+        e.index_iter()
+            .zip(self.raw_window(e.index_iter()))
+            .filter_map(|(ctx, event)| {
+                if event.is_node()
+                    && &self[event.as_raw_node().ty] == NodeType::name()
+                    && !self.is_stale(ctx)
+                {
+                    let ty =
+                        NodeType::try_from(&self.resolve(&event.as_raw_node().payload)).unwrap();
+                    Some((ty.name.clone(), (ctx, ty)))
+                } else {
+                    None
+                }
             })
     }
 

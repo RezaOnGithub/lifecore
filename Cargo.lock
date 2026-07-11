@@ -378,8 +378,10 @@ dependencies = [
 name = "lifecore-typecheck"
 version = "0.1.0"
 dependencies = [
+ "env_logger",
  "itertools",
  "lifecore",
+ "log",
  "serde",
  "serde_json",
 ]

@@ -378,7 +378,7 @@ impl EventContext {
     }
 
     pub fn inclusive_right(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate() && self.thing.is_some() && self.is_bounded());
+        assert!(self.validate() && self.thing.is_some());
         let ctx = self;
         (self.thing.unwrap()..self.end.unwrap_or(usize::MAX)).map(move |x| ctx.look_raw(x))
     }
@@ -390,7 +390,7 @@ impl EventContext {
     }
 
     pub fn exclusive_right(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate() && self.thing.is_some() && self.is_bounded());
+        assert!(self.validate() && self.thing.is_some());
         let ctx = self;
         ((self.thing.unwrap() + 1)..self.end.unwrap_or(usize::MAX)).map(move |x| ctx.look_raw(x))
     }
