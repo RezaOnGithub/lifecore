@@ -166,8 +166,16 @@ pub enum BasicValidationFailureScenario {
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum SuggestedAction {
-    // TODO
-    // AddSpecificNode(NodeExt),
+    AddNode {
+        ty_name: String,
+        payload: NodeBodyExt,
+        parent: Option<EventContext>,
+    },
+    AddEdge {
+        from: EventContext,
+        ty_name: String,
+        to: EventContext,
+    },
 }
 
 pub trait LifeCore {
@@ -205,6 +213,16 @@ pub trait LifeCore {
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, NodeExt)>; // NOTE panics similarly
     fn edges(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, EdgeExt)>; // NOTE panics similarly
     fn root_of(&self, e: EventContext) -> Option<EventContext>;
+    fn fresh_successors(&self, ctx: EventContext, node: EventContext) -> Vec<EventContext>;
+    fn relative_degree(
+        &self,
+        ctx: EventContext,
+        left: EventContext,
+        right: EventContext,
+    ) -> Option<usize>;
+    fn are_siblings(&self, ctx: EventContext, left: EventContext, right: EventContext) -> bool {
+        self.relative_degree(ctx, left, right) == Some(0)
+    }
     /// Return all the fresh types in context
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))>;
     fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<EventContext>>;

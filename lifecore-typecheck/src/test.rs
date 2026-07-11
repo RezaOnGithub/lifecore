@@ -72,6 +72,24 @@ fn bootstrap_node_type(lc: &mut LifeCoreList) {
 }
 
 #[test]
+fn initialize_suggests_bootstrap_node_type_when_missing() {
+    let lc = LifeCoreList::new();
+    let mut typecheck = TypeCheck {
+        config: "test".to_string(),
+    };
+
+    let output = typecheck.initialize(&lc);
+
+    assert!(output.0.iter().any(|report| {
+        matches!(
+            report,
+            AnalysisReport::Suggestion(_, lifecore::SuggestedAction::AddNode { ty_name, .. })
+                if ty_name == NodeType::name()
+        )
+    }));
+}
+
+#[test]
 fn node_deserialization01() {
     let nt_describe_json =
         serde_json::to_string(&Into::<NodeBodyExt>::into(NodeType::describe_self())).unwrap();

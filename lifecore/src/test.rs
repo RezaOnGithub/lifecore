@@ -176,6 +176,45 @@ fn families_include_root_and_children_after_overrides() {
 }
 
 #[test]
+fn fresh_successors_only_include_non_stale_direct_children() {
+    let mut lc = LifeCoreList::new();
+    let root = lc.add("", text_body("root"), None).unwrap();
+    let stale_child = lc.add("", text_body("stale-child"), Some(root.e)).unwrap();
+    let fresh_grandchild = lc
+        .add("", text_body("fresh-grandchild"), Some(stale_child.e))
+        .unwrap();
+    let fresh_child = lc.add("", text_body("fresh-child"), Some(root.e)).unwrap();
+
+    let successors = lc.fresh_successors(EventContext::universe(), root.e);
+    assert_eq!(successors.len(), 1);
+    assert_eq!(successors[0].absolute(), fresh_child.e.absolute());
+    assert!(
+        !successors
+            .iter()
+            .any(|x| x.absolute() == fresh_grandchild.e.absolute())
+    );
+}
+
+#[test]
+fn relative_degree_zero_for_nodes_with_same_parent() {
+    let mut lc = LifeCoreList::new();
+    let root = lc.add("", text_body("root"), None).unwrap();
+    let left = lc.add("", text_body("left"), Some(root.e)).unwrap();
+    let right = lc.add("", text_body("right"), Some(root.e)).unwrap();
+    let grandchild = lc.add("", text_body("grandchild"), Some(left.e)).unwrap();
+
+    assert_eq!(
+        lc.relative_degree(EventContext::universe(), left.e, right.e),
+        Some(0)
+    );
+    assert!(lc.are_siblings(EventContext::universe(), left.e, right.e));
+    assert_eq!(
+        lc.relative_degree(EventContext::universe(), grandchild.e, right.e),
+        Some(1)
+    );
+}
+
+#[test]
 fn node_type_resolution_depends_on_context() {
     let mut lc = LifeCoreList::new();
     let old_type = lc

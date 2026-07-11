@@ -338,6 +338,10 @@ dependencies = [
  "clap",
  "itertools",
  "lifecore",
+ "lifecore-typecheck",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

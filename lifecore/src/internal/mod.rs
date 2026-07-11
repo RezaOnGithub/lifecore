@@ -548,6 +548,58 @@ impl LifeCore for LifeCoreList {
         Some(r.before_and_including())
     }
 
+    fn fresh_successors(&self, ctx: EventContext, node: EventContext) -> Vec<EventContext> {
+        let node = ctx.look_at(node);
+        assert!(self.get(node).is_some_and(|x| x.is_node()));
+        self.nodes(ctx)
+            .filter(|(candidate, candidate_node)| {
+                candidate_node
+                    .parent
+                    .is_some_and(|parent| parent.absolute() == node.absolute())
+                    && !self.is_stale(ctx.look_at(*candidate))
+            })
+            .map(|(candidate, _)| candidate)
+            .collect_vec()
+    }
+
+    fn relative_degree(
+        &self,
+        ctx: EventContext,
+        left: EventContext,
+        right: EventContext,
+    ) -> Option<usize> {
+        let ancestor_chain = |node: EventContext| {
+            let mut chain = vec![];
+            let mut current = ctx.look_at(node);
+            while let Some(parent) = self.node(current).parent {
+                let parent = ctx.look_at(parent);
+                chain.push(parent.absolute());
+                current = parent;
+            }
+            chain
+        };
+
+        if !self.get(ctx.look_at(left)).is_some_and(|x| x.is_node())
+            || !self.get(ctx.look_at(right)).is_some_and(|x| x.is_node())
+        {
+            return None;
+        }
+
+        let left_ancestors = ancestor_chain(left);
+        let right_ancestors = ancestor_chain(right);
+        left_ancestors
+            .iter()
+            .enumerate()
+            .flat_map(|(left_degree, left_ancestor)| {
+                right_ancestors
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, right_ancestor)| *right_ancestor == left_ancestor)
+                    .map(move |(right_degree, _)| left_degree.max(right_degree))
+            })
+            .min()
+    }
+
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))> {
         e.index_iter()
             .zip(self.raw_window(e.index_iter()))

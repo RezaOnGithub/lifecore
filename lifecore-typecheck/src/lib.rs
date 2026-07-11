@@ -15,7 +15,8 @@
 use itertools::Itertools;
 use lifecore::{
     AnalysisOutput, AnalysisReport, Analyzer, AnalyzerFactory, ConstraintSystemMessage,
-    EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeFieldStatus, TypedBody,
+    EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeFieldStatus, SuggestedAction,
+    TypedBody,
 };
 use std::{collections::HashMap, marker::PhantomData};
 
@@ -56,13 +57,36 @@ pub struct TypeCheck {
 }
 
 impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
-    // TODO check is Node_Type node type is defined, if not, suggest it.
     // TODO Node_Type node type has `Tombstone` as an additional override. suggest it.
-    fn initialize(&mut self, _lc: &LC) -> AnalysisOutput {
-        AnalysisOutput(vec![])
+    fn initialize(&mut self, lc: &LC) -> AnalysisOutput {
+        if lc
+            .types(EventContext::universe())
+            .any(|(name, _)| name == NodeType::name())
+        {
+            return AnalysisOutput(vec![]);
+        }
+
+        AnalysisOutput(vec![AnalysisReport::Suggestion(
+            ConstraintSystemMessage {
+                offending_event: EventContext::universe(),
+                system_name: TYPECHECK_NAME.to_string(),
+                system_config: self.config.clone(),
+                relevance: vec![],
+                message: format!("Bootstrap the built-in {} declaration", NodeType::name()),
+            },
+            SuggestedAction::AddNode {
+                ty_name: NodeType::name().to_string(),
+                payload: NodeType::describe_self().into(),
+                parent: None,
+            },
+        )])
     }
 
     fn analyze(&self, lc: &LC) -> AnalysisOutput {
+        if lc.total_event_count() == 0 {
+            return AnalysisOutput(vec![]);
+        }
+
         let mut r = AnalysisOutput(vec![]);
         macro_rules! warn {
             (
