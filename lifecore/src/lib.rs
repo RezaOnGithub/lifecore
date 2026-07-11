@@ -91,23 +91,26 @@ impl PayloadExt {
 // _Usually_, ty.is_none() indicates a bigger problem but dealing with it
 // is not the responsibility of users, for now.
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct NodeExt {
-    e: EventContext,
-    ty: Option<NodeType>,
-    ty_name: String,
-    field: NodeBodyExt,
-    parent: Option<EventContext>,
+    pub e: EventContext,
+    pub ty: Option<NodeType>,
+    pub ty_name: String,
+    pub field: NodeBodyExt,
+    pub parent: Option<EventContext>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct EdgeExt {
-    e: EventContext,
-    ty_name: String,
-    from: EventContext,
-    to: EventContext,
+    pub e: EventContext,
+    pub ty_name: String,
+    pub from: EventContext,
+    pub to: EventContext,
 }
 
 #[derive(EnumIs, EnumTryAs, Clone, PartialEq, Eq)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum EventExt {
     Node(NodeExt),
     Edge(EdgeExt),
@@ -186,8 +189,8 @@ pub trait LifeCore {
         &mut self,
     ) -> Result<CircumstanceExt, LifeCoreError>;
     fn get_or_insert_mock_circumstance(&mut self) -> Result<CircumstanceExt, LifeCoreError>;
-    fn get(&self, e: EventContext) -> EventExt;
-    fn window<I>(&self, i: I) -> impl Iterator<Item = &EventExt>
+    fn get(&self, e: EventContext) -> Option<EventExt>;
+    fn window<I>(&self, i: I) -> impl Iterator<Item = EventExt>
     where
         I: IntoIterator<Item = EventContext>;
     /// Check whether `e.thing` is stale within context
@@ -256,6 +259,21 @@ impl EventExt {
 
     pub fn as_edge(&self) -> EdgeExt {
         self.clone().try_as_edge().unwrap()
+    }
+
+    pub fn is_node_and<F: Fn(&NodeExt) -> bool>(&self, f: F) -> bool {
+        self.is_node() && f(&self.as_node())
+    }
+
+    pub fn is_edge_and<F: Fn(&EdgeExt) -> bool>(&self, f: F) -> bool {
+        self.is_edge() && f(&self.as_edge())
+    }
+
+    pub fn ctx(&self) -> EventContext {
+        match self {
+        EventExt::Node(node_ext) => node_ext.e,
+        EventExt::Edge(edge_ext) => edge_ext.e,
+        }
     }
 }
 
@@ -329,12 +347,16 @@ impl EventContext {
         self.thing.is_none() || self.range().contains(&self.thing.unwrap())
     }
 
-    pub(crate) fn from(r: Range<usize>, thing: Option<usize>) -> Self {
+    pub(crate) fn from_range(r: Range<usize>, thing: Option<usize>) -> Self {
         Self {
             start: Some(r.start),
             end: Some(r.end),
             thing,
         }
+    }
+
+    pub fn absolute(self) -> Self {
+        Self::universe().look_at(self)
     }
 
     pub fn last(&self) -> EventContext {
@@ -458,6 +480,17 @@ impl EventContext {
         }
     }
 }
+
+// TODO
+// impl IntoIterator<Item> for EventContext {
+//     type Item=EventContext;
+
+//     type IntoIter;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         todo!()
+//     }
+// }
 
 impl<LC: LifeCore> AnalysisRunner<LC> {
     pub fn new() -> Self {

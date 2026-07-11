@@ -1,8 +1,6 @@
-use crate::typecheck::{NodeType, TypeCheck, TypeCheckFactory, TypedBody};
-use crate::{
-    LifeCore, NodeBodyExt, PayloadExt,
-    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory},
-};
+use crate::{TypeCheck, TypeCheckFactory};
+use lifecore::{AnalysisRunner, AnalyzerFactory, LifeCore, LifeCoreList, NodeBodyExt, PayloadExt};
+use lifecore::{NodeType, TypedBody};
 
 #[test]
 fn node_deserialization01() {
@@ -20,7 +18,7 @@ fn node_deserialization01() {
 #[test]
 #[should_panic]
 fn no_bootstrap_typecheck() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let _ = lc
         .add(
             "xyz",
@@ -29,55 +27,50 @@ fn no_bootstrap_typecheck() {
         )
         .unwrap();
     let mut runner = AnalysisRunner::new();
-    lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
-    runner
-        .register_analyzer_kind(Box::new(TypeCheckFactory {}))
-        .unwrap();
+    let factory = TypeCheckFactory::<LifeCoreList>::default();
+    lc.add_analyzer(factory.analyzer_name(), "");
+    runner.register_analyzer_kind(Box::new(factory)).unwrap();
 
-    runner.run(&lc).unwrap().unwrap();
+    assert!(runner.run(&lc).unwrap().is_success());
 }
 
 #[test]
 // Under current typing rules, this should only give a warning
 fn bootstrap() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let _ = lc
         .add(NodeType::name(), NodeType::describe_self().into(), None)
         .unwrap();
     let mut runner = AnalysisRunner::new();
-    lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
-    #[expect(clippy::let_underscore_must_use)]
-    let _ = runner
-        .register_analyzer_kind(Box::new(TypeCheckFactory {}))
-        .unwrap();
+    let factory = TypeCheckFactory::<LifeCoreList>::default();
+    lc.add_analyzer(factory.analyzer_name(), "");
+    runner.register_analyzer_kind(Box::new(factory)).unwrap();
 
     let r = runner.run(&lc).unwrap();
-    let _ = r.clone().unwrap();
+    assert!(r.is_success());
     assert!(r.has_warning())
 }
 
 #[test]
 fn typing01() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let mut runner = AnalysisRunner::new();
-    lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
-    runner
-        .register_analyzer_kind(Box::new(TypeCheckFactory {}))
-        .unwrap();
-    #[expect(clippy::let_underscore_must_use)]
+    let factory = TypeCheckFactory::<LifeCoreList>::default();
+    lc.add_analyzer(factory.analyzer_name(), "");
+    runner.register_analyzer_kind(Box::new(factory)).unwrap();
     let _ = lc.add(NodeType::name(), NodeType::describe_self().into(), None);
 }
 
 // #[test]
 // fn tombstone01() {
-//     let mut lc = LifeCore::new();
+//     let mut lc = LifeCoreList::new();
 //     let nt_node_type = lc.add("Node_Type", NodeType::describe_self().into(), None).unwrap();
 //     let nt_tombstone = lc
 //         .add(
 //             "Node_Type",
 //             NodeType {
 //                 name: "Tombstone".to_string(),
-//                 class: lifecore::typecheck::NodeTypeClass::Regular,
+//                 class: LifeCoreList::typecheck::NodeTypeClass::Regular,
 //                 outgoing: vec![],
 //                 incoming: vec![],
 //                 additional_override: vec![],

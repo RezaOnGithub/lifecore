@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{LifeCoreError, NodeBodyExt, PayloadExt, PayloadType, TypedBody};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct NodeType {
     pub name: String,
     pub class: NodeTypeClass,
@@ -21,6 +22,7 @@ pub struct NodeType {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum NodeTypeClass {
     Spike,
     Hub,
@@ -30,6 +32,7 @@ pub enum NodeTypeClass {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum NodeTypeFieldStatus {
     Mandatory,
     Encouraged,

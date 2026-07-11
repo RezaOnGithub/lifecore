@@ -12,21 +12,36 @@
 //!
 //! This can be terribly inefficient, and of course there is a streaming approach but correctness for now. NOTDO PERF
 
-use crate::internal::PayloadType;
-use crate::{analysis::*, internal::EventIndex};
-use crate::*;
 use itertools::Itertools;
+use lifecore::{
+    AnalysisConfig, AnalysisOutput, AnalysisReport, Analyzer, AnalyzerFactory,
+    ConstraintSystemMessage, EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeFieldStatus,
+    PayloadType, TypedBody,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, marker::PhantomData};
 
-#[cfg(test)]
 mod test;
 
 const TYPECHECK_NAME: &str = "Type_Check";
 
-pub struct TypeCheckFactory;
-impl AnalyzerFactory for TypeCheckFactory {
-    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+pub struct TypeCheckFactory<LC: LifeCore> {
+    _x: PhantomData<LC>,
+}
+
+impl<LC: LifeCore> Default for TypeCheckFactory<LC> {
+    fn default() -> Self {
+        Self {
+            _x: Default::default(),
+        }
+    }
+}
+
+impl<LC: LifeCore> AnalyzerFactory<LC> for TypeCheckFactory<LC> {
+    fn analyzer_with_config(
+        &mut self,
+        config: &str,
+    ) -> Result<Box<dyn Analyzer<LC>>, LifeCoreError> {
         Ok(Box::new(TypeCheck {
             config: config.to_string(),
         }))
@@ -41,18 +56,14 @@ pub struct TypeCheck {
     pub config: String,
 }
 
-impl Analyzer for TypeCheck {
-    // Due to the very strict and picky system I've come up with, the very first event MUST be a node that
-    // declares that there is gonna be nodes that specify types; that is, a node of type "Node_Type" that
-    // declares "Node_Type". This bootstrap process needs to happen, and a non-stale node of type "Node_Type"
-    // declaring "Node_Type" must always exist at any EventIndex
-    // Additionally, this should strongly suggest some of the essential node types to add. Currently, Tombstone is very
-    // important, but maybe in the future we need more special-cased node types
-    fn initialize(&mut self, _lc: &LifeCore) -> AnalysisOutput {
+impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
+    // TODO check is Node_Type node type is defined, if not, suggest it.
+    // TODO Node_Type node type has `Tombstone` as an additional override. suggest it.
+    fn initialize(&mut self, _lc: &LC) -> AnalysisOutput {
         AnalysisOutput(vec![])
     }
 
-    fn analyze(&self, lc: &LifeCore) -> AnalysisOutput {
+    fn analyze(&self, lc: &LC) -> AnalysisOutput {
         let mut r = AnalysisOutput(vec![]);
         macro_rules! warn {
             (
@@ -87,26 +98,27 @@ impl Analyzer for TypeCheck {
 
         // check whether a Node_Type declaring some type X is not clashing with an older but non-stale
         // Node_Type declaring a type of the same name.
-        for (node_type_index, node_type_raw) in lc
-            .raw_nodes(EventContext::universe())
-            .filter(|(_, node)| &lc[node.ty] == NodeType::name())
+        for (index, some_type_at_some_point_node) in lc
+            .nodes(EventContext::universe())
+            .filter(|(_, node)| node.ty_name.as_str() == NodeType::name())
         {
             let type_table = lc
-                .types(node_type_index.exclusive_left_context())
+                .types(index.exclusive_left_context())
                 .collect::<HashMap<_, _>>();
-            let node_type = NodeType::try_from(&lc.resolve(&node_type_raw.payload)).unwrap();
-            if let Some((older_type_index, _older_type)) = type_table.get(node_type.name.as_str()) {
+            let some_type_at_some_point =
+                NodeType::try_from(&some_type_at_some_point_node.field).unwrap();
+            if let Some((older_type_index, _older_type)) =
+                type_table.get(some_type_at_some_point.name.as_str())
+            {
                 // The only scenario this is valid is if the new node override the old one
-                if node_type_raw
+                if some_type_at_some_point_node
                     .parent
-                    .is_none_or(|x| x != older_type_index.thing())
+                    .is_none_or(|x| x.absolute() != older_type_index.absolute())
                 {
                     err!(
-                        node_type_index
-                            .inclusive_left_context()
-                            .look_at(node_type_index.thing()),
+                        index.inclusive_left_context(),
                         "Cannot have a Node_Type declaring {} which was already declared",
-                        node_type.name.as_str()
+                        some_type_at_some_point.name.as_str()
                     );
                 }
             }
@@ -136,11 +148,14 @@ impl Analyzer for TypeCheck {
         }
 
         // Check nodes for their fields
-        for last in 0..lc.total_event_count() {
-            let ctx = EventIndex::from(last).before_and_including();
+        for last_event_in_context in lc.window(EventContext::universe().index_iter()) {
+            let ctx = last_event_in_context
+                .ctx()
+                .absolute()
+                .inclusive_left_context();
             for pointed_context in ctx
                 .index_iter()
-                .filter(|e| !lc.is_stale(*e) && lc[e.thing()].is_node())
+                .filter(|e| !lc.is_stale(*e) && lc.get(*e).is_some_and(|x| x.is_node()))
             {
                 let node = lc.node(pointed_context);
                 if node.ty.is_none() {
@@ -213,13 +228,16 @@ impl Analyzer for TypeCheck {
         }
 
         // Check edges ends so that they allow for that edge
-        for last in 0..lc.total_event_count() {
-            let ctx = EventIndex::from(last).before_and_including();
+        for last_event_in_context in lc.window(EventContext::universe().index_iter()) {
+            let ctx = last_event_in_context
+                .ctx()
+                .absolute()
+                .inclusive_left_context();
             let type_table = lc.types(ctx).collect::<HashMap<_, _>>();
 
             for pointed_context in ctx
                 .index_iter()
-                .filter(|e| !lc.is_stale(*e) && lc[e.thing()].is_edge())
+                .filter(|e| !lc.is_stale(*e) && lc.get(*e).is_some_and(|x| x.is_edge()))
             {
                 // from end -> "outgoing" relative to that node
                 // to end -> "incoming" relative to that node
@@ -287,17 +305,18 @@ impl Analyzer for TypeCheck {
         }
 
         // Check whether a child is allowed to override parent at the point of override
-        for last in 0..lc.total_event_count() {
-            let last = EventIndex::from(last);
-            let ctx = last.before_and_including();
+        for last_event_in_context in lc.window(EventContext::universe().index_iter()) {
+            let ctx = last_event_in_context
+                .ctx()
+                .absolute()
+                .exclusive_left_context();
             let _type_table = lc.types(ctx);
 
-            if lc[last].is_edge() || lc.raw_node(&last).parent.is_none() {
+            if last_event_in_context.is_edge()
+                || last_event_in_context.is_node_and(|x| x.parent.is_none())
+            {
                 continue;
             }
-
-            let _current_node = lc.node(ctx.look_at(last));
-            let _parent_node = lc.node(last.before().look_at(lc.raw_node(&last).parent.unwrap()));
         }
         r
     }

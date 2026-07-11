@@ -1,15 +1,17 @@
-use crate::{LifeCore, NodeBodyExt, PayloadExt};
+use itertools::Itertools;
 
+use crate::{EdgeExt, EventContext, LifeCore, LifeCoreList, NodeBodyExt, NodeExt, PayloadExt};
+use super::*;
 
 #[test]
 fn new_is_valid() {
-    let lc = LifeCore::new();
-    assert!(lc.basic_validation().is_ok());
+    let lc = LifeCoreList::new();
+    assert!(lc.basic_validation().is_success());
 }
 
 #[test]
 fn basic_01() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let n0 = lc
         .add(
             "",
@@ -24,9 +26,11 @@ fn basic_01() {
             None,
         )
         .unwrap();
-    let _e0 = lc.connect(n0, "skrunkle", n1).unwrap();
-    assert!(lc.basic_validation().is_ok());
+    let _e0 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
+    assert!(lc.basic_validation().is_success());
 }
+
+
 
 #[test]
 fn basic_02() {}
@@ -34,7 +38,7 @@ fn basic_02() {}
 #[test]
 #[should_panic]
 fn no_dupe_node() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let _n0 = lc
         .add(
             "",
@@ -54,7 +58,7 @@ fn no_dupe_node() {
 #[test]
 #[should_panic]
 fn no_dupe_edge() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let n0 = lc
         .add(
             "",
@@ -69,13 +73,13 @@ fn no_dupe_edge() {
             None,
         )
         .unwrap();
-    let e0 = lc.connect(n0, "skrunkle", n1).unwrap();
-    let _e1 = lc.connect(n0, "skrunkle", n1).unwrap();
+    let e0 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
+    let _e1 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
 }
 
 #[test]
 fn dupe_parent_and_child() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let n0 = lc
         .add(
             "",
@@ -87,16 +91,16 @@ fn dupe_parent_and_child() {
         .add(
             "",
             NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
-            Some(n0),
+            Some(n0.e),
         )
         .unwrap();
-    assert!(lc.basic_validation().is_ok());
+    assert!(lc.basic_validation().is_success());
 }
 
 #[test]
 #[should_panic]
 fn stale_rule_01() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let parent = lc
         .add(
             "",
@@ -108,16 +112,16 @@ fn stale_rule_01() {
         .add(
             "",
             NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
-            Some(parent),
+            Some(parent.e),
         )
         .unwrap();
-    let _e = lc.connect(parent, "", child).unwrap();
+    let _e = lc.connect(parent.e, "", child.e).unwrap();
 }
 
 #[test]
 #[should_panic]
 fn stale_rule_02() {
-    let mut lc = LifeCore::new();
+    let mut lc = LifeCoreList::new();
     let parent = lc
         .add(
             "",
@@ -129,8 +133,8 @@ fn stale_rule_02() {
         .add(
             "",
             NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
-            Some(parent),
+            Some(parent.e),
         )
         .unwrap();
-    let _e = lc.connect(child, "", parent).unwrap();
+    let _e = lc.connect(child.e, "", parent.e).unwrap();
 }
