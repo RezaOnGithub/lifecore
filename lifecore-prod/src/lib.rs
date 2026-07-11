@@ -1,3 +1,1 @@
-fn main() {
-    println!("Hello, world!");
-}
+//! Productivity-related Analyzer

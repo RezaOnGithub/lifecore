@@ -19,8 +19,12 @@
 - Edge head == beginning == from
   - Similarly Edge tail == end == to
   - tail means the sharp end of an arrow!
-- TypeCheck used to be external crate written against Analyzer interfaces; but
+- TypeCheck used to be an external crate written against Analyzer interfaces; but
   now it is incorporated into the core system
+
+# TODO
+
+- Go over iterator usage and use better idioms. `flatten`, `filter_map` etc
 
 # Pitfalls
 
@@ -54,8 +58,7 @@
 - Some kind of explicit deprecation system for nodes? Should this even be
   implemented at type level?
 
-- Reducing the amount of going over the entire database for validation (much
-  much later)
+- Reducing the amount of going over the entire database for validation (NOTDO for now)
 
 - If only we could encode Analyzer systems in the graph as well, so that they
   have the same lifecycle as the node types they govern. Now, any change to node
@@ -63,27 +66,6 @@
   - In the future once we know what Analyzers typically look like, we can scrap
     everything and start over I guess...
   - However, it's just less work for now if:
-    - We carefully design Analyzer interface.
+    - We carefully design the Analyzer interface.
     - Declare in config strings when is the last event that they apply
     - Fork off onto an entirely new Analyzer
-
-# Backlog
-
-- Gradually phase out `anyhow` in favor of `thiserror`
-
-- Clear choice of words regarding special features: Survivor is a node that is
-  not Stale, Leaf is a node that has only exactly one outgoing edge
-
-- Adding or subtracting from a Range's start and end is not really safe, but who
-  cares?
-
-# WishList
-
-- `EnumAs` trait that panics, and only derivable for `Copy` enums
-  - Usecase:
-  ```rust
-  vec_of_enum.iter().filter(|x| x.is_A()).map(|x| x.as_A())
-  ```
-- ... `strum` crate seems quite low-maintenance; I should fork it and go crazy
-  with additions I want.
-  - Better yet, I could use `facet` to implement them.
