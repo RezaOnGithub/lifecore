@@ -185,7 +185,7 @@ fn fresh_successors_only_include_non_stale_direct_children() {
         .unwrap();
     let fresh_child = lc.add("", text_body("fresh-child"), Some(root.e)).unwrap();
 
-    let successors = lc.fresh_successors(EventContext::universe(), root.e);
+    let successors = lc.fresh_successors(root.e.absolute());
     assert_eq!(successors.len(), 1);
     assert_eq!(successors[0].absolute(), fresh_child.e.absolute());
     assert!(
@@ -204,12 +204,12 @@ fn relative_degree_zero_for_nodes_with_same_parent() {
     let grandchild = lc.add("", text_body("grandchild"), Some(left.e)).unwrap();
 
     assert_eq!(
-        lc.relative_degree(EventContext::universe(), left.e, right.e),
+        lc.relative_degree(left.e.absolute(), right.e.absolute()),
         Some(0)
     );
-    assert!(lc.are_siblings(EventContext::universe(), left.e, right.e));
+    assert!(lc.are_siblings(left.e.absolute(), right.e.absolute()));
     assert_eq!(
-        lc.relative_degree(EventContext::universe(), grandchild.e, right.e),
+        lc.relative_degree(grandchild.e.absolute(), right.e.absolute()),
         Some(1)
     );
 }

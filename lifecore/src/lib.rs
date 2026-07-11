@@ -213,15 +213,13 @@ pub trait LifeCore {
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, NodeExt)>; // NOTE panics similarly
     fn edges(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, EdgeExt)>; // NOTE panics similarly
     fn root_of(&self, e: EventContext) -> Option<EventContext>;
-    fn fresh_successors(&self, ctx: EventContext, node: EventContext) -> Vec<EventContext>;
-    fn relative_degree(
-        &self,
-        ctx: EventContext,
-        left: EventContext,
-        right: EventContext,
-    ) -> Option<usize>;
-    fn are_siblings(&self, ctx: EventContext, left: EventContext, right: EventContext) -> bool {
-        self.relative_degree(ctx, left, right) == Some(0)
+    /// Returns fresh successors within context. Use `.absolute()` to get current fresh successors
+    fn fresh_successors(&self, node: EventContext) -> Vec<EventContext>;
+    /// Find relative degree. Siblings (nodes that share a parent) have degree 0.
+    /// Note that the left sides of the contexts need to extend far back enough in order to find the shared parent.
+    fn relative_degree(&self, a: EventContext, b: EventContext) -> Option<usize>;
+    fn are_siblings(&self, left: EventContext, right: EventContext) -> bool {
+        self.relative_degree(left, right) == Some(0)
     }
     /// Return all the fresh types in context
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))>;
@@ -340,7 +338,7 @@ impl AnalysisOutput {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug)]
 pub struct EventContext {
     // Inclusive start.
     // By default, None means "since the beginning"
@@ -354,6 +352,21 @@ pub struct EventContext {
     // What was the object of inspection?
     // Ought to be in start..end
     pub(crate) thing: Option<usize>,
+}
+
+impl Ord for EventContext {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        assert!(
+            self.validate() && self.thing.is_some() && other.validate() && other.thing.is_some()
+        );
+        self.thing.unwrap().cmp(&other.thing.unwrap())
+    }
+}
+
+impl PartialOrd for EventContext {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(&other))
+    }
 }
 
 impl EventContext {
@@ -471,7 +484,7 @@ impl EventContext {
 
     // NOTDO this is the only function that somewhat leaks implementation details.
     // Handle with care!
-    pub fn look_raw(&self, e: usize) -> Self {
+    pub(crate) fn look_raw(&self, e: usize) -> Self {
         assert!(self.validate());
         let mut r = *self;
         r.thing = Some(e);

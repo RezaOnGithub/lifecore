@@ -76,9 +76,11 @@ pub(crate) fn dot_for_graph<LC: LifeCore>(lc: &LC, config: &GraphVizConfig) -> R
     let mut edge_by_ctx = BTreeMap::new();
 
     for (node_ctx, node) in nodes {
+        assert!(node_ctx.absolute() == node_ctx);
         node_by_ctx.insert(node_ctx, node);
     }
     for (edge_ctx, edge) in edges {
+        assert!(edge_ctx.absolute() == edge_ctx);
         edge_by_ctx.insert(edge_ctx, edge);
     }
 

@@ -41,11 +41,11 @@ struct NodeBody(HashMap<StringIndex, Payload>);
 struct CircumstanceIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(test, derive(Debug))]
 struct StringIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(test, derive(Debug))]
 struct EventIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
@@ -70,7 +70,8 @@ struct Node {
     pub parent: Option<EventIndex>,
     pub payload: NodeBody,
 }
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(Debug))]
 struct Edge {
     pub ty: StringIndex,
     pub from: EventIndex,
@@ -548,39 +549,36 @@ impl LifeCore for LifeCoreList {
         Some(r.before_and_including())
     }
 
-    fn fresh_successors(&self, ctx: EventContext, node: EventContext) -> Vec<EventContext> {
-        let node = ctx.look_at(node);
+    fn fresh_successors(&self, node: EventContext) -> Vec<EventContext> {
         assert!(self.get(node).is_some_and(|x| x.is_node()));
-        self.nodes(ctx)
-            .filter(|(candidate, candidate_node)| {
-                candidate_node
-                    .parent
-                    .is_some_and(|parent| parent.absolute() == node.absolute())
-                    && !self.is_stale(ctx.look_at(*candidate))
+        let ctx = || node.exclusive_right();
+        ctx()
+            .zip(self.raw_window(ctx()))
+            .filter(|(index, event)| {
+                event.is_node()
+                    && event.as_raw_node().parent.is_some_and(|parent| {
+                        let parent: EventContext = parent.into();
+                        parent.absolute() == node.absolute()
+                    })
+                    && !self.is_stale(*index)
             })
             .map(|(candidate, _)| candidate)
             .collect_vec()
     }
 
-    fn relative_degree(
-        &self,
-        ctx: EventContext,
-        left: EventContext,
-        right: EventContext,
-    ) -> Option<usize> {
-        let ancestor_chain = |node: EventContext| {
+    fn relative_degree(&self, left: EventContext, right: EventContext) -> Option<usize> {
+        let ancestor_chain = |mut n: EventContext| {
             let mut chain = vec![];
-            let mut current = ctx.look_at(node);
-            while let Some(parent) = self.node(current).parent {
-                let parent = ctx.look_at(parent);
+            while let Some(parent) = self.node(n).parent {
+                let parent = n.look_at(parent);
                 chain.push(parent.absolute());
-                current = parent;
+                n = parent;
             }
             chain
         };
 
-        if !self.get(ctx.look_at(left)).is_some_and(|x| x.is_node())
-            || !self.get(ctx.look_at(right)).is_some_and(|x| x.is_node())
+        if !self.get(left).is_some_and(|x| x.is_node())
+            || !self.get(right).is_some_and(|x| x.is_node())
         {
             return None;
         }

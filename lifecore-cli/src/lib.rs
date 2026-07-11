@@ -602,20 +602,21 @@ fn parse_payload(raw: &str) -> Result<NodeBodyExt> {
     serde_json::from_str(raw).context("payload must be a JSON object matching NodeBodyExt serde")
 }
 
-fn resolve_node_ref(state: &CliState, target: &str) -> Result<EventContext> {
-    let ctx = if let Some(ctx) = state.codenames.get(target) {
-        *ctx
-    } else {
-        let index = target
-            .parse::<usize>()
-            .with_context(|| format!("unknown codename or event index {target:?}"))?;
-        EventContext::universe().look_raw(index)
-    };
-    match state.db.get(ctx) {
-    Some(event) if event.is_node() => Ok(ctx),
-    Some(_) => bail!("{target:?} refers to an edge, not a node"),
-    None => bail!("{target:?} does not refer to an existing event"),
-    }
+fn resolve_node_ref(_state: &CliState, _target: &str) -> Result<EventContext> {
+    bail!("To Be Removed")
+    // let ctx = if let Some(ctx) = state.codenames.get(target) {
+    //     *ctx
+    // } else {
+    //     let index = target
+    //         .parse::<usize>()
+    //         .with_context(|| format!("unknown codename or event index {target:?}"))?;
+    //     EventContext::universe().look_raw(index)
+    // };
+    // match state.db.get(ctx) {
+    // Some(event) if event.is_node() => Ok(ctx),
+    // Some(_) => bail!("{target:?} refers to an edge, not a node"),
+    // None => bail!("{target:?} does not refer to an existing event"),
+    // }
 }
 
 fn payload_kind(payload: &PayloadExt) -> String {
@@ -1043,7 +1044,7 @@ fn sibling_has_similar_edge<LC: LifeCore>(
 ) -> bool {
     lc.nodes(ctx).any(|(candidate, _)| {
         candidate.absolute() != new_node.absolute()
-            && lc.are_siblings(ctx, candidate, new_node)
+            && lc.are_siblings(ctx.look_at(candidate), ctx.look_at(new_node))
             && lc.edges(ctx).any(|(_, edge)| {
                 !lc.is_stale(edge.e)
                     && edge.ty_name == ty_name
