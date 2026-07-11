@@ -14,8 +14,8 @@
 
 use itertools::Itertools;
 use lifecore::{
-    AnalysisOutput, AnalysisReport, Analyzer, AnalyzerFactory, EventContext, LifeCore,
-    LifeCoreError, NodeType, NodeTypeFieldStatus, TypedBody, ConstraintSystemMessage,
+    AnalysisOutput, AnalysisReport, Analyzer, AnalyzerFactory, ConstraintSystemMessage,
+    EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeFieldStatus, TypedBody,
 };
 use std::{collections::HashMap, marker::PhantomData};
 
@@ -289,7 +289,7 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
                 if !incoming_node
                     .ty
                     .unwrap()
-                    .outgoing
+                    .incoming
                     .iter()
                     .map(String::as_str)
                     .contains(edge.ty_name.as_str())

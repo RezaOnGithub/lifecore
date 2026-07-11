@@ -48,9 +48,7 @@ fn raw_edge_window() {
     assert_eq!(lc.raw_edges(EventContext::universe()).count(), 0);
     assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 0);
 
-    e.push(
-        lc.connect(n[0].e, "Some_Edge", n[1].e).unwrap()
-    );
+    e.push(lc.connect(n[0].e, "Some_Edge", n[1].e).unwrap());
     assert!(lc.basic_validation().is_success());
     assert_eq!(w().zip(lc.window(w())).count(), 11);
     assert_eq!(lc.raw_edges(EventContext::universe()).count(), 1);

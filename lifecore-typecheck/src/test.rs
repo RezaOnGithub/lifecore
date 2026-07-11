@@ -1,108 +1,314 @@
-use crate::{TypeCheck, TypeCheckFactory};
-use env_logger;
-use lifecore::{AnalysisRunner, AnalyzerFactory, LifeCore, LifeCoreList, NodeBodyExt, PayloadExt};
-use lifecore::{NodeType, TypedBody};
-use std::sync::Once;
+use crate::TypeCheck;
+use lifecore::{
+    AnalysisOutput, AnalysisReport, Analyzer, LifeCore, LifeCoreList, NodeBodyExt, NodeType,
+    NodeTypeClass, NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody,
+};
 
-fn init_test_logging() {
-    static LOG_INIT: Once = Once::new();
-    LOG_INIT.call_once(|| {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
-            .format_timestamp_millis()
-            .is_test(false) // comment out when debugging crashes
-            .target(env_logger::Target::Stderr)
-            .try_init()
-            .expect("Could not initialize logger");
-    });
+fn type_decl(
+    name: &str,
+    fields: &[(&str, (PayloadType, NodeTypeFieldStatus))],
+    outgoing: &[&str],
+    incoming: &[&str],
+    additional_override: &[&str],
+) -> NodeType {
+    NodeType {
+        name: name.to_string(),
+        class: NodeTypeClass::Regular,
+        outgoing: outgoing.iter().map(|x| x.to_string()).collect(),
+        incoming: incoming.iter().map(|x| x.to_string()).collect(),
+        additional_override: additional_override.iter().map(|x| x.to_string()).collect(),
+        field: fields
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.clone()))
+            .collect(),
+    }
+}
+
+fn run_typecheck(lc: &LifeCoreList) -> AnalysisOutput {
+    TypeCheck {
+        config: "test".to_string(),
+    }
+    .analyze(lc)
+}
+
+fn messages(output: &AnalysisOutput) -> Vec<&str> {
+    output
+        .0
+        .iter()
+        .filter_map(|report| match report {
+        AnalysisReport::Inconsistency(message) | AnalysisReport::Warning(message) => {
+            Some(message.message.as_str())
+        }
+        _ => None,
+        })
+        .collect()
+}
+
+fn inconsistency_messages(output: &AnalysisOutput) -> Vec<&str> {
+    output
+        .0
+        .iter()
+        .filter_map(|report| match report {
+        AnalysisReport::Inconsistency(message) => Some(message.message.as_str()),
+        _ => None,
+        })
+        .collect()
+}
+
+fn warning_messages(output: &AnalysisOutput) -> Vec<&str> {
+    output
+        .0
+        .iter()
+        .filter_map(|report| match report {
+        AnalysisReport::Warning(message) => Some(message.message.as_str()),
+        _ => None,
+        })
+        .collect()
+}
+
+fn bootstrap_node_type(lc: &mut LifeCoreList) {
+    lc.add(NodeType::name(), NodeType::describe_self().into(), None)
+        .unwrap();
 }
 
 #[test]
 fn node_deserialization01() {
     let nt_describe_json =
         serde_json::to_string(&Into::<NodeBodyExt>::into(NodeType::describe_self())).unwrap();
-    eprintln!("nt_describe_json\t{}", nt_describe_json.as_str());
-
     let nt_describe_hashmap =
         serde_json::from_str::<NodeBodyExt>(nt_describe_json.as_str()).unwrap();
-    eprintln!("nt_describe_hashmap\t{:#?}", &nt_describe_hashmap);
 
     let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();
 }
 
 #[test]
-#[should_panic]
-fn no_bootstrap_typecheck() {
+fn bootstrap_reports_missing_override_type_as_warning() {
     let mut lc = LifeCoreList::new();
-    let _ = lc
+    bootstrap_node_type(&mut lc);
+
+    let output = run_typecheck(&lc);
+
+    assert!(output.is_success());
+    assert!(
+        warning_messages(&output)
+            .iter()
+            .any(|message| message.contains("Override Tombstone on type Node_Type"))
+    );
+}
+
+#[test]
+fn missing_type_declaration_is_an_inconsistency() {
+    let mut lc = LifeCoreList::new();
+    lc.add(
+        "Missing_Type",
+        NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+        None,
+    )
+    .unwrap();
+
+    let output = run_typecheck(&lc);
+
+    assert!(
+        inconsistency_messages(&output)
+            .iter()
+            .any(|message| message.contains("Type Missing_Type does not exist"))
+    );
+}
+
+#[test]
+fn field_policy_checks_report_expected_warnings_and_errors() {
+    let mut lc = LifeCoreList::new();
+    bootstrap_node_type(&mut lc);
+    lc.add(
+        NodeType::name(),
+        type_decl(
+            "Task",
+            &[
+                ("must", (PayloadType::Text, NodeTypeFieldStatus::Mandatory)),
+                (
+                    "should",
+                    (PayloadType::Text, NodeTypeFieldStatus::Encouraged),
+                ),
+                ("old", (PayloadType::Text, NodeTypeFieldStatus::Deprecated)),
+                (
+                    "maybe",
+                    (PayloadType::Number, NodeTypeFieldStatus::Optional),
+                ),
+            ],
+            &[],
+            &[],
+            &[],
+        )
+        .into(),
+        None,
+    )
+    .unwrap();
+    lc.add(
+        "Task",
+        NodeBodyExt::from(&[
+            ("must", PayloadExt::Number(5)),
+            ("old", PayloadExt::Text("legacy".to_string())),
+            ("extra", PayloadExt::Text("nope".to_string())),
+        ]),
+        None,
+    )
+    .unwrap();
+
+    let output = run_typecheck(&lc);
+    let inconsistencies = inconsistency_messages(&output);
+    let warnings = warning_messages(&output);
+
+    assert!(
+        inconsistencies
+            .iter()
+            .any(|message| message.contains("Field must has the wrong type"))
+    );
+    assert!(
+        inconsistencies
+            .iter()
+            .any(|message| message.contains("Extraneous field extra not allowed"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains("encouraged to fill the field should"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains("Field old is deprecated"))
+    );
+}
+
+#[test]
+fn missing_mandatory_field_is_an_inconsistency() {
+    let mut lc = LifeCoreList::new();
+    bootstrap_node_type(&mut lc);
+    lc.add(
+        NodeType::name(),
+        type_decl(
+            "Task",
+            &[("must", (PayloadType::Text, NodeTypeFieldStatus::Mandatory))],
+            &[],
+            &[],
+            &[],
+        )
+        .into(),
+        None,
+    )
+    .unwrap();
+    lc.add("Task", NodeBodyExt::from(&[]), None).unwrap();
+
+    let output = run_typecheck(&lc);
+
+    assert!(
+        inconsistency_messages(&output)
+            .iter()
+            .any(|message| message.contains("mandatory field must"))
+    );
+}
+
+#[test]
+fn redeclaring_active_type_without_parent_override_is_an_inconsistency() {
+    let mut lc = LifeCoreList::new();
+    bootstrap_node_type(&mut lc);
+    lc.add(
+        NodeType::name(),
+        type_decl("Task", &[], &[], &[], &[]).into(),
+        None,
+    )
+    .unwrap();
+    lc.add(
+        NodeType::name(),
+        type_decl(
+            "Task",
+            &[("note", (PayloadType::Text, NodeTypeFieldStatus::Optional))],
+            &[],
+            &[],
+            &[],
+        )
+        .into(),
+        None,
+    )
+    .unwrap();
+
+    let output = run_typecheck(&lc);
+
+    assert!(
+        inconsistency_messages(&output)
+            .iter()
+            .any(|message| message.contains("already declared"))
+    );
+}
+
+#[test]
+fn redeclaring_type_with_parent_override_is_not_a_duplicate_type_error() {
+    let mut lc = LifeCoreList::new();
+    bootstrap_node_type(&mut lc);
+    let old_type = lc
         .add(
-            "xyz",
-            NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+            NodeType::name(),
+            type_decl(
+                "Task",
+                &[("old", (PayloadType::Text, NodeTypeFieldStatus::Optional))],
+                &[],
+                &[],
+                &[],
+            )
+            .into(),
             None,
         )
         .unwrap();
-    let mut runner = AnalysisRunner::new();
-    let factory = TypeCheckFactory::<LifeCoreList>::default();
-    lc.add_analyzer(factory.analyzer_name(), "");
-    runner.register_analyzer_kind(Box::new(factory)).unwrap();
+    lc.add(
+        NodeType::name(),
+        type_decl(
+            "Task",
+            &[("new", (PayloadType::Number, NodeTypeFieldStatus::Optional))],
+            &[],
+            &[],
+            &[],
+        )
+        .into(),
+        Some(old_type.e),
+    )
+    .unwrap();
 
-    assert!(runner.run(&lc).unwrap().is_success());
+    let output = run_typecheck(&lc);
+
+    assert!(
+        !messages(&output)
+            .iter()
+            .any(|message| message.contains("Task which was already declared"))
+    );
 }
 
 #[test]
-// Under current typing rules, this should only give a warning
-fn bootstrap() {
-    init_test_logging();
-
+fn incoming_edge_permissions_use_incoming_list() {
     let mut lc = LifeCoreList::new();
-    let _ = lc
-        .add(NodeType::name(), NodeType::describe_self().into(), None)
-        .unwrap();
-    let mut runner = AnalysisRunner::new();
-    let factory = TypeCheckFactory::<LifeCoreList>::default();
-    lc.add_analyzer(factory.analyzer_name(), "");
-    runner.register_analyzer_kind(Box::new(factory)).unwrap();
+    bootstrap_node_type(&mut lc);
+    lc.add(
+        NodeType::name(),
+        type_decl("Source", &[], &["Link"], &[], &[]).into(),
+        None,
+    )
+    .unwrap();
+    lc.add(
+        NodeType::name(),
+        type_decl("Target", &[], &[], &["Link"], &[]).into(),
+        None,
+    )
+    .unwrap();
+    let source = lc.add("Source", NodeBodyExt::from(&[]), None).unwrap();
+    let target = lc.add("Target", NodeBodyExt::from(&[]), None).unwrap();
+    lc.connect(source.e, "Link", target.e).unwrap();
 
-    let r = runner.run(&lc).unwrap();
-    assert!(r.is_success());
-    assert!(r.has_warning())
+    let output = run_typecheck(&lc);
+
+    assert!(
+        !inconsistency_messages(&output)
+            .iter()
+            .any(|message| message.contains("does not allow outgoing edge of type Link")),
+        "TypeCheck should accept Link because Target lists it as incoming: {:#?}",
+        output
+    );
 }
-
-#[test]
-fn typing01() {
-    let mut lc = LifeCoreList::new();
-    let mut runner = AnalysisRunner::new();
-    let factory = TypeCheckFactory::<LifeCoreList>::default();
-    lc.add_analyzer(factory.analyzer_name(), "");
-    runner.register_analyzer_kind(Box::new(factory)).unwrap();
-    let _ = lc.add(NodeType::name(), NodeType::describe_self().into(), None);
-}
-
-// #[test]
-// fn tombstone01() {
-//     let mut lc = LifeCoreList::new();
-//     let nt_node_type = lc.add("Node_Type", NodeType::describe_self().into(), None).unwrap();
-//     let nt_tombstone = lc
-//         .add(
-//             "Node_Type",
-//             NodeType {
-//                 name: "Tombstone".to_string(),
-//                 class: LifeCoreList::typecheck::NodeTypeClass::Regular,
-//                 outgoing: vec![],
-//                 incoming: vec![],
-//                 additional_override: vec![],
-//                 field: vec![],
-//             }
-//             .into(),
-//             None,
-//         )
-//         .unwrap();
-//     let nt_node_type_2 = lc.add("Node_Type", payload, parent)
-//     let mut runner = AnalysisRunner::new();
-//     lc.add_analyzer(TypeCheckFactory {}.analyzer_name(), "");
-//     runner
-//         .register_analyzer_kind(Box::new(TypeCheckFactory {}))
-//         .unwrap();
-
-//     let output = runner.run(&lc).unwrap();
-//     assert!(output.0.is_empty())
-// }

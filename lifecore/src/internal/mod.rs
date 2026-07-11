@@ -123,7 +123,7 @@ impl LifeCore for LifeCoreList {
         {
             let mut t = self.clone();
 
-            let circumstance_index = t.get_or_insert_mock_circumstance().0;
+            let circumstance_index = t.get_or_insert_mock_circumstance_entry().0;
             let ty_str_index = t.get_or_insert_string(ty);
             t.event.push(Event::Edge(Edge {
                 ty: ty_str_index,
@@ -141,7 +141,7 @@ impl LifeCore for LifeCoreList {
 
         // NOTE COPY_PASTE
         // Circumstance MUST come first, because if it fails somehow, then we inserted intermediate data for nothing
-        let current_circumstance_index = self.get_or_insert_current_session_circumstance()?.0;
+        let current_circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
         let ty_str_index = self.get_or_insert_string(ty);
         self.event.push(Event::Edge(Edge {
             ty: ty_str_index,
@@ -181,7 +181,7 @@ impl LifeCore for LifeCoreList {
         {
             let mut t = self.clone();
             // NOTE order of these two operations is SUS
-            let circumstance_index = t.get_or_insert_mock_circumstance().0;
+            let circumstance_index = t.get_or_insert_mock_circumstance_entry().0;
             let ty_str_index = t.get_or_insert_string(ty);
             let p = insert_all_strings(&mut t, &payload);
             t.event.push(Event::Node(Node {
@@ -198,7 +198,7 @@ impl LifeCore for LifeCoreList {
         }
 
         // NOTE COPY_PASTE
-        let circumstance_index = self.get_or_insert_current_session_circumstance()?.0;
+        let circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
         let ty_str_index = self.get_or_insert_string(ty);
         let p = insert_all_strings(self, &payload);
         self.event.push(Event::Node(Node {
@@ -215,11 +215,13 @@ impl LifeCore for LifeCoreList {
     fn get_or_insert_current_session_circumstance(
         &mut self,
     ) -> Result<crate::CircumstanceExt, LifeCoreError> {
-        todo!()
+        let (_, circumstance) = self.get_or_insert_current_session_circumstance_entry()?;
+        Ok(self.resolve_circumstance(&circumstance))
     }
 
     fn get_or_insert_mock_circumstance(&mut self) -> Result<crate::CircumstanceExt, LifeCoreError> {
-        todo!()
+        let (_, circumstance) = self.get_or_insert_mock_circumstance_entry();
+        Ok(self.resolve_circumstance(&circumstance))
     }
 
     fn get(&self, e: EventContext) -> Option<crate::EventExt> {
@@ -241,15 +243,18 @@ impl LifeCore for LifeCoreList {
     }
 
     fn is_stale(&self, e: EventContext) -> bool {
+        let ctx = || e.exclusive_right();
         match self[e.thing()] {
         Event::Node(_) => {
-            for potential_child in self
-                .window(e.exclusive_right())
-                .filter(|x| x.is_node())
-                .map(|x| x.as_node())
-            {
-                if let Some(idx) = potential_child.parent
-                    && idx.thing() == e.thing()
+            for potential_child_node in self.raw_window(ctx()).filter_map(|event| {
+                if event.is_node() {
+                    Some(event.as_raw_node())
+                } else {
+                    None
+                }
+            }) {
+                if let Some(idx) = potential_child_node.parent
+                    && idx == e.thing()
                 {
                     return true;
                 }
@@ -315,7 +320,8 @@ impl LifeCore for LifeCoreList {
                     err!(
                         EventContext::universe(),
                         BasicValidationFailureScenario::InternalError {
-                            message: "Circumstance list does not match up with Event list".to_string()
+                            message: "Circumstance list does not match up with Event list"
+                                .to_string()
                         }
                     );
                 }
@@ -671,7 +677,7 @@ impl LifeCoreList {
         NodeBodyExt(r)
     }
 
-    fn get_or_insert_current_session_circumstance(
+    fn get_or_insert_current_session_circumstance_entry(
         &mut self,
     ) -> Result<(CircumstanceIndex, Circumstance), LifeCoreError> {
         let now = Zoned::now().round(Unit::Hour)?;
@@ -699,7 +705,7 @@ impl LifeCoreList {
         }
     }
 
-    fn get_or_insert_mock_circumstance(&mut self) -> (CircumstanceIndex, Circumstance) {
+    fn get_or_insert_mock_circumstance_entry(&mut self) -> (CircumstanceIndex, Circumstance) {
         if let Some(idx) = self.circumstance_table.get_index_of(&Circumstance::Mock) {
             (CircumstanceIndex(idx as u64), Circumstance::Mock)
         } else {
@@ -721,6 +727,21 @@ impl LifeCoreList {
         } else {
             assert!(self.string_table.insert(s.to_string()));
             StringIndex((self.string_table.len() - 1) as u64)
+        }
+    }
+
+    fn resolve_circumstance(&self, circumstance: &Circumstance) -> crate::CircumstanceExt {
+        match circumstance {
+        Circumstance::Mock => crate::CircumstanceExt::Mock,
+        Circumstance::Session {
+            when_1h,
+            hostname,
+            username,
+        } => crate::CircumstanceExt::Session {
+            when_1h: when_1h.clone(),
+            hostname: self[*hostname].to_string(),
+            username: self[*username].to_string(),
+        },
         }
     }
 
