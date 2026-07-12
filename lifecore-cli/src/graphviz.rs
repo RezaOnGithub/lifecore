@@ -70,18 +70,18 @@ pub fn graphviz<LC: LifeCore>(lc: &LC, config: GraphVizConfig) -> Result<()> {
 
 pub(crate) fn dot_for_graph<LC: LifeCore>(lc: &LC, config: &GraphVizConfig) -> Result<String> {
     let ctx = EventContext::universe();
-    let nodes = lc.nodes(ctx).sorted_by(|left, right| left.0.cmp(&right.0));
-    let edges = lc.edges(ctx).sorted_by(|left, right| left.0.cmp(&right.0));
+    let nodes = lc.nodes(ctx).sorted_by(|left, right| left.e.cmp(&right.e));
+    let edges = lc.edges(ctx).sorted_by(|left, right| left.e.cmp(&right.e));
     let mut node_by_ctx = BTreeMap::new();
     let mut edge_by_ctx = BTreeMap::new();
 
-    for (node_ctx, node) in nodes {
-        assert!(node_ctx.absolute() == node_ctx);
-        node_by_ctx.insert(node_ctx, node);
+    for node in nodes {
+        assert!(node.e.absolute() == node.e);
+        node_by_ctx.insert(node.e, node);
     }
-    for (edge_ctx, edge) in edges {
-        assert!(edge_ctx.absolute() == edge_ctx);
-        edge_by_ctx.insert(edge_ctx, edge);
+    for edge in edges {
+        assert!(edge.e.absolute() == edge.e);
+        edge_by_ctx.insert(edge.e, edge);
     }
 
     let selection = select_events(lc, config, &node_by_ctx, &edge_by_ctx);

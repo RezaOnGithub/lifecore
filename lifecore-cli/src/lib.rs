@@ -455,8 +455,8 @@ fn matching_nodes(
     state
         .db
         .nodes(EventContext::universe())
-        .filter(|(ctx, node)| {
-            !state.db.is_stale(*ctx)
+        .filter(|node| {
+            !state.db.is_stale(node.e)
                 && ty.is_none_or(|ty| node.ty_name == ty)
                 && field_patterns.iter().all(|(field, pattern)| {
                     node.field
@@ -471,7 +471,7 @@ fn matching_nodes(
                         .any(|payload| pattern.is_match(&payload_search_text(payload)))
                 })
         })
-        .map(|(ctx, node)| {
+        .map(|node| {
             let summary = node
                 .field
                 .0
@@ -480,7 +480,7 @@ fn matching_nodes(
                 .take(3)
                 .map(|(name, payload)| format!("{name}={}", payload_search_text(payload)))
                 .join("; ");
-            (ctx, node.ty_name, summary)
+            (node.e, node.ty_name, summary)
         })
         .sorted_by(|left, right| left.0.cmp(&right.0))
         .collect_vec()
@@ -950,7 +950,7 @@ impl<LC: LifeCore + 'static> Analyzer<LC> for InteractiveAnalyzer {
             .analyzer_name()
             .to_string();
         let mut reports = vec![];
-        for (_, edge) in lc.edges(before_new).filter(|(_, edge)| {
+        for edge in lc.edges(before_new).filter(|edge| {
             edge.from.absolute() == old_node_ctx.absolute()
                 || edge.to.absolute() == old_node_ctx.absolute()
         }) {
@@ -1026,7 +1026,7 @@ fn edge_exists<LC: LifeCore>(
     ty_name: &str,
     to: EventContext,
 ) -> bool {
-    lc.edges(ctx).any(|(_, edge)| {
+    lc.edges(ctx).any(|edge| {
         !lc.is_stale(edge.e)
             && edge.from.absolute() == from.absolute()
             && edge.to.absolute() == to.absolute()
@@ -1042,17 +1042,17 @@ fn sibling_has_similar_edge<LC: LifeCore>(
     ty_name: &str,
     old_edge: &EdgeExt,
 ) -> bool {
-    lc.nodes(ctx).any(|(candidate, _)| {
-        candidate.absolute() != new_node.absolute()
-            && lc.are_siblings(ctx.look_at(candidate), ctx.look_at(new_node))
-            && lc.edges(ctx).any(|(_, edge)| {
+    lc.nodes(ctx).any(|candidate_node| {
+        candidate_node.e.absolute() != new_node.absolute()
+            && lc.are_siblings(ctx.look_at(candidate_node.e), ctx.look_at(new_node))
+            && lc.edges(ctx).any(|edge| {
                 !lc.is_stale(edge.e)
                     && edge.ty_name == ty_name
                     && if old_edge.from.absolute() == other.absolute() {
                         edge.from.absolute() == other.absolute()
-                            && edge.to.absolute() == candidate.absolute()
+                            && edge.to.absolute() == candidate_node.e.absolute()
                     } else {
-                        edge.from.absolute() == candidate.absolute()
+                        edge.from.absolute() == candidate_node.e.absolute()
                             && edge.to.absolute() == other.absolute()
                     }
             })

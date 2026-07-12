@@ -210,8 +210,14 @@ pub trait LifeCore {
     // However! NOTE that the type may not actually be what was intended when the node was created
     fn node(&self, ctx: EventContext) -> NodeExt; // NOTE panics if ctx doesn't denote a Node
     fn edge(&self, ctx: EventContext) -> EdgeExt; // NOTE panics similarly
-    fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, NodeExt)>; // NOTE panics similarly
-    fn edges(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, EdgeExt)>; // NOTE panics similarly
+    fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt>; // NOTE panics similarly
+    fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt>; // NOTE panics similarly
+    fn fresh_nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
+        self.nodes(ctx).filter(|x| !self.is_stale(x.e))
+    }
+    fn fresh_edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt> {
+        self.edges(ctx).filter(|x| !self.is_stale(x.e))
+    }
     fn root_of(&self, e: EventContext) -> Option<EventContext>;
     /// Returns fresh successors within context. Use `.absolute()` to get current fresh successors
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext>;

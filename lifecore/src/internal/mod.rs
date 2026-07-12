@@ -521,20 +521,20 @@ impl LifeCore for LifeCoreList {
         }
     }
 
-    fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, NodeExt)> {
+    fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
         let w = || ctx.index_iter();
         w().zip(self.window(w()))
             .filter(|(_, event)| event.is_node())
-            .map(move |(index, _)| (index, self.node(ctx.look_at(index))))
+            .map(move |(index, _)| self.node(ctx.look_at(index)))
     }
 
-    fn edges(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, EdgeExt)> {
+    fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt> {
         let index = || ctx.index_iter();
         let window = self.window(index());
         index()
             .zip(window)
             .filter(|(_, event)| event.is_edge())
-            .map(move |(index, _)| (index, self.edge(ctx.look_at(index))))
+            .map(move |(index, _)| self.edge(ctx.look_at(index)))
     }
 
     fn root_of(&self, e: EventContext) -> Option<EventContext> {

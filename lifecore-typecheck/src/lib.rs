@@ -121,12 +121,12 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
 
         // check whether a Node_Type declaring some type X is not clashing with an older but non-stale
         // Node_Type declaring a type of the same name.
-        for (index, some_type_at_some_point_node) in lc
+        for some_type_at_some_point_node in lc
             .nodes(EventContext::universe())
-            .filter(|(_, node)| node.ty_name.as_str() == NodeType::name())
+            .filter(|node| node.ty_name.as_str() == NodeType::name())
         {
             let type_table = lc
-                .types(index.exclusive_left_context())
+                .types(some_type_at_some_point_node.e.exclusive_left_context())
                 .collect::<HashMap<_, _>>();
 
             let some_type_at_some_point =
@@ -140,7 +140,7 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
                     .is_none_or(|x| x.absolute() != older_type_index.absolute())
                 {
                     err!(
-                        index.inclusive_left_context(),
+                        some_type_at_some_point_node.e.inclusive_left_context(),
                         "Cannot have a Node_Type declaring {} which was already declared",
                         some_type_at_some_point.name.as_str()
                     );
@@ -334,12 +334,49 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
                 .ctx()
                 .absolute()
                 .exclusive_left_context();
-            let _type_table = lc.types(ctx);
-
             if last_event_in_context.is_edge()
                 || last_event_in_context.is_node_and(|x| x.parent.is_none())
             {
                 continue;
+            }
+
+            let child_type_name = last_event_in_context.as_node().ty_name.clone();
+            let parent_in_context = ctx.look_at(last_event_in_context.as_node().parent.unwrap());
+            let Some(parent_type) = lc.node(parent_in_context).ty else {
+                // We have bigger problems.
+                continue;
+            };
+
+            if !parent_type.additional_override.contains(&child_type_name) {
+                err!(
+                    last_event_in_context.ctx().inclusive_left_context(),
+                    "The parent type {} does not allow a node of type {} to override it",
+                    parent_type.name.as_str(),
+                    child_type_name.as_str()
+                );
+            }
+        }
+
+        // Check Node Classes
+        for last_event_in_context in lc.window(EventContext::universe().index_iter()) {
+            let ctx = last_event_in_context
+                .ctx()
+                .absolute()
+                .inclusive_left_context();
+            for fresh_node in lc.nodes(ctx).filter(|x| !lc.is_stale(x.e)) {
+                let Some(ty) = fresh_node.ty else {
+                    // We have bigger problems
+                    continue;
+                };
+                // TODO
+                match ty.class {
+                lifecore::NodeTypeClass::Spike | lifecore::NodeTypeClass::Toothpick => {
+                    // Check for only outgoing edges
+                }
+                lifecore::NodeTypeClass::Hub => todo!(),
+                lifecore::NodeTypeClass::EdgeNode => todo!(),
+                lifecore::NodeTypeClass::Regular => continue, // Anything goes
+                }
             }
         }
         r
