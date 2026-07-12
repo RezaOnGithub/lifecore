@@ -500,8 +500,11 @@ impl EventContext {
 
     pub fn intersect(&self, rhs: &Self) -> Self {
         assert!(self.validate() && rhs.validate() && self.thing == rhs.thing);
-        let start = std::cmp::min(self.start.unwrap_or(0), rhs.start.unwrap_or(0));
-        let end = std::cmp::min(self.end.unwrap_or(0), rhs.end.unwrap_or(0));
+        let start = std::cmp::max(self.start.unwrap_or(0), rhs.start.unwrap_or(0));
+        let end = std::cmp::min(
+            self.end.unwrap_or(usize::MAX),
+            rhs.end.unwrap_or(usize::MAX),
+        );
         Self {
             start: Some(start),
             end: Some(end),

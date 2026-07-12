@@ -432,6 +432,8 @@ impl LifeCore for LifeCoreList {
                                     )
                                 }
                             );
+                            // `idx` is invalid. Let's not crash on the remaining checks
+                            continue;
                         }
                         if self[idx].is_edge() {
                             err!(
@@ -451,6 +453,8 @@ impl LifeCore for LifeCoreList {
                                 message: format!("Edge {} has an end out of range", e.0)
                             }
                         );
+                        // `from` and `to` are invalid. Let's not crash in the next check
+                        continue;
                     }
                     if self[from].is_edge() || self[to].is_edge() {
                         err!(
@@ -606,9 +610,13 @@ impl LifeCore for LifeCoreList {
                     && &self[event.as_raw_node().ty] == NodeType::name()
                     && !self.is_stale(ctx)
                 {
-                    let ty =
-                        NodeType::try_from(&self.resolve(&event.as_raw_node().payload)).unwrap();
-                    Some((ty.name.clone(), (ctx, ty)))
+                    if let Ok(ty) = NodeType::try_from(&self.resolve(&event.as_raw_node().payload))
+                    {
+                        Some((ty.name.clone(), (ctx, ty)))
+                    } else {
+                        // We have much bigger problems
+                        None
+                    }
                 } else {
                     None
                 }

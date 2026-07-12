@@ -272,6 +272,56 @@ fn node_type_resolution_depends_on_context() {
 }
 
 #[test]
+fn context_intersection_uses_the_tighter_left_bound() {
+    let left = EventContext {
+        start: Some(2),
+        end: Some(8),
+        thing: Some(5),
+    };
+    let right = EventContext {
+        start: Some(4),
+        end: Some(7),
+        thing: Some(5),
+    };
+
+    let intersection = left.intersect(&right);
+
+    assert_eq!(intersection.start, Some(4));
+    assert_eq!(intersection.end, Some(7));
+    assert!(intersection.validate());
+}
+
+#[test]
+fn context_intersection_treats_an_unbounded_end_as_infinity() {
+    let bounded = EventContext {
+        start: Some(0),
+        end: Some(4),
+        thing: None,
+    };
+
+    let intersection = EventContext::universe().intersect(&bounded);
+
+    assert_eq!(intersection, bounded);
+}
+
+#[test]
+fn basic_validation_reports_an_out_of_range_parent_without_panicking() {
+    let mut lc = LifeCoreList::new();
+    lc.add("", text_body("node"), None).unwrap();
+    let mut serialized = serde_json::to_value(lc).unwrap();
+    serialized["event"][0]["Node"]["parent"] = serde_json::json!(99);
+    let corrupted: LifeCoreList = serde_json::from_value(serialized).unwrap();
+
+    let validation = std::panic::catch_unwind(|| corrupted.basic_validation());
+
+    assert!(
+        validation.is_ok(),
+        "basic_validation must diagnose an out-of-range stored reference instead of indexing it"
+    );
+    assert!(validation.unwrap().has_error());
+}
+
+#[test]
 #[should_panic]
 fn last_on_empty_lifecore_panics() {
     generic_last_on_empty_lifecore_panics(LifeCoreList::new());

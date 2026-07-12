@@ -129,8 +129,12 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
                 .types(some_type_at_some_point_node.e.exclusive_left_context())
                 .collect::<HashMap<_, _>>();
 
-            let some_type_at_some_point =
-                NodeType::try_from(&some_type_at_some_point_node.field).unwrap();
+            let Ok(some_type_at_some_point) =
+                NodeType::try_from(&some_type_at_some_point_node.field)
+            else {
+                err!(some_type_at_some_point_node.e, "Malformed Node_Type Body");
+                continue;
+            };
             if let Some((older_type_index, _older_type)) =
                 type_table.get(some_type_at_some_point.name.as_str())
             {
@@ -320,7 +324,7 @@ impl<LC: LifeCore> Analyzer<LC> for TypeCheck {
                 {
                     err!(
                         pointed_context,
-                        "Edge head node of type {} does not allow outgoing edge of type {}",
+                        "Edge tail node of type {} does not allow incoming edge of type {}",
                         incoming_node.ty_name.as_str(),
                         edge.ty_name.as_str()
                     );

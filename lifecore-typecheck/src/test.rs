@@ -330,3 +330,51 @@ fn incoming_edge_permissions_use_incoming_list() {
         output
     );
 }
+
+#[test]
+fn malformed_node_type_is_reported_without_panicking() {
+    let output = std::panic::catch_unwind(|| {
+        let mut lc = LifeCoreList::new();
+        bootstrap_node_type(&mut lc);
+        lc.add(NodeType::name(), NodeBodyExt::from(&[]), None)
+            .unwrap();
+        run_typecheck(&lc)
+    });
+
+    assert!(
+        output.is_ok(),
+        "TypeCheck must diagnose an invalid Node_Type body instead of unwrapping it"
+    );
+    assert!(output.unwrap().has_error());
+}
+
+#[test]
+fn disallowed_incoming_edge_diagnostic_identifies_the_incoming_end() {
+    let mut lc = LifeCoreList::new();
+    bootstrap_node_type(&mut lc);
+    lc.add(
+        NodeType::name(),
+        type_decl("Source", &[], &["Link"], &[], &[]).into(),
+        None,
+    )
+    .unwrap();
+    lc.add(
+        NodeType::name(),
+        type_decl("Target", &[], &[], &[], &[]).into(),
+        None,
+    )
+    .unwrap();
+    let source = lc.add("Source", NodeBodyExt::from(&[]), None).unwrap();
+    let target = lc.add("Target", NodeBodyExt::from(&[]), None).unwrap();
+    lc.connect(source.e, "Link", target.e).unwrap();
+
+    let output = run_typecheck(&lc);
+
+    assert!(
+        inconsistency_messages(&output).iter().any(|message| {
+            message
+                .contains("Edge tail node of type Target does not allow incoming edge of type Link")
+        }),
+        "the diagnostic must describe the Target/incoming check: {output:#?}"
+    );
+}
