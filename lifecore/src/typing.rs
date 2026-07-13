@@ -125,3 +125,25 @@ impl TryFrom<&NodeBodyExt> for NodeType {
         })
     }
 }
+
+impl NodeType {
+    fn new(
+        name: &str,
+        fields: &[(&str, (PayloadType, NodeTypeFieldStatus))],
+        outgoing: &[&str],
+        incoming: &[&str],
+        additional_override: &[&str],
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            class: NodeTypeClass::Regular,
+            outgoing: outgoing.iter().map(|x| x.to_string()).collect(),
+            incoming: incoming.iter().map(|x| x.to_string()).collect(),
+            additional_override: additional_override.iter().map(|x| x.to_string()).collect(),
+            field: fields
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect(),
+        }
+    }
+}

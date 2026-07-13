@@ -105,13 +105,12 @@ enum Payload {
 }
 
 impl LifeCore for LifeCoreList {
-    fn last(&self) -> EventContext {
-        assert!(!self.event.is_empty());
-        EventIndex((self.total_event_count() - 1) as u64).before_and_including()
-    }
-
-    fn total_event_count(&self) -> usize {
-        self.event.len()
+    fn last(&self) -> Option<EventContext> {
+        if self.event.is_empty() {
+            None
+        } else {
+            Some(EventIndex((self.event.len() - 1) as u64).before_and_including())
+        }
     }
 
     fn connect(
@@ -137,7 +136,7 @@ impl LifeCore for LifeCoreList {
                 return Err(v.err());
             }
             // This shouldn't crash
-            let _ = t.edge(t.last());
+            let _ = t.edge(t.last().unwrap());
         }
 
         // NOTE COPY_PASTE
@@ -151,7 +150,7 @@ impl LifeCore for LifeCoreList {
         }));
         self.circumstance.push(current_circumstance_index);
         assert!(self.basic_validation().is_success());
-        Ok(self.edge(self.last()))
+        Ok(self.edge(self.last().unwrap()))
     }
 
     fn add(
@@ -187,7 +186,7 @@ impl LifeCore for LifeCoreList {
             let p = insert_all_strings(&mut t, &payload);
             t.event.push(Event::Node(Node {
                 ty: ty_str_index,
-                parent: parent.map(|x| x.into()),
+                parent: parent.clone().map(|x| x.into()),
                 payload: p,
             }));
             t.circumstance.push(circumstance_index);
@@ -195,7 +194,7 @@ impl LifeCore for LifeCoreList {
             if r.has_error() {
                 return Err(r.err());
             }
-            let _ = t.node(t.last());
+            let _ = t.node(t.last().unwrap());
         }
 
         // NOTE COPY_PASTE
@@ -204,13 +203,13 @@ impl LifeCore for LifeCoreList {
         let p = insert_all_strings(self, &payload);
         self.event.push(Event::Node(Node {
             ty: ty_str_index,
-            parent: parent.map(|x| x.into()),
+            parent: parent.clone().map(|x| x.into()),
             payload: p,
         }));
         self.circumstance.push(circumstance_index);
 
         assert!(self.basic_validation().is_success());
-        Ok(self.node(self.last()))
+        Ok(self.node(self.last().unwrap()))
     }
 
     fn get_or_insert_current_session_circumstance(
@@ -526,14 +525,14 @@ impl LifeCore for LifeCoreList {
     }
 
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
-        let w = || ctx.index_iter();
+        let w = || ctx.items();
         w().zip(self.window(w()))
             .filter(|(_, event)| event.is_node())
             .map(move |(index, _)| self.node(ctx.look_at(index)))
     }
 
     fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt> {
-        let index = || ctx.index_iter();
+        let index = || ctx.items();
         let window = self.window(index());
         index()
             .zip(window)
@@ -603,8 +602,8 @@ impl LifeCore for LifeCoreList {
     }
 
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))> {
-        e.index_iter()
-            .zip(self.raw_window(e.index_iter()))
+        e.items()
+            .zip(self.raw_window(e.items()))
             .filter_map(|(ctx, event)| {
                 if event.is_node()
                     && &self[event.as_raw_node().ty] == NodeType::name()
@@ -750,13 +749,13 @@ impl LifeCoreList {
             username: uname_index,
         };
         if let Some(idx) = self.circumstance_table.get_index_of(&circumstance) {
-            anyhow::Result::Ok((CircumstanceIndex(idx as u64), circumstance))
+            Ok((CircumstanceIndex(idx as u64), circumstance))
         } else {
             assert!(
                 self.circumstance_table.insert(circumstance.clone()),
                 "Circumstance should not be present. We just checked!"
             );
-            anyhow::Result::Ok((
+            Ok((
                 CircumstanceIndex((self.circumstance_table.len() - 1) as u64),
                 circumstance,
             ))
@@ -823,14 +822,14 @@ impl LifeCoreList {
 
     // Aggregate Return
     fn raw_nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, Node)> {
-        let w = || ctx.index_iter();
+        let w = || ctx.items();
         w().zip(self.raw_window(w()))
             .filter(|(_, event)| event.is_node())
             .map(|(index, event)| (index, event.as_raw_node()))
     }
 
     fn raw_edges(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, Edge)> {
-        let w = || ctx.index_iter();
+        let w = || ctx.items();
         w().zip(self.raw_window(w()))
             .filter(|(_, event)| event.is_edge())
             .map(|(index, event)| (index, event.as_raw_edge()))

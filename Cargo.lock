@@ -315,7 +315,6 @@ dependencies = [
 name = "lifecore"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "arrayvec",
  "clap",
  "env_logger",
@@ -389,6 +388,8 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "strum",
+ "thiserror",
 ]
 
 [[package]]

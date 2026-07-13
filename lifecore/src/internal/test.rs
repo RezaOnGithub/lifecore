@@ -41,7 +41,7 @@ fn raw_edge_window() {
         );
     }
 
-    let w = || EventContext::universe().index_iter();
+    let w = || EventContext::universe().items();
 
     assert_eq!(lc.window(w()).count(), 10);
     assert_eq!(lc.edges(EventContext::universe()).count(), 0);

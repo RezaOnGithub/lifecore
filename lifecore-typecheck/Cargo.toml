@@ -9,6 +9,9 @@ serde_json = "1.0.150"
 itertools = "0.15.0"
 lifecore = { path = "../lifecore"}
 log = "0.4.33"
+thiserror = "2.0.18"
+strum = { version = "0.28.0", features = ["derive"] }
+
 
 [lints]
 workspace = true

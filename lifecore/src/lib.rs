@@ -178,9 +178,13 @@ pub enum SuggestedAction {
     },
 }
 
+// Implementation Rules:
+// - Don't be too high-level, and use EventContext instead of heavy-weight NodeExt and EdgeExt as parameters
+// - Expect duplicate code; Leverage the private helpers on the implementor type
 pub trait LifeCore {
-    fn last(&self) -> EventContext;
-    fn total_event_count(&self) -> usize;
+    // TODO assert for boundedness
+    /// Get last event in LifeCore as a bounded EventContext
+    fn last(&self) -> Option<EventContext>;
     fn connect(
         &mut self,
         from: EventContext,
@@ -218,14 +222,69 @@ pub trait LifeCore {
     fn fresh_edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt> {
         self.edges(ctx).filter(|x| !self.is_stale(x.e))
     }
+
+    /// Get non-stale edges connected to node `n`
+    ///
+    /// *Note:* for this function to return anything meaningful, `n` itself
+    /// needs to be fresh within the context that implies. That is, if `n` is
+    /// stale, any edge connected to it is also stale.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use lifecore::{LifeCoreList, LifeCore, NodeBodyExt, NodeExt, EdgeExt};
+    /// let mut lc = LifeCoreList::new();
+    /// let a0 = lc.add("A", NodeBodyExt::default(), None).unwrap();
+    /// let b0 = lc.add("B", NodeBodyExt::default(), None).unwrap();
+    /// let _ = lc.connect(a0.e, "X", b0.e).unwrap();
+    /// let b1 = lc.add("B", NodeBodyExt::default(), Some(b0.e)).unwrap();
+    /// let _ = lc.connect(a0.e, "X", b1.e).unwrap();
+    /// assert_eq!(lc.fresh_edges_of(b0).count(), 0);
+    /// ```
+    fn fresh_edges_of(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
+        let ctx = n.exclusive_right_context();
+        self.edges(ctx).filter(move |x| {
+            !self.is_stale(x.e)
+                && (x.from.absolute() == n.absolute() || x.to.absolute() == n.absolute())
+        })
+    }
+
+    /// Get fresh outgoing edges from `n` within the implied context.
+    /// 
+    /// Outgoing edge means an edge where `n` is `from`, also known as the head of the edge
+    /// 
+    /// *Note:* for this function to return anything meaningful, `n` itself
+    /// needs to be fresh within the context that implies. That is, if `n` is
+    /// stale, any edge connected to it is also stale.
+    fn fresh_outgoing_edges_of(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
+        let ctx = n.exclusive_right_context();
+        self.edges(ctx)
+            .filter(move |x| !self.is_stale(x.e) && x.from.absolute() == n.absolute())
+    }
+
+    /// Get fresh Incoming edges from `n` within the implied context.
+    /// 
+    /// Incoming edge means an edge where `n` is `to`, also known as the tail of the edge
+    /// 
+    /// *Note:* for this function to return anything meaningful, `n` itself
+    /// needs to be fresh within the context that implies. That is, if `n` is
+    /// stale, any edge connected to it is also stale.
+    fn fresh_incoming_edges_to(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
+        let ctx = n.exclusive_right_context();
+        self.edges(ctx)
+            .filter(move |x| !self.is_stale(x.e) && x.to.absolute() == n.absolute())
+    }
+
+    /// Get root of node at `e`. That is, the ancestor node by the way of `parent` component
     fn root_of(&self, e: EventContext) -> Option<EventContext>;
+
     /// Returns fresh successors within context. Use `.absolute()` to get current fresh successors
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext>;
+
     /// Find relative degree. Siblings (nodes that share a parent) have degree 0.
     /// Note that the left sides of the contexts need to extend far back enough in order to find the shared parent.
     fn relative_degree(&self, a: EventContext, b: EventContext) -> Option<usize>;
-    fn are_siblings(&self, left: EventContext, right: EventContext) -> bool {
-        self.relative_degree(left, right) == Some(0)
+    fn are_siblings(&self, a: EventContext, b: EventContext) -> bool {
+        self.relative_degree(a, b) == Some(0)
     }
     /// Return all the fresh types in context
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))>;
@@ -408,34 +467,25 @@ impl EventContext {
 
     // Look at every event within context, from the context
     // NOTE potentially unbounded!
-    pub fn index_iter(self) -> impl Iterator<Item = Self> {
+    pub fn items(self) -> impl Iterator<Item = Self> {
         assert!(self.validate());
         let ctx = self;
         self.range().map(move |x| ctx.look_raw(x))
     }
 
+    pub fn inclusive_right_context(self) -> Self {
+        assert!(self.validate() && self.thing.is_some());
+        let r = Self {
+            start: self.thing,
+            end: self.end,
+            thing: Some(self.thing.unwrap()),
+        };
+        assert!(r.validate());
+        r
+    }
+
     pub fn inclusive_right(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate() && self.thing.is_some());
-        let ctx = self;
-        (self.thing.unwrap()..self.end.unwrap_or(usize::MAX)).map(move |x| ctx.look_raw(x))
-    }
-
-    pub fn inclusive_left(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate() && self.thing.is_some() && self.is_bounded());
-        let ctx = self;
-        (self.start.unwrap_or(0)..(self.thing.unwrap() + 1)).map(move |x| ctx.look_raw(x))
-    }
-
-    pub fn exclusive_right(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate() && self.thing.is_some());
-        let ctx = self;
-        ((self.thing.unwrap() + 1)..self.end.unwrap_or(usize::MAX)).map(move |x| ctx.look_raw(x))
-    }
-
-    pub fn exclusive_left(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate() && self.thing.is_some() && self.is_bounded());
-        let ctx = self;
-        (self.start.unwrap_or(0)..self.thing.unwrap()).map(move |x| ctx.look_raw(x))
+        self.inclusive_right_context().items()
     }
 
     pub fn inclusive_left_context(&self) -> Self {
@@ -451,6 +501,25 @@ impl EventContext {
         r
     }
 
+    pub fn inclusive_left(self) -> impl Iterator<Item = Self> {
+        self.inclusive_left_context().items()
+    }
+
+    pub fn exclusive_right_context(self) -> Self {
+        assert!(self.validate() && self.thing.is_some());
+        let r = Self {
+            start: Some(self.thing.unwrap() + 1),
+            end: self.end,
+            thing: None,
+        };
+        assert!(r.validate());
+        r
+    }
+
+    pub fn exclusive_right(self) -> impl Iterator<Item = Self> {
+        self.exclusive_right_context().items()
+    }
+
     pub fn exclusive_left_context(&self) -> Self {
         assert!(self.validate() && self.thing.is_some());
         // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
@@ -462,6 +531,10 @@ impl EventContext {
         };
         assert!(r.validate());
         r
+    }
+
+    pub fn exclusive_left(self) -> impl Iterator<Item = Self> {
+        self.exclusive_left_context().items()
     }
 
     pub fn is_bounded(&self) -> bool {
@@ -762,5 +835,11 @@ impl From<whoami::Error> for LifeCoreError {
 impl From<jiff::Error> for LifeCoreError {
     fn from(inner: jiff::Error) -> Self {
         LifeCoreError::ErrorRoundingTime { inner }
+    }
+}
+
+impl Default for NodeBodyExt {
+    fn default() -> Self {
+        Self(HashMap::new())
     }
 }
