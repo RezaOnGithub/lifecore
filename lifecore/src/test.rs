@@ -1,6 +1,10 @@
 use crate::{
-    BasicValidationFailureScenario, EventContext, LifeCore, LifeCoreError, LifeCoreList,
-    NodeBodyExt, NodeType, NodeTypeClass, NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody,
+    BasicValidationFailure,
+    BasicValidationFailureScenario::{self, *},
+    EventContext, LifeCore,
+    LifeCoreError,
+    LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass, NodeTypeFieldStatus, PayloadExt,
+    PayloadType, TypedBody, analysis,
 };
 
 fn text_body(value: &str) -> NodeBodyExt {
@@ -28,20 +32,6 @@ fn type_decl(
     }
 }
 
-fn system_error_reasons(error: LifeCoreError) -> Vec<BasicValidationFailureScenario> {
-    match error {
-    LifeCoreError::SystemsError(output) => output
-        .0
-        .into_iter()
-        .filter_map(|report| match report {
-        crate::AnalysisReport::BasicValidationFailure { reason, .. } => Some(reason),
-        _ => None,
-        })
-        .collect(),
-    other => panic!("expected SystemsError, got {other:?}"),
-    }
-}
-
 fn generic_parent_child_override_scenario<LC: LifeCore>(mut lc: LC) {
     let parent = lc.add("", text_body("parent"), None).unwrap();
     let child = lc.add("", text_body("child"), Some(parent.e)).unwrap();
@@ -55,8 +45,8 @@ fn generic_parent_child_override_scenario<LC: LifeCore>(mut lc: LC) {
     // assert_eq!(lc.total_event_count(), 3);
 }
 
-fn generic_last_on_empty_lifecore_panics<LC: LifeCore>(lc: LC) {
-    let _ = lc.last();
+fn generic_last_on_empty_lifecore<LC: LifeCore>(lc: LC) {
+    assert!(lc.last().is_none());
 }
 
 fn generic_get_with_unpointed_context_panics<LC: LifeCore>(lc: &LC) {
@@ -67,12 +57,12 @@ fn generic_window_with_unpointed_context_panics<LC: LifeCore>(lc: &LC) {
     let _ = lc.window([EventContext::universe()]).count();
 }
 
-fn generic_node_on_edge_context_panics<LC: LifeCore>(lc: &LC, edge: EventContext) {
-    let _ = lc.node(edge);
+fn generic_node_on_edge_context<LC: LifeCore>(lc: &LC, edge: EventContext) {
+    assert!(lc.node(edge).is_none());
 }
 
-fn generic_edge_on_node_context_panics<LC: LifeCore>(lc: &LC, node: EventContext) {
-    let _ = lc.edge(node);
+fn generic_edge_on_node_context<LC: LifeCore>(lc: &LC, node: EventContext) {
+    assert!(lc.edge(node).is_none())
 }
 
 fn generic_is_stale_with_out_of_range_context_panics<LC: LifeCore>(lc: &LC) {
@@ -82,7 +72,7 @@ fn generic_is_stale_with_out_of_range_context_panics<LC: LifeCore>(lc: &LC) {
 #[test]
 fn new_is_valid() {
     let lc = LifeCoreList::new();
-    assert!(lc.basic_validation().is_success());
+    assert!(lc.basic_validation().is_ok());
 }
 
 #[test]
@@ -91,7 +81,7 @@ fn basic_01() {
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let n1 = lc.add("", text_body("orange"), None).unwrap();
     let _e0 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
-    assert!(lc.basic_validation().is_success());
+    assert!(lc.basic_validation().is_ok());
 }
 
 #[test]
@@ -102,7 +92,13 @@ fn no_dupe_node() {
     let mut lc = LifeCoreList::new();
     let _n0 = lc.add("", text_body("yellow"), None).unwrap();
     let error = lc.add("", text_body("yellow"), None).unwrap_err();
-    assert!(system_error_reasons(error).contains(&BasicValidationFailureScenario::DuplicateNode));
+    assert!(matches!(
+        error,
+        LifeCoreError::BasicValidationFailure(BasicValidationFailure {
+            reason: DuplicateNode,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -112,7 +108,13 @@ fn no_dupe_edge() {
     let n1 = lc.add("", text_body("orange"), None).unwrap();
     let _e0 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
     let error = lc.connect(n0.e, "skrunkle", n1.e).unwrap_err();
-    assert!(system_error_reasons(error).contains(&BasicValidationFailureScenario::DuplicateEdge));
+    assert!(matches!(
+        error,
+        LifeCoreError::BasicValidationFailure(BasicValidationFailure {
+            reason: DuplicateEdge,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -120,7 +122,7 @@ fn dupe_parent_and_child() {
     let mut lc = LifeCoreList::new();
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let _n1 = lc.add("", text_body("yellow"), Some(n0.e)).unwrap();
-    assert!(lc.basic_validation().is_success());
+    assert!(lc.basic_validation().is_ok());
 }
 
 #[test]
@@ -129,9 +131,13 @@ fn stale_rule_01() {
     let parent = lc.add("", text_body("yellow"), None).unwrap();
     let child = lc.add("", text_body("yellow"), Some(parent.e)).unwrap();
     let error = lc.connect(parent.e, "", child.e).unwrap_err();
-    assert!(
-        system_error_reasons(error).contains(&BasicValidationFailureScenario::StaleRuleViolation)
-    );
+    assert!(matches!(
+        error,
+        LifeCoreError::BasicValidationFailure(BasicValidationFailure {
+            reason: StaleRuleViolation,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -140,9 +146,13 @@ fn stale_rule_02() {
     let parent = lc.add("", text_body("yellow"), None).unwrap();
     let child = lc.add("", text_body("yellow"), Some(parent.e)).unwrap();
     let error = lc.connect(child.e, "", parent.e).unwrap_err();
-    assert!(
-        system_error_reasons(error).contains(&BasicValidationFailureScenario::StaleRuleViolation)
-    );
+    assert!(matches!(
+        error,
+        LifeCoreError::BasicValidationFailure(BasicValidationFailure {
+            reason: StaleRuleViolation,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -269,35 +279,35 @@ fn node_type_resolution_depends_on_context() {
         types_before_override[0].1.1.field[0].0.as_str(),
         "old_field"
     );
-    assert!(lc.basic_validation().is_success());
+    assert!(lc.basic_validation().is_ok());
     assert_eq!(new_type.ty_name.as_str(), NodeType::name());
 }
 
 #[test]
 fn context_intersection_uses_the_tighter_left_bound() {
     let left = EventContext {
-        start: Some(2),
-        end: Some(8),
+        start: 2,
+        end: 8,
         thing: Some(5),
     };
     let right = EventContext {
-        start: Some(4),
-        end: Some(7),
+        start: 4,
+        end: 7,
         thing: Some(5),
     };
 
     let intersection = left.intersect(&right);
 
-    assert_eq!(intersection.start, Some(4));
-    assert_eq!(intersection.end, Some(7));
+    assert_eq!(intersection.start, 4);
+    assert_eq!(intersection.end, 7);
     assert!(intersection.validate());
 }
 
 #[test]
 fn context_intersection_treats_an_unbounded_end_as_infinity() {
     let bounded = EventContext {
-        start: Some(0),
-        end: Some(4),
+        start: 0,
+        end: 4,
         thing: None,
     };
 
@@ -320,13 +330,13 @@ fn basic_validation_reports_an_out_of_range_parent_without_panicking() {
         validation.is_ok(),
         "basic_validation must diagnose an out-of-range stored reference instead of indexing it"
     );
-    assert!(validation.unwrap().has_error());
+    assert!(validation.unwrap().is_err());
 }
 
 #[test]
 #[should_panic]
 fn last_on_empty_lifecore_panics() {
-    generic_last_on_empty_lifecore_panics(LifeCoreList::new());
+    generic_last_on_empty_lifecore(LifeCoreList::new());
 }
 
 #[test]
@@ -344,14 +354,13 @@ fn window_with_unpointed_context_panics() {
 }
 
 #[test]
-#[should_panic]
-fn node_on_edge_context_panics() {
+fn node_on_edge_context() {
     let mut lc = LifeCoreList::new();
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let n1 = lc.add("", text_body("orange"), None).unwrap();
     let edge = lc.connect(n0.e, "edge", n1.e).unwrap();
 
-    generic_node_on_edge_context_panics(&lc, edge.e);
+    generic_node_on_edge_context(&lc, edge.e);
 }
 
 #[test]
@@ -360,7 +369,7 @@ fn edge_on_node_context_panics() {
     let mut lc = LifeCoreList::new();
     let node = lc.add("", text_body("yellow"), None).unwrap();
 
-    generic_edge_on_node_context_panics(&lc, node.e);
+    generic_edge_on_node_context(&lc, node.e);
 }
 
 #[test]

@@ -17,8 +17,7 @@ the central model is a typed, versioned graph.
 - `lifecore-typecheck`: analyzer that checks graph contents against active
   `Node_Type` declarations.
 - `lifecore-test`: integration tests for runner-based analysis behavior.
-- `lifecore-cli`: placeholder CLI crate. Most GraphViz code is currently
-  commented out.
+- `lifecore-cli`: placeholder CLI crate.
 - `lifecore-derive`: placeholder procedural macro crate for future typed-body
   derive helpers.
 - `lifecore-kman`, `lifecore-prod`: placeholder downstream analyzer/domain
@@ -78,4 +77,4 @@ the central model is a typed, versioned graph.
 - Validation and TypeCheck are currently correctness-first and repeatedly scan
   graph history.
 - The analyzer API is still thin. Downstream analyzer crates may need richer
-  graph-query helpers before they can avoid rebuilding common traversals.
+  graph-query helpers so they can avoid rebuilding common traversals.

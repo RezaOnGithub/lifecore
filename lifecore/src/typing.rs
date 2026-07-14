@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 use crate::{LifeCoreError, NodeBodyExt, PayloadExt, PayloadType, TypedBody};
 
@@ -21,7 +22,7 @@ pub struct NodeType {
     pub field: Vec<(String, (PayloadType, NodeTypeFieldStatus))>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Display)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum NodeTypeClass {
     Spike,
@@ -127,7 +128,7 @@ impl TryFrom<&NodeBodyExt> for NodeType {
 }
 
 impl NodeType {
-    fn new(
+    pub fn new(
         name: &str,
         fields: &[(&str, (PayloadType, NodeTypeFieldStatus))],
         outgoing: &[&str],

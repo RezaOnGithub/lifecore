@@ -19,12 +19,23 @@
 - Edge head == beginning == from
   - Similarly Edge tail == end == to
   - tail means the sharp end of an arrow!
-- TypeCheck used to be an external crate written against Analyzer interfaces; but
-  now it is incorporated into the core system
+- TypeCheck used to be an external crate written against Analyzer interfaces;
+  but now it is incorporated into the core system
 
 # TODO
 
 - Go over iterator usage and use better idioms. `flatten`, `filter_map` etc
+- test eventcontext:
+  ```rust
+  last_event_in_context
+                    .ctx()
+                    // .absolute()
+                    .inclusive_left_context() ==
+  last_event_in_context
+                    .ctx()
+                    .absolute()
+                    .inclusive_left_context()
+  ```
 
 # Pitfalls
 
@@ -58,7 +69,8 @@
 - Some kind of explicit deprecation system for nodes? Should this even be
   implemented at type level?
 
-- Reducing the amount of going over the entire database for validation (NOTDO for now)
+- Reducing the amount of going over the entire database for validation (NOTDO
+  for now)
 
 - If only we could encode Analyzer systems in the graph as well, so that they
   have the same lifecycle as the node types they govern. Now, any change to node

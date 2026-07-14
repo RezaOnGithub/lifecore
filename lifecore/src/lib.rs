@@ -4,21 +4,25 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::Hash,
-    ops::{Index, Range},
+    ops::{Index, Range, RangeBounds},
 };
 use strum::{EnumIs, EnumTryAs};
 
+pub mod analysis;
 mod internal;
 #[cfg(test)]
 mod test;
 mod typing;
 
-// Used for "external" convenient usage
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct NodeBodyExt(pub HashMap<String, PayloadExt>);
 
-pub use jiff::Zoned;
-
+/// "Circumstance" is currently a simple method of logging event dates and places
+/// Not much weight to it at the moment, and doesn't make a functional difference.
+///
+/// "Mock" circumstance is intended for running validation and analysis before writing a node
+/// or an edge to the database proper. Currently, a single `Mock` is allowed and it must be associated
+/// with the last event
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 pub enum CircumstanceExt {
     Mock,
@@ -46,14 +50,56 @@ pub enum LifeCoreError {
     #[error("Analyzer {name:?} not found!")]
     AnalyzerNotFound { name: String },
     #[error("Systems Error")]
-    SystemsError(AnalysisOutput), // TODO how to only report Inconsistency and BasicValidationError instead
+    SystemsError(Vec<analysis::Inconsistency>),
+    #[error("Validation Failure")]
+    BasicValidationFailure(BasicValidationFailure),
 }
 
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct BasicValidationFailure {
+    offending_event: EventContext,
+    reason: BasicValidationFailureScenario,
+}
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub enum BasicValidationFailureScenario {
+    InternalError { message: String },
+    ExtraneousMockCircumstance,
+    DuplicateEdge,
+    DuplicateNode,
+    StaleRuleViolation,
+    OutOfRangeParent,
+    EdgeParent,
+    OutOfRangeEdgeEnd,
+    EdgeEndIsEdge,
+    StaleRule,
+}
+
+/// An instant in time.
 pub use jiff::Timestamp;
 
+/// A timezone-aware instant in time.
+pub use jiff::Zoned;
+
+/// Payload type for a complex object
+///
+/// # NOTE
+///
+/// Use of JSON is highly discouraged; stick to primitive types and
+/// consider this an escape hatch just in case.
+pub use serde_json::Value as JSON;
+pub use serde_json::to_value as to_json_value;
+
+/// Unit enum denoting Payload types
 pub use internal::PayloadType;
 
-// This is a convenient type for the user
+/// Convenient Payload Type For Users
+///
+/// # Note
+///
+/// `PayloadExt::Serialized` should be the last resort for users. As time goes on,
+/// the list of primitve types will be expaneded to further minimize its use.
+/// Serialized LOBs are highly discouraged.
 #[derive(
     Serialize,
     Deserialize,
@@ -70,26 +116,21 @@ pub enum PayloadExt {
     PreciseTime(Timestamp),
     Text(String),
     Number(i64),
-
-    // NOTE this should be a last resort for users. As time goes on, we expand
-    // the list of primitve types to further minimize its use.
-    // Serialized LOBs are discouraged.
     Serialized(serde_json::Value),
 }
 
 impl PayloadExt {
     pub fn serialized_from<T: Serialize>(x: T) -> Self {
-        Self::Serialized(serde_json::to_value(x).unwrap())
+        Self::Serialized(to_json_value(x).unwrap())
     }
 }
 
-// TODO this may have been a bad decision: Type depends on the context and can evolve,
-// so now use an `EventContext` to the type to keep track of at which point in time we meant it.
-// Of course, this adds another validity issue: corresponding EventIndex must be valid in this
-// window!
-// NOTE `ty` may fail to resolve too! so just in case we also include `ty_name`
-// _Usually_, ty.is_none() indicates a bigger problem but dealing with it
-// is not the responsibility of users, for now.
+/// Convenience type describing a Node.
+///
+/// # Note
+/// - `ty` may not resolve to the type that was intended when the node was first created;
+/// types can evolve over time and are context-dependent.
+/// - `ty` may could potentially be unresolved as well. Use `ty_name` in analyzers.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct NodeExt {
@@ -100,6 +141,7 @@ pub struct NodeExt {
     pub parent: Option<EventContext>,
 }
 
+/// Convenience type describing an Edge.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct EdgeExt {
@@ -116,75 +158,19 @@ pub enum EventExt {
     Edge(EdgeExt),
 }
 
-#[derive(PartialEq, Eq, Clone, EnumIs, Debug)]
-pub enum AnalysisReport {
-    BasicValidationFailure {
-        offending_event: EventContext,
-        reason: BasicValidationFailureScenario,
-    },
-    BasicValidationWarning {
-        offending_event: EventContext,
-        message: String,
-    },
-    LogInfo {
-        offending_event: EventContext,
-        message: String,
-    },
-    // Errors from Constraint systems
-    Inconsistency(ConstraintSystemMessage),
-    // Information that ought to be acted upon.
-    Warning(ConstraintSystemMessage),
-    // Actual suggestions for things to add. Must be a concrete action (add this node, or edge, or delete this)
-    Suggestion(ConstraintSystemMessage, SuggestedAction),
-}
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct AnalysisOutput(pub Vec<AnalysisReport>);
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct ConstraintSystemMessage {
-    // Contains the event that was problematic and the neighborhood that the error happened
-    pub offending_event: EventContext,
-    pub system_name: String,
-    pub system_config: String,
-    // Errors are always relevant, of course, but warnings less so because we may have resolved them in a future window.
-    // The UI may choose to ignore this message if N members of `relevance` are stale (for some sensible N)
-    // Additionally, UI may implement a `barklist` where messages of a certain hash are dismissed.
-    // (This led to needing a custom Hash implementation that specifically sorts this list)
-    pub relevance: Vec<EventContext>,
-    pub message: String,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub enum BasicValidationFailureScenario {
-    InternalError { message: String },
-    ExtraneousMockCircumstance,
-    DuplicateEdge,
-    DuplicateNode,
-    StaleRuleViolation,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub enum SuggestedAction {
-    AddNode {
-        ty_name: String,
-        payload: NodeBodyExt,
-        parent: Option<EventContext>,
-    },
-    AddEdge {
-        from: EventContext,
-        ty_name: String,
-        to: EventContext,
-    },
-}
-
-// Implementation Rules:
-// - Don't be too high-level, and use EventContext instead of heavy-weight NodeExt and EdgeExt as parameters
-// - Expect duplicate code; Leverage the private helpers on the implementor type
-pub trait LifeCore {
-    // TODO assert for boundedness
+/// The primary trait describing the interface to the database.
+///
+/// ## Rules For Implementors
+/// - Don't be too high-level, and use EventContext instead of heavy-weight NodeExt and EdgeExt.
+/// - Expect duplicate code; Leverage the private helpers on the implementor type
+pub trait LifeCore : Send + Sync {
     /// Get last event in LifeCore as a bounded EventContext
     fn last(&self) -> Option<EventContext>;
+    /// Test for the basic rules of LifeCore.
+    ///
+    /// # Rules
+    /// TODO
+    fn basic_validation(&self) -> Result<(), BasicValidationFailure>;
     fn connect(
         &mut self,
         from: EventContext,
@@ -197,11 +183,8 @@ pub trait LifeCore {
         payload: NodeBodyExt,
         parent: Option<EventContext>,
     ) -> Result<NodeExt, LifeCoreError>;
-    fn get_or_insert_current_session_circumstance(
-        &mut self,
-    ) -> Result<CircumstanceExt, LifeCoreError>;
-    fn get_or_insert_mock_circumstance(&mut self) -> Result<CircumstanceExt, LifeCoreError>;
     fn get(&self, e: EventContext) -> Option<EventExt>;
+    fn get_with_circumstance(&self, e: EventContext) -> Option<(EventExt, CircumstanceExt)>;
     fn window<I>(&self, i: I) -> impl Iterator<Item = EventExt>
     where
         I: IntoIterator<Item = EventContext>;
@@ -209,13 +192,12 @@ pub trait LifeCore {
     /// Stale Node means a newer node has it as its parent within context
     /// Stale Edge means at least one end is a Stale Node
     fn is_stale(&self, e: EventContext) -> bool;
-    fn basic_validation(&self) -> AnalysisOutput;
-    // NOTE retrieves nodes with their types resolved within the context. Convenient!
-    // However! NOTE that the type may not actually be what was intended when the node was created
-    fn node(&self, ctx: EventContext) -> NodeExt; // NOTE panics if ctx doesn't denote a Node
-    fn edge(&self, ctx: EventContext) -> EdgeExt; // NOTE panics similarly
-    fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt>; // NOTE panics similarly
-    fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt>; // NOTE panics similarly
+    /// *Panics* if `ctx` does not point to an event
+    fn node(&self, ctx: EventContext) -> Option<NodeExt>;
+    /// *Panics* if `ctx` does not point to an event
+    fn edge(&self, ctx: EventContext) -> Option<EdgeExt>;
+    fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt>;
+    fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt>;
     fn fresh_nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
         self.nodes(ctx).filter(|x| !self.is_stale(x.e))
     }
@@ -249,9 +231,9 @@ pub trait LifeCore {
     }
 
     /// Get fresh outgoing edges from `n` within the implied context.
-    /// 
+    ///
     /// Outgoing edge means an edge where `n` is `from`, also known as the head of the edge
-    /// 
+    ///
     /// *Note:* for this function to return anything meaningful, `n` itself
     /// needs to be fresh within the context that implies. That is, if `n` is
     /// stale, any edge connected to it is also stale.
@@ -262,9 +244,9 @@ pub trait LifeCore {
     }
 
     /// Get fresh Incoming edges from `n` within the implied context.
-    /// 
+    ///
     /// Incoming edge means an edge where `n` is `to`, also known as the tail of the edge
-    /// 
+    ///
     /// *Note:* for this function to return anything meaningful, `n` itself
     /// needs to be fresh within the context that implies. That is, if `n` is
     /// stale, any edge connected to it is also stale.
@@ -290,40 +272,11 @@ pub trait LifeCore {
     fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))>;
     fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<EventContext>>;
     fn add_analyzer(&mut self, name: &str, config: &str);
-    fn current_analysis_suite(&self) -> AnalysisSuiteConfig;
+    fn current_analysis_suite(&self) -> analysis::SuiteConfig;
 }
 
 /// Canonical implementor of LifeCore
 pub use internal::LifeCoreList;
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AnalysisSuiteConfig(pub Vec<AnalysisConfig>);
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AnalysisConfig {
-    pub name: String,
-    pub config: String,
-}
-
-// The idea behind `initialize` is that if some pre-condition is not quite correct, or
-// if we are "done" in some sense, analyzer can disable itself and maybe issue a warning.
-pub trait Analyzer<LC: LifeCore>: Send + Sync {
-    fn initialize(&mut self, lc: &LC) -> AnalysisOutput;
-    fn analyze(&self, lc: &LC) -> AnalysisOutput;
-}
-
-pub trait AnalyzerFactory<LC: LifeCore> {
-    fn analyzer_with_config(
-        &mut self,
-        config: &str,
-    ) -> Result<Box<dyn Analyzer<LC>>, LifeCoreError>;
-    fn analyzer_name(&self) -> &'static str;
-}
-
-pub struct AnalysisRunner<LC: LifeCore> {
-    factory: HashMap<String, Box<dyn AnalyzerFactory<LC>>>,
-    analyzer: Vec<Box<dyn Analyzer<LC>>>,
-}
 
 pub use typing::{NodeType, NodeTypeClass, NodeTypeFieldStatus};
 
@@ -358,61 +311,16 @@ impl EventExt {
     }
 }
 
-impl AnalysisOutput {
-    pub fn has_error(&self) -> bool {
-        for x in self.0.iter() {
-            match x {
-            AnalysisReport::BasicValidationFailure { .. } => return true,
-            AnalysisReport::LogInfo { .. } => continue,
-            AnalysisReport::Inconsistency(_) => return true,
-            AnalysisReport::Warning(_) => continue,
-            AnalysisReport::Suggestion(_, _) => continue,
-            AnalysisReport::BasicValidationWarning { .. } => continue,
-            }
-        }
-        false
-    }
-
-    pub fn err(&self) -> LifeCoreError {
-        assert!(self.has_error());
-        LifeCoreError::SystemsError(AnalysisOutput(
-            self.0
-                .iter()
-                .filter(|x| x.is_basic_validation_failure() || x.is_inconsistency())
-                .cloned()
-                .collect_vec(),
-        ))
-    }
-
-    pub fn is_success(&self) -> bool {
-        !self.has_error()
-    }
-
-    pub fn has_warning(&self) -> bool {
-        for x in self.0.iter() {
-            match x {
-            AnalysisReport::BasicValidationFailure { .. } => continue,
-            AnalysisReport::LogInfo { .. } => continue,
-            AnalysisReport::Inconsistency(_) => continue,
-            AnalysisReport::Warning(_) => return true,
-            AnalysisReport::Suggestion(_, _) => continue,
-            AnalysisReport::BasicValidationWarning { .. } => continue,
-            }
-        }
-        false
-    }
-}
-
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug)]
 pub struct EventContext {
     // Inclusive start.
     // By default, None means "since the beginning"
     // NOTE rarely if ever we'll need to constrain the start. Perhaps later when optimizing?
-    pub(crate) start: Option<usize>,
+    pub(crate) start: usize,
     // Exclusive! `start..end` basically
     // Used to calculate type, check for staleness etc
     // By default, None means "till forever" (goes to infinity)
-    pub(crate) end: Option<usize>,
+    pub(crate) end: usize,
 
     // What was the object of inspection?
     // Ought to be in start..end
@@ -436,19 +344,37 @@ impl PartialOrd for EventContext {
 
 impl EventContext {
     pub(crate) fn range(&self) -> Range<usize> {
-        self.start.unwrap_or(0)..self.end.unwrap_or(usize::MAX)
+        self.start..self.end
     }
 
     pub fn validate(&self) -> bool {
         self.thing.is_none() || self.range().contains(&self.thing.unwrap())
     }
 
-    pub(crate) fn from_range(r: Range<usize>, thing: Option<usize>) -> Self {
-        Self {
-            start: Some(r.start),
-            end: Some(r.end),
+    pub(crate) fn from_range<R: RangeBounds<usize>>(range: R, thing: Option<usize>) -> Self {
+        let r = Self {
+            start: {
+                match range.start_bound() {
+                std::ops::Bound::Included(x) => *x,
+                std::ops::Bound::Excluded(x) => x.saturating_add(1),
+                std::ops::Bound::Unbounded => 0,
+                }
+            },
+            end: {
+                match range.end_bound() {
+                std::ops::Bound::Included(x) => x.saturating_add(1),
+                std::ops::Bound::Excluded(x) => *x,
+                std::ops::Bound::Unbounded => usize::MAX,
+                }
+            },
             thing,
-        }
+        };
+        assert!(thing.is_none_or(|thing| if range.contains(&thing) {
+            r.range().contains(&thing)
+        } else {
+            true
+        }));
+        r
     }
 
     pub fn absolute(self) -> Self {
@@ -456,13 +382,13 @@ impl EventContext {
     }
 
     pub fn last(&self) -> EventContext {
-        assert!(self.is_bounded() && !self.is_empty() && self.validate());
-        self.look_raw(self.end.unwrap() - 1)
+        assert!(!self.is_empty() && self.validate() && self.end != 0);
+        self.look_raw(self.end.saturating_sub(1))
     }
 
     pub fn first(&self) -> EventContext {
         assert!(!self.is_empty() && self.validate());
-        self.look_raw(self.start.unwrap_or(0))
+        self.look_raw(self.start)
     }
 
     // Look at every event within context, from the context
@@ -476,7 +402,7 @@ impl EventContext {
     pub fn inclusive_right_context(self) -> Self {
         assert!(self.validate() && self.thing.is_some());
         let r = Self {
-            start: self.thing,
+            start: self.thing.unwrap(),
             end: self.end,
             thing: Some(self.thing.unwrap()),
         };
@@ -489,12 +415,12 @@ impl EventContext {
     }
 
     pub fn inclusive_left_context(&self) -> Self {
-        assert!(self.validate() && self.thing.is_some());
+        assert!(self.validate() && self.thing.is_some_and(|x| x < usize::MAX));
         // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
         // We can safely increment self.thing and use it as the upper bound
         let r = Self {
             start: self.start,
-            end: Some(self.thing.unwrap() + 1),
+            end: self.thing.unwrap() + 1,
             thing: None,
         };
         assert!(r.validate());
@@ -508,7 +434,7 @@ impl EventContext {
     pub fn exclusive_right_context(self) -> Self {
         assert!(self.validate() && self.thing.is_some());
         let r = Self {
-            start: Some(self.thing.unwrap() + 1),
+            start: self.thing.unwrap().saturating_add(1),
             end: self.end,
             thing: None,
         };
@@ -526,7 +452,7 @@ impl EventContext {
         // We can safely pass self.thing as the upper bound
         let r = Self {
             start: self.start,
-            end: self.thing,
+            end: self.thing.unwrap(),
             thing: None,
         };
         assert!(r.validate());
@@ -537,11 +463,12 @@ impl EventContext {
         self.exclusive_left_context().items()
     }
 
-    pub fn is_bounded(&self) -> bool {
-        assert!(self.validate());
-
-        self.end.is_some()
-    }
+    // This is wrong. The context can be arbitrarily large but still "bounded"
+    // Actually it is always bounded due to `usize::MAX`
+    // pub fn is_bounded(&self) -> bool {
+    //     assert!(self.validate());
+    //     self.end.is_some()
+    // }
 
     pub fn is_empty(&self) -> bool {
         assert!(self.validate());
@@ -572,23 +499,28 @@ impl EventContext {
     }
 
     pub fn intersect(&self, rhs: &Self) -> Self {
-        assert!(self.validate() && rhs.validate() && self.thing == rhs.thing);
-        let start = std::cmp::max(self.start.unwrap_or(0), rhs.start.unwrap_or(0));
-        let end = std::cmp::min(
-            self.end.unwrap_or(usize::MAX),
-            rhs.end.unwrap_or(usize::MAX),
-        );
-        Self {
-            start: Some(start),
-            end: Some(end),
-            thing: self.thing,
+        assert!(self.validate() && rhs.validate());
+        let start = std::cmp::max(self.start, rhs.start);
+        let end = std::cmp::min(self.end, rhs.end);
+        let r = Self {
+            start: start,
+            end: end,
+            thing: None,
+        };
+        if self.thing.is_some() && self.thing == rhs.thing {
+            Self {
+                thing: self.thing,
+                ..r
+            }
+        } else {
+            r
         }
     }
 
     pub fn universe() -> Self {
         Self {
-            start: None,
-            end: None,
+            start: 0,
+            end: usize::MAX,
             thing: None,
         }
     }
@@ -604,75 +536,6 @@ impl EventContext {
 //         todo!()
 //     }
 // }
-
-impl<LC: LifeCore> AnalysisRunner<LC> {
-    pub fn new() -> Self {
-        Self {
-            factory: HashMap::new(),
-            analyzer: vec![],
-        }
-    }
-
-    pub fn register_analyzer_kind(
-        &mut self,
-        factory: Box<dyn AnalyzerFactory<LC>>,
-    ) -> Result<(), LifeCoreError> {
-        if self.factory.contains_key(factory.analyzer_name()) {
-            return Err(LifeCoreError::DuplicateAnalyzer {
-                dupe_name: factory.analyzer_name().to_string(),
-            });
-        }
-        self.factory
-            .insert(factory.analyzer_name().to_string(), factory);
-        Ok(())
-    }
-
-    pub fn run(&mut self, lc: &LC) -> Result<AnalysisOutput, LifeCoreError> {
-        let mut analyzer: Vec<Box<dyn Analyzer<LC>>> = vec![];
-        for x in lc.current_analysis_suite().0.iter() {
-            if self.factory.contains_key(&x.name) {
-                analyzer.push(
-                    self.factory
-                        .get_mut(&x.name)
-                        .unwrap()
-                        .analyzer_with_config(&x.config)?,
-                );
-            } else {
-                return Err(LifeCoreError::AnalyzerNotFound {
-                    name: x.name.clone(),
-                });
-            }
-        }
-        let mut r: Vec<AnalysisReport> =
-            analyzer
-                .iter_mut()
-                .map(|x| x.initialize(lc).0)
-                .fold(vec![], |acc, x| {
-                    let mut t = vec![];
-                    t.extend(acc);
-                    t.extend(x);
-                    t
-                });
-        r.extend(
-            analyzer
-                .into_iter()
-                .map(|x| x.analyze(lc).0)
-                .fold(vec![], |acc, x| {
-                    let mut t = vec![];
-                    t.extend(acc);
-                    t.extend(x);
-                    t
-                }),
-        );
-        Ok(AnalysisOutput(r))
-    }
-}
-
-impl ConstraintSystemMessage {
-    pub fn validate(&self) -> bool {
-        self.offending_event.validate() && self.offending_event.thing.is_some()
-    }
-}
 
 impl NodeBodyExt {
     pub fn from(x: &[(&str, PayloadExt)]) -> Self {
@@ -764,21 +627,6 @@ impl PayloadExt {
     }
 }
 
-// Special-Case Hash: relevance list should be sorted first
-impl Hash for ConstraintSystemMessage {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.offending_event.hash(state);
-        self.system_name.hash(state);
-        self.system_config.hash(state);
-        {
-            let mut sorted = self.relevance.clone();
-            sorted.sort();
-            sorted.hash(state);
-        }
-        self.message.hash(state);
-    }
-}
-
 impl Display for PayloadExt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -803,7 +651,7 @@ impl Display for EventContext {
         f.write_str(
             format!(
                 "EventContext[{}, <{}>, {})",
-                self.start.unwrap_or(0),
+                self.start,
                 {
                     if let Some(x) = self.thing {
                         format!("{}", x)
@@ -812,14 +660,7 @@ impl Display for EventContext {
                     }
                 }
                 .as_str(),
-                {
-                    if let Some(x) = self.end {
-                        format!("{}", x)
-                    } else {
-                        "INF".to_string()
-                    }
-                }
-                .as_str()
+                self.end
             )
             .as_str(),
         )
@@ -835,6 +676,12 @@ impl From<whoami::Error> for LifeCoreError {
 impl From<jiff::Error> for LifeCoreError {
     fn from(inner: jiff::Error) -> Self {
         LifeCoreError::ErrorRoundingTime { inner }
+    }
+}
+
+impl From<BasicValidationFailure> for LifeCoreError {
+    fn from(value: BasicValidationFailure) -> Self {
+        Self::BasicValidationFailure(value)
     }
 }
 

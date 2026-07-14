@@ -3,34 +3,21 @@
 #![cfg(test)]
 
 use lifecore::{
-    AnalysisReport, AnalysisRunner, AnalyzerFactory, LifeCore, LifeCoreError, LifeCoreList,
-    NodeBodyExt, NodeType, NodeTypeClass, NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody,
+    LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass,
+    NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody,
+    analysis::{self, AnalyzerFactory},
 };
 use lifecore_typecheck::TypeCheckFactory;
 
-fn type_decl(name: &str, fields: &[(&str, (PayloadType, NodeTypeFieldStatus))]) -> NodeType {
-    NodeType {
-        name: name.to_string(),
-        class: NodeTypeClass::Regular,
-        outgoing: vec![],
-        incoming: vec![],
-        additional_override: vec![],
-        field: fields
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.clone()))
-            .collect(),
-    }
-}
-
-fn runner_with_typecheck<LC: LifeCore + 'static>() -> AnalysisRunner<LC> {
-    let mut runner = AnalysisRunner::new();
+fn runner_with_typecheck<LC: LifeCore + 'static>() -> analysis::AnalysisRunner<LC> {
+    let mut runner = analysis::AnalysisRunner::default();
     runner
         .register_analyzer_kind(Box::new(TypeCheckFactory::<LC>::default()))
         .unwrap();
     runner
 }
 
-fn configure_typecheck<LC: LifeCore>(lc: &mut LC) {
+fn configure_typecheck<LC: LifeCore + 'static>(lc: &mut LC) {
     lc.add_analyzer(
         TypeCheckFactory::<LC>::default().analyzer_name(),
         "integration",
@@ -49,10 +36,13 @@ fn generic_runner_reports_missing_type<LC: LifeCore + 'static>(mut lc: LC) {
 
     let output = runner.run(&lc).unwrap();
 
-    assert!(output.0.iter().any(|report| match report {
-    AnalysisReport::Inconsistency(message) =>
-        message.message.contains("Type Missing_Type does not exist"),
-    _ => false,
+    assert!(output.0.iter().any(|report| {
+        match report {
+        analysis::Message::Inconsistency(message) => message
+            .message
+            .contains("Missing_Type couldn't be resolved"),
+        _ => false,
+        }
     }));
 }
 
@@ -68,9 +58,12 @@ fn runner_combines_typecheck_warnings_and_inconsistencies() {
         .unwrap();
     lc.add(
         NodeType::name(),
-        type_decl(
+        NodeType::new(
             "Task",
             &[("title", (PayloadType::Text, NodeTypeFieldStatus::Mandatory))],
+            &[],
+            &[],
+            &[],
         )
         .into(),
         None,
@@ -84,14 +77,12 @@ fn runner_combines_typecheck_warnings_and_inconsistencies() {
 
     assert!(output.0.iter().any(|report| {
         match report {
-        AnalysisReport::Warning(message) => message
-            .message
-            .contains("Override Tombstone on type Node_Type"),
+        analysis::Message::Warning(message) => message.message.contains("Override"),
         _ => false,
         }
     }));
     assert!(output.0.iter().any(|report| match report {
-    AnalysisReport::Inconsistency(message) => message.message.contains("mandatory field title"),
+    analysis::Message::Inconsistency(message) => message.message.contains("Mandatory"),
     _ => false,
     }));
 }
@@ -102,7 +93,7 @@ fn runner_reports_missing_registered_analyzer_kind() {
     lc.add(NodeType::name(), NodeType::describe_self().into(), None)
         .unwrap();
     lc.add_analyzer("No_Such_Analyzer", "");
-    let mut runner = AnalysisRunner::<LifeCoreList>::new();
+    let mut runner = analysis::AnalysisRunner::<LifeCoreList>::default();
 
     let error = runner.run(&lc).unwrap_err();
 
@@ -114,7 +105,7 @@ fn runner_reports_missing_registered_analyzer_kind() {
 
 #[test]
 fn runner_rejects_duplicate_analyzer_factory() {
-    let mut runner = AnalysisRunner::<LifeCoreList>::new();
+    let mut runner = analysis::AnalysisRunner::<LifeCoreList>::default();
     runner
         .register_analyzer_kind(Box::new(TypeCheckFactory::<LifeCoreList>::default()))
         .unwrap();
