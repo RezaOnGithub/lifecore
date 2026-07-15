@@ -3,7 +3,12 @@ use indexmap::IndexSet;
 use itertools::Itertools;
 use jiff::Unit;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt::Display, ops::Index, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    ops::Index,
+    str::FromStr,
+};
 use strum::{Display, EnumIs, EnumTryAs, VariantNames};
 use whoami::{hostname, username};
 
@@ -222,7 +227,7 @@ impl LifeCore for LifeCoreList {
     }
 
     fn is_stale(&self, e: EventContext) -> bool {
-        let ctx = || e.exclusive_right();
+        let ctx = || e.items();
         match self[e.thing()] {
         Event::Node(_) => {
             for potential_child_node in self.raw_window(ctx()).filter_map(|event| {
@@ -334,14 +339,14 @@ impl LifeCore for LifeCoreList {
             for dupe in dupe_class {
                 for pair in dupe.iter().combinations(2) {
                     let ((older_index, _older_node), (newer_index, newer_node)) = {
-                        if pair[0].0 < pair[1].0 {
+                        if pair[0].0.thing() < pair[1].0.thing() {
                             (pair[0], pair[1])
                         } else {
                             (pair[1], pair[0])
                         }
                     };
 
-                    if self.is_stale(newer_index.exclusive_left_context().look_at(*older_index)) {
+                    if self.is_stale(newer_index.exclusive_left().look_at(*older_index)) {
                         // TODO move this check into its own analyzer
                         // warn!(
                         //     *newer_index,
@@ -427,7 +432,7 @@ impl LifeCore for LifeCoreList {
             {
                 return Err(BasicValidationFailure {
                     offending_event: EventContext::universe().look_at(edge_context.into()),
-                    reason: StaleRule,
+                    reason: StaleRuleViolation,
                 });
             }
         }
@@ -511,7 +516,7 @@ impl LifeCore for LifeCoreList {
 
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext> {
         assert!(self.get(node).is_some_and(|x| x.is_node()));
-        let ctx = || node.exclusive_right();
+        let ctx = || node.items();
         ctx()
             .zip(self.raw_window(ctx()))
             .filter(|(index, event)| {
@@ -580,21 +585,40 @@ impl LifeCore for LifeCoreList {
     }
 
     fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<EventContext>> {
-        self.raw_nodes(ctx)
-            .filter(|(_, node)| node.parent.is_some())
-            .into_group_map_by(|x| self.root_of(x.0).unwrap())
-            .into_values()
-            .map(|children_pair| {
-                // NOTE Does not contain the root
-                assert!(!children_pair.is_empty());
-                let mut children = children_pair
-                    .into_iter()
-                    .map(|(index, _)| index)
-                    .collect_vec();
-                children.push(ctx.look_at(self.root_of(children[0]).unwrap()));
-                children
-            })
+        let mut family = Vec::<HashSet<EventIndex>>::new();
+        for (index, node) in self.raw_nodes(ctx) {
+            if node.parent.is_none_or(|p| !ctx.range().contains(&p.i())) {
+                // We consider this a root node
+                let mut r = HashSet::new();
+                r.insert(index.into());
+                family.push(r);
+            } else {
+                // This must be a child node
+                for set_index in 0..family.len() {
+                    if family[set_index].contains(&node.parent.unwrap()) {
+                        family.get_mut(set_index).unwrap().insert(index.into());
+                    }
+                }
+            }
+        }
+        family
+            .into_iter()
+            .map(|x| x.into_iter().map(|y| ctx.look_at(y.into())).collect_vec())
             .collect_vec()
+        // .filter(|(_, node)| node.parent.is_some())
+        // .into_group_map_by(|x| self.root_of(x.0).unwrap())
+        // .into_values()
+        // .map(|children_pair| {
+        //     // NOTE Does not contain the root
+        //     assert!(!children_pair.is_empty());
+        //     let mut children = children_pair
+        //         .into_iter()
+        //         .map(|(index, _)| index)
+        //         .collect_vec();
+        //     children.push(ctx.look_at(self.root_of(children[0]).unwrap()));
+        //     children
+        // })
+        // .collect_vec()
     }
 
     fn add_analyzer(&mut self, name: &str, config: &str) {
@@ -836,12 +860,17 @@ impl EventContext {
 
 impl EventIndex {
     fn before(&self) -> EventContext {
-        EventContext::from_range(0..(self.0 as usize), None)
+        EventContext {
+            end: self.i(),
+            thing: None,
+        }
     }
 
     fn before_and_including(&self) -> EventContext {
-        // Can't use RangeInclusive because it can't be converted to Range easily
-        EventContext::from_range(0..((self.0 + 1) as usize), Some(self.0 as usize))
+        EventContext {
+            end: self.i().saturating_add(1),
+            thing: Some(self.i()),
+        }
     }
 
     fn i(self) -> usize {

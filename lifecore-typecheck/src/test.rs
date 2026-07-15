@@ -1,8 +1,8 @@
 use crate::TypeCheck;
 use lifecore::{
-    analysis, LifeCore, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass, NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody, analysis::Analyzer,
+    LifeCore, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass, NodeTypeFieldStatus, PayloadExt,
+    PayloadType, TypedBody, analysis, analysis::Analyzer,
 };
-
 
 // TODO rewrite tests against the new interfaces
 // fn run_typecheck(lc: &LifeCoreList) -> analysis::Output {

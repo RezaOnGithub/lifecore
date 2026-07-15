@@ -175,7 +175,7 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
                 .iter()
                 .cartesian_product(
                     &lc.window(EventContext::universe().items())
-                        .map(|x| x.ctx().inclusive_left_context())
+                        .map(|x| x.ctx().inclusive_left())
                         .collect_vec(), // TODO PERF get rid of this
                 )
                 .map(|(a, window)| a.analyze(&lc, *window).0)
@@ -274,7 +274,10 @@ impl Into<LifeCoreError> for Output {
 
 impl<LC: LifeCore> Default for AnalysisRunner<LC> {
     fn default() -> Self {
-        Self { factory: Default::default(), analyzer: Default::default() }
+        Self {
+            factory: Default::default(),
+            analyzer: Default::default(),
+        }
     }
 }
 

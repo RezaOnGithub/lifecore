@@ -12,6 +12,9 @@ pub mod analysis;
 mod internal;
 #[cfg(test)]
 mod test;
+/// Tests written by agents
+#[cfg(test)]
+mod test2;
 mod typing;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -72,7 +75,6 @@ pub enum BasicValidationFailureScenario {
     EdgeParent,
     OutOfRangeEdgeEnd,
     EdgeEndIsEdge,
-    StaleRule,
 }
 
 /// An instant in time.
@@ -163,7 +165,7 @@ pub enum EventExt {
 /// ## Rules For Implementors
 /// - Don't be too high-level, and use EventContext instead of heavy-weight NodeExt and EdgeExt.
 /// - Expect duplicate code; Leverage the private helpers on the implementor type
-pub trait LifeCore : Send + Sync {
+pub trait LifeCore: Send + Sync {
     /// Get last event in LifeCore as a bounded EventContext
     fn last(&self) -> Option<EventContext>;
     /// Test for the basic rules of LifeCore.
@@ -220,12 +222,11 @@ pub trait LifeCore : Send + Sync {
     /// let _ = lc.connect(a0.e, "X", b0.e).unwrap();
     /// let b1 = lc.add("B", NodeBodyExt::default(), Some(b0.e)).unwrap();
     /// let _ = lc.connect(a0.e, "X", b1.e).unwrap();
-    /// assert_eq!(lc.fresh_edges_of(b0).count(), 0);
+    /// assert_eq!(lc.fresh_edges_of(b0.e).count(), 0);
     /// ```
     fn fresh_edges_of(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
-        let ctx = n.exclusive_right_context();
-        self.edges(ctx).filter(move |x| {
-            !self.is_stale(x.e)
+        self.edges(n).filter(move |x| {
+            !self.is_stale(n.look_at(x.e))
                 && (x.from.absolute() == n.absolute() || x.to.absolute() == n.absolute())
         })
     }
@@ -238,8 +239,7 @@ pub trait LifeCore : Send + Sync {
     /// needs to be fresh within the context that implies. That is, if `n` is
     /// stale, any edge connected to it is also stale.
     fn fresh_outgoing_edges_of(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
-        let ctx = n.exclusive_right_context();
-        self.edges(ctx)
+        self.edges(n)
             .filter(move |x| !self.is_stale(x.e) && x.from.absolute() == n.absolute())
     }
 
@@ -251,8 +251,7 @@ pub trait LifeCore : Send + Sync {
     /// needs to be fresh within the context that implies. That is, if `n` is
     /// stale, any edge connected to it is also stale.
     fn fresh_incoming_edges_to(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
-        let ctx = n.exclusive_right_context();
-        self.edges(ctx)
+        self.edges(n)
             .filter(move |x| !self.is_stale(x.e) && x.to.absolute() == n.absolute())
     }
 
@@ -311,15 +310,10 @@ impl EventExt {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
 pub struct EventContext {
-    // Inclusive start.
-    // By default, None means "since the beginning"
-    // NOTE rarely if ever we'll need to constrain the start. Perhaps later when optimizing?
-    pub(crate) start: usize,
-    // Exclusive! `start..end` basically
+    // Exclusive! `0..end` basically
     // Used to calculate type, check for staleness etc
-    // By default, None means "till forever" (goes to infinity)
     pub(crate) end: usize,
 
     // What was the object of inspection?
@@ -327,68 +321,33 @@ pub struct EventContext {
     pub(crate) thing: Option<usize>,
 }
 
-impl Ord for EventContext {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        assert!(
-            self.validate() && self.thing.is_some() && other.validate() && other.thing.is_some()
-        );
-        self.thing.unwrap().cmp(&other.thing.unwrap())
-    }
-}
-
-impl PartialOrd for EventContext {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(&other))
-    }
-}
-
 impl EventContext {
     pub(crate) fn range(&self) -> Range<usize> {
-        self.start..self.end
+        0..self.end
     }
 
     pub fn validate(&self) -> bool {
-        self.thing.is_none() || self.range().contains(&self.thing.unwrap())
-    }
-
-    pub(crate) fn from_range<R: RangeBounds<usize>>(range: R, thing: Option<usize>) -> Self {
-        let r = Self {
-            start: {
-                match range.start_bound() {
-                std::ops::Bound::Included(x) => *x,
-                std::ops::Bound::Excluded(x) => x.saturating_add(1),
-                std::ops::Bound::Unbounded => 0,
-                }
-            },
-            end: {
-                match range.end_bound() {
-                std::ops::Bound::Included(x) => x.saturating_add(1),
-                std::ops::Bound::Excluded(x) => *x,
-                std::ops::Bound::Unbounded => usize::MAX,
-                }
-            },
-            thing,
-        };
-        assert!(thing.is_none_or(|thing| if range.contains(&thing) {
-            r.range().contains(&thing)
-        } else {
-            true
-        }));
-        r
+        self.thing.is_none_or(|thing| self.range().contains(&thing))
     }
 
     pub fn absolute(self) -> Self {
         Self::universe().look_at(self)
     }
 
-    pub fn last(&self) -> EventContext {
-        assert!(!self.is_empty() && self.validate() && self.end != 0);
-        self.look_raw(self.end.saturating_sub(1))
+    pub fn last(&self) -> Option<EventContext> {
+        if self.range().is_empty() {
+            None
+        } else {
+            Some(self.look_raw(self.end.saturating_sub(1)))
+        }
     }
 
-    pub fn first(&self) -> EventContext {
-        assert!(!self.is_empty() && self.validate());
-        self.look_raw(self.start)
+    pub fn first(&self) -> Option<EventContext> {
+        if self.range().is_empty() {
+            None
+        } else {
+            Some(self.look_raw(0))
+        }
     }
 
     // Look at every event within context, from the context
@@ -399,59 +358,27 @@ impl EventContext {
         self.range().map(move |x| ctx.look_raw(x))
     }
 
-    pub fn inclusive_right_context(self) -> Self {
-        assert!(self.validate() && self.thing.is_some());
-        let r = Self {
-            start: self.thing.unwrap(),
-            end: self.end,
-            thing: Some(self.thing.unwrap()),
-        };
-        assert!(r.validate());
-        r
-    }
-
-    pub fn inclusive_right(self) -> impl Iterator<Item = Self> {
-        self.inclusive_right_context().items()
-    }
-
-    pub fn inclusive_left_context(&self) -> Self {
+    pub fn inclusive_left(&self) -> Self {
         assert!(self.validate() && self.thing.is_some_and(|x| x < usize::MAX));
         // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
         // We can safely increment self.thing and use it as the upper bound
         let r = Self {
-            start: self.start,
             end: self.thing.unwrap() + 1,
-            thing: None,
+            thing: self.thing,
         };
         assert!(r.validate());
         r
     }
 
-    pub fn inclusive_left(self) -> impl Iterator<Item = Self> {
-        self.inclusive_left_context().items()
+    pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
+        self.inclusive_left().items()
     }
 
-    pub fn exclusive_right_context(self) -> Self {
-        assert!(self.validate() && self.thing.is_some());
-        let r = Self {
-            start: self.thing.unwrap().saturating_add(1),
-            end: self.end,
-            thing: None,
-        };
-        assert!(r.validate());
-        r
-    }
-
-    pub fn exclusive_right(self) -> impl Iterator<Item = Self> {
-        self.exclusive_right_context().items()
-    }
-
-    pub fn exclusive_left_context(&self) -> Self {
+    pub fn exclusive_left(&self) -> Self {
         assert!(self.validate() && self.thing.is_some());
         // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
         // We can safely pass self.thing as the upper bound
         let r = Self {
-            start: self.start,
             end: self.thing.unwrap(),
             thing: None,
         };
@@ -459,8 +386,8 @@ impl EventContext {
         r
     }
 
-    pub fn exclusive_left(self) -> impl Iterator<Item = Self> {
-        self.exclusive_left_context().items()
+    pub fn exclusive_left_items(self) -> impl Iterator<Item = Self> {
+        self.exclusive_left().items()
     }
 
     // This is wrong. The context can be arbitrarily large but still "bounded"
@@ -500,10 +427,8 @@ impl EventContext {
 
     pub fn intersect(&self, rhs: &Self) -> Self {
         assert!(self.validate() && rhs.validate());
-        let start = std::cmp::max(self.start, rhs.start);
         let end = std::cmp::min(self.end, rhs.end);
         let r = Self {
-            start: start,
             end: end,
             thing: None,
         };
@@ -519,23 +444,21 @@ impl EventContext {
 
     pub fn universe() -> Self {
         Self {
-            start: 0,
             end: usize::MAX,
             thing: None,
         }
     }
 }
 
-// TODO
-// impl IntoIterator<Item> for EventContext {
-//     type Item=EventContext;
+impl IntoIterator for EventContext {
+    type Item = usize;
 
-//     type IntoIter;
+    type IntoIter = <std::ops::Range<usize> as IntoIterator>::IntoIter;
 
-//     fn into_iter(self) -> Self::IntoIter {
-//         todo!()
-//     }
-// }
+    fn into_iter(self) -> Self::IntoIter {
+        self.range().into_iter()
+    }
+}
 
 impl NodeBodyExt {
     pub fn from(x: &[(&str, PayloadExt)]) -> Self {
@@ -651,7 +574,7 @@ impl Display for EventContext {
         f.write_str(
             format!(
                 "EventContext[{}, <{}>, {})",
-                self.start,
+                0,
                 {
                     if let Some(x) = self.thing {
                         format!("{}", x)

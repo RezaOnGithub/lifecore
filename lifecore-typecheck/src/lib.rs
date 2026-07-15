@@ -375,7 +375,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
             .filter(|node| node.ty_name.as_str() == NodeType::name())
         {
             let type_table = lc
-                .types(some_type_at_some_point_node.e.exclusive_left_context())
+                .types(some_type_at_some_point_node.e.exclusive_left())
                 .collect::<HashMap<_, _>>();
 
             let Ok(some_type_at_some_point) =
@@ -396,7 +396,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                 {
                     r.push(DuplicateTypeDefinition {
                         name: some_type_at_some_point.name.to_string(),
-                        offending_event: some_type_at_some_point_node.e.inclusive_left_context(),
+                        offending_event: some_type_at_some_point_node.e.inclusive_left(),
                     });
                 }
             }
@@ -562,11 +562,8 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
         }
 
         // Check whether a child is allowed to override parent at the point of override
-        for last_event_in_context in lc.window(EventContext::universe().items()) {
-            let ctx = last_event_in_context
-                .ctx()
-                .absolute()
-                .exclusive_left_context();
+        for last_event_in_context in lc.window(window.items()) {
+            let preceding = last_event_in_context.ctx().exclusive_left();
             if last_event_in_context.is_edge()
                 || last_event_in_context.is_node_and(|x| x.parent.is_none())
             {
@@ -574,7 +571,8 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
             }
 
             let child_type_name = last_event_in_context.as_node().ty_name.clone();
-            let parent_in_context = ctx.look_at(last_event_in_context.as_node().parent.unwrap());
+            let parent_in_context =
+                preceding.look_at(last_event_in_context.as_node().parent.unwrap());
             let Some(parent_type) = lc.node(parent_in_context).unwrap().ty else {
                 // We have bigger problems.
                 continue;
@@ -582,7 +580,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
 
             if !parent_type.additional_override.contains(&child_type_name) {
                 r.push(BadOverride {
-                    offending_event: last_event_in_context.ctx().inclusive_left_context(),
+                    offending_event: last_event_in_context.ctx().inclusive_left(),
                     parent_ty_name: parent_type.name.to_string(),
                     child_ty_name: child_type_name.to_string(),
                 });
@@ -628,7 +626,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                 }
             }
             EdgeNode => {
-                if outgoing_count != 1 && incoming_count != 1 {
+                if outgoing_count != 1 || incoming_count != 1 {
                     r.push(NodeClassNotRespected {
                         offending_event: fresh_node.e,
                         ty_name: ty.name.to_string(),
@@ -691,3 +689,7 @@ impl<LC: LifeCore> Default for TypeCheckFactory<LC> {
 
 #[cfg(test)]
 mod test;
+
+/// Tests written by Agents
+#[cfg(test)]
+mod test2;
