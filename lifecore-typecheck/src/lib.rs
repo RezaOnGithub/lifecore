@@ -16,12 +16,19 @@ use itertools::Itertools;
 use lifecore::{
     EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeClass, NodeTypeFieldStatus,
     PayloadType, TypedBody,
-    analysis::{self, AnalyzerFactory, InnerMessageType, InnerOutput},
+    analysis::{self, InnerMessageType, InnerOutput},
 };
-use std::{collections::HashMap, fmt::format, marker::PhantomData};
+use std::{collections::HashMap, marker::PhantomData};
 use strum::IntoDiscriminant;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(name(TypeCheckTest)))]
+#[cfg_attr(test, strum_discriminants(vis(pub(crate))))]
+#[cfg_attr(
+    test,
+    strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
+)]
 pub enum TypeCheckMessage {
     AddBootstrapNode,
     MalformedNodeTypeBody {

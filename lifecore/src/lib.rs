@@ -4,18 +4,24 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::Hash,
-    ops::{Index, Range, RangeBounds},
+    ops::{Index, Range},
 };
 use strum::{EnumIs, EnumTryAs};
 
-pub mod analysis;
-mod internal;
-#[cfg(test)]
-mod test;
-/// Tests written by agents
-#[cfg(test)]
-mod test2;
-mod typing;
+/// An instant in time. From `jiff`.
+pub use jiff::Timestamp;
+
+/// A timezone-aware instant in time. From `jiff`.
+pub use jiff::Zoned;
+
+/// Payload type for a complex object. From `serde_json`
+///
+/// # NOTE
+///
+/// Use of JSON is highly discouraged; stick to primitive types and
+/// consider this an escape hatch just in case.
+pub use serde_json::Value as JSON;
+pub use serde_json::to_value as to_json_value;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct NodeBodyExt(pub HashMap<String, PayloadExt>);
@@ -37,6 +43,13 @@ pub enum CircumstanceExt {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(name(LifeCoreErrorTest)))]
+#[cfg_attr(test, strum_discriminants(vis(pub(crate))))]
+#[cfg_attr(
+    test,
+    strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
+)]
 pub enum LifeCoreError {
     #[error("Some Oddity With Rounding Time!")]
     ErrorRoundingTime { inner: jiff::Error },
@@ -65,6 +78,13 @@ pub struct BasicValidationFailure {
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(test, derive(strum::EnumDiscriminants))]
+#[cfg_attr(test, strum_discriminants(name(BasicValidationTest)))]
+#[cfg_attr(test, strum_discriminants(vis(pub(crate))))]
+#[cfg_attr(
+    test,
+    strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
+)]
 pub enum BasicValidationFailureScenario {
     InternalError { message: String },
     ExtraneousMockCircumstance,
@@ -77,21 +97,7 @@ pub enum BasicValidationFailureScenario {
     EdgeEndIsEdge,
 }
 
-/// An instant in time.
-pub use jiff::Timestamp;
-
-/// A timezone-aware instant in time.
-pub use jiff::Zoned;
-
-/// Payload type for a complex object
-///
-/// # NOTE
-///
-/// Use of JSON is highly discouraged; stick to primitive types and
-/// consider this an escape hatch just in case.
-pub use serde_json::Value as JSON;
-pub use serde_json::to_value as to_json_value;
-
+// TODO PayloadType should be created from PayloadExt, not the internal Payload type.
 /// Unit enum denoting Payload types
 pub use internal::PayloadType;
 
@@ -118,7 +124,7 @@ pub enum PayloadExt {
     PreciseTime(Timestamp),
     Text(String),
     Number(i64),
-    Serialized(serde_json::Value),
+    Serialized(JSON),
 }
 
 impl PayloadExt {
@@ -194,9 +200,7 @@ pub trait LifeCore: Send + Sync {
     /// Stale Node means a newer node has it as its parent within context
     /// Stale Edge means at least one end is a Stale Node
     fn is_stale(&self, e: EventContext) -> bool;
-    /// *Panics* if `ctx` does not point to an event
     fn node(&self, ctx: EventContext) -> Option<NodeExt>;
-    /// *Panics* if `ctx` does not point to an event
     fn edge(&self, ctx: EventContext) -> Option<EdgeExt>;
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt>;
     fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt>;
@@ -294,12 +298,12 @@ impl EventExt {
         self.clone().try_as_edge().unwrap()
     }
 
-    pub fn is_node_and<F: Fn(&NodeExt) -> bool>(&self, f: F) -> bool {
-        self.is_node() && f(&self.as_node())
+    pub fn is_node_and<F: Fn(NodeExt) -> bool>(&self, f: F) -> bool {
+        self.clone().try_as_node().is_some_and(f)
     }
 
-    pub fn is_edge_and<F: Fn(&EdgeExt) -> bool>(&self, f: F) -> bool {
-        self.is_edge() && f(&self.as_edge())
+    pub fn is_edge_and<F: Fn(EdgeExt) -> bool>(&self, f: F) -> bool {
+        self.clone().try_as_edge().is_some_and(f)
     }
 
     pub fn ctx(&self) -> EventContext {
@@ -433,6 +437,7 @@ impl EventContext {
             thing: None,
         };
         if self.thing.is_some() && self.thing == rhs.thing {
+            assert!(self.thing.is_some_and(|x| x < self.end && x < rhs.end));
             Self {
                 thing: self.thing,
                 ..r
@@ -476,62 +481,60 @@ impl NodeBodyExt {
     // NOTE one helper method per Payload type
     pub fn get_precise_time(&self, name: &str) -> Result<Timestamp, LifeCoreError> {
         if !self.0.contains_key(name) {
-            Result::<Timestamp, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+            Err(LifeCoreError::FieldNotFound {
                 field_name: name.to_string(),
             })
         } else if !self.0[name].is_precise_time() {
-            Result::<Timestamp, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+            Err(LifeCoreError::FieldContainsUnexpectedType {
                 field_name: name.to_string(),
             })
         } else {
-            Result::<Timestamp, LifeCoreError>::Ok(
-                self.0[name].clone().try_as_precise_time().unwrap(),
-            )
+            Ok(self.0[name].clone().try_as_precise_time().unwrap())
         }
     }
     pub fn get_number(&self, name: &str) -> Result<i64, LifeCoreError> {
         if !self.0.contains_key(name) {
-            Result::<i64, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+            Err(LifeCoreError::FieldNotFound {
                 field_name: name.to_string(),
             })
         } else if !self.0[name].is_number() {
-            Result::<i64, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+            Err(LifeCoreError::FieldContainsUnexpectedType {
                 field_name: name.to_string(),
             })
         } else {
-            Result::<i64, LifeCoreError>::Ok(self.0[name].clone().try_as_number().unwrap())
+            Ok(self.0[name].clone().try_as_number().unwrap())
         }
     }
     pub fn get_text(&self, name: &str) -> Result<String, LifeCoreError> {
         if !self.0.contains_key(name) {
-            Result::<String, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+            Err(LifeCoreError::FieldNotFound {
                 field_name: name.to_string(),
             })
         } else if !self.0[name].is_text() {
-            Result::<String, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+            Err(LifeCoreError::FieldContainsUnexpectedType {
                 field_name: name.to_string(),
             })
         } else {
-            Result::<String, LifeCoreError>::Ok(self.0[name].clone().try_as_text().unwrap())
+            Ok(self.0[name].clone().try_as_text().unwrap())
         }
     }
 
     pub fn get_deserialized<T: DeserializeOwned>(&self, name: &str) -> Result<T, LifeCoreError> {
         if !self.0.contains_key(name) {
-            Result::<T, LifeCoreError>::Err(LifeCoreError::FieldNotFound {
+            Err(LifeCoreError::FieldNotFound {
                 field_name: name.to_string(),
             })
         } else if !self.0[name].is_serialized() {
-            Result::<T, LifeCoreError>::Err(LifeCoreError::FieldContainsUnexpectedType {
+            Err(LifeCoreError::FieldContainsUnexpectedType {
                 field_name: name.to_string(),
             })
         } else {
             if let Result::Ok(x) =
                 serde_json::from_value::<T>(self.0[name].clone().try_as_serialized().unwrap())
             {
-                Result::<T, LifeCoreError>::Ok(x)
+                Ok(x)
             } else {
-                Result::<T, LifeCoreError>::Err(LifeCoreError::FieldDeserializationFailed {
+                Err(LifeCoreError::FieldDeserializationFailed {
                     field_name: name.to_string(),
                 })
             }
@@ -613,3 +616,11 @@ impl Default for NodeBodyExt {
         Self(HashMap::new())
     }
 }
+
+pub mod analysis;
+mod internal;
+#[cfg(test)]
+mod test;
+#[cfg(test)]
+mod test2;
+mod typing;

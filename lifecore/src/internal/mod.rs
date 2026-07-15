@@ -18,9 +18,6 @@ use crate::{
     analysis,
 };
 
-#[cfg(test)]
-mod test;
-
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct LifeCoreList {
     // indexed by EventIndex
@@ -138,7 +135,7 @@ impl LifeCore for LifeCoreList {
             let _ = t.edge(t.last().unwrap());
         }
 
-        // NOTE COPY_PASTE
+        // COPY_PASTE
         // Circumstance MUST come first, because if it fails somehow, then we inserted intermediate data for nothing
         let current_circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
         let ty_str_index = self.get_or_insert_string(ty);
@@ -193,7 +190,7 @@ impl LifeCore for LifeCoreList {
             let _ = t.node(t.last().unwrap());
         }
 
-        // NOTE COPY_PASTE
+        // COPY_PASTE
         let circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
         let ty_str_index = self.get_or_insert_string(ty);
         let p = insert_all_strings(self, &payload);
@@ -246,7 +243,9 @@ impl LifeCore for LifeCoreList {
         }
         Event::Edge(Edge { ty: _, from, to }) => {
             // SUS
-            if self.is_stale(e.look_at(from.into())) || self.is_stale(e.look_at(to.into())) {
+            if self.is_stale(e.look_at(from.before_and_including()))
+                || self.is_stale(e.look_at(to.before_and_including()))
+            {
                 return true;
             }
         }
@@ -279,7 +278,7 @@ impl LifeCore for LifeCoreList {
             {
                 if self.event.len() != self.circumstance.len() {
                     return Err(BasicValidationFailure {
-                        offending_event: EventContext::universe(),
+                        offending_event: ctx(),
                         reason: InternalError {
                             message: "Circumstance list does not match up with Event list"
                                 .to_string(),
@@ -347,7 +346,7 @@ impl LifeCore for LifeCoreList {
                     };
 
                     if self.is_stale(newer_index.exclusive_left().look_at(*older_index)) {
-                        // TODO move this check into its own analyzer
+                        // TODO move this Warning into its own analyzer
                         // warn!(
                         //     *newer_index,
                         //     "Duplicate nodes, but older one was invalidated before the new one was added (discouraged). EventIndex {} and {}",
@@ -391,13 +390,15 @@ impl LifeCore for LifeCoreList {
                 if let Some(idx) = parent {
                     if !idx_in_range(idx) {
                         return Err(BasicValidationFailure {
-                            offending_event: EventContext::universe().look_at(idx.into()),
+                            offending_event: EventContext::universe()
+                                .look_at(idx.before_and_including()),
                             reason: OutOfRangeParent,
                         });
                     }
                     if self[idx].is_edge() {
                         return Err(BasicValidationFailure {
-                            offending_event: EventContext::universe().look_at(idx.into()),
+                            offending_event: EventContext::universe()
+                                .look_at(idx.before_and_including()),
                             reason: EdgeParent,
                         });
                     }
@@ -407,13 +408,15 @@ impl LifeCore for LifeCoreList {
                 let idx = EventIndex::from(e.0);
                 if !idx_in_range(from) || !idx_in_range(to) {
                     return Err(BasicValidationFailure {
-                        offending_event: EventContext::universe().look_at(idx.into()),
+                        offending_event: EventContext::universe()
+                            .look_at(idx.before_and_including()),
                         reason: OutOfRangeEdgeEnd,
                     });
                 }
                 if self[from].is_edge() || self[to].is_edge() {
                     return Err(BasicValidationFailure {
-                        offending_event: EventContext::universe().look_at(idx.into()),
+                        offending_event: EventContext::universe()
+                            .look_at(idx.before_and_including()),
                         reason: EdgeEndIsEdge,
                     });
                 }
@@ -421,14 +424,14 @@ impl LifeCore for LifeCoreList {
             }
         }
 
-        // Rule: after a node has been overriden (that is, a new 'child' node has been added) it cannot be a part of a new edge. "Stale Rule"
+        // Rule: after a node has been overriden (that is, a new "child" node has been added) it cannot be a part of a new edge. "Stale Rule"
         for (edge_context, edge) in self.raw_edges(ctx()) {
             // Throw away the loop context. Now we are looking at 0..edge_index
             // (inclusive or exclusive doesn't matter in this particular case)
-            let ctx = edge_context.thing().before();
+            let ctx = edge_context.exclusive_left();
             assert!(edge_context.thing().0 > edge.from.0 && edge_context.thing().0 > edge.to.0);
-            if self.is_stale(ctx.look_at(edge.from.into()))
-                || self.is_stale(ctx.look_at(edge.to.into()))
+            if self.is_stale(ctx.look_at(edge.from.before_and_including()))
+                || self.is_stale(ctx.look_at(edge.to.before_and_including()))
             {
                 return Err(BasicValidationFailure {
                     offending_event: EventContext::universe().look_at(edge_context.into()),
@@ -441,7 +444,6 @@ impl LifeCore for LifeCoreList {
     }
 
     fn node(&self, ctx: EventContext) -> Option<NodeExt> {
-        // TODO clean this
         let index: EventIndex = ctx.into();
         if !self[index].is_node() {
             return None;
@@ -463,13 +465,12 @@ impl LifeCore for LifeCoreList {
             ty,
             ty_name: self[raw_node.ty].to_string(),
             field: body,
-            parent: raw_node.parent.map(|x| x.into()),
+            parent: raw_node.parent.map(|x| x.before_and_including()),
             e: ctx,
         })
     }
 
     fn edge(&self, ctx: EventContext) -> Option<EdgeExt> {
-        // TODO clean this
         let index: EventIndex = ctx.into();
         if !self[index].is_edge() {
             return None;
@@ -477,16 +478,15 @@ impl LifeCore for LifeCoreList {
         let raw_edge = self[index].as_raw_edge();
         Some(EdgeExt {
             ty_name: self[raw_edge.ty].to_string(),
-            from: ctx.look_at(raw_edge.from.into()),
-            to: ctx.look_at(raw_edge.to.into()),
+            from: ctx.look_at(raw_edge.from.before_and_including()),
+            to: ctx.look_at(raw_edge.to.before_and_including()),
             e: ctx,
         })
     }
 
-    // NOTE `ctx` can be unbounded! Be careful!
+    // NOTE `ctx` can be out of bounds! Be careful!
     // Wrong approaches:
     // - `ctx.items().flat_map(...)`
-    // - Calling `window` (would cause infinite recursion)
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
         let w = || ctx.items();
         w().zip(self.window(w()))
@@ -502,6 +502,7 @@ impl LifeCore for LifeCoreList {
             .map(move |(index, _)| self.edge(ctx.look_at(index)).unwrap())
     }
 
+    /// Get the root of `e`. `None` if `e` is a root node or an edge
     fn root_of(&self, e: EventContext) -> Option<EventContext> {
         let index: EventIndex = e.into();
         if self[index].is_edge() {
@@ -511,9 +512,13 @@ impl LifeCore for LifeCoreList {
         while let Some(parent_event) = self.raw_node(&r).parent {
             r = parent_event;
         }
-        Some(r.before_and_including())
+        Some(e.look_raw(r.i()))
     }
 
+    // TODO revise
+    // The current implementation is wrong because we need to look at all successors, not just
+    // immediate successors
+    #[cfg(never)]
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext> {
         assert!(self.get(node).is_some_and(|x| x.is_node()));
         let ctx = || node.items();
@@ -522,8 +527,7 @@ impl LifeCore for LifeCoreList {
             .filter(|(index, event)| {
                 event.is_node()
                     && event.as_raw_node().parent.is_some_and(|parent| {
-                        let parent: EventContext = parent.into();
-                        parent.absolute() == node.absolute()
+                        parent.before_and_including().absolute() == node.absolute()
                     })
                     && !self.is_stale(*index)
             })
@@ -603,7 +607,11 @@ impl LifeCore for LifeCoreList {
         }
         family
             .into_iter()
-            .map(|x| x.into_iter().map(|y| ctx.look_at(y.into())).collect_vec())
+            .map(|x| {
+                x.into_iter()
+                    .map(|y| ctx.look_at(y.before_and_including()))
+                    .collect_vec()
+            })
             .collect_vec()
         // .filter(|(_, node)| node.parent.is_some())
         // .into_group_map_by(|x| self.root_of(x.0).unwrap())
@@ -891,18 +899,6 @@ impl From<&EventContext> for EventIndex {
     }
 }
 
-impl From<EventIndex> for EventContext {
-    fn from(value: EventIndex) -> Self {
-        Self::universe().look_raw(value.i())
-    }
-}
-
-impl From<&EventIndex> for EventContext {
-    fn from(value: &EventIndex) -> Self {
-        From::<EventIndex>::from(*value)
-    }
-}
-
 impl From<&usize> for EventIndex {
     fn from(value: &usize) -> Self {
         Self(*value as u64)
@@ -970,3 +966,6 @@ impl std::hash::Hash for NodeBody {
         x.hash(state);
     }
 }
+
+#[cfg(test)]
+mod test;

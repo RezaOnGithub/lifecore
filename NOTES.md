@@ -36,6 +36,8 @@
                     .absolute()
                     .inclusive_left_context()
   ```
+- test `LifeCoreError` scenarios and `BasicValidationFailureScenario`: I have derived their variant sets,
+now should be easier to generate each kind of error and catch lack of tests for additional scenarios at test time.
 
 # Pitfalls
 
