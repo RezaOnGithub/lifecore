@@ -11,7 +11,7 @@ use crate::{
 };
 
 fn connected_graph() -> (LifeCoreList, NodeExt, NodeExt, EdgeExt) {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let from = lc.add("From", NodeBodyExt::default(), None).unwrap();
     let to = lc.add("To", NodeBodyExt::default(), None).unwrap();
     let edge = lc.connect(from.e, "link", to.e).unwrap();

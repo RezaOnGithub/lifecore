@@ -69,13 +69,13 @@ fn generic_is_stale_with_out_of_range_context_panics<LC: LifeCore>(lc: &LC) {
 
 #[test]
 fn new_is_valid() {
-    let lc = LifeCoreList::new();
+    let lc = LifeCoreList::default();
     assert!(lc.basic_validation().is_ok());
 }
 
 #[test]
 fn basic_01() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let n1 = lc.add("", text_body("orange"), None).unwrap();
     let _e0 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
@@ -87,7 +87,7 @@ fn basic_02() {}
 
 #[test]
 fn no_dupe_node() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let _n0 = lc.add("", text_body("yellow"), None).unwrap();
     let error = lc.add("", text_body("yellow"), None).unwrap_err();
     assert!(matches!(
@@ -101,7 +101,7 @@ fn no_dupe_node() {
 
 #[test]
 fn no_dupe_edge() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let n1 = lc.add("", text_body("orange"), None).unwrap();
     let _e0 = lc.connect(n0.e, "skrunkle", n1.e).unwrap();
@@ -117,7 +117,7 @@ fn no_dupe_edge() {
 
 #[test]
 fn dupe_parent_and_child() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let _n1 = lc.add("", text_body("yellow"), Some(n0.e)).unwrap();
     assert!(lc.basic_validation().is_ok());
@@ -125,7 +125,7 @@ fn dupe_parent_and_child() {
 
 #[test]
 fn stale_rule_01() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let parent = lc.add("", text_body("yellow"), None).unwrap();
     let child = lc.add("", text_body("yellow"), Some(parent.e)).unwrap();
     let error = lc.connect(parent.e, "", child.e).unwrap_err();
@@ -140,7 +140,7 @@ fn stale_rule_01() {
 
 #[test]
 fn stale_rule_02() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let parent = lc.add("", text_body("yellow"), None).unwrap();
     let child = lc.add("", text_body("yellow"), Some(parent.e)).unwrap();
     let error = lc.connect(child.e, "", parent.e).unwrap_err();
@@ -155,12 +155,12 @@ fn stale_rule_02() {
 
 #[test]
 fn child_can_be_added_to_already_overridden_node() {
-    generic_parent_child_override_scenario(LifeCoreList::new());
+    generic_parent_child_override_scenario(LifeCoreList::default());
 }
 
 #[test]
 fn families_include_root_and_children_after_overrides() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let root = lc.add("", text_body("root"), None).unwrap();
     let child = lc.add("", text_body("child"), Some(root.e)).unwrap();
     let second_child = lc.add("", text_body("second-child"), Some(root.e)).unwrap();
@@ -187,7 +187,7 @@ fn families_include_root_and_children_after_overrides() {
 
 #[test]
 fn fresh_successors_only_include_non_stale_direct_children() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let root = lc.add("", text_body("root"), None).unwrap();
     let stale_child = lc.add("", text_body("stale-child"), Some(root.e)).unwrap();
     let fresh_grandchild = lc
@@ -207,7 +207,7 @@ fn fresh_successors_only_include_non_stale_direct_children() {
 
 #[test]
 fn relative_degree_zero_for_nodes_with_same_parent() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let root = lc.add("", text_body("root"), None).unwrap();
     let left = lc.add("", text_body("left"), Some(root.e)).unwrap();
     let right = lc.add("", text_body("right"), Some(root.e)).unwrap();
@@ -228,7 +228,7 @@ fn relative_degree_zero_for_nodes_with_same_parent() {
 #[cfg(never)]
 #[test]
 fn node_type_resolution_depends_on_context() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let old_type = lc
         .add(
             NodeType::name(),
@@ -314,7 +314,7 @@ fn context_intersection_treats_an_unbounded_end_as_infinity() {
 
 #[test]
 fn basic_validation_reports_an_out_of_range_parent_without_panicking() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     lc.add("", text_body("node"), None).unwrap();
     let mut serialized = serde_json::to_value(lc).unwrap();
     serialized["event"][0]["Node"]["parent"] = serde_json::json!(99);
@@ -334,26 +334,26 @@ fn basic_validation_reports_an_out_of_range_parent_without_panicking() {
 #[test]
 #[should_panic]
 fn last_on_empty_lifecore_panics() {
-    generic_last_on_empty_lifecore(LifeCoreList::new());
+    generic_last_on_empty_lifecore(LifeCoreList::default());
 }
 
 #[test]
 #[should_panic]
 fn get_with_unpointed_context_panics() {
-    let lc = LifeCoreList::new();
+    let lc = LifeCoreList::default();
     generic_get_with_unpointed_context_panics(&lc);
 }
 
 #[test]
 #[should_panic]
 fn window_with_unpointed_context_panics() {
-    let lc = LifeCoreList::new();
+    let lc = LifeCoreList::default();
     generic_window_with_unpointed_context_panics(&lc);
 }
 
 #[test]
 fn node_on_edge_context() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let n0 = lc.add("", text_body("yellow"), None).unwrap();
     let n1 = lc.add("", text_body("orange"), None).unwrap();
     let edge = lc.connect(n0.e, "edge", n1.e).unwrap();
@@ -366,7 +366,7 @@ fn node_on_edge_context() {
 #[test]
 #[should_panic]
 fn edge_on_node_context_panics() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let node = lc.add("", text_body("yellow"), None).unwrap();
 
     generic_edge_on_node_context(&lc, node.e);
@@ -375,7 +375,7 @@ fn edge_on_node_context_panics() {
 #[test]
 #[should_panic]
 fn is_stale_with_out_of_range_context_panics() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let _node = lc.add("", text_body("yellow"), None).unwrap();
 
     generic_is_stale_with_out_of_range_context_panics(&lc);

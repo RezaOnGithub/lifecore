@@ -13,9 +13,9 @@ use strum::{Display, EnumIs, EnumTryAs, VariantNames};
 use whoami::{hostname, username};
 
 use crate::{
-    BasicValidationFailure, BasicValidationFailureScenario::*, EdgeExt, EventContext, LifeCore,
-    LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, Timestamp, TypedBody, Zoned,
-    analysis,
+    BasicValidationFailure, BasicValidationFailureScenario::*, EdgeExt, EventContext, JSON,
+    LifeCore, LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, Timestamp, TypedBody,
+    Zoned, analysis,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -345,7 +345,7 @@ impl LifeCore for LifeCoreList {
                         }
                     };
 
-                    if self.is_stale(newer_index.exclusive_left().look_at(*older_index)) {
+                    if self.is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index)) {
                         // TODO move this Warning into its own analyzer
                         // warn!(
                         //     *newer_index,
@@ -428,7 +428,7 @@ impl LifeCore for LifeCoreList {
         for (edge_context, edge) in self.raw_edges(ctx()) {
             // Throw away the loop context. Now we are looking at 0..edge_index
             // (inclusive or exclusive doesn't matter in this particular case)
-            let ctx = edge_context.exclusive_left();
+            let ctx = edge_context.shrink_to_exclusive_left();
             assert!(edge_context.thing().0 > edge.from.0 && edge_context.thing().0 > edge.to.0);
             if self.is_stale(ctx.look_at(edge.from.before_and_including()))
                 || self.is_stale(ctx.look_at(edge.to.before_and_including()))
@@ -517,22 +517,28 @@ impl LifeCore for LifeCoreList {
 
     // TODO revise
     // The current implementation is wrong because we need to look at all successors, not just
-    // immediate successors
-    #[cfg(never)]
+    // immediate successors. Need to make this clear in the documentation too.
+    // Can contain itself, if it does not have any children
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext> {
-        assert!(self.get(node).is_some_and(|x| x.is_node()));
-        let ctx = || node.items();
-        ctx()
-            .zip(self.raw_window(ctx()))
-            .filter(|(index, event)| {
-                event.is_node()
-                    && event.as_raw_node().parent.is_some_and(|parent| {
-                        parent.before_and_including().absolute() == node.absolute()
-                    })
-                    && !self.is_stale(*index)
-            })
-            .map(|(candidate, _)| candidate)
-            .collect_vec()
+        if self.get(node).is_none_or(|x| x.is_edge()) {
+            return vec![];
+        }
+        let w = || node.exclusive_right_items();
+        let mut successor = HashSet::<EventContext>::from([node.absolute()]);
+        for (candidate_index, candidate) in w()
+            .zip(self.raw_window(w()))
+            .filter(|(_, event)| event.is_node())
+            .map(|(i, e)| (i, e.as_raw_node()))
+        {
+            if candidate
+                .parent
+                .is_some_and(|parent| successor.contains(&parent.absolute()))
+            {
+                successor.remove(&candidate.parent.unwrap().absolute());
+                successor.insert(candidate_index.absolute());
+            }
+        }
+        successor.into_iter().collect()
     }
 
     fn relative_degree(&self, left: EventContext, right: EventContext) -> Option<usize> {
@@ -590,7 +596,7 @@ impl LifeCore for LifeCoreList {
 
     fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<EventContext>> {
         let mut family = Vec::<HashSet<EventIndex>>::new();
-        for (index, node) in self.raw_nodes(ctx) {
+        'outer: for (index, node) in self.raw_nodes(ctx) {
             if node.parent.is_none_or(|p| !ctx.range().contains(&p.i())) {
                 // We consider this a root node
                 let mut r = HashSet::new();
@@ -601,8 +607,14 @@ impl LifeCore for LifeCoreList {
                 for set_index in 0..family.len() {
                     if family[set_index].contains(&node.parent.unwrap()) {
                         family.get_mut(set_index).unwrap().insert(index.into());
+                        continue 'outer;
                     }
                 }
+                panic!(
+                    "parent {} for this node {} should had been found by now",
+                    node.parent.unwrap(),
+                    index
+                );
             }
         }
         family
@@ -613,20 +625,6 @@ impl LifeCore for LifeCoreList {
                     .collect_vec()
             })
             .collect_vec()
-        // .filter(|(_, node)| node.parent.is_some())
-        // .into_group_map_by(|x| self.root_of(x.0).unwrap())
-        // .into_values()
-        // .map(|children_pair| {
-        //     // NOTE Does not contain the root
-        //     assert!(!children_pair.is_empty());
-        //     let mut children = children_pair
-        //         .into_iter()
-        //         .map(|(index, _)| index)
-        //         .collect_vec();
-        //     children.push(ctx.look_at(self.root_of(children[0]).unwrap()));
-        //     children
-        // })
-        // .collect_vec()
     }
 
     fn add_analyzer(&mut self, name: &str, config: &str) {
@@ -711,16 +709,6 @@ impl Index<CircumstanceIndex> for LifeCoreList {
 }
 
 impl LifeCoreList {
-    pub fn new() -> Self {
-        Self {
-            event: vec![],
-            circumstance: vec![],
-            circumstance_table: IndexSet::new(),
-            string_table: IndexSet::new(),
-            configured_analyzer: analysis::SuiteConfig(vec![]),
-        }
-    }
-
     fn resolve(&self, t: &NodeBody) -> NodeBodyExt {
         let mut r = HashMap::<String, PayloadExt>::new();
         for (k, v) in t.0.iter() {
@@ -729,9 +717,9 @@ impl LifeCoreList {
                 Payload::PreciseTime(timestamp) => PayloadExt::PreciseTime(*timestamp),
                 Payload::Text(string_index) => PayloadExt::Text(self[string_index].to_string()),
                 Payload::Number(i) => PayloadExt::Number(*i),
-                Payload::Serialized(string_index) => PayloadExt::Serialized(
-                    serde_json::Value::from_str(&self[string_index]).unwrap(),
-                ),
+                Payload::Serialized(string_index) => {
+                    PayloadExt::Serialized(JSON::from_str(&self[string_index]).unwrap())
+                }
                 }
             });
         }
@@ -756,7 +744,6 @@ impl LifeCoreList {
         let now = Zoned::now().round(Unit::Hour)?;
         let hname = hostname()?;
         let uname = username()?;
-        // CANNOT actually use `?` because it would attempt to return a reference to strings allocated locally
         let hname_index = self.get_or_insert_string(hname.as_str());
         let uname_index = self.get_or_insert_string(uname.as_str());
         let circumstance = Circumstance::Session {
@@ -836,7 +823,6 @@ impl LifeCoreList {
         self[*i].as_raw_edge()
     }
 
-    // Aggregate Return
     fn raw_nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, Node)> {
         let w = || ctx.items();
         w().zip(self.raw_window(w()))
@@ -860,6 +846,18 @@ impl LifeCoreList {
     }
 }
 
+impl Default for LifeCoreList {
+    fn default() -> Self {
+        Self {
+            event: vec![],
+            circumstance: vec![],
+            circumstance_table: IndexSet::new(),
+            string_table: IndexSet::new(),
+            configured_analyzer: analysis::SuiteConfig(vec![]),
+        }
+    }
+}
+
 impl EventContext {
     fn thing(self) -> EventIndex {
         self.into()
@@ -879,6 +877,10 @@ impl EventIndex {
             end: self.i().saturating_add(1),
             thing: Some(self.i()),
         }
+    }
+
+    fn absolute(&self) -> EventContext {
+        EventContext::universe().look_raw(self.i())
     }
 
     fn i(self) -> usize {

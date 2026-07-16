@@ -2,14 +2,15 @@
 
 - Special comment words
 
-| Word       | Meaning                             | Suggested Action                                                                                                                        |
-| ---------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| SUS        | Suspicious, there may be a bug here | double-check bounds, conditionals, documentation for called fucntions, check for shadowing etc.                                         |
-| TODO       | Potential Work To Do                | Indicates future work but is not currently required. Do not engage in the work unless instructed to.                                    |
-| NOTDO      | Potential Work You Shouldn't Do     | Indicates work that is deferred indefinitely. Usually sign of a disruptive refactoring we rather not do right now                       |
-| COPY_PASTE | Copy-pasted Code                    | Means "code here is copy-pasted and is identical to an excerpt nearby." Typically, change to one instance requires change to the other. |
-| NOTE       | Usage Note                          | Something to keep in mind when using or referring to an item                                                                            |
-| PERF       | Performance Concern                 | This piece of code may need to be adjusted for better performance. Usually not an immediate concern                                     |
+| Word       | Meaning                             | Suggested Action                                                                                                                                                                                 |
+| ---------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SUS        | Suspicious, there may be a bug here | double-check bounds, conditionals, documentation for called fucntions, check for shadowing etc.                                                                                                  |
+| TODO       | Potential Work To Do                | Indicates future work but is not currently required. Do not engage in the work unless instructed to.                                                                                             |
+| TOTEST     | Testing scenario                    | Means a some new tests need to be added to check for this condition, and/or library API inspected for potential tests relevant to the scenario                                                   |
+| NOTDO      | Potential Work You Shouldn't Do     | Indicates work that is deferred indefinitely. Usually sign of a disruptive refactoring we rather not do right now                                                                                |
+| COPY_PASTE | Copy-pasted Code                    | Means "code here is copy-pasted and is identical to an excerpt nearby." Copy-pasted code has the potential to have a subtle bug. Typically, change to one instance requires change to the other. |
+| NOTE       | Usage Note                          | Something to keep in mind when using or referring to an item                                                                                                                                     |
+| PERF       | Performance Concern                 | This piece of code may need to be adjusted for better performance. Usually not an immediate concern                                                                                              |
 
 # Info
 
@@ -36,8 +37,9 @@
                     .absolute()
                     .inclusive_left_context()
   ```
-- test `LifeCoreError` scenarios and `BasicValidationFailureScenario`: I have derived their variant sets,
-now should be easier to generate each kind of error and catch lack of tests for additional scenarios at test time.
+- test `LifeCoreError` scenarios and `BasicValidationFailureScenario`: I have
+  derived their variant sets, now should be easier to generate each kind of
+  error and catch lack of tests for additional scenarios at test time.
 
 # Pitfalls
 

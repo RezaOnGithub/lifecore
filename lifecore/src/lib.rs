@@ -314,6 +314,7 @@ impl EventExt {
     }
 }
 
+// TOTEST EventContext can never ever point to usize::MAX (i.e. thing is none or in 0..(MAX-1))
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
 pub struct EventContext {
     // Exclusive! `0..end` basically
@@ -362,7 +363,7 @@ impl EventContext {
         self.range().map(move |x| ctx.look_raw(x))
     }
 
-    pub fn inclusive_left(&self) -> Self {
+    pub fn shrink_to_inclusive_left(&self) -> Self {
         assert!(self.validate() && self.thing.is_some_and(|x| x < usize::MAX));
         // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
         // We can safely increment self.thing and use it as the upper bound
@@ -374,11 +375,7 @@ impl EventContext {
         r
     }
 
-    pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
-        self.inclusive_left().items()
-    }
-
-    pub fn exclusive_left(&self) -> Self {
+    pub fn shrink_to_exclusive_left(&self) -> Self {
         assert!(self.validate() && self.thing.is_some());
         // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
         // We can safely pass self.thing as the upper bound
@@ -390,8 +387,39 @@ impl EventContext {
         r
     }
 
+    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    pub fn inclusive_right_items(self) -> impl Iterator<Item = Self> {
+        let start = self.thing.unwrap_or(self.end);
+        (start..self.end).into_iter().map(move |x| Self {
+            thing: Some(x),
+            ..self
+        })
+    }
+
+    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    pub fn exclusive_right_items(self) -> impl Iterator<Item = Self> {
+        let start = self.thing.map_or(self.end, |x| x.saturating_add(1));
+        (start..self.end).into_iter().map(move |x| Self {
+            thing: Some(x),
+            ..self
+        })
+    }
+    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
+        let end = self.thing.map_or(self.end, |x| x.saturating_add(1));
+        (0..end).into_iter().map(move |x| Self {
+            thing: Some(x),
+            ..self
+        })
+    }
+
+    // NOTE returned contexts are the same as the originator, but the `thing` is different
     pub fn exclusive_left_items(self) -> impl Iterator<Item = Self> {
-        self.exclusive_left().items()
+        let end = self.thing.unwrap_or(self.end);
+        (0..end).into_iter().map(move |x| Self {
+            thing: Some(x),
+            ..self
+        })
     }
 
     // This is wrong. The context can be arbitrarily large but still "bounded"

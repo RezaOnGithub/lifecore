@@ -175,7 +175,7 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
                 .iter()
                 .cartesian_product(
                     &lc.window(EventContext::universe().items())
-                        .map(|x| x.ctx().inclusive_left())
+                        .map(|x| x.ctx().shrink_to_inclusive_left())
                         .collect_vec(), // TODO PERF get rid of this
                 )
                 .map(|(a, window)| a.analyze(&lc, *window).0)
