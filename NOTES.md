@@ -67,14 +67,17 @@
   - [ ] Better sepecific hash functions
   - [ ] GraphViz is difficult because LifeCore::families is a set of sets, no
         proper ordering
-  - [ ] Allow for tail mock circumstances for sidecars
+  - [X] Allow for tail mock circumstances for sidecars
 
 # Learning
 
 - Making PayloadExt `#[serde(transparent)]` -- _terrible_ mistake. Wasted hours
   trying to reconcile data that gets deserialized to Text with Serialized. Just
   accept that the JSON output is going to be a bit noisy.
-- Brackets + `` `` on rustdoc
+- Brackets + `` on rustdoc
+- Old "running validation on a copy of the database" -> no need to copy paste
+  code. if borrowing self as `&mut` you can do `*self = copy;` to write the
+  changes to self.
 
 # Wishlist
 

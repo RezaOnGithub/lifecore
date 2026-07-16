@@ -107,35 +107,26 @@ impl LifeCore for LifeCoreList {
         ty: &str,
         to: PointedEventContext,
     ) -> Result<EdgeExt, LifeCoreError> {
-        // Perform action on a copy. If it is valid, perform it on self
-        {
-            let mut t = self.clone();
+        let mut candidate = self.clone();
+        let circumstance = candidate
+            .get_or_insert_current_session_circumstance_entry()?
+            .0;
+        let edge = candidate.connect_and_validate(from, ty, to, circumstance)?;
+        *self = candidate;
+        Ok(edge)
+    }
 
-            let circumstance_index = t.get_or_insert_mock_circumstance_entry().0;
-            let ty_str_index = t.get_or_insert_string(ty);
-            t.event.push(Event::Edge(Edge {
-                ty: ty_str_index,
-                from: from.thing(),
-                to: to.thing(),
-            }));
-            t.circumstance.push(circumstance_index);
-            let _ = t.basic_validation()?;
-            let _ = t.edge(t.last().unwrap());
-        }
-
-        // COPY_PASTE
-        // Circumstance MUST come first, because if it fails somehow, then we inserted
-        // intermediate data for nothing
-        let current_circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
-        let ty_str_index = self.get_or_insert_string(ty);
-        self.event.push(Event::Edge(Edge {
-            ty: ty_str_index,
-            from: from.into(),
-            to: to.into(),
-        }));
-        self.circumstance.push(current_circumstance_index);
-        assert!(self.basic_validation().is_ok());
-        Ok(self.edge(self.last().unwrap()).unwrap())
+    fn connect_mock(
+        &mut self,
+        from: PointedEventContext,
+        ty: &str,
+        to: PointedEventContext,
+    ) -> Result<EdgeExt, LifeCoreError> {
+        let mut candidate = self.clone();
+        let circumstance = candidate.get_or_insert_mock_circumstance_entry().0;
+        let edge = candidate.connect_and_validate(from, ty, to, circumstance)?;
+        *self = candidate;
+        Ok(edge)
     }
 
     fn add(
@@ -144,54 +135,68 @@ impl LifeCore for LifeCoreList {
         payload: NodeBodyExt,
         parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError> {
-        let insert_all_strings = |t: &mut Self, payload: &NodeBodyExt| -> NodeBody {
-            let mut r = NodeBody::default();
-            for (k, v) in payload.0.iter() {
-                let smalltable_key = t.get_or_insert_string(k);
-                let smalltable_value = {
-                    match v {
-                    PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
-                    PayloadExt::Text(s) => Payload::Text(t.get_or_insert_string(s.as_str())),
-                    PayloadExt::Number(i) => Payload::Number(*i),
-                    PayloadExt::Serialized(s) => {
-                        Payload::Serialized(t.get_or_insert_string(&s.to_string()))
-                    }
-                    }
-                };
-                r.insert(smalltable_key, smalltable_value);
-            }
-            r
-        };
+        let mut candidate = self.clone();
+        let circumstance = candidate
+            .get_or_insert_current_session_circumstance_entry()?
+            .0;
+        let node = candidate.add_and_validate(ty, payload, parent, circumstance)?;
+        *self = candidate;
+        Ok(node)
+    }
 
-        {
-            let mut t = self.clone();
-            // NOTE order of these two operations is SUS
-            let circumstance_index = t.get_or_insert_mock_circumstance_entry().0;
-            let ty_str_index = t.get_or_insert_string(ty);
-            let p = insert_all_strings(&mut t, &payload);
-            t.event.push(Event::Node(Node {
-                ty: ty_str_index,
-                parent: parent.clone().map(|x| x.into()),
-                payload: p,
-            }));
-            t.circumstance.push(circumstance_index);
-            let _ = t.basic_validation()?;
-            let _ = t.node(t.last().unwrap());
+    fn add_mock(
+        &mut self,
+        ty: &str,
+        payload: NodeBodyExt,
+        parent: Option<PointedEventContext>,
+    ) -> Result<NodeExt, LifeCoreError> {
+        let mut candidate = self.clone();
+        let circumstance = candidate.get_or_insert_mock_circumstance_entry().0;
+        let node = candidate.add_and_validate(ty, payload, parent, circumstance)?;
+        *self = candidate;
+        Ok(node)
+    }
+
+    fn is_mock(&self) -> bool {
+        self.circumstance_table.contains(&Circumstance::Mock)
+    }
+
+    fn apply(&mut self) -> Result<(), LifeCoreError> {
+        if !self.is_mock() {
+            return Ok(());
         }
 
-        // COPY_PASTE
-        let circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
-        let ty_str_index = self.get_or_insert_string(ty);
-        let p = insert_all_strings(self, &payload);
-        self.event.push(Event::Node(Node {
-            ty: ty_str_index,
-            parent: parent.clone().map(|x| x.into()),
-            payload: p,
-        }));
-        self.circumstance.push(circumstance_index);
+        let mut candidate = self.clone();
+        candidate.basic_validation()?;
+        let current_circumstance = candidate.current_session_circumstance()?;
+        let mock_index = CircumstanceIndex((candidate.circumstance_table.len() - 1) as u64);
 
-        assert!(self.basic_validation().is_ok());
-        Ok(self.node(self.last().unwrap()).unwrap())
+        assert!(
+            matches!(
+                candidate.circumstance_table.last(),
+                Some(Circumstance::Mock)
+            ),
+            "Mock must be the final circumstance"
+        );
+        assert!(
+            matches!(candidate.circumstance_table.pop(), Some(Circumstance::Mock)),
+            "The final circumstance must be Mock"
+        );
+
+        let current_index = candidate
+            .get_or_insert_circumstance_entry(current_circumstance)
+            .0;
+        if current_index != mock_index {
+            for circumstance in candidate.circumstance.iter_mut() {
+                if *circumstance == mock_index {
+                    *circumstance = current_index;
+                }
+            }
+        }
+
+        candidate.basic_validation()?;
+        *self = candidate;
+        Ok(())
     }
 
     fn get(&self, e: PointedEventContext) -> Option<crate::EventExt> {
@@ -280,9 +285,8 @@ impl LifeCore for LifeCoreList {
                 }
             }
 
-            // Only a SINGLE Circumstance::Mock is allowed. This is only for running
-            // validation code before adding a new event TODO modify this so
-            // that only TAIL Circumstance::Mock are allowed.
+            // Events under Circumstance::Mock must form a contiguous suffix. This is
+            // used for validating provisional changes before applying them.
             {
                 if self.circumstance_table.contains(&Circumstance::Mock) {
                     let mock_index = self
@@ -294,9 +298,14 @@ impl LifeCore for LifeCoreList {
                         .iter()
                         .enumerate()
                         .filter(|x| x.1.0 as usize == mock_index)
+                        .map(|x| x.0)
                         .collect_vec();
                     assert!(!mock_event_index.is_empty());
-                    if mock_event_index.len() > 1 || mock_event_index[0].0 != self.event.len() - 1 {
+                    if !mock_event_index
+                        .iter()
+                        .copied()
+                        .eq(mock_event_index[0]..self.event.len())
+                    {
                         // TODO better context
                         return Err(BasicValidationFailure {
                             offending_event: ctx().into(),
@@ -738,58 +747,95 @@ impl LifeCoreList {
         NodeBodyExt(r)
     }
 
-    fn get_or_insert_current_session_circumstance(
+    fn connect_and_validate(
         &mut self,
-    ) -> Result<crate::CircumstanceExt, LifeCoreError> {
-        let (_, circumstance) = self.get_or_insert_current_session_circumstance_entry()?;
-        Ok(self.resolve_circumstance(&circumstance))
+        from: PointedEventContext,
+        ty: &str,
+        to: PointedEventContext,
+        circumstance: CircumstanceIndex,
+    ) -> Result<EdgeExt, LifeCoreError> {
+        let ty = self.get_or_insert_string(ty);
+        self.event.push(Event::Edge(Edge {
+            ty,
+            from: from.thing(),
+            to: to.thing(),
+        }));
+        self.circumstance.push(circumstance);
+        self.basic_validation()?;
+        Ok(self.edge(self.last().unwrap()).unwrap())
     }
 
-    fn get_or_insert_mock_circumstance(&mut self) -> Result<crate::CircumstanceExt, LifeCoreError> {
-        let (_, circumstance) = self.get_or_insert_mock_circumstance_entry();
-        Ok(self.resolve_circumstance(&circumstance))
+    fn add_and_validate(
+        &mut self,
+        ty: &str,
+        payload: NodeBodyExt,
+        parent: Option<PointedEventContext>,
+        circumstance: CircumstanceIndex,
+    ) -> Result<NodeExt, LifeCoreError> {
+        let ty = self.get_or_insert_string(ty);
+        let mut body = NodeBody::default();
+        for (name, payload) in payload.0.iter() {
+            let name = self.get_or_insert_string(name);
+            let payload = match payload {
+            PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
+            PayloadExt::Text(value) => Payload::Text(self.get_or_insert_string(value.as_str())),
+            PayloadExt::Number(value) => Payload::Number(*value),
+            PayloadExt::Serialized(value) => {
+                Payload::Serialized(self.get_or_insert_string(&value.to_string()))
+            }
+            };
+            body.insert(name, payload);
+        }
+        self.event.push(Event::Node(Node {
+            ty,
+            parent: parent.map(|x| x.into()),
+            payload: body,
+        }));
+        self.circumstance.push(circumstance);
+        self.basic_validation()?;
+        Ok(self.node(self.last().unwrap()).unwrap())
+    }
+
+    fn current_session_circumstance(&mut self) -> Result<Circumstance, LifeCoreError> {
+        let now = Zoned::now().round(Unit::Hour)?;
+        let hostname = hostname()?;
+        let username = username()?;
+        let hostname = self.get_or_insert_string(hostname.as_str());
+        let username = self.get_or_insert_string(username.as_str());
+        Ok(Circumstance::Session {
+            when_1h: now,
+            hostname,
+            username,
+        })
     }
 
     fn get_or_insert_current_session_circumstance_entry(
         &mut self,
     ) -> Result<(CircumstanceIndex, Circumstance), LifeCoreError> {
-        let now = Zoned::now().round(Unit::Hour)?;
-        let hname = hostname()?;
-        let uname = username()?;
-        let hname_index = self.get_or_insert_string(hname.as_str());
-        let uname_index = self.get_or_insert_string(uname.as_str());
-        let circumstance = Circumstance::Session {
-            when_1h: now,
-            hostname: hname_index,
-            username: uname_index,
-        };
+        let circumstance = self.current_session_circumstance()?;
+        Ok(self.get_or_insert_circumstance_entry(circumstance))
+    }
+
+    fn get_or_insert_circumstance_entry(
+        &mut self,
+        circumstance: Circumstance,
+    ) -> (CircumstanceIndex, Circumstance) {
         if let Some(idx) = self.circumstance_table.get_index_of(&circumstance) {
-            Ok((CircumstanceIndex(idx as u64), circumstance))
+            (CircumstanceIndex(idx as u64), circumstance)
         } else {
             assert!(
                 self.circumstance_table.insert(circumstance.clone()),
                 "Circumstance should not be present. We just checked!"
             );
-            Ok((
+            (
                 CircumstanceIndex((self.circumstance_table.len() - 1) as u64),
                 circumstance,
-            ))
+            )
         }
     }
 
     fn get_or_insert_mock_circumstance_entry(&mut self) -> (CircumstanceIndex, Circumstance) {
-        if let Some(idx) = self.circumstance_table.get_index_of(&Circumstance::Mock) {
-            (CircumstanceIndex(idx as u64), Circumstance::Mock)
-        } else {
-            assert!(
-                self.circumstance_table.insert(Circumstance::Mock),
-                "Circumstance should not be present. We just checked!"
-            );
-            (
-                CircumstanceIndex((self.circumstance_table.len() - 1) as u64),
-                Circumstance::Mock,
-            )
-        }
+        self.get_or_insert_circumstance_entry(Circumstance::Mock)
     }
 
     fn get_or_insert_string(&mut self, s: &str) -> StringIndex {

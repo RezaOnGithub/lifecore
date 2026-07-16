@@ -31,8 +31,9 @@ pub struct NodeBodyExt(pub BTreeMap<String, PayloadExt>);
 /// difference.
 ///
 /// "Mock" circumstance is intended for running validation and analysis before
-/// writing a node or an edge to the database proper. Currently, a single `Mock`
-/// is allowed and it must be associated with the last event
+/// writing nodes or edges to the database proper. Multiple events may share the
+/// single `Mock` circumstance as long as they form a contiguous suffix of graph
+/// history.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 pub enum CircumstanceExt {
     Mock,
@@ -174,6 +175,10 @@ pub enum EventExt {
 }
 
 /// The primary trait describing the interface to the database.
+///
+/// Mutations are committed only after the resulting database passes basic
+/// validation. Ordinary mutations therefore fail while a mock suffix is
+/// pending, without changing the database.
 pub trait LifeCore: Send + Sync {
     /// Get last event in LifeCore as a bounded EventContext
     fn last(&self) -> Option<PointedEventContext>;
@@ -188,12 +193,38 @@ pub trait LifeCore: Send + Sync {
         ty: &str,
         to: PointedEventContext,
     ) -> Result<EdgeExt, LifeCoreError>;
+    /// Add a provisional edge to the validated mock suffix.
+    ///
+    /// A validation failure leaves the database unchanged.
+    fn connect_mock(
+        &mut self,
+        from: PointedEventContext,
+        ty: &str,
+        to: PointedEventContext,
+    ) -> Result<EdgeExt, LifeCoreError>;
     fn add(
         &mut self,
         ty: &str,
         payload: NodeBodyExt,
         parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError>;
+    /// Add a provisional node to the validated mock suffix.
+    ///
+    /// A validation failure leaves the database unchanged.
+    fn add_mock(
+        &mut self,
+        ty: &str,
+        payload: NodeBodyExt,
+        parent: Option<PointedEventContext>,
+    ) -> Result<NodeExt, LifeCoreError>;
+    /// Whether this database contains a validated suffix of mock events.
+    fn is_mock(&self) -> bool;
+    /// Replace the mock suffix's circumstance with one session generated at
+    /// application time.
+    ///
+    /// This is a no-op when no mock events are present. A failure leaves the
+    /// database unchanged.
+    fn apply(&mut self) -> Result<(), LifeCoreError>;
     /// Get the event selected by a pointed context.
     fn get(&self, e: PointedEventContext) -> Option<EventExt>;
     fn get_with_circumstance(&self, e: PointedEventContext) -> Option<(EventExt, CircumstanceExt)>;
