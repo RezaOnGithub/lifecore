@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     fmt,
     hash::Hash,
     ops::{Index, Range},
@@ -24,7 +24,7 @@ pub use serde_json::Value as JSON;
 pub use serde_json::to_value as to_json_value;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
-pub struct NodeBodyExt(pub HashMap<String, PayloadExt>);
+pub struct NodeBodyExt(pub BTreeMap<String, PayloadExt>);
 
 /// "Circumstance" is currently a simple method of logging event dates and
 /// places Not much weight to it at the moment, and doesn't make a functional
@@ -200,19 +200,19 @@ pub trait LifeCore: Send + Sync {
     fn window<I>(&self, i: I) -> impl Iterator<Item = EventExt>
     where
         I: IntoIterator<Item = PointedEventContext>;
-    /// Check whether `e.thing` is stale within context
+    /// Check whether `e.thing` is stale within context. Return None for invalid input
     /// Stale Node means a newer node has it as its parent within context
     /// Stale Edge means at least one end is a Stale Node
-    fn is_stale(&self, e: PointedEventContext) -> bool;
+    fn is_stale(&self, e: PointedEventContext) -> Option<bool>;
     fn node(&self, ctx: PointedEventContext) -> Option<NodeExt>;
     fn edge(&self, ctx: PointedEventContext) -> Option<EdgeExt>;
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt>;
     fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt>;
     fn fresh_nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
-        self.nodes(ctx).filter(|x| !self.is_stale(x.e))
+        self.nodes(ctx).filter(|x| !self.is_stale(x.e).unwrap())
     }
     fn fresh_edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt> {
-        self.edges(ctx).filter(|x| !self.is_stale(x.e))
+        self.edges(ctx).filter(|x| !self.is_stale(x.e).unwrap())
     }
 
     /// Get non-stale edges connected to node `n`
@@ -234,7 +234,7 @@ pub trait LifeCore: Send + Sync {
     /// ```
     fn fresh_edges_of(&self, n: PointedEventContext) -> impl Iterator<Item = EdgeExt> {
         self.edges(n.window()).filter(move |x| {
-            !self.is_stale(n.look_at(x.e))
+            !self.is_stale(n.look_at(x.e)).unwrap()
                 && (x.from.absolute() == n.absolute() || x.to.absolute() == n.absolute())
         })
     }
@@ -249,7 +249,7 @@ pub trait LifeCore: Send + Sync {
     /// stale, any edge connected to it is also stale.
     fn fresh_outgoing_edges_of(&self, n: PointedEventContext) -> impl Iterator<Item = EdgeExt> {
         self.edges(n.window())
-            .filter(move |x| !self.is_stale(x.e) && x.from.absolute() == n.absolute())
+            .filter(move |x| !self.is_stale(x.e).unwrap() && x.from.absolute() == n.absolute())
     }
 
     /// Get fresh Incoming edges from `n` within the implied context.
@@ -262,7 +262,7 @@ pub trait LifeCore: Send + Sync {
     /// stale, any edge connected to it is also stale.
     fn fresh_incoming_edges_to(&self, n: PointedEventContext) -> impl Iterator<Item = EdgeExt> {
         self.edges(n.window())
-            .filter(move |x| !self.is_stale(x.e) && x.to.absolute() == n.absolute())
+            .filter(move |x| !self.is_stale(x.e).unwrap() && x.to.absolute() == n.absolute())
     }
 
     /// Get root of node at `e`. That is, the ancestor node by the way of
@@ -527,7 +527,7 @@ impl IntoIterator for PointedEventContext {
 
 impl NodeBodyExt {
     pub fn from(x: &[(&str, PayloadExt)]) -> Self {
-        let mut r = HashMap::<String, PayloadExt>::new();
+        let mut r = BTreeMap::<String, PayloadExt>::new();
         assert!(
             x.iter().map(|y| &y.0).counts().len() == x.len(),
             "Supplied list has a repeated key (not a proper set!)"
@@ -667,7 +667,7 @@ impl From<BasicValidationFailure> for LifeCoreError {
 
 impl Default for NodeBodyExt {
     fn default() -> Self {
-        Self(HashMap::new())
+        Self(BTreeMap::new())
     }
 }
 

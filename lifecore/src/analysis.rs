@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Debug as DebugTrait;
 use std::hash::Hash;
 
@@ -131,7 +131,7 @@ pub trait AnalyzerFactory<LC: LifeCore> {
 }
 
 pub struct AnalysisRunner<LC: LifeCore> {
-    factory: HashMap<String, Box<dyn AnalyzerFactory<LC>>>,
+    factory: BTreeMap<String, Box<dyn AnalyzerFactory<LC>>>,
     analyzer: Vec<Box<dyn Analyzer<LC>>>,
 }
 

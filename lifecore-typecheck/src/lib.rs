@@ -22,7 +22,7 @@ use lifecore::{
     PayloadType, PointedEventContext, TypedBody,
     analysis::{self, InnerMessageType, InnerOutput},
 };
-use std::{collections::HashMap, marker::PhantomData};
+use std::{collections::BTreeMap, marker::PhantomData};
 use strum::IntoDiscriminant;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -387,7 +387,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
         {
             let type_table = lc
                 .types(some_type_at_some_point_node.e.shrink_to_exclusive_left())
-                .collect::<HashMap<_, _>>();
+                .collect::<BTreeMap<_, _>>();
 
             let Ok(some_type_at_some_point) =
                 NodeType::try_from(&some_type_at_some_point_node.field)
@@ -413,7 +413,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
             }
         }
 
-        let type_table = lc.types(window).collect::<HashMap<_, _>>();
+        let type_table = lc.types(window).collect::<BTreeMap<_, _>>();
 
         // Check that override types exist
         // TODO I'm not sure whether this should be an error or not.
@@ -437,7 +437,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
 
         for pointed_context in window
             .items()
-            .filter(|e| !lc.is_stale(*e) && lc.get(*e).is_some_and(|x| x.is_node()))
+            .filter(|e| !lc.is_stale(*e).unwrap() && lc.get(*e).is_some_and(|x| x.is_node()))
         {
             let node = lc.node(pointed_context).unwrap();
             if node.ty.is_none() {
@@ -515,7 +515,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
         // Check edges ends so that they allow for that edge
         for pointed_context in window
             .items()
-            .filter(|e| !lc.is_stale(*e) && lc.get(*e).is_some_and(|x| x.is_edge()))
+            .filter(|e| !lc.is_stale(*e).unwrap() && lc.get(*e).is_some_and(|x| x.is_edge()))
         {
             // from end -> "outgoing" relative to that node
             // to end -> "incoming" relative to that node
@@ -602,7 +602,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
         }
 
         // Check Node Classes
-        for fresh_node in lc.nodes(window).filter(|x| !lc.is_stale(x.e)) {
+        for fresh_node in lc.nodes(window).filter(|x| !lc.is_stale(x.e).unwrap()) {
             use lifecore::NodeTypeClass::*;
             let Some(ty) = fresh_node.ty else {
                 // We have bigger problems

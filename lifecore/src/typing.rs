@@ -5,7 +5,7 @@
 //! instance of this type need careful modification to ensure typechecking
 //! proceeds as normal
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap};
 
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -100,7 +100,7 @@ impl From<NodeType> for NodeBodyExt {
             ]
             .into_iter()
             .map(|(x, y)| (x.to_string(), y))
-            .collect::<HashMap<String, PayloadExt>>(),
+            .collect::<BTreeMap<String, PayloadExt>>(),
         )
     }
 }

@@ -10,9 +10,6 @@ fn simple_body(value: &str) -> NodeBodyExt {
     NodeBodyExt::from(&[("Hello", PayloadExt::Text(value.to_string()))])
 }
 
-fn generic_is_stale_with_out_of_range_context_panics<LC: LifeCore>(lc: &LC) {
-    let _ = lc.is_stale(EventContext::universe().look_raw(usize::MAX / 2));
-}
 
 #[test]
 fn new_is_valid() {
@@ -98,11 +95,6 @@ fn stale_rule_02() {
             ..
         })
     ));
-}
-
-#[test]
-fn child_can_be_added_to_already_overridden_node() {
-    generic::basic01(LifeCoreList::default());
 }
 
 #[test]
@@ -293,12 +285,9 @@ fn node_on_edge_context() {
 }
 
 #[test]
-#[should_panic]
-fn is_stale_with_out_of_range_context_panics() {
-    let mut lc = LifeCoreList::default();
-    let _node = lc.add("", simple_body("yellow"), None).unwrap();
-
-    generic_is_stale_with_out_of_range_context_panics(&lc);
+fn generic_tests() {
+    generic::basic01(LifeCoreList::default());
+    generic::fresh_successors(LifeCoreList::default());
 }
 
 mod extra;

@@ -17,6 +17,10 @@ Features:
 
 These features are described in this document.
 
+# Transactions, Validation and Analysis
+
+CLI is equipped with AnalysisRunner with all the currently-implemented Analyzers registered. At each insertion operation, if it is successful (i.e. BasicValidation passes) then the complete AnalysisSuit is run. If no Inconsistencies are generated, the new item is ready to be written to th
+
 # Mode Of Operation
 
 The purposed mode of operation for adding an alias or updating an alias or
@@ -28,7 +32,7 @@ applying a suggestion or adding a diagnostic to the barklist is as follows:
   previous table, CLI performs the aformentioned operation on the selected item.
   - Note that to facilitate interactions of this sort, the order of output
     entries needs to be deterministic! This requires a review of the internal
-    API and especially the diagnostics handling.
+    API and especially the diagnostics handling, plus sorting the results.
 
 # Storage
 

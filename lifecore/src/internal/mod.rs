@@ -4,12 +4,12 @@ use itertools::Itertools;
 use jiff::Unit;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet},
     fmt::Display,
     ops::Index,
     str::FromStr,
 };
-use strum::{Display, EnumIs, EnumTryAs, VariantNames};
+use strum::{EnumIs, EnumTryAs, VariantNames};
 use whoami::{hostname, username};
 
 use crate::{
@@ -38,7 +38,7 @@ pub struct LifeCoreList {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-struct NodeBody(HashMap<StringIndex, Payload>);
+struct NodeBody(BTreeMap<StringIndex, Payload>);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 struct CircumstanceIndex(u64);
@@ -212,35 +212,37 @@ impl LifeCore for LifeCoreList {
         i.into_iter().map_while(|x| self.get(x))
     }
 
-    // TODO more robust impl
-    fn is_stale(&self, e: PointedEventContext) -> bool {
-        let ctx = || e.items();
-        match self[e.thing()] {
+    // TOTEST any remaining panic scenarios?
+    fn is_stale(&self, e: PointedEventContext) -> Option<bool> {
+        if e.thing >= self.event.len() {
+            return None;
+        }
+        match &self[e.thing()] {
         Event::Node(_) => {
-            for potential_child_node in self.raw_window(ctx()).filter_map(|event| {
-                if event.is_node() {
-                    Some(event.as_raw_node())
-                } else {
-                    None
-                }
-            }) {
-                if let Some(idx) = potential_child_node.parent
-                    && idx == e.thing()
+            let ctx = || e.inclusive_right_items();
+            for event in self.raw_window(ctx()) {
+                if event
+                    .try_as_node()
+                    .map(|node| {
+                        node.parent
+                            .is_some_and(|parent| parent.absolute() == e.absolute())
+                    })
+                    .is_some_and(|x| x)
                 {
-                    return true;
+                    return Some(true);
                 }
             }
         }
         Event::Edge(Edge { ty: _, from, to }) => {
             // SUS
-            if self.is_stale(e.look_at(from.before_and_including()))
-                || self.is_stale(e.look_at(to.before_and_including()))
+            // TODO use is_some but it also has to be false
+            if self.is_stale(e.look_at(from.absolute())).unwrap() || self.is_stale(e.look_at(to.absolute())).unwrap()
             {
-                return true;
+                return Some(true);
             }
         }
         }
-        false
+        Some(false)
     }
 
     fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
@@ -338,7 +340,7 @@ impl LifeCore for LifeCoreList {
                         }
                     };
 
-                    if self.is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index)) {
+                    if self.is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index)).unwrap() {
                         // TODO move this Warning into its own analyzer
                         // warn!(
                         //     *newer_index,
@@ -424,8 +426,8 @@ impl LifeCore for LifeCoreList {
             // (inclusive or exclusive doesn't matter in this particular case)
             let ctx = edge_context.shrink_to_exclusive_left();
             assert!(edge_context.thing().0 > edge.from.0 && edge_context.thing().0 > edge.to.0);
-            if self.is_stale(ctx.look_at(edge.from.before_and_including()))
-                || self.is_stale(ctx.look_at(edge.to.before_and_including()))
+            if self.is_stale(ctx.look_at(edge.from.before_and_including())).unwrap()
+                || self.is_stale(ctx.look_at(edge.to.before_and_including())).unwrap()
             {
                 return Err(BasicValidationFailure {
                     offending_event: edge_context
@@ -515,31 +517,33 @@ impl LifeCore for LifeCoreList {
         Some(e.look_raw(r.i()))
     }
 
-    // TODO revise
-    // The old implementation was wrong because we need to look at all
-    // successors, not just immediate successors. Need to make this clear in the
-    // documentation too. Can contain itself, if it does not have any children
-    // TODO this is still busted!!! A) discards roots B) discards window
     fn fresh_successors(&self, node: PointedEventContext) -> Vec<PointedEventContext> {
         if self.get(node).is_none_or(|x| x.is_edge()) {
             return vec![];
         }
         let w = || node.exclusive_right_items();
-        let mut successor = HashSet::<PointedEventContext>::from([node.absolute()]);
+        let mut successors = BTreeSet::<PointedEventContext>::from([node.absolute()]);
+        let mut roots = BTreeSet::<PointedEventContext>::new();
         for (candidate_index, candidate) in w()
             .zip(self.raw_window(w()))
             .filter(|(_, event)| event.is_node())
             .map(|(i, e)| (i, e.as_raw_node()))
         {
-            if candidate
-                .parent
-                .is_some_and(|parent| successor.contains(&parent.absolute()))
-            {
-                successor.remove(&candidate.parent.unwrap().absolute());
-                successor.insert(candidate_index.absolute());
+            assert!(successors.intersection(&roots).nth(0).is_none());
+            assert!(successors.iter().all(|x| *x == x.absolute()));
+            assert!(roots.iter().all(|x| *x == x.absolute()));
+            if let Some(candidate_parent) = candidate.parent {
+                let candidate_parent: PointedEventContext = candidate_parent.absolute();
+                if successors.contains(&candidate_parent) {
+                    successors.remove(&candidate_parent);
+                    roots.insert(candidate_parent);
+                    successors.insert(candidate_index.absolute());
+                } else if roots.contains(&candidate_parent) {
+                    successors.insert(candidate_index.absolute());
+                }
             }
         }
-        successor.into_iter().collect()
+        successors.into_iter().map(|x| node.look_at(x)).collect()
     }
 
     fn relative_degree(
@@ -587,7 +591,7 @@ impl LifeCore for LifeCoreList {
             .filter_map(|(ctx, event)| {
                 if event.is_node()
                     && &self[event.as_raw_node().ty] == NodeType::name()
-                    && !self.is_stale(ctx)
+                    && !self.is_stale(ctx).unwrap()
                 {
                     if let Ok(ty) = NodeType::try_from(&self.resolve(&event.as_raw_node().payload))
                     {
@@ -603,11 +607,11 @@ impl LifeCore for LifeCoreList {
     }
 
     fn families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>> {
-        let mut family = Vec::<HashSet<EventIndex>>::new();
+        let mut family = Vec::<BTreeSet<EventIndex>>::new();
         'outer: for (index, node) in self.raw_nodes(ctx) {
             if node.parent.is_none_or(|p| !ctx.range().contains(&p.i())) {
                 // We consider this a root node
-                let mut r = HashSet::new();
+                let mut r = BTreeSet::new();
                 r.insert(index.into());
                 family.push(r);
             } else {
@@ -718,7 +722,7 @@ impl Index<CircumstanceIndex> for LifeCoreList {
 
 impl LifeCoreList {
     fn resolve(&self, t: &NodeBody) -> NodeBodyExt {
-        let mut r = HashMap::<String, PayloadExt>::new();
+        let mut r = BTreeMap::<String, PayloadExt>::new();
         for (k, v) in t.0.iter() {
             r.insert(self[k].to_string(), {
                 match v {

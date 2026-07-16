@@ -52,25 +52,29 @@
 
 # Agenda
 
-- Fix `is_stale`
-- Fix `fresh_successors`
-- `EventContext::universe()` is dangerous and an anti-pattern
+- [ ] Look over the codebase: `EventContext::universe()` is dangerous and an
+      anti-pattern
+- [x] Fix `is_stale`
+- [x] Fix `fresh_successors`
 - Complete CLI spec
-  + Exact storage format
-  + analyzer failures are addition blockers
-  + clearer alias language: parent aliased and children aliased.
-  + alias + sidecar interaction, global aliases and sidecar namespace
-  + sidecar can specify parent, no need to be able to specify lone edges in a sidecar?
-  + Better sepecific hash functions
-  + GraphViz is difficult because LifeCore::families is a set of sets, no proper ordering
-
+  - [ ] Exact storage format
+  - [ ] analyzer failures are addition blockers
+  - [ ] clearer alias language: parent aliased and children aliased.
+  - [ ] alias + sidecar interaction, global aliases and sidecar namespace
+  - [ ] sidecar can specify parent, no need to be able to specify lone edges in
+        a sidecar?
+  - [ ] sidecar is a part of the CLI state!! what is so confusing about it!!
+  - [ ] Better sepecific hash functions
+  - [ ] GraphViz is difficult because LifeCore::families is a set of sets, no
+        proper ordering
+  - [ ] Allow for tail mock circumstances for sidecars
 
 # Learning
 
 - Making PayloadExt `#[serde(transparent)]` -- _terrible_ mistake. Wasted hours
   trying to reconcile data that gets deserialized to Text with Serialized. Just
   accept that the JSON output is going to be a bit noisy.
-- Brackets + ` `` `` ` on rustdoc
+- Brackets + `` `` on rustdoc
 
 # Wishlist
 
