@@ -1,5 +1,6 @@
 use lifecore::{
-    EventContext, LifeCore, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass, TypedBody,
+    DiagnosticLocation, EventContext, LifeCore, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass,
+    PointedEventContext, TypedBody,
     analysis::{AnalysisRunner, AnalyzerFactory, Message},
 };
 
@@ -22,7 +23,7 @@ fn add_bootstrap(lc: &mut LifeCoreList) {
         .unwrap();
 }
 
-fn invalid_override_graph() -> (LifeCoreList, EventContext, EventContext) {
+fn invalid_override_graph() -> (LifeCoreList, PointedEventContext, PointedEventContext) {
     let mut lc = LifeCoreList::default();
     add_bootstrap(&mut lc);
     lc.add(
@@ -88,7 +89,7 @@ fn bad_override_is_reported_once_at_the_child_event() {
         .collect::<Vec<_>>();
 
     assert_eq!(bad_overrides.len(), 1);
-    assert_eq!(bad_overrides[0].offending_event, child);
+    assert_eq!(bad_overrides[0].offending_event, child.into());
 }
 
 #[test]
@@ -136,7 +137,28 @@ fn duplicate_type_definition_points_at_the_newer_declaration() {
         .collect::<Vec<_>>();
 
     assert_eq!(duplicates.len(), 1);
-    assert_eq!(duplicates[0].offending_event, newer.e);
+    assert_eq!(duplicates[0].offending_event, newer.e.into());
+}
+
+#[test]
+fn bootstrap_suggestion_has_a_universe_window_location() {
+    let mut lc = LifeCoreList::default();
+    configure(&mut lc);
+
+    let output = runner().run(&lc).unwrap();
+    let suggestion = output
+        .0
+        .iter()
+        .find_map(|message| match message {
+        Message::Suggestion(message) if message.message.contains("bootstrap") => Some(message),
+        _ => None,
+        })
+        .unwrap();
+
+    assert_eq!(
+        suggestion.offending_event,
+        DiagnosticLocation::Window(EventContext::universe())
+    );
 }
 
 // TODO revise

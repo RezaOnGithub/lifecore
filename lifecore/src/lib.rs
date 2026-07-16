@@ -75,7 +75,7 @@ pub enum LifeCoreError {
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct BasicValidationFailure {
-    offending_event: EventContext,
+    offending_event: DiagnosticLocation,
     reason: BasicValidationFailureScenario,
 }
 
@@ -149,21 +149,21 @@ impl PayloadExt {
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct NodeExt {
-    pub e: EventContext,
+    pub e: PointedEventContext,
     pub ty: Option<NodeType>,
     pub ty_name: String,
     pub field: NodeBodyExt,
-    pub parent: Option<EventContext>,
+    pub parent: Option<PointedEventContext>,
 }
 
 /// Convenience type describing an Edge.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct EdgeExt {
-    pub e: EventContext,
+    pub e: PointedEventContext,
     pub ty_name: String,
-    pub from: EventContext,
-    pub to: EventContext,
+    pub from: PointedEventContext,
+    pub to: PointedEventContext,
 }
 
 #[derive(EnumIs, EnumTryAs, Clone, PartialEq, Eq)]
@@ -176,7 +176,7 @@ pub enum EventExt {
 /// The primary trait describing the interface to the database.
 pub trait LifeCore: Send + Sync {
     /// Get last event in LifeCore as a bounded EventContext
-    fn last(&self) -> Option<EventContext>;
+    fn last(&self) -> Option<PointedEventContext>;
     /// Test for the basic rules of LifeCore.
     ///
     /// # Rules
@@ -184,27 +184,28 @@ pub trait LifeCore: Send + Sync {
     fn basic_validation(&self) -> Result<(), BasicValidationFailure>;
     fn connect(
         &mut self,
-        from: EventContext,
+        from: PointedEventContext,
         ty: &str,
-        to: EventContext,
+        to: PointedEventContext,
     ) -> Result<EdgeExt, LifeCoreError>;
     fn add(
         &mut self,
         ty: &str,
         payload: NodeBodyExt,
-        parent: Option<EventContext>,
+        parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError>;
-    fn get(&self, e: EventContext) -> Option<EventExt>;
-    fn get_with_circumstance(&self, e: EventContext) -> Option<(EventExt, CircumstanceExt)>;
+    /// Get the event selected by a pointed context.
+    fn get(&self, e: PointedEventContext) -> Option<EventExt>;
+    fn get_with_circumstance(&self, e: PointedEventContext) -> Option<(EventExt, CircumstanceExt)>;
     fn window<I>(&self, i: I) -> impl Iterator<Item = EventExt>
     where
-        I: IntoIterator<Item = EventContext>;
+        I: IntoIterator<Item = PointedEventContext>;
     /// Check whether `e.thing` is stale within context
     /// Stale Node means a newer node has it as its parent within context
     /// Stale Edge means at least one end is a Stale Node
-    fn is_stale(&self, e: EventContext) -> bool;
-    fn node(&self, ctx: EventContext) -> Option<NodeExt>;
-    fn edge(&self, ctx: EventContext) -> Option<EdgeExt>;
+    fn is_stale(&self, e: PointedEventContext) -> bool;
+    fn node(&self, ctx: PointedEventContext) -> Option<NodeExt>;
+    fn edge(&self, ctx: PointedEventContext) -> Option<EdgeExt>;
     fn nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt>;
     fn edges(&self, ctx: EventContext) -> impl Iterator<Item = EdgeExt>;
     fn fresh_nodes(&self, ctx: EventContext) -> impl Iterator<Item = NodeExt> {
@@ -223,7 +224,7 @@ pub trait LifeCore: Send + Sync {
     /// # Example
     /// ```rust
     /// # use lifecore::{LifeCoreList, LifeCore, NodeBodyExt, NodeExt, EdgeExt};
-    /// let mut lc = LifeCoreList::new();
+    /// let mut lc = LifeCoreList::default();
     /// let a0 = lc.add("A", NodeBodyExt::default(), None).unwrap();
     /// let b0 = lc.add("B", NodeBodyExt::default(), None).unwrap();
     /// let _ = lc.connect(a0.e, "X", b0.e).unwrap();
@@ -231,8 +232,8 @@ pub trait LifeCore: Send + Sync {
     /// let _ = lc.connect(a0.e, "X", b1.e).unwrap();
     /// assert_eq!(lc.fresh_edges_of(b0.e).count(), 0);
     /// ```
-    fn fresh_edges_of(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
-        self.edges(n).filter(move |x| {
+    fn fresh_edges_of(&self, n: PointedEventContext) -> impl Iterator<Item = EdgeExt> {
+        self.edges(n.window()).filter(move |x| {
             !self.is_stale(n.look_at(x.e))
                 && (x.from.absolute() == n.absolute() || x.to.absolute() == n.absolute())
         })
@@ -246,8 +247,8 @@ pub trait LifeCore: Send + Sync {
     /// *Note:* for this function to return anything meaningful, `n` itself
     /// needs to be fresh within the context that implies. That is, if `n` is
     /// stale, any edge connected to it is also stale.
-    fn fresh_outgoing_edges_of(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
-        self.edges(n)
+    fn fresh_outgoing_edges_of(&self, n: PointedEventContext) -> impl Iterator<Item = EdgeExt> {
+        self.edges(n.window())
             .filter(move |x| !self.is_stale(x.e) && x.from.absolute() == n.absolute())
     }
 
@@ -259,31 +260,34 @@ pub trait LifeCore: Send + Sync {
     /// *Note:* for this function to return anything meaningful, `n` itself
     /// needs to be fresh within the context that implies. That is, if `n` is
     /// stale, any edge connected to it is also stale.
-    fn fresh_incoming_edges_to(&self, n: EventContext) -> impl Iterator<Item = EdgeExt> {
-        self.edges(n)
+    fn fresh_incoming_edges_to(&self, n: PointedEventContext) -> impl Iterator<Item = EdgeExt> {
+        self.edges(n.window())
             .filter(move |x| !self.is_stale(x.e) && x.to.absolute() == n.absolute())
     }
 
     /// Get root of node at `e`. That is, the ancestor node by the way of
     /// `parent` component
-    fn root_of(&self, e: EventContext) -> Option<EventContext>;
+    fn root_of(&self, e: PointedEventContext) -> Option<PointedEventContext>;
 
     /// Returns fresh successors within context.
     /// A 'successor' is defined as any non-stale node within context that has
     /// `node` as its ancestor. An 'ancestor' of a node is any node within
     /// `.parent` chain of it. If a node has no parent, it is its own ancestor
-    fn fresh_successors(&self, node: EventContext) -> Vec<EventContext>;
+    fn fresh_successors(&self, node: PointedEventContext) -> Vec<PointedEventContext>;
 
     /// Find relative degree. Siblings (nodes that share a parent) have degree
     /// 0. Note that the left sides of the contexts need to extend far back
     /// enough in order to find the shared parent.
-    fn relative_degree(&self, a: EventContext, b: EventContext) -> Option<usize>;
-    fn are_siblings(&self, a: EventContext, b: EventContext) -> bool {
+    fn relative_degree(&self, a: PointedEventContext, b: PointedEventContext) -> Option<usize>;
+    fn are_siblings(&self, a: PointedEventContext, b: PointedEventContext) -> bool {
         self.relative_degree(a, b) == Some(0)
     }
     /// Return all the fresh types in context
-    fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))>;
-    fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<EventContext>>;
+    fn types(
+        &self,
+        e: EventContext,
+    ) -> impl Iterator<Item = (String, (PointedEventContext, NodeType))>;
+    fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>>;
     fn add_analyzer(&mut self, name: &str, config: &str);
     fn current_analysis_suite(&self) -> analysis::SuiteConfig;
 }
@@ -316,32 +320,38 @@ impl EventExt {
         self.clone().try_as_edge().is_some_and(f)
     }
 
-    pub fn ctx(&self) -> EventContext {
+    pub fn ctx(&self) -> PointedEventContext {
         match self {
         EventExt::Node(node_ext) => node_ext.e,
         EventExt::Edge(edge_ext) => edge_ext.e,
         }
     }
 }
-/// A window from the beginning to some point after, that optionally points to a
-/// specific point in time LifeCore events are strictly ordered and append-only.
-/// Given that meanings and intentions can shift over time, we need a reference
-/// window when looking at individual events; even types cannot be properly
-/// resolved without knowing having the window to refer to the latest version of
-/// a type.
+/// A window from the beginning of graph history to an exclusive end.
 ///
-/// In other words, `EventContext` is a "snapshot ID" of the database,
-/// optionally coupled with a concrete index of an event
-// TOTEST EventContext can never ever point to usize::MAX (i.e. thing is none or in 0..(MAX-1))
+/// LifeCore events are strictly ordered and append-only. Given that meanings
+/// and intentions can shift over time, graph operations need a reference window
+/// even when inspecting an individual event.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
 pub struct EventContext {
     // Exclusive! `0..end` basically
     // Used to calculate type, check for staleness etc
     pub(crate) end: usize,
+}
 
-    // What was the object of inspection?
-    // Ought to be in start..end
-    pub(crate) thing: Option<usize>,
+/// An [`EventContext`] window coupled with a concrete event in that window.
+// TOTEST PointedEventContext can never point to usize::MAX
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
+pub struct PointedEventContext {
+    pub(crate) end: usize,
+    pub(crate) thing: usize,
+}
+
+/// The location associated with a diagnostic.
+#[derive(PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
+pub enum DiagnosticLocation {
+    Window(EventContext),
+    Event(PointedEventContext),
 }
 
 impl EventContext {
@@ -349,15 +359,7 @@ impl EventContext {
         0..self.end
     }
 
-    pub fn validate(&self) -> bool {
-        self.thing.is_none_or(|thing| self.range().contains(&thing))
-    }
-
-    pub fn absolute(self) -> Self {
-        Self::universe().look_at(self)
-    }
-
-    pub fn last(&self) -> Option<EventContext> {
+    pub fn last(&self) -> Option<PointedEventContext> {
         if self.range().is_empty() {
             None
         } else {
@@ -365,7 +367,7 @@ impl EventContext {
         }
     }
 
-    pub fn first(&self) -> Option<EventContext> {
+    pub fn first(&self) -> Option<PointedEventContext> {
         if self.range().is_empty() {
             None
         } else {
@@ -375,139 +377,145 @@ impl EventContext {
 
     // Look at every event within context, from the context
     // NOTE potentially unbounded!
-    pub fn items(self) -> impl Iterator<Item = Self> {
-        assert!(self.validate());
+    pub fn items(self) -> impl Iterator<Item = PointedEventContext> {
         let ctx = self;
         self.range().map(move |x| ctx.look_raw(x))
     }
 
-    pub fn shrink_to_inclusive_left(&self) -> Self {
-        assert!(self.validate() && self.thing.is_some_and(|x| x < usize::MAX));
-        // We know that thing is in start..end (that is, thing.is_some() and the range
-        // non-empty) We can safely increment self.thing and use it as the upper
-        // bound
-        let r = Self {
-            end: self.thing.unwrap() + 1,
-            thing: self.thing,
-        };
-        assert!(r.validate());
-        r
-    }
-
-    pub fn shrink_to_exclusive_left(&self) -> Self {
-        assert!(self.validate() && self.thing.is_some());
-        // We know that thing is in start..end (that is, thing.is_some() and the range
-        // non-empty) We can safely pass self.thing as the upper bound
-        let r = Self {
-            end: self.thing.unwrap(),
-            thing: None,
-        };
-        assert!(r.validate());
-        r
-    }
-
-    // NOTE returned contexts are the same as the originator, but the `thing` is
-    // different
-    pub fn inclusive_right_items(self) -> impl Iterator<Item = Self> {
-        let start = self.thing.unwrap_or(self.end);
-        (start..self.end).into_iter().map(move |x| Self {
-            thing: Some(x),
-            ..self
-        })
-    }
-
-    // NOTE returned contexts are the same as the originator, but the `thing` is
-    // different
-    pub fn exclusive_right_items(self) -> impl Iterator<Item = Self> {
-        let start = self.thing.map_or(self.end, |x| x.saturating_add(1));
-        (start..self.end).into_iter().map(move |x| Self {
-            thing: Some(x),
-            ..self
-        })
-    }
-    // NOTE returned contexts are the same as the originator, but the `thing` is
-    // different
-    pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
-        let end = self.thing.map_or(self.end, |x| x.saturating_add(1));
-        (0..end).into_iter().map(move |x| Self {
-            thing: Some(x),
-            ..self
-        })
-    }
-
-    // NOTE returned contexts are the same as the originator, but the `thing` is
-    // different
-    pub fn exclusive_left_items(self) -> impl Iterator<Item = Self> {
-        let end = self.thing.unwrap_or(self.end);
-        (0..end).into_iter().map(move |x| Self {
-            thing: Some(x),
-            ..self
-        })
-    }
-
-    // This is wrong. The context can be arbitrarily large but still "bounded"
-    // Actually it is always bounded due to `usize::MAX`
-    // pub fn is_bounded(&self) -> bool {
-    //     assert!(self.validate());
-    //     self.end.is_some()
-    // }
-
     pub fn is_empty(&self) -> bool {
-        assert!(self.validate());
-
         self.range().is_empty()
     }
 
     // Builders
     // Take care to write an interface that minimizes usage mistakes
 
-    /// NOTE throws away the context on `e.thing()` and looks at it from `self`
-    /// perspective
-    pub fn look_at(&self, e: EventContext) -> Self {
-        assert!(self.validate());
-        let mut r = *self;
-        r.thing = e.thing;
+    /// NOTE throws away the context on `e` and looks at its event from `self`'s
+    /// perspective.
+    pub fn look_at(&self, e: PointedEventContext) -> PointedEventContext {
+        let r = PointedEventContext {
+            end: self.end,
+            thing: e.thing,
+        };
         assert!(r.validate());
         r
     }
 
     // NOTDO this is the only function that somewhat leaks implementation details.
     // Handle with care!
-    pub(crate) fn look_raw(&self, e: usize) -> Self {
-        assert!(self.validate());
-        let mut r = *self;
-        r.thing = Some(e);
+    pub(crate) fn look_raw(&self, e: usize) -> PointedEventContext {
+        let r = PointedEventContext {
+            end: self.end,
+            thing: e,
+        };
         assert!(r.validate());
         r
     }
 
-    pub fn intersect(&self, rhs: &Self) -> Self {
-        assert!(self.validate() && rhs.validate());
-        let end = std::cmp::min(self.end, rhs.end);
-        let r = Self {
-            end: end,
-            thing: None,
-        };
-        if self.thing.is_some() && self.thing == rhs.thing {
-            assert!(self.thing.is_some_and(|x| x < self.end && x < rhs.end));
-            Self {
-                thing: self.thing,
-                ..r
-            }
-        } else {
-            r
+    pub fn universe() -> Self {
+        Self { end: usize::MAX }
+    }
+}
+
+impl PointedEventContext {
+    pub(crate) fn range(&self) -> Range<usize> {
+        0..self.end
+    }
+
+    pub fn validate(&self) -> bool {
+        self.range().contains(&self.thing)
+    }
+
+    pub fn window(self) -> EventContext {
+        EventContext { end: self.end }
+    }
+
+    pub fn absolute(self) -> Self {
+        EventContext::universe().look_at(self)
+    }
+
+    pub fn last(&self) -> Option<Self> {
+        self.window().last()
+    }
+
+    pub fn first(&self) -> Option<Self> {
+        self.window().first()
+    }
+
+    pub fn items(self) -> impl Iterator<Item = Self> {
+        self.window().items()
+    }
+
+    pub fn shrink_to_inclusive_left(&self) -> EventContext {
+        assert!(self.validate() && self.thing < usize::MAX);
+        EventContext {
+            end: self.thing + 1,
         }
     }
 
-    pub fn universe() -> Self {
-        Self {
-            end: usize::MAX,
-            thing: None,
-        }
+    pub fn shrink_to_exclusive_left(&self) -> EventContext {
+        assert!(self.validate());
+        EventContext { end: self.thing }
+    }
+
+    pub fn inclusive_right_items(self) -> impl Iterator<Item = Self> {
+        (self.thing..self.end).map(move |thing| Self { thing, ..self })
+    }
+
+    pub fn exclusive_right_items(self) -> impl Iterator<Item = Self> {
+        (self.thing.saturating_add(1)..self.end).map(move |thing| Self { thing, ..self })
+    }
+
+    pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
+        (0..self.thing.saturating_add(1)).map(move |thing| Self { thing, ..self })
+    }
+
+    pub fn exclusive_left_items(self) -> impl Iterator<Item = Self> {
+        (0..self.thing).map(move |thing| Self { thing, ..self })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        assert!(self.validate());
+        self.range().is_empty()
+    }
+
+    pub fn look_at(&self, e: Self) -> Self {
+        self.window().look_at(e)
+    }
+
+    pub(crate) fn look_raw(&self, e: usize) -> Self {
+        self.window().look_raw(e)
+    }
+}
+
+impl From<PointedEventContext> for EventContext {
+    fn from(value: PointedEventContext) -> Self {
+        value.window()
+    }
+}
+
+impl From<EventContext> for DiagnosticLocation {
+    fn from(value: EventContext) -> Self {
+        Self::Window(value)
+    }
+}
+
+impl From<PointedEventContext> for DiagnosticLocation {
+    fn from(value: PointedEventContext) -> Self {
+        Self::Event(value)
     }
 }
 
 impl IntoIterator for EventContext {
+    type Item = usize;
+
+    type IntoIter = <std::ops::Range<usize> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.range().into_iter()
+    }
+}
+
+impl IntoIterator for PointedEventContext {
     type Item = usize;
 
     type IntoIter = <std::ops::Range<usize> as IntoIterator>::IntoIter;
@@ -626,22 +634,16 @@ impl Index<&str> for NodeBodyExt {
 
 impl fmt::Display for EventContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
-            format!(
-                "EventContext[{}, <{}>, {})",
-                0,
-                {
-                    if let Some(x) = self.thing {
-                        format!("{}", x)
-                    } else {
-                        "NONE".to_string()
-                    }
-                }
-                .as_str(),
-                self.end
-            )
-            .as_str(),
-        )
+        f.write_fmt(format_args!("EventContext[{}, {})", 0, self.end))
+    }
+}
+
+impl fmt::Display for PointedEventContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "PointedEventContext[{}, <{}>, {})",
+            0, self.thing, self.end
+        ))
     }
 }
 

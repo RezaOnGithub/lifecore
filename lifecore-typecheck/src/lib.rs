@@ -19,7 +19,7 @@
 use itertools::Itertools;
 use lifecore::{
     EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeClass, NodeTypeFieldStatus,
-    PayloadType, TypedBody,
+    PayloadType, PointedEventContext, TypedBody,
     analysis::{self, InnerMessageType, InnerOutput},
 };
 use std::{collections::HashMap, marker::PhantomData};
@@ -36,64 +36,64 @@ use strum::IntoDiscriminant;
 pub enum TypeCheckMessage {
     AddBootstrapNode,
     MalformedNodeTypeBody {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
     },
     DuplicateTypeDefinition {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         name: String,
     },
     NonexistantOverrideType {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         base_ty_name: String,
         override_ty_name: String,
-        relevance: Vec<EventContext>,
+        relevance: Vec<PointedEventContext>,
     },
     NodeTypeNonexistant {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
     },
     ElidedMandatoryField {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
         field_name: String,
     },
     // TODO add relevance
     ElidedEncouragedField {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
         field_name: String,
     },
     // TODO add relevance
     DeprecatedField {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
         field_name: String,
     },
     FieldTypeMismatch {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
         field_name: String,
         expected_type: PayloadType,
         present_type: PayloadType,
     },
     ExtraneousField {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
         field_name: String,
     },
     BadEdgeEndpoint {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         edge_ty_name: String,
         bad_node_ty_name: String,
         bad_node_is_head: bool,
     },
     BadOverride {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         parent_ty_name: String,
         child_ty_name: String,
     },
     NodeClassNotRespected {
-        offending_event: EventContext,
+        offending_event: PointedEventContext,
         ty_name: String,
         expected_class: NodeTypeClass,
     },
@@ -147,7 +147,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
         let system_config = self.config.to_string();
         let r: analysis::Message = match x.clone() {
         TypeCheckMessage::AddBootstrapNode => Suggestion {
-            offending_event: EventContext::universe(),
+            offending_event: EventContext::universe().into(),
             system_name: TypeCheckFactory::<LC>::name().to_string(),
             system_config: self.config.to_string(),
             relevance: vec![],
@@ -160,7 +160,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
         }
         .into(),
         TypeCheckMessage::MalformedNodeTypeBody { offending_event } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: "Unable to parse NodeType body".to_string(),
@@ -170,7 +170,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             offending_event,
             name,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -185,7 +185,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             override_ty_name,
             relevance,
         } => Warning {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             relevance,
@@ -200,7 +200,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             offending_event,
             ty_name,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -214,7 +214,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             ty_name,
             field_name,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -229,7 +229,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             ty_name,
             field_name,
         } => Warning {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             relevance: vec![],
@@ -245,7 +245,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             ty_name,
             field_name,
         } => Warning {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             relevance: vec![],
@@ -263,7 +263,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             expected_type,
             present_type,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -280,7 +280,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             ty_name,
             field_name,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -296,7 +296,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             bad_node_ty_name,
             bad_node_is_head,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -312,7 +312,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             parent_ty_name,
             child_ty_name,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -327,7 +327,7 @@ impl<LC: LifeCore> TypeCheck<LC> {
             ty_name,
             expected_class,
         } => Inconsistency {
-            offending_event,
+            offending_event: offending_event.into(),
             system_name,
             system_config,
             message: format!(
@@ -407,7 +407,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                 {
                     r.push(DuplicateTypeDefinition {
                         name: some_type_at_some_point.name.to_string(),
-                        offending_event: some_type_at_some_point_node.e.shrink_to_inclusive_left(),
+                        offending_event: some_type_at_some_point_node.e,
                     });
                 }
             }
@@ -592,7 +592,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
 
             if !parent_type.additional_override.contains(&child_type_name) {
                 r.push(BadOverride {
-                    offending_event: last_event_in_context.ctx().shrink_to_inclusive_left(),
+                    offending_event: last_event_in_context.ctx(),
                     parent_ty_name: parent_type.name.to_string(),
                     child_ty_name: child_type_name.to_string(),
                 });

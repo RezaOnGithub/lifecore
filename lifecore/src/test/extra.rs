@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    EdgeExt, EventContext, LifeCore, LifeCoreList, NodeBodyExt, NodeExt,
+    EdgeExt, LifeCore, LifeCoreList, NodeBodyExt, NodeExt, PointedEventContext,
     analysis::{Suggestion, Warning},
 };
 
@@ -95,18 +95,14 @@ fn families_can_include_a_root_from_before_the_search_window() {
     // );
 }
 
+// TODO revise
+// Hash of Message needs more testing
 #[test]
 fn warning_hash_is_independent_of_relevance_order_for_the_same_event() {
-    let wide = EventContext {
-        end: 4,
-        thing: Some(1),
-    };
-    let narrow = EventContext {
-        end: 3,
-        thing: Some(1),
-    };
+    let wide = PointedEventContext { end: 4, thing: 1 };
+    let narrow = PointedEventContext { end: 3, thing: 1 };
     let warning = |relevance| Warning {
-        offending_event: wide,
+        offending_event: wide.into(),
         system_name: "test".to_string(),
         system_config: String::new(),
         relevance,
@@ -121,16 +117,10 @@ fn warning_hash_is_independent_of_relevance_order_for_the_same_event() {
 
 #[test]
 fn suggestion_hash_is_independent_of_relevance_order_for_the_same_event() {
-    let wide = EventContext {
-        end: 4,
-        thing: Some(1),
-    };
-    let narrow = EventContext {
-        end: 3,
-        thing: Some(1),
-    };
+    let wide = PointedEventContext { end: 4, thing: 1 };
+    let narrow = PointedEventContext { end: 3, thing: 1 };
     let suggestion = |relevance| Suggestion {
-        offending_event: wide,
+        offending_event: wide.into(),
         system_name: "test".to_string(),
         system_config: String::new(),
         relevance,

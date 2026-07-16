@@ -1,20 +1,8 @@
-//! Generic tests that check for panic scenarios are not easy to organize.
-//! As a crutch, we will be abusing `std::panic::catch_unwind` to assert for
-//! panic behavior This is quite bad, and needs to get refactored to more
-//! reliable `#[should_panic]` tests
-
-macro_rules! assert_panic {
-    ($stmt:stmt$(,)?) => {
-        ::std::panic::catch_unwind(|| -> () { $stmt })
-            .expect_err("assert_panic! argument did not panic")
-    };
-}
-
 use crate::{
     BasicValidationFailure,
     BasicValidationFailureScenario::{self, *},
     EventContext, LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass,
-    NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody, analysis,
+    NodeTypeFieldStatus, PayloadExt, PayloadType, PointedEventContext, TypedBody, analysis,
 };
 
 fn simple_body(value: &str) -> NodeBodyExt {
@@ -113,7 +101,7 @@ fn stale_rule_02() {
 
 #[test]
 fn child_can_be_added_to_already_overridden_node() {
-    basic01(LifeCoreList::default());
+    generic::basic01(LifeCoreList::default());
 }
 
 #[test]
@@ -224,32 +212,48 @@ fn node_type_resolution_depends_on_context() {
 }
 
 #[test]
-fn context_intersection_uses_the_tighter_left_bound() {
-    let left = EventContext {
-        end: 8,
-        thing: Some(5),
-    };
-    let right = EventContext {
-        end: 7,
-        thing: Some(5),
-    };
+fn context_typestates_preserve_window_and_point() {
+    let window = EventContext { end: 5 };
+    let points = window.items().collect::<Vec<_>>();
 
-    let intersection = left.intersect(&right);
+    assert_eq!(
+        points.iter().map(|point| point.thing).collect::<Vec<_>>(),
+        (0..5).collect::<Vec<_>>()
+    );
+    assert_eq!(window.first(), Some(points[0]));
+    assert_eq!(window.last(), Some(points[4]));
 
-    assert_eq!(intersection.end, 7);
-    assert!(intersection.validate());
+    let point = window.look_at(PointedEventContext { end: 8, thing: 2 });
+    assert_eq!(point, PointedEventContext { end: 5, thing: 2 });
+    assert_eq!(point.window(), window);
+    assert_eq!(point.absolute().end, usize::MAX);
+    assert_eq!(point.absolute().thing, 2);
+    assert_eq!(point.shrink_to_exclusive_left(), EventContext { end: 2 });
+    assert_eq!(point.shrink_to_inclusive_left(), EventContext { end: 3 });
 }
 
 #[test]
-fn context_intersection_treats_an_unbounded_end_as_infinity() {
-    let bounded = EventContext {
-        end: 4,
-        thing: None,
+fn pointed_context_directional_items_preserve_the_window() {
+    let point = PointedEventContext { end: 5, thing: 2 };
+    let things = |points: Vec<PointedEventContext>| {
+        assert!(points.iter().all(|candidate| candidate.end == point.end));
+        points
+            .into_iter()
+            .map(|candidate| candidate.thing)
+            .collect::<Vec<_>>()
     };
 
-    let intersection = EventContext::universe().intersect(&bounded);
-
-    assert_eq!(intersection, bounded);
+    assert_eq!(things(point.items().collect()), vec![0, 1, 2, 3, 4]);
+    assert_eq!(
+        things(point.inclusive_right_items().collect()),
+        vec![2, 3, 4]
+    );
+    assert_eq!(things(point.exclusive_right_items().collect()), vec![3, 4]);
+    assert_eq!(
+        things(point.inclusive_left_items().collect()),
+        vec![0, 1, 2]
+    );
+    assert_eq!(things(point.exclusive_left_items().collect()), vec![0, 1]);
 }
 
 #[test]
@@ -270,27 +274,13 @@ fn basic_validation_reports_an_out_of_range_parent_without_panicking() {
 }
 
 #[test]
-#[should_panic]
-fn get_with_unpointed_context_panics() {
-    let lc = LifeCoreList::default();
-    generic_get_with_unpointed_context_panics(&lc);
-}
-
-#[test]
-#[should_panic]
-fn window_with_unpointed_context_panics() {
-    let lc = LifeCoreList::default();
-    generic_window_with_unpointed_context_panics(&lc);
-}
-
-#[test]
 fn node_on_edge_context() {
     let mut lc = LifeCoreList::default();
     let n0 = lc.add("", simple_body("yellow"), None).unwrap();
     let n1 = lc.add("", simple_body("orange"), None).unwrap();
     let edge = lc.connect(n0.e, "edge", n1.e).unwrap();
 
-    generic_node_on_edge_context(&lc, edge.e);
+    assert!(lc.node(edge.e).is_none());
 }
 
 #[test]

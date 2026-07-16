@@ -35,7 +35,7 @@ the central model is a typed, versioned graph.
 - Read `NOTES.md` before making design-heavy changes.
 - Comments tagged `SUS`, `TODO`, `NOTDO`, `COPY_PASTE`, `NOTE`, and `PERF` have
   project-specific meanings documented in `NOTES.md`.
-- Be careful with `EventContext` windows. Types and staleness are contextual:
+- Be careful with event-context windows. Types and staleness are contextual:
   the right answer depends on both the inspected graph item and the historical
   context used to inspect it.
 - Keep changes scoped. Several crates are intentionally skeletal, and broad
@@ -43,16 +43,17 @@ the central model is a typed, versioned graph.
 
 ## Interface Terms
 
-- `EventContext` is the current handle for both a history window and an optional
-  inspected append-log record. Its bounds describe the context used for lookup;
-  its `thing` points at the specific node or edge being inspected.
-- An unpointed context has no `thing`. It can describe a window, but many
-  methods that need a concrete node or edge will panic if given one.
+- `EventContext` describes a history window from the beginning of graph history
+  to an exclusive end.
+- `PointedEventContext` couples that window with a mandatory `thing` identifying
+  the specific node or edge being inspected. Methods that require a concrete
+  append-log record accept this pointed type.
 - A stale node is a node that has been superseded by a newer child within the
   chosen context. A stale edge is an edge whose endpoint has become stale.
 - Fresh means non-stale in the chosen context. Freshness can change when the
   context window changes.
-- `NodeExt.ty_name` is the stored type name. `NodeExt.ty` is a resolved
+- `NodeExt.e`, `NodeExt.parent`, and the contexts stored by `EdgeExt` are
+  pointed. `NodeExt.ty_name` is the stored type name. `NodeExt.ty` is a resolved
   `NodeType` for the current context and may be absent or historically shifted.
 
 ## Validation And TypeCheck
@@ -70,8 +71,8 @@ the central model is a typed, versioned graph.
 
 ## Current Risks
 
-- Many `LifeCore` methods panic when passed invalid, unpointed, out-of-range, or
-  wrong-kind contexts. Tests document some of these crash paths.
+- Some `LifeCore` methods still panic when passed invalid, out-of-range, or
+  wrong-kind pointed contexts. Tests document some of these crash paths.
 - `NodeExt` eagerly includes a resolved `NodeType`, but that type can shift over
   time. This is convenient for callers yet easy to misuse.
 - Validation and TypeCheck are currently correctness-first and repeatedly scan

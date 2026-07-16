@@ -6,7 +6,9 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
 
-use crate::{EventContext, LifeCore, LifeCoreError, NodeBodyExt};
+use crate::{
+    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, NodeBodyExt, PointedEventContext,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SuiteConfig(pub Vec<Config>);
@@ -20,7 +22,7 @@ pub struct Config {
 #[derive(Hash)] // no need for a custom implementation
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Inconsistency {
-    pub offending_event: EventContext,
+    pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
     pub message: String,
@@ -28,19 +30,19 @@ pub struct Inconsistency {
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Warning {
-    pub offending_event: EventContext,
+    pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
-    pub relevance: Vec<EventContext>,
+    pub relevance: Vec<PointedEventContext>,
     pub message: String,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Suggestion {
-    pub offending_event: EventContext,
+    pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
-    pub relevance: Vec<EventContext>,
+    pub relevance: Vec<PointedEventContext>,
     pub message: String,
     pub action: Vec<SuggestedAction>,
 }
@@ -50,12 +52,12 @@ pub enum SuggestedAction {
     AddNode {
         ty_name: String,
         payload: NodeBodyExt,
-        parent: Option<EventContext>,
+        parent: Option<PointedEventContext>,
     },
     AddEdge {
-        from: EventContext,
+        from: PointedEventContext,
         ty_name: String,
-        to: EventContext,
+        to: PointedEventContext,
     },
 }
 

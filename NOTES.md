@@ -55,6 +55,7 @@
 - Making PayloadExt `#[serde(transparent)]` -- _terrible_ mistake. Wasted hours
   trying to reconcile data that gets deserialized to Text with Serialized. Just
   accept that the JSON output is going to be a bit noisy.
+- Brackets + ` `` `` ` on rustdoc
 
 # Wishlist
 

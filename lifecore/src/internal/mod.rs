@@ -14,8 +14,8 @@ use whoami::{hostname, username};
 
 use crate::{
     BasicValidationFailure, BasicValidationFailureScenario::*, EdgeExt, EventContext, JSON,
-    LifeCore, LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, Timestamp, TypedBody,
-    Zoned, analysis,
+    LifeCore, LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, PointedEventContext,
+    Timestamp, TypedBody, Zoned, analysis,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -93,7 +93,7 @@ enum Payload {
 }
 
 impl LifeCore for LifeCoreList {
-    fn last(&self) -> Option<EventContext> {
+    fn last(&self) -> Option<PointedEventContext> {
         if self.event.is_empty() {
             None
         } else {
@@ -103,9 +103,9 @@ impl LifeCore for LifeCoreList {
 
     fn connect(
         &mut self,
-        from: EventContext,
+        from: PointedEventContext,
         ty: &str,
-        to: EventContext,
+        to: PointedEventContext,
     ) -> Result<EdgeExt, LifeCoreError> {
         // Perform action on a copy. If it is valid, perform it on self
         {
@@ -142,7 +142,7 @@ impl LifeCore for LifeCoreList {
         &mut self,
         ty: &str,
         payload: NodeBodyExt,
-        parent: Option<EventContext>,
+        parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError> {
         let insert_all_strings = |t: &mut Self, payload: &NodeBodyExt| -> NodeBody {
             let mut r = NodeBody::default();
@@ -194,7 +194,7 @@ impl LifeCore for LifeCoreList {
         Ok(self.node(self.last().unwrap()).unwrap())
     }
 
-    fn get(&self, e: EventContext) -> Option<crate::EventExt> {
+    fn get(&self, e: PointedEventContext) -> Option<crate::EventExt> {
         let index: EventIndex = e.into();
         if index.i() >= self.event.len() {
             return None;
@@ -207,12 +207,12 @@ impl LifeCore for LifeCoreList {
 
     fn window<I>(&self, i: I) -> impl Iterator<Item = crate::EventExt>
     where
-        I: IntoIterator<Item = EventContext>,
+        I: IntoIterator<Item = PointedEventContext>,
     {
         i.into_iter().map_while(|x| self.get(x))
     }
 
-    fn is_stale(&self, e: EventContext) -> bool {
+    fn is_stale(&self, e: PointedEventContext) -> bool {
         let ctx = || e.items();
         match self[e.thing()] {
         Event::Node(_) => {
@@ -268,7 +268,7 @@ impl LifeCore for LifeCoreList {
             {
                 if self.event.len() != self.circumstance.len() {
                     return Err(BasicValidationFailure {
-                        offending_event: ctx(),
+                        offending_event: ctx().into(),
                         reason: InternalError {
                             message: "Circumstance list does not match up with Event list"
                                 .to_string(),
@@ -296,7 +296,7 @@ impl LifeCore for LifeCoreList {
                     if mock_event_index.len() > 1 || mock_event_index[0].0 != self.event.len() - 1 {
                         // TODO better context
                         return Err(BasicValidationFailure {
-                            offending_event: ctx(),
+                            offending_event: ctx().into(),
                             reason: ExtraneousMockCircumstance,
                         });
                     }
@@ -314,7 +314,7 @@ impl LifeCore for LifeCoreList {
             if edge_count != unique_edge_count {
                 // TODO not so easy now; give better context
                 return Err(BasicValidationFailure {
-                    offending_event: ctx(),
+                    offending_event: ctx().into(),
                     reason: DuplicateEdge,
                 });
             }
@@ -362,7 +362,7 @@ impl LifeCore for LifeCoreList {
                             }
                         });
                         return Err(BasicValidationFailure {
-                            offending_event: *newer_index,
+                            offending_event: (*newer_index).into(),
                             reason: DuplicateNode,
                         });
                     }
@@ -385,15 +385,13 @@ impl LifeCore for LifeCoreList {
                 if let Some(idx) = parent {
                     if !idx_in_range(idx) {
                         return Err(BasicValidationFailure {
-                            offending_event: EventContext::universe()
-                                .look_at(idx.before_and_including()),
+                            offending_event: ctx().look_at(idx.before_and_including()).into(),
                             reason: OutOfRangeParent,
                         });
                     }
                     if self[idx].is_edge() {
                         return Err(BasicValidationFailure {
-                            offending_event: EventContext::universe()
-                                .look_at(idx.before_and_including()),
+                            offending_event: ctx().look_at(idx.before_and_including()).into(),
                             reason: EdgeParent,
                         });
                     }
@@ -403,15 +401,13 @@ impl LifeCore for LifeCoreList {
                 let idx = EventIndex::from(e.0);
                 if !idx_in_range(from) || !idx_in_range(to) {
                     return Err(BasicValidationFailure {
-                        offending_event: EventContext::universe()
-                            .look_at(idx.before_and_including()),
+                        offending_event: ctx().look_at(idx.before_and_including()).into(),
                         reason: OutOfRangeEdgeEnd,
                     });
                 }
                 if self[from].is_edge() || self[to].is_edge() {
                     return Err(BasicValidationFailure {
-                        offending_event: EventContext::universe()
-                            .look_at(idx.before_and_including()),
+                        offending_event: ctx().look_at(idx.before_and_including()).into(),
                         reason: EdgeEndIsEdge,
                     });
                 }
@@ -430,7 +426,11 @@ impl LifeCore for LifeCoreList {
                 || self.is_stale(ctx.look_at(edge.to.before_and_including()))
             {
                 return Err(BasicValidationFailure {
-                    offending_event: EventContext::universe().look_at(edge_context.into()),
+                    offending_event: edge_context
+                        .shrink_to_inclusive_left()
+                        .last()
+                        .unwrap()
+                        .into(),
                     reason: StaleRuleViolation,
                 });
             }
@@ -439,7 +439,7 @@ impl LifeCore for LifeCoreList {
         Ok(())
     }
 
-    fn node(&self, ctx: EventContext) -> Option<NodeExt> {
+    fn node(&self, ctx: PointedEventContext) -> Option<NodeExt> {
         let index: EventIndex = ctx.into();
         if !self[index].is_node() {
             return None;
@@ -447,7 +447,7 @@ impl LifeCore for LifeCoreList {
         let raw_node = self[index].as_raw_node();
         let ty = {
             if let Some((_, (_, ty))) = self
-                .types(ctx)
+                .types(ctx.window())
                 .filter(|(name, _)| name.as_str() == &self[raw_node.ty])
                 .nth(0)
             {
@@ -466,7 +466,7 @@ impl LifeCore for LifeCoreList {
         })
     }
 
-    fn edge(&self, ctx: EventContext) -> Option<EdgeExt> {
+    fn edge(&self, ctx: PointedEventContext) -> Option<EdgeExt> {
         let index: EventIndex = ctx.into();
         if !self[index].is_edge() {
             return None;
@@ -499,7 +499,7 @@ impl LifeCore for LifeCoreList {
     }
 
     /// Get the root of `e`. `None` if `e` is a root node or an edge
-    fn root_of(&self, e: EventContext) -> Option<EventContext> {
+    fn root_of(&self, e: PointedEventContext) -> Option<PointedEventContext> {
         let index: EventIndex = e.into();
         if self[index].is_edge() {
             return None;
@@ -512,15 +512,15 @@ impl LifeCore for LifeCoreList {
     }
 
     // TODO revise
-    // The current implementation is wrong because we need to look at all
+    // The old implementation was wrong because we need to look at all
     // successors, not just immediate successors. Need to make this clear in the
     // documentation too. Can contain itself, if it does not have any children
-    fn fresh_successors(&self, node: EventContext) -> Vec<EventContext> {
+    fn fresh_successors(&self, node: PointedEventContext) -> Vec<PointedEventContext> {
         if self.get(node).is_none_or(|x| x.is_edge()) {
             return vec![];
         }
         let w = || node.exclusive_right_items();
-        let mut successor = HashSet::<EventContext>::from([node.absolute()]);
+        let mut successor = HashSet::<PointedEventContext>::from([node.absolute()]);
         for (candidate_index, candidate) in w()
             .zip(self.raw_window(w()))
             .filter(|(_, event)| event.is_node())
@@ -537,8 +537,12 @@ impl LifeCore for LifeCoreList {
         successor.into_iter().collect()
     }
 
-    fn relative_degree(&self, left: EventContext, right: EventContext) -> Option<usize> {
-        let ancestor_chain = |mut n: EventContext| {
+    fn relative_degree(
+        &self,
+        left: PointedEventContext,
+        right: PointedEventContext,
+    ) -> Option<usize> {
+        let ancestor_chain = |mut n: PointedEventContext| {
             let mut chain = vec![];
             while let Some(parent) = self.node(n).unwrap().parent {
                 let parent = n.look_at(parent);
@@ -569,7 +573,10 @@ impl LifeCore for LifeCoreList {
             .min()
     }
 
-    fn types(&self, e: EventContext) -> impl Iterator<Item = (String, (EventContext, NodeType))> {
+    fn types(
+        &self,
+        e: EventContext,
+    ) -> impl Iterator<Item = (String, (PointedEventContext, NodeType))> {
         e.items()
             .zip(self.raw_window(e.items()))
             .filter_map(|(ctx, event)| {
@@ -590,7 +597,7 @@ impl LifeCore for LifeCoreList {
             })
     }
 
-    fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<EventContext>> {
+    fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>> {
         let mut family = Vec::<HashSet<EventIndex>>::new();
         'outer: for (index, node) in self.raw_nodes(ctx) {
             if node.parent.is_none_or(|p| !ctx.range().contains(&p.i())) {
@@ -636,7 +643,7 @@ impl LifeCore for LifeCoreList {
 
     fn get_with_circumstance(
         &self,
-        e: EventContext,
+        e: PointedEventContext,
     ) -> Option<(crate::EventExt, crate::CircumstanceExt)> {
         let i: EventIndex = e.into();
         let e = self.get(e)?;
@@ -819,14 +826,14 @@ impl LifeCoreList {
         self[*i].as_raw_edge()
     }
 
-    fn raw_nodes(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, Node)> {
+    fn raw_nodes(&self, ctx: EventContext) -> impl Iterator<Item = (PointedEventContext, Node)> {
         let w = || ctx.items();
         w().zip(self.raw_window(w()))
             .filter(|(_, event)| event.is_node())
             .map(|(index, event)| (index, event.as_raw_node()))
     }
 
-    fn raw_edges(&self, ctx: EventContext) -> impl Iterator<Item = (EventContext, Edge)> {
+    fn raw_edges(&self, ctx: EventContext) -> impl Iterator<Item = (PointedEventContext, Edge)> {
         let w = || ctx.items();
         w().zip(self.raw_window(w()))
             .filter(|(_, event)| event.is_edge())
@@ -835,10 +842,10 @@ impl LifeCoreList {
 
     fn raw_window<I>(&self, i: I) -> impl Iterator<Item = Event>
     where
-        I: IntoIterator<Item = EventContext>,
+        I: IntoIterator<Item = PointedEventContext>,
     {
         i.into_iter()
-            .map_while(|x| self.event.get(x.thing.unwrap()).cloned())
+            .map_while(|x| self.event.get(x.thing).cloned())
     }
 }
 
@@ -854,7 +861,7 @@ impl Default for LifeCoreList {
     }
 }
 
-impl EventContext {
+impl PointedEventContext {
     fn thing(self) -> EventIndex {
         self.into()
     }
@@ -862,20 +869,17 @@ impl EventContext {
 
 impl EventIndex {
     fn before(&self) -> EventContext {
-        EventContext {
-            end: self.i(),
-            thing: None,
-        }
+        EventContext { end: self.i() }
     }
 
-    fn before_and_including(&self) -> EventContext {
-        EventContext {
+    fn before_and_including(&self) -> PointedEventContext {
+        PointedEventContext {
             end: self.i().saturating_add(1),
-            thing: Some(self.i()),
+            thing: self.i(),
         }
     }
 
-    fn absolute(&self) -> EventContext {
+    fn absolute(&self) -> PointedEventContext {
         EventContext::universe().look_raw(self.i())
     }
 
@@ -884,15 +888,15 @@ impl EventIndex {
     }
 }
 
-impl From<EventContext> for EventIndex {
-    fn from(value: EventContext) -> Self {
-        assert!(value.validate() && value.thing.is_some());
-        Self(u64::try_from(value.thing.unwrap()).unwrap())
+impl From<PointedEventContext> for EventIndex {
+    fn from(value: PointedEventContext) -> Self {
+        assert!(value.validate());
+        Self(u64::try_from(value.thing).unwrap())
     }
 }
 
-impl From<&EventContext> for EventIndex {
-    fn from(value: &EventContext) -> Self {
+impl From<&PointedEventContext> for EventIndex {
+    fn from(value: &PointedEventContext) -> Self {
         Self::from(*value)
     }
 }
