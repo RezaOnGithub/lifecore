@@ -50,6 +50,21 @@
     event itself
   - Types can "shift" over time, and Types need to be inspected in context.
 
+# Agenda
+
+- Fix `is_stale`
+- Fix `fresh_successors`
+- `EventContext::universe()` is dangerous and an anti-pattern
+- Complete CLI spec
+  + Exact storage format
+  + analyzer failures are addition blockers
+  + clearer alias language: parent aliased and children aliased.
+  + alias + sidecar interaction, global aliases and sidecar namespace
+  + sidecar can specify parent, no need to be able to specify lone edges in a sidecar?
+  + Better sepecific hash functions
+  + GraphViz is difficult because LifeCore::families is a set of sets, no proper ordering
+
+
 # Learning
 
 - Making PayloadExt `#[serde(transparent)]` -- _terrible_ mistake. Wasted hours

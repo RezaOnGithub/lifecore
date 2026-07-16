@@ -287,7 +287,7 @@ pub trait LifeCore: Send + Sync {
         &self,
         e: EventContext,
     ) -> impl Iterator<Item = (String, (PointedEventContext, NodeType))>;
-    fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>>;
+    fn families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>>;
     fn add_analyzer(&mut self, name: &str, config: &str);
     fn current_analysis_suite(&self) -> analysis::SuiteConfig;
 }

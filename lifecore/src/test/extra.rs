@@ -68,6 +68,21 @@ fn fresh_edges_exclude_an_edge_with_a_stale_endpoint() {
     assert_eq!(lc.fresh_edges_of(from.e.absolute()).count(), 0);
 }
 
+#[test]
+fn node_parent_inherits_the_inspection_window() {
+    let mut lc = LifeCoreList::default();
+    let root = lc.add("Root", NodeBodyExt::default(), None).unwrap();
+    let child = lc
+        .add("Child", NodeBodyExt::default(), Some(root.e))
+        .unwrap();
+    let _later = lc.add("Later", NodeBodyExt::default(), None).unwrap();
+    let child_at_end = lc.last().unwrap().look_at(child.e);
+
+    let child = lc.node(child_at_end).unwrap();
+
+    assert_eq!(child.parent, Some(child_at_end.look_at(root.e)));
+}
+
 // TODO revise
 #[cfg(never)]
 #[test]

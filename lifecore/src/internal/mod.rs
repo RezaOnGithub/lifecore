@@ -212,6 +212,7 @@ impl LifeCore for LifeCoreList {
         i.into_iter().map_while(|x| self.get(x))
     }
 
+    // TODO more robust impl
     fn is_stale(&self, e: PointedEventContext) -> bool {
         let ctx = || e.items();
         match self[e.thing()] {
@@ -376,6 +377,7 @@ impl LifeCore for LifeCoreList {
 
         for e in self.event.iter().enumerate() {
             let idx_in_range = |idx: &EventIndex| (idx.0 as usize) < e.0;
+            let offending_event = ctx().look_raw(e.0);
             match e.1 {
             Event::Node(Node {
                 ty: _,
@@ -385,13 +387,13 @@ impl LifeCore for LifeCoreList {
                 if let Some(idx) = parent {
                     if !idx_in_range(idx) {
                         return Err(BasicValidationFailure {
-                            offending_event: ctx().look_at(idx.before_and_including()).into(),
+                            offending_event: offending_event.into(),
                             reason: OutOfRangeParent,
                         });
                     }
                     if self[idx].is_edge() {
                         return Err(BasicValidationFailure {
-                            offending_event: ctx().look_at(idx.before_and_including()).into(),
+                            offending_event: offending_event.into(),
                             reason: EdgeParent,
                         });
                     }
@@ -461,7 +463,9 @@ impl LifeCore for LifeCoreList {
             ty,
             ty_name: self[raw_node.ty].to_string(),
             field: body,
-            parent: raw_node.parent.map(|x| x.before_and_including()),
+            parent: raw_node
+                .parent
+                .map(|x| ctx.look_at(x.before_and_including())),
             e: ctx,
         })
     }
@@ -515,6 +519,7 @@ impl LifeCore for LifeCoreList {
     // The old implementation was wrong because we need to look at all
     // successors, not just immediate successors. Need to make this clear in the
     // documentation too. Can contain itself, if it does not have any children
+    // TODO this is still busted!!! A) discards roots B) discards window
     fn fresh_successors(&self, node: PointedEventContext) -> Vec<PointedEventContext> {
         if self.get(node).is_none_or(|x| x.is_edge()) {
             return vec![];
@@ -597,7 +602,7 @@ impl LifeCore for LifeCoreList {
             })
     }
 
-    fn non_solo_families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>> {
+    fn families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>> {
         let mut family = Vec::<HashSet<EventIndex>>::new();
         'outer: for (index, node) in self.raw_nodes(ctx) {
             if node.parent.is_none_or(|p| !ctx.range().contains(&p.i())) {

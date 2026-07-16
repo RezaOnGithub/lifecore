@@ -1,8 +1,9 @@
 use crate::{
     BasicValidationFailure,
     BasicValidationFailureScenario::{self, *},
-    EventContext, LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass,
-    NodeTypeFieldStatus, PayloadExt, PayloadType, PointedEventContext, TypedBody, analysis,
+    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeType,
+    NodeTypeClass, NodeTypeFieldStatus, PayloadExt, PayloadType, PointedEventContext, TypedBody,
+    analysis,
 };
 
 fn simple_body(value: &str) -> NodeBodyExt {
@@ -113,7 +114,7 @@ fn families_include_root_and_children_after_overrides() {
         .add("", simple_body("second-child"), Some(root.e))
         .unwrap();
 
-    let families = lc.non_solo_families(EventContext::universe());
+    let families = lc.families(EventContext::universe());
     assert_eq!(families.len(), 1);
     assert_eq!(families[0].len(), 3);
     assert!(
@@ -270,7 +271,15 @@ fn basic_validation_reports_an_out_of_range_parent_without_panicking() {
         validation.is_ok(),
         "basic_validation must diagnose an out-of-range stored reference instead of indexing it"
     );
-    assert!(validation.unwrap().is_err());
+    let failure = validation.unwrap().unwrap_err();
+    let DiagnosticLocation::Event(offending_event) = failure.offending_event else {
+        panic!("out-of-range parent should be attributed to its node event");
+    };
+    assert_eq!(
+        offending_event.absolute(),
+        corrupted.last().unwrap().absolute()
+    );
+    assert!(corrupted.get(offending_event).is_some());
 }
 
 #[test]

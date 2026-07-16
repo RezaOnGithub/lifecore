@@ -590,7 +590,9 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                 continue;
             };
 
-            if !parent_type.additional_override.contains(&child_type_name) {
+            if child_type_name.as_str() != parent_type.name.as_str()
+                && !parent_type.additional_override.contains(&child_type_name)
+            {
                 r.push(BadOverride {
                     offending_event: last_event_in_context.ctx(),
                     parent_ty_name: parent_type.name.to_string(),
