@@ -1,16 +1,20 @@
 //! "Type System" Constraint System
 //!
-//! This implements a basic type checking system that is compatible with the limited VCS capabilities.
-//! A "Node_Type" declares a new type with a unique name among non-stale nodes, the edges that are
-//! allowed to connect to or from the node, and a node class: Toothpick (only a single edge that is
-//! outgoing), Hub (only incoming edges), Spike (only outgoing edges), Regular (no restrictions) EdgeNode
-//! (exactly one incoming and exactly one outgoing)
+//! This implements a basic type checking system that is compatible with the
+//! limited VCS capabilities. A "Node_Type" declares a new type with a unique
+//! name among non-stale types, and declares node fields, the edges that are
+//! allowed to connect to or from the node, and the node class: Toothpick (only
+//! a single edge that is outgoing), Hub (only incoming edges), Spike (only
+//! outgoing edges), Regular (no restrictions) EdgeNode (exactly one incoming
+//! and exactly one outgoing)
 //!
-//! The general idea is: at every event, all node must get typechecked against exactly one non-stale Node_Type
-//! that is older or the same age; That is, if a node type X is overriden at E, all non-stale X nodes by E must
+//! The general idea is: at every event, all node must get typechecked against
+//! exactly one non-stale Node_Type that is older or the same age; That is, if a
+//! node type X is overriden at E, all non-stale X nodes by E must
 //! typecheck against the new type X' that overrode X.
 //!
-//! This can be terribly inefficient, and of course there is a streaming approach but correctness for now. NOTDO PERF
+//! This can be terribly inefficient, and of course there is a streaming
+//! approach but correctness for now. NOTDO PERF
 
 use itertools::Itertools;
 use lifecore::{
@@ -375,8 +379,8 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
     {
         use TypeCheckMessage::*;
         let mut r = TypeCheckOutput(vec![]);
-        // check whether a Node_Type declaring some type X is not clashing with an older but non-stale
-        // Node_Type declaring a type of the same name.
+        // check whether a Node_Type declaring some type X is not clashing with an older
+        // but non-stale Node_Type declaring a type of the same name.
         for some_type_at_some_point_node in lc
             .nodes(window)
             .filter(|node| node.ty_name.as_str() == NodeType::name())
@@ -413,8 +417,9 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
 
         // Check that override types exist
         // TODO I'm not sure whether this should be an error or not.
-        // What it's causing at the moment is that interrelated Node_Types have to complete
-        // a ritual to allow overriding each othe. I'm demoting this to a warning for now.
+        // What it's causing at the moment is that interrelated Node_Types have to
+        // complete a ritual to allow overriding each othe. I'm demoting this to
+        // a warning for now.
         for (ty_event, ty) in type_table.values() {
             for override_ty in ty.additional_override.iter() {
                 if !type_table.contains_key(override_ty) {

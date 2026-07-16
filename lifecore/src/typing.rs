@@ -1,8 +1,9 @@
 //! The types here used to be a tightly integrated part of `lifecore-typecheck`
 //! However, it is much more convenient to have types as a first-class citizen
-//! But this creates issues with regard to how the type system should evolve in the future.
-//! In general, if this module changes, databases with an older instance of this type need
-//! careful modification to ensure typechecking proceeds as normal
+//! But this creates issues with regard to how the type system should evolve in
+//! the future. In general, if this module changes, databases with an older
+//! instance of this type need careful modification to ensure typechecking
+//! proceeds as normal
 
 use std::collections::HashMap;
 

@@ -62,11 +62,12 @@ pub enum SuggestedAction {
 /// A Message from an `Analyzer`
 ///
 /// # "Relevance"
-/// Some `Message` variants have a field named `relevance`. Errors are always "relevant" of course but
-/// warnings and suggestions less, as they may have been resolved later.
-/// The UI may choose to ignore a message if N members of `relevance` are stale (for some sensible N)
-/// Additionally, UI may implement a `barklist` where messages of a certain hash are dismissed.
-/// (This led to needing a custom `Hash` implementation that specifically sorts this list)
+/// Some `Message` variants have a field named `relevance`. Errors are always
+/// "relevant" of course but warnings and suggestions less, as they may have
+/// been resolved later. The UI may choose to ignore a message if N members of
+/// `relevance` are stale (for some sensible N) Additionally, UI may implement a
+/// `barklist` where messages of a certain hash are dismissed. (This led to
+/// needing a custom `Hash` implementation that specifically sorts this list)
 #[derive(PartialEq, Eq, Clone, Debug, EnumIs, EnumTryAs, Hash, EnumDiscriminants)]
 #[strum_discriminants(name(MessageType))]
 #[strum_discriminants(vis(pub))]
@@ -87,15 +88,18 @@ pub trait InnerOutput<MSG: InnerMessageType>: Clone + Sized {
     fn push(&mut self, v: MSG);
 }
 
-/// Type representing an Analyzer, a piece of code that goes over the database and generates messages
-/// `Analyzer` is bound by LifeCore trait implementor and `InnerOutput`. `InnerOutput` is actually
-/// not strictly necessary but it guides the implementor (or an AI agent) to create inner message types
-/// that communicate the issue, rather than blocks of text inside `Message`. `Into<Message>` is not feasible
-/// and only the Analyzer may have enough context to convert `InnerOutput` to the all-purpose `Message`;
-/// so `Analyzer` also has to implement conversion methods.
+/// Type representing an Analyzer, a piece of code that goes over the database
+/// and generates messages `Analyzer` is bound by LifeCore trait implementor and
+/// `InnerOutput`. `InnerOutput` is actually not strictly necessary but it
+/// guides the implementor (or an AI agent) to create inner message types
+/// that communicate the issue, rather than blocks of text inside `Message`.
+/// `Into<Message>` is not feasible and only the Analyzer may have enough
+/// context to convert `InnerOutput` to the all-purpose `Message`; so `Analyzer`
+/// also has to implement conversion methods.
 ///
-/// The idea behind `initialize` is that if some pre-condition is not quite correct, or
-/// if we are "done" in some sense, analyzer can disable itself and potentially issue a warning.
+/// The idea behind `initialize` is that if some pre-condition is not quite
+/// correct, or if we are "done" in some sense, analyzer can disable itself and
+/// potentially issue a warning.
 pub trait Analyzer<LC: LifeCore>: Send + Sync {
     type MSG: InnerMessageType
     where
@@ -190,8 +194,8 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
 
 impl Output {
     fn validate(&self) -> bool {
-        // TODO what could we be validating here, just in case? And `assert!` or `debug_assert!`?
-        // self.0.iter().all(|x| match x {
+        // TODO what could we be validating here, just in case? And `assert!` or
+        // `debug_assert!`? self.0.iter().all(|x| match x {
         //     Message::Inconsistency(inconsistency) => todo!(),
         //     Message::Warning(warning) => todo!(),
         //     Message::Suggestion(suggestion) => todo!(),
@@ -309,7 +313,8 @@ impl Hash for Suggestion {
         }
         self.message.hash(state);
 
-        // SUS implementing Hash for NodeBodyExt is unwieldy, and this won't cause an issue, probably
+        // SUS implementing Hash for NodeBodyExt is unwieldy, and this won't cause an
+        // issue, probably
         (self.action.len()).hash(state);
     }
 }

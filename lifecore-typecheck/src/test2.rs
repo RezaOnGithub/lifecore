@@ -23,7 +23,7 @@ fn add_bootstrap(lc: &mut LifeCoreList) {
 }
 
 fn invalid_override_graph() -> (LifeCoreList, EventContext, EventContext) {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     add_bootstrap(&mut lc);
     lc.add(
         NodeType::name(),
@@ -46,7 +46,7 @@ fn invalid_override_graph() -> (LifeCoreList, EventContext, EventContext) {
 
 #[test]
 fn runner_analyzes_a_valid_typed_edge_without_panicking() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     add_bootstrap(&mut lc);
     lc.add(
         NodeType::name(),
@@ -93,7 +93,7 @@ fn bad_override_is_reported_once_at_the_child_event() {
 
 #[test]
 fn duplicate_type_definition_points_at_the_newer_declaration() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     add_bootstrap(&mut lc);
     lc.add(
         NodeType::name(),
@@ -155,7 +155,7 @@ fn override_analysis_does_not_panic_when_the_parent_precedes_the_window() {
 #[cfg(never)]
 #[test]
 fn edge_node_requires_both_an_incoming_and_an_outgoing_edge() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     add_bootstrap(&mut lc);
     let mut edge_node_type = NodeType::new("Edge_Like", &[], &["link"], &[], &[]);
     edge_node_type.class = NodeTypeClass::EdgeNode;

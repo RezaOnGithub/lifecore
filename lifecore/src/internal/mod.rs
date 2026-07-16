@@ -32,7 +32,8 @@ pub struct LifeCoreList {
 
     // Analyzers added so far. An analyzer has 2 pieces of state:
     // - initial config (just a small short string)
-    // - nodes and edges that may get added as a part of the suggestions through AnalysisReport (may indicate "progression")
+    // - nodes and edges that may get added as a part of the suggestions through AnalysisReport
+    //   (may indicate "progression")
     configured_analyzer: analysis::SuiteConfig,
 }
 
@@ -81,20 +82,7 @@ struct Edge {
 }
 
 // This is for the internal representation of Node Payload
-#[derive(
-    Serialize,
-    Deserialize,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    strum::VariantNames,
-    strum::EnumDiscriminants,
-)]
-#[strum_discriminants(name(PayloadType))]
-#[strum_discriminants(vis(pub))]
-#[strum_discriminants(derive(Serialize, Deserialize, Hash, Display))]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, VariantNames)]
 enum Payload {
     PreciseTime(Timestamp),
     Text(StringIndex),
@@ -136,7 +124,8 @@ impl LifeCore for LifeCoreList {
         }
 
         // COPY_PASTE
-        // Circumstance MUST come first, because if it fails somehow, then we inserted intermediate data for nothing
+        // Circumstance MUST come first, because if it fails somehow, then we inserted
+        // intermediate data for nothing
         let current_circumstance_index = self.get_or_insert_current_session_circumstance_entry()?.0;
         let ty_str_index = self.get_or_insert_string(ty);
         self.event.push(Event::Edge(Edge {
@@ -156,7 +145,7 @@ impl LifeCore for LifeCoreList {
         parent: Option<EventContext>,
     ) -> Result<NodeExt, LifeCoreError> {
         let insert_all_strings = |t: &mut Self, payload: &NodeBodyExt| -> NodeBody {
-            let mut r = NodeBody::new();
+            let mut r = NodeBody::default();
             for (k, v) in payload.0.iter() {
                 let smalltable_key = t.get_or_insert_string(k);
                 let smalltable_value = {
@@ -256,7 +245,8 @@ impl LifeCore for LifeCoreList {
     fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
         let ctx = || EventContext::universe();
 
-        // Non-Rules. Have little to do with the meaning of the graph, but more related to data integrity
+        // Non-Rules. Have little to do with the meaning of the graph, but more related
+        // to data integrity
         {
             // Payload and PayloadExt cover the same types
             {
@@ -287,8 +277,9 @@ impl LifeCore for LifeCoreList {
                 }
             }
 
-            // Only a SINGLE Circumstance::Mock is allowed. This is only for running validation code before adding a new event
-            // TODO modify this so that only TAIL Circumstance::Mock are allowed.
+            // Only a SINGLE Circumstance::Mock is allowed. This is only for running
+            // validation code before adding a new event TODO modify this so
+            // that only TAIL Circumstance::Mock are allowed.
             {
                 if self.circumstance_table.contains(&Circumstance::Mock) {
                     let mock_index = self
@@ -314,7 +305,8 @@ impl LifeCore for LifeCoreList {
         }
 
         // Rule: exact edge duplicate events are forbidden.
-        // Rule: exact node duplicate events are forbidden if both are valid within a neighborhood; node duplicates are _only discouraged_ otherwise
+        // Rule: exact node duplicate events are forbidden if both are valid within a
+        // neighborhood; node duplicates are _only discouraged_ otherwise
         {
             // Easy part: check edges
             let edge_count = self.edges(ctx()).count();
@@ -349,7 +341,9 @@ impl LifeCore for LifeCoreList {
                         // TODO move this Warning into its own analyzer
                         // warn!(
                         //     *newer_index,
-                        //     "Duplicate nodes, but older one was invalidated before the new one was added (discouraged). EventIndex {} and {}",
+                        //     "Duplicate nodes, but older one was invalidated
+                        // before the new one was added (discouraged).
+                        // EventIndex {} and {}",
                         //     older_index,
                         //     newer_index
                         // );
@@ -357,7 +351,8 @@ impl LifeCore for LifeCoreList {
                         assert!({
                             // The check above should pass if an identical node overrides the parent
                             // What is the application of overriding a node with an exact copy?
-                            // (Maybe counters, or means of correcting edges or getting rid of stale edges)
+                            // (Maybe counters, or means of correcting edges or getting rid of stale
+                            // edges)
                             if let Some(idx) = newer_node.parent
                                 && idx == older_index.thing()
                             {
@@ -375,8 +370,8 @@ impl LifeCore for LifeCoreList {
             }
         }
 
-        // Rule: events are sorted, nodes and edges cannot refer to themselves or the future
-        // Rule: Edges can only be between nodes
+        // Rule: events are sorted, nodes and edges cannot refer to themselves or the
+        // future Rule: Edges can only be between nodes
         // Rule: Node parent can only be another node
 
         for e in self.event.iter().enumerate() {
@@ -424,7 +419,8 @@ impl LifeCore for LifeCoreList {
             }
         }
 
-        // Rule: after a node has been overriden (that is, a new "child" node has been added) it cannot be a part of a new edge. "Stale Rule"
+        // Rule: after a node has been overriden (that is, a new "child" node has been
+        // added) it cannot be a part of a new edge. "Stale Rule"
         for (edge_context, edge) in self.raw_edges(ctx()) {
             // Throw away the loop context. Now we are looking at 0..edge_index
             // (inclusive or exclusive doesn't matter in this particular case)
@@ -516,9 +512,9 @@ impl LifeCore for LifeCoreList {
     }
 
     // TODO revise
-    // The current implementation is wrong because we need to look at all successors, not just
-    // immediate successors. Need to make this clear in the documentation too.
-    // Can contain itself, if it does not have any children
+    // The current implementation is wrong because we need to look at all
+    // successors, not just immediate successors. Need to make this clear in the
+    // documentation too. Can contain itself, if it does not have any children
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext> {
         if self.get(node).is_none_or(|x| x.is_edge()) {
             return vec![];
@@ -941,23 +937,16 @@ impl Event {
     }
 }
 
-impl NodeBody {
-    fn new() -> Self {
-        Self(HashMap::new())
+impl Default for NodeBody {
+    fn default() -> Self {
+        Self(Default::default())
     }
+}
 
+impl NodeBody {
     fn insert(&mut self, key: StringIndex, val: Payload) {
         assert!(!self.0.contains_key(&key));
         assert!(self.0.insert(key, val).is_none());
-    }
-
-    fn from(tab: HashMap<StringIndex, Payload>) -> Self {
-        assert!(tab.len() <= 32, "HashMap too large!");
-        let mut r = Self::new();
-        for x in tab.into_iter() {
-            r.insert(x.0, x.1);
-        }
-        r
     }
 }
 

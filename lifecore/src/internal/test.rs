@@ -30,7 +30,7 @@ fn context01() {
 #[test]
 fn raw_edge_window() {
     init_test_logging();
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     let mut n: Vec<NodeExt> = vec![];
     let mut e: Vec<EdgeExt> = vec![];
 

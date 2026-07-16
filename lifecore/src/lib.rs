@@ -2,7 +2,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::HashMap,
-    fmt::Display,
+    fmt,
     hash::Hash,
     ops::{Index, Range},
 };
@@ -26,12 +26,13 @@ pub use serde_json::to_value as to_json_value;
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct NodeBodyExt(pub HashMap<String, PayloadExt>);
 
-/// "Circumstance" is currently a simple method of logging event dates and places
-/// Not much weight to it at the moment, and doesn't make a functional difference.
+/// "Circumstance" is currently a simple method of logging event dates and
+/// places Not much weight to it at the moment, and doesn't make a functional
+/// difference.
 ///
-/// "Mock" circumstance is intended for running validation and analysis before writing a node
-/// or an edge to the database proper. Currently, a single `Mock` is allowed and it must be associated
-/// with the last event
+/// "Mock" circumstance is intended for running validation and analysis before
+/// writing a node or an edge to the database proper. Currently, a single `Mock`
+/// is allowed and it must be associated with the last event
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 pub enum CircumstanceExt {
     Mock,
@@ -65,6 +66,7 @@ pub enum LifeCoreError {
     DuplicateAnalyzer { dupe_name: String },
     #[error("Analyzer {name:?} not found!")]
     AnalyzerNotFound { name: String },
+    // TODO is this used anywhere?
     #[error("Systems Error")]
     SystemsError(Vec<analysis::Inconsistency>),
     #[error("Validation Failure")]
@@ -97,17 +99,13 @@ pub enum BasicValidationFailureScenario {
     EdgeEndIsEdge,
 }
 
-// TODO PayloadType should be created from PayloadExt, not the internal Payload type.
-/// Unit enum denoting Payload types
-pub use internal::PayloadType;
-
 /// Convenient Payload Type For Users
 ///
 /// # Note
 ///
-/// `PayloadExt::Serialized` should be the last resort for users. As time goes on,
-/// the list of primitve types will be expaneded to further minimize its use.
-/// Serialized LOBs are highly discouraged.
+/// `PayloadExt::Serialized` should be the last resort for users. As time goes
+/// on, the list of primitve types will be expaneded to further minimize its
+/// use. Serialized LOBs are highly discouraged.
 #[derive(
     Serialize,
     Deserialize,
@@ -115,10 +113,17 @@ pub use internal::PayloadType;
     PartialEq,
     Eq,
     Hash,
-    strum::VariantNames,
     strum::EnumIs,
     strum::EnumTryAs,
+    strum::EnumDiscriminants,
+    strum::VariantNames,
     Debug,
+)]
+#[strum_discriminants(name(PayloadType))]
+#[strum_discriminants(vis(pub))]
+#[strum_discriminants(derive(Serialize, Deserialize, Hash, strum::Display))]
+#[strum_discriminants(
+    doc = "Denotes a type of payload. Automatically generated from `PayloadExt` variants"
 )]
 pub enum PayloadExt {
     PreciseTime(Timestamp),
@@ -136,9 +141,11 @@ impl PayloadExt {
 /// Convenience type describing a Node.
 ///
 /// # Note
-/// - `ty` may not resolve to the type that was intended when the node was first created;
+/// - `ty` may not resolve to the type that was intended when the node was first
+///   created;
 /// types can evolve over time and are context-dependent.
-/// - `ty` may could potentially be unresolved as well. Use `ty_name` in analyzers.
+/// - `ty` may could potentially be unresolved as well. Use `ty_name` in
+///   analyzers.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct NodeExt {
@@ -167,10 +174,6 @@ pub enum EventExt {
 }
 
 /// The primary trait describing the interface to the database.
-///
-/// ## Rules For Implementors
-/// - Don't be too high-level, and use EventContext instead of heavy-weight NodeExt and EdgeExt.
-/// - Expect duplicate code; Leverage the private helpers on the implementor type
 pub trait LifeCore: Send + Sync {
     /// Get last event in LifeCore as a bounded EventContext
     fn last(&self) -> Option<EventContext>;
@@ -237,7 +240,8 @@ pub trait LifeCore: Send + Sync {
 
     /// Get fresh outgoing edges from `n` within the implied context.
     ///
-    /// Outgoing edge means an edge where `n` is `from`, also known as the head of the edge
+    /// Outgoing edge means an edge where `n` is `from`, also known as the head
+    /// of the edge
     ///
     /// *Note:* for this function to return anything meaningful, `n` itself
     /// needs to be fresh within the context that implies. That is, if `n` is
@@ -249,7 +253,8 @@ pub trait LifeCore: Send + Sync {
 
     /// Get fresh Incoming edges from `n` within the implied context.
     ///
-    /// Incoming edge means an edge where `n` is `to`, also known as the tail of the edge
+    /// Incoming edge means an edge where `n` is `to`, also known as the tail of
+    /// the edge
     ///
     /// *Note:* for this function to return anything meaningful, `n` itself
     /// needs to be fresh within the context that implies. That is, if `n` is
@@ -259,14 +264,19 @@ pub trait LifeCore: Send + Sync {
             .filter(move |x| !self.is_stale(x.e) && x.to.absolute() == n.absolute())
     }
 
-    /// Get root of node at `e`. That is, the ancestor node by the way of `parent` component
+    /// Get root of node at `e`. That is, the ancestor node by the way of
+    /// `parent` component
     fn root_of(&self, e: EventContext) -> Option<EventContext>;
 
-    /// Returns fresh successors within context. Use `.absolute()` to get current fresh successors
+    /// Returns fresh successors within context.
+    /// A 'successor' is defined as any non-stale node within context that has
+    /// `node` as its ancestor. An 'ancestor' of a node is any node within
+    /// `.parent` chain of it. If a node has no parent, it is its own ancestor
     fn fresh_successors(&self, node: EventContext) -> Vec<EventContext>;
 
-    /// Find relative degree. Siblings (nodes that share a parent) have degree 0.
-    /// Note that the left sides of the contexts need to extend far back enough in order to find the shared parent.
+    /// Find relative degree. Siblings (nodes that share a parent) have degree
+    /// 0. Note that the left sides of the contexts need to extend far back
+    /// enough in order to find the shared parent.
     fn relative_degree(&self, a: EventContext, b: EventContext) -> Option<usize>;
     fn are_siblings(&self, a: EventContext, b: EventContext) -> bool {
         self.relative_degree(a, b) == Some(0)
@@ -313,7 +323,15 @@ impl EventExt {
         }
     }
 }
-
+/// A window from the beginning to some point after, that optionally points to a
+/// specific point in time LifeCore events are strictly ordered and append-only.
+/// Given that meanings and intentions can shift over time, we need a reference
+/// window when looking at individual events; even types cannot be properly
+/// resolved without knowing having the window to refer to the latest version of
+/// a type.
+///
+/// In other words, `EventContext` is a "snapshot ID" of the database,
+/// optionally coupled with a concrete index of an event
 // TOTEST EventContext can never ever point to usize::MAX (i.e. thing is none or in 0..(MAX-1))
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
 pub struct EventContext {
@@ -365,8 +383,9 @@ impl EventContext {
 
     pub fn shrink_to_inclusive_left(&self) -> Self {
         assert!(self.validate() && self.thing.is_some_and(|x| x < usize::MAX));
-        // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
-        // We can safely increment self.thing and use it as the upper bound
+        // We know that thing is in start..end (that is, thing.is_some() and the range
+        // non-empty) We can safely increment self.thing and use it as the upper
+        // bound
         let r = Self {
             end: self.thing.unwrap() + 1,
             thing: self.thing,
@@ -377,8 +396,8 @@ impl EventContext {
 
     pub fn shrink_to_exclusive_left(&self) -> Self {
         assert!(self.validate() && self.thing.is_some());
-        // We know that thing is in start..end (that is, thing.is_some() and the range non-empty)
-        // We can safely pass self.thing as the upper bound
+        // We know that thing is in start..end (that is, thing.is_some() and the range
+        // non-empty) We can safely pass self.thing as the upper bound
         let r = Self {
             end: self.thing.unwrap(),
             thing: None,
@@ -387,7 +406,8 @@ impl EventContext {
         r
     }
 
-    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    // NOTE returned contexts are the same as the originator, but the `thing` is
+    // different
     pub fn inclusive_right_items(self) -> impl Iterator<Item = Self> {
         let start = self.thing.unwrap_or(self.end);
         (start..self.end).into_iter().map(move |x| Self {
@@ -396,7 +416,8 @@ impl EventContext {
         })
     }
 
-    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    // NOTE returned contexts are the same as the originator, but the `thing` is
+    // different
     pub fn exclusive_right_items(self) -> impl Iterator<Item = Self> {
         let start = self.thing.map_or(self.end, |x| x.saturating_add(1));
         (start..self.end).into_iter().map(move |x| Self {
@@ -404,7 +425,8 @@ impl EventContext {
             ..self
         })
     }
-    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    // NOTE returned contexts are the same as the originator, but the `thing` is
+    // different
     pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
         let end = self.thing.map_or(self.end, |x| x.saturating_add(1));
         (0..end).into_iter().map(move |x| Self {
@@ -413,7 +435,8 @@ impl EventContext {
         })
     }
 
-    // NOTE returned contexts are the same as the originator, but the `thing` is different
+    // NOTE returned contexts are the same as the originator, but the `thing` is
+    // different
     pub fn exclusive_left_items(self) -> impl Iterator<Item = Self> {
         let end = self.thing.unwrap_or(self.end);
         (0..end).into_iter().map(move |x| Self {
@@ -438,7 +461,8 @@ impl EventContext {
     // Builders
     // Take care to write an interface that minimizes usage mistakes
 
-    /// NOTE throws away the context on `e.thing()` and looks at it from `self` perspective
+    /// NOTE throws away the context on `e.thing()` and looks at it from `self`
+    /// perspective
     pub fn look_at(&self, e: EventContext) -> Self {
         assert!(self.validate());
         let mut r = *self;
@@ -581,7 +605,7 @@ impl PayloadExt {
     }
 }
 
-impl Display for PayloadExt {
+impl fmt::Display for PayloadExt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
         PayloadExt::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
@@ -600,7 +624,7 @@ impl Index<&str> for NodeBodyExt {
     }
 }
 
-impl Display for EventContext {
+impl fmt::Display for EventContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(
             format!(
@@ -649,6 +673,4 @@ pub mod analysis;
 mod internal;
 #[cfg(test)]
 mod test;
-#[cfg(test)]
-mod test2;
 mod typing;

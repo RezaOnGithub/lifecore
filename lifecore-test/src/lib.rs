@@ -48,12 +48,12 @@ fn generic_runner_reports_missing_type<LC: LifeCore + 'static>(mut lc: LC) {
 
 #[test]
 fn runner_reports_typecheck_analysis_for_generic_lifecore_path() {
-    generic_runner_reports_missing_type(LifeCoreList::new());
+    generic_runner_reports_missing_type(LifeCoreList::default());
 }
 
 #[test]
 fn runner_combines_typecheck_warnings_and_inconsistencies() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     lc.add(NodeType::name(), NodeType::describe_self().into(), None)
         .unwrap();
     lc.add(
@@ -89,7 +89,7 @@ fn runner_combines_typecheck_warnings_and_inconsistencies() {
 
 #[test]
 fn runner_reports_missing_registered_analyzer_kind() {
-    let mut lc = LifeCoreList::new();
+    let mut lc = LifeCoreList::default();
     lc.add(NodeType::name(), NodeType::describe_self().into(), None)
         .unwrap();
     lc.add_analyzer("No_Such_Analyzer", "");

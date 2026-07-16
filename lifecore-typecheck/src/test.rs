@@ -18,9 +18,9 @@ use lifecore::{
 //         .0
 //         .iter()
 //         .filter_map(|report| match report {
-//         AnalysisReport::Inconsistency(message) | AnalysisReport::Warning(message) => {
-//             Some(message.message.as_str())
-//         }
+//         AnalysisReport::Inconsistency(message) |
+// AnalysisReport::Warning(message) => {             
+// Some(message.message.as_str())         }
 //         _ => None,
 //         })
 //         .collect()
@@ -31,8 +31,8 @@ use lifecore::{
 //         .0
 //         .iter()
 //         .filter_map(|report| match report {
-//         AnalysisReport::Inconsistency(message) => Some(message.message.as_str()),
-//         _ => None,
+//         AnalysisReport::Inconsistency(message) =>
+// Some(message.message.as_str()),         _ => None,
 //         })
 //         .collect()
 // }
@@ -65,8 +65,8 @@ use lifecore::{
 //     assert!(output.0.iter().any(|report| {
 //         matches!(
 //             report,
-//             AnalysisReport::Suggestion(_, lifecore::SuggestedAction::AddNode { ty_name, .. })
-//                 if ty_name == NodeType::name()
+//             AnalysisReport::Suggestion(_, lifecore::SuggestedAction::AddNode
+// { ty_name, .. })                 if ty_name == NodeType::name()
 //         )
 //     }));
 // }
@@ -74,9 +74,11 @@ use lifecore::{
 // #[test]
 // fn node_deserialization01() {
 //     let nt_describe_json =
-//         serde_json::to_string(&Into::<NodeBodyExt>::into(NodeType::describe_self())).unwrap();
+//         serde_json::to_string(&
+// Into::<NodeBodyExt>::into(NodeType::describe_self())).unwrap();
 //     let nt_describe_hashmap =
-//         serde_json::from_str::<NodeBodyExt>(nt_describe_json.as_str()).unwrap();
+//         serde_json::from_str::<NodeBodyExt>(nt_describe_json.as_str()).
+// unwrap();
 
 //     let _ = NodeType::try_from(&nt_describe_hashmap).unwrap();
 // }
@@ -92,8 +94,8 @@ use lifecore::{
 //     assert!(
 //         warning_messages(&output)
 //             .iter()
-//             .any(|message| message.contains("Override Tombstone on type Node_Type"))
-//     );
+//             .any(|message| message.contains("Override Tombstone on type
+// Node_Type"))     );
 // }
 
 // #[test]
@@ -101,8 +103,8 @@ use lifecore::{
 //     let mut lc = LifeCoreList::new();
 //     lc.add(
 //         "Missing_Type",
-//         NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
-//         None,
+//         NodeBodyExt::from(&[("date",
+// PayloadExt::Text("yellow".to_string()))]),         None,
 //     )
 //     .unwrap();
 
@@ -111,8 +113,8 @@ use lifecore::{
 //     assert!(
 //         inconsistency_messages(&output)
 //             .iter()
-//             .any(|message| message.contains("Type Missing_Type does not exist"))
-//     );
+//             .any(|message| message.contains("Type Missing_Type does not
+// exist"))     );
 // }
 
 // #[test]
@@ -124,13 +126,13 @@ use lifecore::{
 //         type_decl(
 //             "Task",
 //             &[
-//                 ("must", (PayloadType::Text, NodeTypeFieldStatus::Mandatory)),
-//                 (
+//                 ("must", (PayloadType::Text,
+// NodeTypeFieldStatus::Mandatory)),                 (
 //                     "should",
 //                     (PayloadType::Text, NodeTypeFieldStatus::Encouraged),
 //                 ),
-//                 ("old", (PayloadType::Text, NodeTypeFieldStatus::Deprecated)),
-//                 (
+//                 ("old", (PayloadType::Text,
+// NodeTypeFieldStatus::Deprecated)),                 (
 //                     "maybe",
 //                     (PayloadType::Number, NodeTypeFieldStatus::Optional),
 //                 ),
@@ -166,13 +168,13 @@ use lifecore::{
 //     assert!(
 //         inconsistencies
 //             .iter()
-//             .any(|message| message.contains("Extraneous field extra not allowed"))
-//     );
+//             .any(|message| message.contains("Extraneous field extra not
+// allowed"))     );
 //     assert!(
 //         warnings
 //             .iter()
-//             .any(|message| message.contains("encouraged to fill the field should"))
-//     );
+//             .any(|message| message.contains("encouraged to fill the field
+// should"))     );
 //     assert!(
 //         warnings
 //             .iter()
@@ -250,8 +252,8 @@ use lifecore::{
 //             NodeType::name(),
 //             type_decl(
 //                 "Task",
-//                 &[("old", (PayloadType::Text, NodeTypeFieldStatus::Optional))],
-//                 &[],
+//                 &[("old", (PayloadType::Text,
+// NodeTypeFieldStatus::Optional))],                 &[],
 //                 &[],
 //                 &[],
 //             )
@@ -278,8 +280,8 @@ use lifecore::{
 //     assert!(
 //         !messages(&output)
 //             .iter()
-//             .any(|message| message.contains("Task which was already declared"))
-//     );
+//             .any(|message| message.contains("Task which was already
+// declared"))     );
 // }
 
 // #[test]
@@ -307,9 +309,9 @@ use lifecore::{
 //     assert!(
 //         !inconsistency_messages(&output)
 //             .iter()
-//             .any(|message| message.contains("does not allow outgoing edge of type Link")),
-//         "TypeCheck should accept Link because Target lists it as incoming: {:#?}",
-//         output
+//             .any(|message| message.contains("does not allow outgoing edge of
+// type Link")),         "TypeCheck should accept Link because Target lists it
+// as incoming: {:#?}",         output
 //     );
 // }
 
@@ -325,8 +327,8 @@ use lifecore::{
 
 //     assert!(
 //         output.is_ok(),
-//         "TypeCheck must diagnose an invalid Node_Type body instead of unwrapping it"
-//     );
+//         "TypeCheck must diagnose an invalid Node_Type body instead of
+// unwrapping it"     );
 //     assert!(output.unwrap().has_error());
 // }
 
@@ -355,8 +357,8 @@ use lifecore::{
 //     assert!(
 //         inconsistency_messages(&output).iter().any(|message| {
 //             message
-//                 .contains("Edge tail node of type Target does not allow incoming edge of type Link")
-//         }),
+//                 .contains("Edge tail node of type Target does not allow
+// incoming edge of type Link")         }),
 //         "the diagnostic must describe the Target/incoming check: {output:#?}"
 //     );
 // }

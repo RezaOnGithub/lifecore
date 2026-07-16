@@ -10,6 +10,8 @@ use crate::{
     analysis::{Suggestion, Warning},
 };
 
+use super::*;
+
 fn connected_graph() -> (LifeCoreList, NodeExt, NodeExt, EdgeExt) {
     let mut lc = LifeCoreList::default();
     let from = lc.add("From", NodeBodyExt::default(), None).unwrap();
