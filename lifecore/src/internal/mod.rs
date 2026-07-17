@@ -13,9 +13,9 @@ use strum::{EnumIs, EnumTryAs, VariantNames};
 use whoami::{hostname, username};
 
 use crate::{
-    BasicValidationFailure, BasicValidationFailureScenario::*, EdgeExt, EventContext, JSON,
-    LifeCore, LifeCoreError, NodeBodyExt, NodeExt, NodeType, PayloadExt, PointedEventContext,
-    Timestamp, TypedBody, Zoned, analysis,
+    BasicValidationFailure, BasicValidationFailureScenario::*, EdgeExt, EventContext, FamilyInsert,
+    JSON, LifeCore, LifeCoreError, LifeCoreFamily, NodeBodyExt, NodeExt, NodeType, PayloadExt,
+    PointedEventContext, Timestamp, TypedBody, Zoned, analysis,
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -241,7 +241,8 @@ impl LifeCore for LifeCoreList {
         Event::Edge(Edge { ty: _, from, to }) => {
             // SUS
             // TODO use is_some but it also has to be false
-            if self.is_stale(e.look_at(from.absolute())).unwrap() || self.is_stale(e.look_at(to.absolute())).unwrap()
+            if self.is_stale(e.look_at(from.absolute())).unwrap()
+                || self.is_stale(e.look_at(to.absolute())).unwrap()
             {
                 return Some(true);
             }
@@ -349,7 +350,10 @@ impl LifeCore for LifeCoreList {
                         }
                     };
 
-                    if self.is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index)).unwrap() {
+                    if self
+                        .is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index))
+                        .unwrap()
+                    {
                         // TODO move this Warning into its own analyzer
                         // warn!(
                         //     *newer_index,
@@ -435,8 +439,12 @@ impl LifeCore for LifeCoreList {
             // (inclusive or exclusive doesn't matter in this particular case)
             let ctx = edge_context.shrink_to_exclusive_left();
             assert!(edge_context.thing().0 > edge.from.0 && edge_context.thing().0 > edge.to.0);
-            if self.is_stale(ctx.look_at(edge.from.before_and_including())).unwrap()
-                || self.is_stale(ctx.look_at(edge.to.before_and_including())).unwrap()
+            if self
+                .is_stale(ctx.look_at(edge.from.before_and_including()))
+                .unwrap()
+                || self
+                    .is_stale(ctx.look_at(edge.to.before_and_including()))
+                    .unwrap()
             {
                 return Err(BasicValidationFailure {
                     offending_event: edge_context
@@ -615,37 +623,24 @@ impl LifeCore for LifeCoreList {
             })
     }
 
-    fn families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>> {
-        let mut family = Vec::<BTreeSet<EventIndex>>::new();
-        'outer: for (index, node) in self.raw_nodes(ctx) {
+    fn families(&self, ctx: EventContext) -> Vec<LifeCoreFamily> {
+        let mut r = Vec::<LifeCoreFamily>::new();
+        for (index, node) in self.raw_nodes(ctx) {
             if node.parent.is_none_or(|p| !ctx.range().contains(&p.i())) {
                 // We consider this a root node
-                let mut r = BTreeSet::new();
-                r.insert(index.into());
-                family.push(r);
+                r.push(LifeCoreFamily::new_with_root(index));
             } else {
                 // This must be a child node
-                for set_index in 0..family.len() {
-                    if family[set_index].contains(&node.parent.unwrap()) {
-                        family.get_mut(set_index).unwrap().insert(index.into());
-                        continue 'outer;
-                    }
-                }
-                panic!(
-                    "parent {} for this node {} should had been found by now",
-                    node.parent.unwrap(),
-                    index
-                );
+                assert!(index == ctx.look_at(index.absolute()));
+                r.iter_mut().for_each(|x| {
+                    x.insert(FamilyInsert {
+                        parent: ctx.look_at(node.parent.unwrap().absolute()),
+                        child: index,
+                    })
+                });
             }
         }
-        family
-            .into_iter()
-            .map(|x| {
-                x.into_iter()
-                    .map(|y| ctx.look_at(y.before_and_including()))
-                    .collect_vec()
-            })
-            .collect_vec()
+        r
     }
 
     fn add_analyzer(&mut self, name: &str, config: &str) {

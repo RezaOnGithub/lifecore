@@ -1,4 +1,4 @@
-use itertools::Itertools;
+use itertools::{Iterate, Itertools};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
@@ -174,6 +174,13 @@ pub enum EventExt {
     Edge(EdgeExt),
 }
 
+/// The return type for [`LifeCore::families`]
+#[derive(Clone, EnumIs, EnumTryAs)]
+pub enum LifeCoreFamily {
+    Leaf(PointedEventContext),
+    Parent(PointedEventContext, Vec<LifeCoreFamily>),
+}
+
 /// The primary trait describing the interface to the database.
 ///
 /// Mutations are committed only after the resulting database passes basic
@@ -318,7 +325,7 @@ pub trait LifeCore: Send + Sync {
         &self,
         e: EventContext,
     ) -> impl Iterator<Item = (String, (PointedEventContext, NodeType))>;
-    fn families(&self, ctx: EventContext) -> Vec<Vec<PointedEventContext>>;
+    fn families(&self, ctx: EventContext) -> Vec<LifeCoreFamily>;
     fn add_analyzer(&mut self, name: &str, config: &str);
     fn current_analysis_suite(&self) -> analysis::SuiteConfig;
 }
@@ -641,6 +648,75 @@ impl PayloadExt {
         PayloadExt::Number(_) => PayloadType::Number,
         PayloadExt::Serialized(_) => PayloadType::Serialized,
         }
+    }
+}
+
+/// Keyword Arguments to [`LifeCoreFamily::insert`]
+#[derive(Clone, Copy)]
+pub struct FamilyInsert {
+    pub parent: PointedEventContext,
+    pub child: PointedEventContext,
+}
+
+impl LifeCoreFamily {
+    pub fn contains_absolute(&self, v: PointedEventContext) -> bool {
+        match self {
+        LifeCoreFamily::Leaf(pointed_event_context) => {
+            v.absolute() == pointed_event_context.absolute()
+        }
+        LifeCoreFamily::Parent(pointed_event_context, items) => {
+            v.absolute() == pointed_event_context.absolute()
+                || items.iter().any(|x| x.contains_absolute(v))
+        }
+        }
+    }
+
+    /// *Note:* inserts `v` as is. Silently fails if `v.parent` is not present.
+    pub fn insert(&mut self, v: FamilyInsert) {
+        if self.contains_absolute(v.parent) {
+            match self {
+            LifeCoreFamily::Leaf(pointed_event_context) => {
+                assert!(pointed_event_context.absolute() == v.parent.absolute());
+                *self = LifeCoreFamily::Parent(v.parent, vec![LifeCoreFamily::Leaf(v.child)])
+            }
+            LifeCoreFamily::Parent(pointed_event_context, items) => {
+                if pointed_event_context.absolute() == v.parent {
+                    items.push(LifeCoreFamily::Leaf(v.child));
+                } else {
+                    items.iter_mut().for_each(|x| x.insert(v));
+                }
+            }
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+        LifeCoreFamily::Leaf(_) => 1,
+        LifeCoreFamily::Parent(_, items) => 1 + items.iter().map(|x| x.len()).sum::<usize>(),
+        }
+    }
+
+    /// *Note:* inserts `v` as is.
+    pub fn new_with_root(v: PointedEventContext) -> Self {
+        Self::Leaf(v)
+    }
+
+    pub fn collect(&self) -> Vec<PointedEventContext> {
+        match self {
+        LifeCoreFamily::Leaf(pointed_event_context) => vec![*pointed_event_context],
+        LifeCoreFamily::Parent(pointed_event_context, items) => {
+            let mut r = vec![*pointed_event_context];
+            for v in items.iter().map(|x| x.collect()) {
+                r.extend(v);
+            }
+            r
+        }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = PointedEventContext> {
+        self.collect().into_iter()
     }
 }
 

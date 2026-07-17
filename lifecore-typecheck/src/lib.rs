@@ -631,7 +631,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                 }
             }
             Toothpick => {
-                if outgoing_count != 1 || incoming_count > 0 {
+                if outgoing_count > 1 || incoming_count > 0 {
                     r.push(NodeClassNotRespected {
                         offending_event: fresh_node.e,
                         ty_name: ty.name.to_string(),
@@ -640,7 +640,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                 }
             }
             EdgeNode => {
-                if outgoing_count != 1 || incoming_count != 1 {
+                if outgoing_count > 1 || incoming_count > 1 {
                     r.push(NodeClassNotRespected {
                         offending_event: fresh_node.e,
                         ty_name: ty.name.to_string(),
