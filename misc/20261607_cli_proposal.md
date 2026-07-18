@@ -152,13 +152,6 @@ an alias' `PointedEventContext` to the barklist is as follows:
   user error; the user must query before repeating the same query with
   `--select`
 
-The CLI shall keep track of whether the last invocation was for a query
-subcommand and what the subcommand was, and check against the subcommand in
-`--select`. For now it should remember only the very last invocation. If the
-database state has changed due to database mutation, or sidecar
-attachment/detachment/commitment, or alias definition/removal subcommand
-invocation, this history is cleared to `None`.
-
 ## Alias
 
 CLI should store alias information in the persisted CLI state. An alias is a
@@ -289,9 +282,8 @@ in sidecar attachment failure.
 
 ### Detaching The Sidecar
 
-Once the sidecar is detached, the state file MUST be identical to the state
-before the sidecar was attached with the exception of the last query log.
-(outlined in a previous section)
+If the sidecar is detached, the state file MUST be identical to the state
+before the sidecar was attached.
 
 (Note that this is not an explicit condition to be checked for, so much it is an
 implementation guideline and a guiding principle when validating this proposal
