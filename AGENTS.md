@@ -17,7 +17,10 @@ the central model is a typed, versioned graph.
 - `lifecore-typecheck`: analyzer that checks graph contents against active
   `Node_Type` declarations.
 - `lifecore-test`: integration tests for runner-based analysis behavior.
-- `lifecore-cli`: placeholder CLI crate.
+- `lifecore-cli`: functional CLI and reusable support modules for JSON state
+  persistence, analysis-gated mutations, aliases, barklisting, TOML sidecars,
+  queries, suggestions, and GraphViz output. It also contains the built-in
+  `Interactive` analyzer.
 - `lifecore-derive`: placeholder procedural macro crate for future typed-body
   derive helpers.
 - `lifecore-kman`, `lifecore-prod`: placeholder downstream analyzer/domain
@@ -26,9 +29,19 @@ the central model is a typed, versioned graph.
 
 ## Commands
 
-- Run tests with `cargo test`.
+- Run the complete test suite with `cargo test --workspace`.
+- Run focused CLI tests with `cargo test -p lifecore-cli`.
+- Run the CLI with `cargo run -p lifecore-cli -- <arguments>`; use `--help` at
+  any command level for the exact clap interface.
 - Format with `cargo +nightly fmt`; `NOTES.md` says nightly rustfmt features are
   used even though the rest of the project targets stable Rust.
+- In a dirty workspace, prefer a targeted formatting check such as
+  `cargo +nightly fmt --check -p lifecore-cli` so unrelated user work is not
+  rewritten.
+- A useful strict check for CLI-owned code is
+  `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+  The wider workspace currently emits pre-existing warnings, so do not assume a
+  workspace-wide `-D warnings` invocation is clean.
 
 ## Conventions
 
@@ -40,6 +53,11 @@ the central model is a typed, versioned graph.
   context used to inspect it.
 - Keep changes scoped. Several crates are intentionally skeletal, and broad
   refactors should wait until the model and analyzer interface are clearer.
+- Preserve existing working-tree changes. Proposal documents and core APIs are
+  often edited together while designs are being explored.
+- Prefer deterministic iteration and presentation. Interactive CLI operations
+  list candidates and select them by a one-based `--select`; changing sort order
+  silently changes the meaning of a repeated command.
 
 ## Interface Terms
 
@@ -48,6 +66,9 @@ the central model is a typed, versioned graph.
 - `PointedEventContext` couples that window with a mandatory `thing` identifying
   the specific node or edge being inspected. Methods that require a concrete
   append-log record accept this pointed type.
+- `PointedEventContext::new(index)` creates the smallest valid context that
+  includes an event. Use a current bounded window when inspecting an event, and
+  use `.absolute()` only when comparing event identity across windows.
 - A stale node is a node that has been superseded by a newer child within the
   chosen context. A stale edge is an edge whose endpoint has become stale.
 - Fresh means non-stale in the chosen context. Freshness can change when the
@@ -55,6 +76,9 @@ the central model is a typed, versioned graph.
 - `NodeExt.e`, `NodeExt.parent`, and the contexts stored by `EdgeExt` are
   pointed. `NodeExt.ty_name` is the stored type name. `NodeExt.ty` is a resolved
   `NodeType` for the current context and may be absent or historically shifted.
+- Avoid exposing raw context indices in user interfaces. The CLI resolves
+  user-facing aliases to pointed contexts and serializes contexts through their
+  serde representation where an index is unavoidable.
 
 ## Validation And TypeCheck
 
@@ -68,6 +92,91 @@ the central model is a typed, versioned graph.
   permissions, and unresolved override targets.
 - Analyzer output is diagnostic. Core mutation APIs currently reject only
   `basic_validation` failures before committing a graph change.
+- `add_mock` and `connect_mock` append a validated provisional suffix under one
+  `Mock` circumstance. `apply` replaces that suffix with a canonical session
+  circumstance. A failed core mutation leaves the receiver unchanged.
+- `AnalysisRunner` reads analyzer name/config pairs from
+  `LifeCore::current_analysis_suite`, constructs them from separately registered
+  factories, runs analyzer initialization, and analyzes every valid historical
+  prefix. A configured analyzer without a registered factory is an error.
+- The CLI registers `Type_Check` and `Interactive`. CLI mutations are stricter
+  than direct core mutations: every individual provisional addition must pass
+  basic validation and the complete analyzer suite without an Inconsistency
+  before the operation may continue or be saved. Warnings and Suggestions are
+  non-fatal.
+- `Interactive` examines a window ending in a child node and suggests recreating
+  eligible incoming or outgoing connections from its parent. It suppresses a
+  suggestion when the opposite endpoint is stale or a fresh successor already
+  has the equivalent connection.
+
+## CLI State And Transactions
+
+- The state file is pretty JSON with exactly two top-level values: `lifecore`
+  contains `LifeCoreList`, and `cli` contains aliases, barklist entries, and the
+  optional sidecar path.
+- The default path is `./LifeCoreState.json`. If
+  `LIFECORE_STATE_FILE_PATH` is defined, that path is authoritative; failures
+  must never fall back to the current-directory file.
+- `init` creates the state file, registers `Interactive` and `Type_Check`, runs
+  validation and analysis, applies any provisional state, and refuses to
+  replace an existing file. TypeCheck's bootstrap Suggestion on an empty graph
+  is expected and is non-fatal.
+- Persisted state must never contain `Mock`. Loading aborts if it does, and
+  saving checks again before an atomic same-directory temporary-file rename.
+  There is intentionally no file locking yet.
+- Database mutations follow loaded -> staged clone -> analyzed -> applied ->
+  atomically saved. `add`, `connect`, `analyzer add`, and `suggestion apply` are
+  dry runs unless `--commit` is present. Analyzer configuration is not a graph
+  event, but the CLI still stages it on a clone and analyzes before saving.
+- CLI-state-only operations such as alias/barklist changes and sidecar
+  attach/detach persist immediately. They must not accidentally persist a
+  provisional database assembled from a sidecar.
+- Output modes are `auto`, `table`, `lines`, and `json`; `auto` selects tables
+  only for a TTY. `--no-bark` disables Warning/Suggestion filtering and also
+  prevents automatic barklisting when a Suggestion is committed.
+- Diagnostics are deterministically sorted and Warning/Suggestion hashes use a
+  canonical SHA3-512 representation. Relevance is sorted for hashing, while
+  SuggestedAction order remains significant. Never filter an Inconsistency.
+- Logging uses `log` and `env_logger`, defaults to `trace`, and writes to stderr.
+  Set `RUST_LOG` when quieter or more selective output is needed.
+
+## Sidecars
+
+- A sidecar is a TOML `[[entry]]` list. Entries are processed in file order;
+  each creates one node followed by `connect_to` edges and then
+  `connect_back_from` edges. String and integer body values map to
+  `PayloadExt::Text` and `PayloadExt::Number`; other TOML payload conversions
+  are intentionally deferred.
+- Sidecar aliases are temporary until commit. They may reference persisted
+  aliases or aliases from earlier entries, and become persisted only after a
+  successful `sidecar commit`.
+- `sidecar attach` checks only that the path exists and stores an absolute path;
+  it deliberately does not parse the file. Later ordinary invocations rebuild
+  and analyze the provisional suffix in memory.
+- `sidecar detach` must not read or parse the sidecar. This is the escape hatch
+  for deleted, unreadable, or invalid sidecars, and attach followed by detach
+  with no other saved change should restore identical state-file bytes.
+- While attached, singular mutations, analyzer additions, suggestion
+  application, alias mutation, and barklist mutation are forbidden. Read-only
+  commands operate on the analyzed provisional graph. Only `sidecar commit`
+  may apply and save that suffix; the TOML file itself is never deleted.
+
+## CLI Code Map
+
+- `lifecore-cli/src/lib.rs`: clap interface, dispatch, transaction orchestration,
+  queries, aliases, barklist and selection workflows.
+- `state.rs`: serialized state envelope, path resolution, Mock rejection, and
+  atomic persistence.
+- `diagnostics.rs`: deterministic ordering, canonical hashes, bark filtering,
+  and table/line/JSON rendering.
+- `sidecar.rs`: TOML schema and payload conversion.
+- `interactive_analyzer.rs`: reusable `Interactive` analyzer and factory.
+- `graphviz.rs`: reusable DOT generation plus optional `dot -Tsvg` execution.
+- `util.rs`: context/index helpers necessitated by private context fields.
+
+Keep validation and analysis in the shared staging helpers. Duplicating mutation
+logic in a command handler is likely to omit rollback, analyzer execution, Mock
+handling, or diagnostic presentation.
 
 ## Current Risks
 
@@ -79,3 +188,10 @@ the central model is a typed, versioned graph.
   graph history.
 - The analyzer API is still thin. Downstream analyzer crates may need richer
   graph-query helpers so they can avoid rebuilding common traversals.
+- The CLI MVP accepts only text and integer fields for singular additions and
+  sidecars. General `Node_Type` declarations contain serialized fields and
+  therefore cannot yet be authored completely through these input paths. The
+  built-in TypeCheck bootstrap Suggestion remains the supported way to create
+  the initial `Node_Type` node from a fresh CLI state.
+- SVG generation requires the external `dot` executable. `graphviz --dot`
+  writes DOT directly and has no GraphViz runtime dependency.
