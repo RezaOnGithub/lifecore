@@ -23,7 +23,7 @@ pub use jiff::Zoned;
 pub use serde_json::Value as JSON;
 pub use serde_json::to_value as to_json_value;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct NodeBodyExt(pub BTreeMap<String, PayloadExt>);
 
 /// "Circumstance" is currently a simple method of logging event dates and
@@ -76,8 +76,8 @@ pub enum LifeCoreError {
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct BasicValidationFailure {
-    offending_event: DiagnosticLocation,
-    reason: BasicValidationFailureScenario,
+    pub offending_event: DiagnosticLocation,
+    pub reason: BasicValidationFailureScenario,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -379,7 +379,7 @@ pub struct EventContext {
 
 /// An [`EventContext`] window coupled with a concrete event in that window.
 // TOTEST PointedEventContext can never point to usize::MAX
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug)]
 pub struct PointedEventContext {
     pub(crate) end: usize,
     pub(crate) thing: usize,
@@ -459,6 +459,15 @@ impl PointedEventContext {
         0..self.end
     }
 
+    /// This is new functionality due to growing pains with regard to user code.
+    /// Handle with care!
+    pub fn new(thing: usize) -> Self {
+        Self {
+            end: thing.saturating_add(1),
+            thing,
+        }
+    }
+
     pub fn validate(&self) -> bool {
         self.range().contains(&self.thing)
     }
@@ -522,6 +531,22 @@ impl PointedEventContext {
 
     pub(crate) fn look_raw(&self, e: usize) -> Self {
         self.window().look_raw(e)
+    }
+}
+
+impl Ord for PointedEventContext {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.end.cmp(&other.end) {
+        std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+        std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+        std::cmp::Ordering::Equal => self.thing.cmp(&other.thing),
+        }
+    }
+}
+
+impl PartialOrd for PointedEventContext {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 

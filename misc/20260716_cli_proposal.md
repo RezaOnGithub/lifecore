@@ -23,8 +23,11 @@ database at any `EventContext`; to closely enforce these invariants, the intent
 is to run Basic Validation and all Analyzers at every database mutation, (where
 Analyzers also scan the database in every valid window as well; see
 `lifecore::analysis::AnalysisRunner`) and a database mutation shall only add
-exactly 1 event to the database (in addition to bookkeeping/circumstance, but 1
-logical addition nonetheless)
+exactly 1 event to the database OR 1 new analyzer name/config pair (in addition
+to bookkeeping/circumstance, but 1 logical addition nonetheless)
+
+All mutations are additive; subtractive/corrective operations are not within
+scope.
 
 # Specification
 
@@ -39,6 +42,10 @@ own for certain operations, and this state shall be kept separate from the
 database as described. Whenever we refer to the "state file", we are referring
 to the file holding the aforementioned JSON data.
 
+(It is not intended for the users to edit the state file by hand, and
+pretty-printed JSON is for the purposes of development; a binary serialization
+target in the future shall naturally discourage hand-editing.)
+
 By default, the CLI should operate on the state file in the current directory
 named `LifeCoreState.json` UNLESS environment variable
 `LIFECORE_STATE_FILE_PATH` is defined; then the state file path is the path that
@@ -48,13 +55,15 @@ to the implicit working directory path for the state file in case of errors.
 fallback to the file that may be present in the working directory)
 
 Before the state file is usable, it must be initialized via an `init`
-subcommand. Then, the state file with the path derived from the procedure above
-is created with no initial events contained. `init` fails if the database file
-already exists.
+subcommand. (which creates an empty database in Staged state, which must become
+Analyzed before it's ready to be applied and persisted; see below) Then, the
+state file with the path derived from the procedure above is created with no
+initial events contained. `init` fails if the database file already exists.
 
 `init` is a database mutation operation; thus it must run Basic Validation and
 the default analysis suite on the empty database, then invoking the `apply`
-method and writing to the state file.
+method and writing to the state file. For details of database states, refer to
+the next section.
 
 Upon deserializing the database, CLI must immediately abort if the database
 contains a `Mock` circumstance; in general, `Mock` must never be present in the
@@ -64,24 +73,44 @@ before writing to the state file.
 For the purpose of the MVP, the state file need not have a version field or
 exact specification; if it can be deserialized, it is considered workable.
 
-For the purpose of the MVP, the CLI shall read and write the state file
-directly, with no file locking, or rename-based control.
+For the purpose of the MVP, the CLI shall not perform file-locking but may use
+atomic rename to persist state file.
 
 ## Transactions, Validation and Analysis
 
-LifeCore database exists in 3 states: just read from the disk, provisional,
-ready to be written back to the disk. To enter provisional state, new events
-need to be added via `add_mock` and `connect_mock` method. After each addition
-operation, if a basic validation error is raised, the current operation is
-aborted. Then, AnalysisRunner must run the Analysis Suite associated with the
-database. Note that (at least for now) the entire Analysis Suite must pass
-without any Inconsistency in order to continue the operation.
+LifeCore database exists in 5 states:
 
-Once all the desired new events are added in the provisional state, CLI shall do
-nothing with the database UNLESS the user has opted to write changes. Then,
+- Loaded: the database has just been read from the state file.
+- Staged: new events have been added, that pass basic validation, but unknown to
+  pass analysis.
+- Analyzed: new events have been added that pass basic validation and analysis,
+  diagnostics have been generated. The new events are under "Mock" circumstance.
+- Applied: "Mock" circumstances are replaced, database is in a canonical state,
+  ready to be written back.
+- Saved: the state file has been updated; the operation of the CLI utility must
+  conclude.
+
+Typical read/query operations need not advance past Loaded state normally, and
+Analyzed state when a sidecar is present.
+
+For every addition event, the database starts from Analyzed or Loaded state,
+transitions to Staged by `add_mock` or `connect_mock`, and transitions to
+Analyzed after the analysis suite passes. In case of a basic validation failure,
+or detected inconsistency in analysis, the current operation is aborted.
+
+To enter Staged state, new events need to be added via `add_mock` and
+`connect_mock` method. After each addition operation, if a basic validation
+error is raised, the current operation is aborted. Then, AnalysisRunner must run
+the Analysis Suite associated with the database. Note that (at least for now)
+the entire Analysis Suite must pass without any Inconsistency in order to
+continue the operation.
+
+Once all the desired new events are in the provisional Analyzed state, CLI shall
+do nothing with the database UNLESS the user has opted to write changes. Then,
 `apply` method of the database is called and, if successful, the database is
 ready to be written back to the state file. Depending on whether the actual file
-write operation is successful or not, the persistent database will be modified.
+write operation is successful or not, the persistent database on disk will be
+modified.
 
 Note that the behavior is slightly different if a sidecar is present; all
 sidecar content are implied to be provisional additions, thus on start-up, the
@@ -100,15 +129,20 @@ By default, `Interactive` and `TypeCheck` are registered as analyzers upon
 `init`, (see above) This fact needs to clearly acknowledged to the user.
 
 The built-in analysis runner shall be equipped with all analyzers implemented
-thus far in the current workspace, with a straight-forward importing new ones in
-code and recompiling.
+thus far in the current workspace, with a straight-forward path for importing
+new ones in code and recompiling.
 
 (Organizing CLI functionality into a reusable system for integration of
 thirdparty analyzers for the purpose of custom CLIs is not within the scope of
 the current CLI proposal)
 
-User may add new analyzers with `analyzer add` subcommand; no checks are
-performed regarding whether such Analyzer and Analyzer factories exist.
+User may add new analyzers with `analyzer add` subcommand by specifying a name
+and the config string. No checks are performed initially regarding whether such
+Analyzer and Analyzer factories exist. Analyzer addition modifies the database,
+(database enters Staged state) and thus requires another round of basic
+validation followed by running Analyzers, which would surface the issue of
+missing Analyzer factories, which would abort persistence, which addresses the
+problem.
 
 ## Diagnostics
 
@@ -124,7 +158,9 @@ diagnostics is described in a later section.
 
 Users can trigger a basic validation check and view all diagnostics for the
 current database, with barklist on or not, via `check` subcommand. This
-operation shall not modify the state file.
+operation shall not modify the state file. `check` stops at the first erroneous
+event. ("erroneous" meaning it generates either a basic validation failure or an
+analyzer inconsistency)
 
 Diagnostic Messages must be sorted with a stable and robust sorting strategy
 before presenting to the user, which is also the same algorithm for selecting
@@ -136,9 +172,9 @@ The preferred hash algorithm is `SHA3-512` from `sha3` crate, for now.
 
 ## Mode Of Operation
 
-The purposed mode of operation for adding an alias or removing an alias or
-applying a suggestion or adding a diagnostic to the barklist by hash or adding
-an alias' `PointedEventContext` to the barklist is as follows:
+The purposed mode of operation for adding an alias or applying a suggestion or
+adding a diagnostic to the barklist by hash or adding an alias'
+`PointedEventContext` to the barklist is as follows:
 
 - User invokes the CLI for the aforementioned operation, and receives a numbered
   list of possible targets from the CLI.
@@ -174,7 +210,7 @@ Multiple aliases MAY refer to the same event.
 Alias names are unique. As long as an alias exists, users may not add another
 alias of the same name.
 
-Failure to add an alias CAN abort an add operation.
+Failure to add an alias MUST abort an add operation.
 
 ## Singular Mutation
 
@@ -182,8 +218,9 @@ The CLI shall have basic `add` and `connect` functionality for adding a single
 node or edge, and optionally `.apply()` and persisting these operations via
 `--commit` flag. (i.e. "dry run" by default.) For now, `add` command should
 support adding nodes with text and numerical fields, in a syntax such as
-`--key FIELD --value PAYLOAD`. (Parsing other payload types is currently not
-within the scope of the MVP but ought to be straightforward to implement later.)
+`--text KEY=VALUE` or `--number KEY=VALUE`. (Parsing other payload types is
+currently not within the scope of the MVP but ought to be straightforward to
+implement later.)
 
 ## Sidecar
 
@@ -200,7 +237,7 @@ of the CLI:
 - Suggestions cannot be applied.
 - New aliases may not be created.
 - Existing aliases may not be removed.
-- Singular mutations are not allowed.
+- Singular mutations are not allowed. (no adding nodes, edges, or analyzers)
 - Adding by hash or by PointedEventContext to the barklist is not allowed.
 - Any database mutation operation (other than `sidecar commit` detailed below)
 
@@ -282,12 +319,16 @@ in sidecar attachment failure.
 
 ### Detaching The Sidecar
 
-If the sidecar is detached, the state file MUST be identical to the state
-before the sidecar was attached.
+If the sidecar is detached, the state file MUST be identical to the state before
+the sidecar was attached.
 
 (Note that this is not an explicit condition to be checked for, so much it is an
 implementation guideline and a guiding principle when validating this proposal
 for conflicting requirements.)
+
+Sidecar detachment must not involve actually processing or reading from the
+sidecar file; this is a fail-safe so that deleted or invalid sidecar files don't
+trap the state file in an inoperable state.
 
 ### Committing Sidecar Files
 

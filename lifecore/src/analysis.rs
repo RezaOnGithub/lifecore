@@ -47,7 +47,7 @@ pub struct Suggestion {
     pub action: Vec<SuggestedAction>,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub enum SuggestedAction {
     AddNode {
         ty_name: String,
@@ -315,8 +315,8 @@ impl Hash for Suggestion {
         }
         self.message.hash(state);
 
-        // SUS implementing Hash for NodeBodyExt is unwieldy, and this won't cause an
-        // issue, probably
-        (self.action.len()).hash(state);
+        // Actions already have an ordering to them;
+        // sorting a suggested action list may turn it into an invalid sugestion
+        self.action.hash(state);
     }
 }

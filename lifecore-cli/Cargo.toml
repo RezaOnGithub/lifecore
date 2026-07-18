@@ -5,17 +5,20 @@ edition = "2024"
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:anyhow"]
+cli = []
 
 [dependencies]
-anyhow = { version = "1.0.103", optional = true }
-clap = { version = "4.6.1", features = ["derive"], optional = true }
-itertools = "0.15.0"
+anyhow = "1.0.103"
+clap = { version = "4.6.1", features = ["derive"] }
+env_logger = "0.11.11"
 lifecore = { path = "../lifecore" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
+log = "0.4.33"
 regex = "1.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+sha3 = "0.10.8"
+toml = "0.9.8"
 
 [lints]
 workspace = true

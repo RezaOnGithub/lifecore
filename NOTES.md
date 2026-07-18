@@ -59,6 +59,9 @@
 
 - [ ] Look over the codebase: `EventContext::universe()` is dangerous and an
       anti-pattern
+- [ ] Fix `Hash` for Message variants...
+- [ ] loaded → staged candidate → analyzed → applied → atomically persisted
+- [ ] sidecar detach safety
 
 # Learning
 
