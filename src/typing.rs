@@ -5,42 +5,12 @@
 //! instance of this type need careful modification to ensure typechecking
 //! proceeds as normal
 
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use crate::{LifeCoreError, NodeBodyExt, PayloadExt, PayloadType, TypedBody};
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct NodeType {
-    pub name: String,
-    pub class: NodeTypeClass,
-    pub outgoing: Vec<String>,
-    pub incoming: Vec<String>,
-    pub additional_override: Vec<String>,
-    pub field: Vec<(String, (PayloadType, NodeTypeFieldStatus))>,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Display)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub enum NodeTypeClass {
-    Spike,
-    Hub,
-    Toothpick,
-    EdgeNode,
-    Regular,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub enum NodeTypeFieldStatus {
-    Mandatory,
-    Encouraged,
-    Deprecated,
-    Optional,
-}
+use crate::{Body, LifeCoreError, Payload, TypedBody, ValueType};
 
 impl<'a> TypedBody<'a> for NodeType {
     fn describe_self() -> NodeType {
@@ -53,27 +23,27 @@ impl<'a> TypedBody<'a> for NodeType {
             field: vec![
                 (
                     "name".to_string(),
-                    (PayloadType::Text, NodeTypeFieldStatus::Mandatory),
+                    (ValueType::Text, NodeTypeFieldStatus::Mandatory),
                 ),
                 (
                     "class".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                    (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
                 ),
                 (
                     "from_end".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                    (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
                 ),
                 (
                     "to_end".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                    (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
                 ),
                 (
                     "additional_override".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                    (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
                 ),
                 (
                     "field".to_string(),
-                    (PayloadType::Serialized, NodeTypeFieldStatus::Mandatory),
+                    (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
                 ),
             ],
         }
@@ -84,38 +54,37 @@ impl<'a> TypedBody<'a> for NodeType {
     }
 }
 
-impl From<NodeType> for NodeBodyExt {
+impl From<NodeType> for Body {
     fn from(val: NodeType) -> Self {
-        NodeBodyExt(
+        Body(
             vec![
-                ("name", PayloadExt::Text(val.name)),
-                ("class", PayloadExt::serialized_from(val.class)),
-                ("from_end", PayloadExt::serialized_from(val.outgoing)),
-                ("to_end", PayloadExt::serialized_from(val.incoming)),
+                ("name", Payload::Text(val.name)),
+                ("class", Payload::serialized_from(val.class)),
+                ("from_end", Payload::serialized_from(val.outgoing)),
+                ("to_end", Payload::serialized_from(val.incoming)),
                 (
                     "additional_override",
-                    PayloadExt::serialized_from(val.additional_override),
+                    Payload::serialized_from(val.additional_override),
                 ),
-                ("field", PayloadExt::serialized_from(val.field)),
+                ("field", Payload::serialized_from(val.field)),
             ]
             .into_iter()
             .map(|(x, y)| (x.to_string(), y))
-            .collect::<BTreeMap<String, PayloadExt>>(),
+            .collect::<BTreeMap<String, Payload>>(),
         )
     }
 }
 
-impl TryFrom<&NodeBodyExt> for NodeType {
+impl TryFrom<&Body> for NodeType {
     type Error = LifeCoreError;
 
-    fn try_from(v: &NodeBodyExt) -> Result<Self, Self::Error> {
+    fn try_from(v: &Body) -> Result<Self, Self::Error> {
         let name = v.get_text("name")?;
         let class: NodeTypeClass = v.get_deserialized("class")?;
         let from_end: Vec<String> = v.get_deserialized("from_end")?;
         let to_end: Vec<String> = v.get_deserialized("to_end")?;
         let additional_override: Vec<String> = v.get_deserialized("additional_override")?;
-        let field: Vec<(String, (PayloadType, NodeTypeFieldStatus))> =
-            v.get_deserialized("field")?;
+        let field: Vec<(String, (ValueType, NodeTypeFieldStatus))> = v.get_deserialized("field")?;
 
         Ok(Self {
             name,
@@ -131,7 +100,7 @@ impl TryFrom<&NodeBodyExt> for NodeType {
 impl NodeType {
     pub fn new(
         name: &str,
-        fields: &[(&str, (PayloadType, NodeTypeFieldStatus))],
+        fields: &[(&str, (ValueType, NodeTypeFieldStatus))],
         outgoing: &[&str],
         incoming: &[&str],
         additional_override: &[&str],
@@ -148,4 +117,9 @@ impl NodeType {
                 .collect(),
         }
     }
+}
+
+impl ValueType {
+    /// Parser for a DSL for expressing types
+    pub fn parse(s: &str) -> Self {}
 }

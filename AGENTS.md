@@ -39,8 +39,8 @@ the central model is a typed, versioned graph.
   `cargo +nightly fmt --check -p lifecore-cli` so unrelated user work is not
   rewritten.
 - A useful strict check for CLI-owned code is
-  `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-  The wider workspace currently emits pre-existing warnings, so do not assume a
+  `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`. The
+  wider workspace currently emits pre-existing warnings, so do not assume a
   workspace-wide `-D warnings` invocation is clean.
 
 ## Conventions
@@ -48,8 +48,8 @@ the central model is a typed, versioned graph.
 - Read `NOTES.md` before making design-heavy changes.
 - Comments tagged `SUS`, `TODO`, `NOTDO`, `COPY_PASTE`, `NOTE`, and `PERF` have
   project-specific meanings documented in `NOTES.md`.
-- Be careful with event-context windows. Types and staleness are contextual:
-  the right answer depends on both the inspected graph item and the historical
+- Be careful with event-context windows. Types and staleness are contextual: the
+  right answer depends on both the inspected graph item and the historical
   context used to inspect it.
 - Keep changes scoped. Several crates are intentionally skeletal, and broad
   refactors should wait until the model and analyzer interface are clearer.
@@ -114,13 +114,13 @@ the central model is a typed, versioned graph.
 - The state file is pretty JSON with exactly two top-level values: `lifecore`
   contains `LifeCoreList`, and `cli` contains aliases, barklist entries, and the
   optional sidecar path.
-- The default path is `./LifeCoreState.json`. If
-  `LIFECORE_STATE_FILE_PATH` is defined, that path is authoritative; failures
-  must never fall back to the current-directory file.
+- The default path is `./LifeCoreState.json`. If `LIFECORE_STATE_FILE_PATH` is
+  defined, that path is authoritative; failures must never fall back to the
+  current-directory file.
 - `init` creates the state file, registers `Interactive` and `Type_Check`, runs
-  validation and analysis, applies any provisional state, and refuses to
-  replace an existing file. TypeCheck's bootstrap Suggestion on an empty graph
-  is expected and is non-fatal.
+  validation and analysis, applies any provisional state, and refuses to replace
+  an existing file. TypeCheck's bootstrap Suggestion on an empty graph is
+  expected and is non-fatal.
 - Persisted state must never contain `Mock`. Loading aborts if it does, and
   saving checks again before an atomic same-directory temporary-file rename.
   There is intentionally no file locking yet.
@@ -137,8 +137,8 @@ the central model is a typed, versioned graph.
 - Diagnostics are deterministically sorted and Warning/Suggestion hashes use a
   canonical SHA3-512 representation. Relevance is sorted for hashing, while
   SuggestedAction order remains significant. Never filter an Inconsistency.
-- Logging uses `log` and `env_logger`, defaults to `trace`, and writes to stderr.
-  Set `RUST_LOG` when quieter or more selective output is needed.
+- Logging uses `log` and `env_logger`, defaults to `trace`, and writes to
+  stderr. Set `RUST_LOG` when quieter or more selective output is needed.
 
 ## Sidecars
 
@@ -158,13 +158,13 @@ the central model is a typed, versioned graph.
   with no other saved change should restore identical state-file bytes.
 - While attached, singular mutations, analyzer additions, suggestion
   application, alias mutation, and barklist mutation are forbidden. Read-only
-  commands operate on the analyzed provisional graph. Only `sidecar commit`
-  may apply and save that suffix; the TOML file itself is never deleted.
+  commands operate on the analyzed provisional graph. Only `sidecar commit` may
+  apply and save that suffix; the TOML file itself is never deleted.
 
 ## CLI Code Map
 
-- `lifecore-cli/src/lib.rs`: clap interface, dispatch, transaction orchestration,
-  queries, aliases, barklist and selection workflows.
+- `lifecore-cli/src/lib.rs`: clap interface, dispatch, transaction
+  orchestration, queries, aliases, barklist and selection workflows.
 - `state.rs`: serialized state envelope, path resolution, Mock rejection, and
   atomic persistence.
 - `diagnostics.rs`: deterministic ordering, canonical hashes, bark filtering,
@@ -193,5 +193,5 @@ handling, or diagnostic presentation.
   therefore cannot yet be authored completely through these input paths. The
   built-in TypeCheck bootstrap Suggestion remains the supported way to create
   the initial `Node_Type` node from a fresh CLI state.
-- SVG generation requires the external `dot` executable. `graphviz --dot`
-  writes DOT directly and has no GraphViz runtime dependency.
+- SVG generation requires the external `dot` executable. `graphviz --dot` writes
+  DOT directly and has no GraphViz runtime dependency.

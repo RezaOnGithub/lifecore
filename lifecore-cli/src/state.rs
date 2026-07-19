@@ -179,7 +179,7 @@ pub fn absolute_existing_path(path: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use lifecore::NodeBodyExt;
+    use lifecore::Body;
 
     use super::*;
 
@@ -220,7 +220,7 @@ mod tests {
         let mut state = StateFile::empty();
         state
             .lifecore
-            .add_mock("Thing", NodeBodyExt::default(), None)
+            .add_mock("Thing", Body::default(), None)
             .unwrap();
         fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
 

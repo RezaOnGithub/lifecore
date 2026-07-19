@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
-use lifecore::{NodeBodyExt, PayloadExt};
+use lifecore::{Body, Payload};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -47,25 +47,25 @@ impl Sidecar {
 }
 
 impl SidecarEntry {
-    pub fn node_body(&self) -> Result<NodeBodyExt> {
+    pub fn node_body(&self) -> Result<Body> {
         let mut body = BTreeMap::new();
         for (name, value) in &self.body {
             let payload = match value {
-            toml::Value::String(value) => PayloadExt::Text(value.clone()),
-            toml::Value::Integer(value) => PayloadExt::Number(*value),
+            toml::Value::String(value) => Payload::Text(value.clone()),
+            toml::Value::Integer(value) => Payload::Number(*value),
             unsupported => bail!(
                 "sidecar field {name:?} uses unsupported TOML value {unsupported}; only strings and integers are supported"
             ),
             };
             body.insert(name.clone(), payload);
         }
-        Ok(NodeBodyExt(body))
+        Ok(Body(body))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use lifecore::PayloadExt;
+    use lifecore::Payload;
 
     use super::*;
 
@@ -91,11 +91,11 @@ mod tests {
         let entry = &sidecar.entries[0];
         assert_eq!(
             entry.node_body().unwrap().0["content"],
-            PayloadExt::Text("Buy Milk".into())
+            Payload::Text("Buy Milk".into())
         );
         assert_eq!(
             entry.node_body().unwrap().0["priority"],
-            PayloadExt::Number(2)
+            Payload::Number(2)
         );
         assert_eq!(entry.connect.connect_to[0].target, "AtWork");
         assert_eq!(entry.connect.connect_back_from[0].target, "Dairy");

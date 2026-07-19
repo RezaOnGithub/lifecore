@@ -11,8 +11,8 @@ analysis window.
 
 ## Terminology And Scope
 
-- A **current node** or **current edge** is fresh in the bounded
-  `EventContext` being analyzed.
+- A **current node** or **current edge** is fresh in the bounded `EventContext`
+  being analyzed.
 - A **timebox** is a non-negative integer number of minutes.
 - A TODO or Project is **unfinished** when its `status` is not `Done`.
 - A node **contributes to** another node when a current `Contributes_To` edge
@@ -29,9 +29,8 @@ outside the scope of this analyzer.
 The Rust crate should export typed bodies named `Todo`, `Project`, and `Cycler`,
 a shared `CompletionStatus` enum, `ProductivityConfig`, and
 `ProductivityFactory`. Their persisted type names are `TODO`, `Project`, and
-`Cycler`, respectively. `CompletionStatus` has exactly the Rust variants
-`Done`, `InProgress`, and `Dormant`, which map to the textual values specified
-below.
+`Cycler`, respectively. `CompletionStatus` has exactly the Rust variants `Done`,
+`InProgress`, and `Dormant`, which map to the textual values specified below.
 
 Status strings and graph type names are case-sensitive. Although `status` is
 semantically a completion field, its persisted field name remains `status`.
@@ -47,11 +46,11 @@ A `TODO` is a specific actionable item with these fields:
 | `estimated_completion_minutes` | `Number`     | Optional  |
 
 The allowed statuses are `Done`, `In-Progress`, and `Dormant`. There is no
-separate ready or pending state: every unfinished TODO is explicitly either
-in progress or dormant.
+separate ready or pending state: every unfinished TODO is explicitly either in
+progress or dormant.
 
-`TODO` uses `NodeTypeClass::Spike`, permits outgoing `Contributes_To` edges,
-and permits no incoming edge names.
+`TODO` uses `NodeTypeClass::Spike`, permits outgoing `Contributes_To` edges, and
+permits no incoming edge names.
 
 ### Project
 
@@ -63,9 +62,9 @@ A `Project` groups work under a description and a required timebox:
 | `status`                       | `Text`       | Mandatory |
 | `estimated_completion_minutes` | `Number`     | Mandatory |
 
-Project uses the same statuses as TODO: `Done`, `In-Progress`, and `Dormant`.
-In particular, `TODO` is not a valid Project status. Consequently, Projects
-have the same deliberate lack of a ready-but-not-started state as TODO items.
+Project uses the same statuses as TODO: `Done`, `In-Progress`, and `Dormant`. In
+particular, `TODO` is not a valid Project status. Consequently, Projects have
+the same deliberate lack of a ready-but-not-started state as TODO items.
 
 `Project` uses `NodeTypeClass::Regular` and permits `Contributes_To` as both an
 incoming and outgoing edge name.
@@ -78,8 +77,8 @@ A `Cycler` represents an area that should periodically receive completed work:
 | ------------- | ------------ | --------- |
 | `description` | `Text`       | Mandatory |
 
-`Cycler` uses `NodeTypeClass::Hub`, permits incoming `Contributes_To` edges,
-and permits no outgoing edge names.
+`Cycler` uses `NodeTypeClass::Hub`, permits incoming `Contributes_To` edges, and
+permits no outgoing edge names.
 
 All three canonical declarations allow `Tombstone` as their sole additional
 override type. Field order follows the tables above. Declaration comparison for
@@ -96,8 +95,8 @@ The analyzer accepts exactly these endpoint pairs for a `Contributes_To` edge:
 | `TODO`      | `Project` |
 | `Project`   | `Project` |
 
-TypeCheck can verify that an endpoint declaration permits the edge name, but
-it cannot constrain the type at the opposite endpoint. `Productivity` therefore
+TypeCheck can verify that an endpoint declaration permits the edge name, but it
+cannot constrain the type at the opposite endpoint. `Productivity` therefore
 owns validation of these pairs. A `Contributes_To` edge with any other endpoint
 pair is an Inconsistency.
 
@@ -107,9 +106,9 @@ recursive time accounting would otherwise be undefined.
 
 ## Type Declaration Bootstrap
 
-On initialization, the analyzer examines the active `Node_Type` declarations
-for `TODO`, `Project`, and `Cycler`. For each declaration that is absent or does
-not structurally equal the canonical declaration above, it emits a separate
+On initialization, the analyzer examines the active `Node_Type` declarations for
+`TODO`, `Project`, and `Cycler`. For each declaration that is absent or does not
+structurally equal the canonical declaration above, it emits a separate
 Suggestion containing one `SuggestedAction::AddNode`:
 
 - `ty_name` is `Node_Type`;
@@ -118,10 +117,10 @@ Suggestion containing one `SuggestedAction::AddNode`:
 - `parent` points to the active declaration when replacing a mismatch.
 
 Separate suggestions let the CLI apply and analyze each graph addition through
-its normal transaction workflow. They are advisory rather than
-Inconsistencies. Replacing a declaration can still be rejected by TypeCheck if
-existing fresh nodes do not satisfy the replacement schema; the productivity
-analyzer must not bypass that protection.
+its normal transaction workflow. They are advisory rather than Inconsistencies.
+Replacing a declaration can still be rejected by TypeCheck if existing fresh
+nodes do not satisfy the replacement schema; the productivity analyzer must not
+bypass that protection.
 
 ## Configuration
 
@@ -136,8 +135,8 @@ object:
 
 An empty string is equivalent to the object above. `oldest_cyclers` is a
 non-negative integer and is the number of uncovered Cyclers selected for
-warnings. Zero disables only the Cycler warning. Unknown fields, malformed
-JSON, fractional values, and negative values reject analyzer construction.
+warnings. Zero disables only the Cycler warning. Unknown fields, malformed JSON,
+fractional values, and negative values reject analyzer construction.
 
 To report this cleanly, LifeCore should add an error variant equivalent to:
 
@@ -183,8 +182,8 @@ The analyzer emits Inconsistencies for:
 
 TypeCheck may also diagnose malformed field shapes. The productivity analyzer
 must nevertheless handle them without panicking when TypeCheck is absent or
-ordered differently. A malformed value is excluded from calculations that
-depend on it after its Inconsistency has been recorded.
+ordered differently. A malformed value is excluded from calculations that depend
+on it after its Inconsistency has been recorded.
 
 Cycle reporting should be deterministic and finite. Emit one Inconsistency for
 each cyclic strongly connected component, locate it at the newest internal
@@ -200,25 +199,24 @@ An unfinished TODO is urgent when:
 - it directly contributes to at least one Project.
 
 Emit one Warning per urgent TODO, not one per edge or recipient Project. Locate
-the warning at the TODO and include the TODO, all direct recipient Projects,
-and their connecting edges in relevance. A non-time-boxed TODO contributing
-only to a Cycler is not urgent under this rule. A Done TODO never produces this
-warning.
+the warning at the TODO and include the TODO, all direct recipient Projects, and
+their connecting edges in relevance. A non-time-boxed TODO contributing only to
+a Cycler is not urgent under this rule. A Done TODO never produces this warning.
 
 ### Project Timebox Overage
 
 For each Project, recursively follow incoming `Contributes_To` edges through
 contributing Projects and collect reachable TODOs. The consumed estimate is the
-sum of `estimated_completion_minutes` from the unique current TODO nodes in
-that transitive subgraph.
+sum of `estimated_completion_minutes` from the unique current TODO nodes in that
+transitive subgraph.
 
 - Count a TODO once even when multiple contribution paths reach it.
 - Include TODO estimates regardless of TODO status, including `Done`.
-- Exclude TODOs without estimates; their urgency is handled separately when
-  they directly contribute to a Project.
-- Do not add a nested Project's timebox to its parent's consumed estimate.
-  Every Project timebox is a budget checked independently against its own
-  recursively collected TODO work.
+- Exclude TODOs without estimates; their urgency is handled separately when they
+  directly contribute to a Project.
+- Do not add a nested Project's timebox to its parent's consumed estimate. Every
+  Project timebox is a budget checked independently against its own recursively
+  collected TODO work.
 
 Emit one Warning for a Project only when consumed minutes are strictly greater
 than `estimated_completion_minutes`. Equality is within budget. Locate the
@@ -246,15 +244,15 @@ relevance.
 ### Oldest Uncovered Cyclers
 
 A current Cycler is covered only when a current TODO with status `Done` has a
-current `Contributes_To` edge to it. A historical edge, an edge made stale by
-an endpoint replacement, or a Done successor without a recreated edge does not
+current `Contributes_To` edge to it. A historical edge, an edge made stale by an
+endpoint replacement, or a Done successor without a recreated edge does not
 cover the Cycler.
 
 Sort uncovered Cyclers by the event identity of their current fresh version,
 oldest first, and select at most `oldest_cyclers`. Replacing a Cycler therefore
 resets its age. Emit one Warning per selected Cycler, located at and relevant to
-that Cycler. Equal event ages are impossible, but absolute event identity is
-the deterministic tie-breaker wherever ordering helpers require one.
+that Cycler. Equal event ages are impossible, but absolute event identity is the
+deterministic tie-breaker wherever ordering helpers require one.
 
 ## Diagnostic Conversion
 
@@ -269,12 +267,12 @@ constructing text inside graph traversal. Each variant maps to exactly one
   numeric budget totals for overage warnings.
 
 Warnings are non-fatal under the CLI transaction rules. Every semantic
-Inconsistency is fatal. Suggested type declarations remain non-fatal and use
-the existing suggestion application workflow.
+Inconsistency is fatal. Suggested type declarations remain non-fatal and use the
+existing suggestion application workflow.
 
 The runner intentionally preserves diagnostics from historical windows.
-`Productivity` should not suppress a valid historical diagnostic merely
-because a later window resolves it; relevance and the CLI barklist remain the
+`Productivity` should not suppress a valid historical diagnostic merely because
+a later window resolves it; relevance and the CLI barklist remain the
 presentation-layer mechanism for managing non-fatal historical messages.
 
 ## CLI And Workspace Integration
@@ -308,9 +306,8 @@ The eventual implementation should cover at least these cases:
    component with deterministic locations.
 8. A direct unfinished TODO without an estimate warns once across multiple
    recipient Projects; Done, estimated, and Cycler-only TODOs do not warn.
-9. Direct, nested, branching, and duplicate-path Project graphs calculate
-   unique TODO estimates correctly. Equality does not warn and strict overage
-   does.
+9. Direct, nested, branching, and duplicate-path Project graphs calculate unique
+   TODO estimates correctly. Equality does not warn and strict overage does.
 10. Nested Project timeboxes are not double-counted, and completed TODO work
     remains part of the consumed estimate.
 11. Every Dormant Project warns independently.
@@ -330,7 +327,7 @@ Removing `TODO` from the Project status vocabulary introduces no contradiction
 with the analyzer rules. It makes Project status exactly consistent with TODO
 status and leaves the Dormant and In-Progress warnings well-defined.
 
-The resulting model deliberately has no pending state for either node type.
-This limits expressiveness—an unfinished item must be `In-Progress` or
-`Dormant`—but it is a shared, explicit domain choice rather than an accidental
-schema inconsistency.
+The resulting model deliberately has no pending state for either node type. This
+limits expressiveness—an unfinished item must be `In-Progress` or `Dormant`—but
+it is a shared, explicit domain choice rather than an accidental schema
+inconsistency.

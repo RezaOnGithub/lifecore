@@ -11,7 +11,7 @@ cli = []
 anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
-lifecore = { path = "../lifecore" }
+lifecore = { path = "../" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 log = "0.4.33"
 regex = "1.12.2"

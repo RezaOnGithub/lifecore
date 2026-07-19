@@ -2,7 +2,7 @@ use std::{cmp::Ordering, io::IsTerminal};
 
 use clap::ValueEnum;
 use lifecore::{
-    BasicValidationFailure, DiagnosticLocation, NodeBodyExt, PointedEventContext,
+    BasicValidationFailure, DiagnosticLocation, Body, PointedEventContext,
     analysis::{Message, SuggestedAction},
 };
 use serde::Serialize;
@@ -25,7 +25,7 @@ pub enum OutputFormat {
 pub enum ActionRecord {
     AddNode {
         ty: String,
-        body: NodeBodyExt,
+        body: Body,
         parent: Option<PointedEventContext>,
     },
     AddEdge {

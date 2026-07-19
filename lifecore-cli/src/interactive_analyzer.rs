@@ -189,18 +189,18 @@ impl<LC: LifeCore> Analyzer<LC> for Interactive<LC> {
 
 #[cfg(test)]
 mod tests {
-    use lifecore::{LifeCoreList, NodeBodyExt, PayloadExt, analysis::Analyzer};
+    use lifecore::{LifeCoreList, Body, Payload, analysis::Analyzer};
 
     use super::*;
 
     #[test]
     fn suggests_recreating_an_outgoing_parent_connection() {
         let mut lifecore = LifeCoreList::default();
-        let parent = lifecore.add("Thing", NodeBodyExt::default(), None).unwrap();
-        let other = lifecore.add("Other", NodeBodyExt::default(), None).unwrap();
+        let parent = lifecore.add("Thing", Body::default(), None).unwrap();
+        let other = lifecore.add("Other", Body::default(), None).unwrap();
         lifecore.connect(parent.e, "related", other.e).unwrap();
         let child = lifecore
-            .add("Thing", NodeBodyExt::default(), Some(parent.e))
+            .add("Thing", Body::default(), Some(parent.e))
             .unwrap();
         let analyzer = Interactive::<LifeCoreList> {
             config: String::new(),
@@ -223,14 +223,14 @@ mod tests {
     #[test]
     fn ignores_parent_connection_when_other_endpoint_is_stale() {
         let mut lifecore = LifeCoreList::default();
-        let parent = lifecore.add("Thing", NodeBodyExt::default(), None).unwrap();
-        let other = lifecore.add("Other", NodeBodyExt::default(), None).unwrap();
+        let parent = lifecore.add("Thing", Body::default(), None).unwrap();
+        let other = lifecore.add("Other", Body::default(), None).unwrap();
         lifecore.connect(parent.e, "related", other.e).unwrap();
         lifecore
-            .add("Other", NodeBodyExt::default(), Some(other.e))
+            .add("Other", Body::default(), Some(other.e))
             .unwrap();
         let child = lifecore
-            .add("Thing", NodeBodyExt::default(), Some(parent.e))
+            .add("Thing", Body::default(), Some(parent.e))
             .unwrap();
         let analyzer = Interactive::<LifeCoreList> {
             config: String::new(),
@@ -243,11 +243,11 @@ mod tests {
     #[test]
     fn suggests_recreating_an_incoming_parent_connection() {
         let mut lifecore = LifeCoreList::default();
-        let other = lifecore.add("Other", NodeBodyExt::default(), None).unwrap();
-        let parent = lifecore.add("Thing", NodeBodyExt::default(), None).unwrap();
+        let other = lifecore.add("Other", Body::default(), None).unwrap();
+        let parent = lifecore.add("Thing", Body::default(), None).unwrap();
         lifecore.connect(other.e, "related", parent.e).unwrap();
         let child = lifecore
-            .add("Thing", NodeBodyExt::default(), Some(parent.e))
+            .add("Thing", Body::default(), Some(parent.e))
             .unwrap();
         let analyzer = Interactive::<LifeCoreList> {
             config: String::new(),
@@ -269,13 +269,13 @@ mod tests {
     #[test]
     fn suppresses_connection_already_recreated_by_a_fresh_sibling() {
         let mut lifecore = LifeCoreList::default();
-        let parent = lifecore.add("Thing", NodeBodyExt::default(), None).unwrap();
-        let other = lifecore.add("Other", NodeBodyExt::default(), None).unwrap();
+        let parent = lifecore.add("Thing", Body::default(), None).unwrap();
+        let other = lifecore.add("Other", Body::default(), None).unwrap();
         lifecore.connect(parent.e, "related", other.e).unwrap();
         let first_child = lifecore
             .add(
                 "Thing",
-                NodeBodyExt::from(&[("version", PayloadExt::Number(1))]),
+                Body::from(&[("version", Payload::Number(1))]),
                 Some(parent.e),
             )
             .unwrap();
@@ -283,7 +283,7 @@ mod tests {
         let second_child = lifecore
             .add(
                 "Thing",
-                NodeBodyExt::from(&[("version", PayloadExt::Number(2))]),
+                Body::from(&[("version", Payload::Number(2))]),
                 Some(parent.e),
             )
             .unwrap();

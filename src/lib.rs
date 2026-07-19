@@ -1,12 +1,43 @@
-use itertools::{Iterate, Itertools};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{
-    collections::BTreeMap,
-    fmt,
-    hash::Hash,
-    ops::{Index, Range},
-};
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, fmt, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
+
+/// The Index For Any Event
+///
+/// All LifeCore entries are ordered, and may build on top of each other.
+///
+/// *Note:* index must be less than `usize::MAX`.
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+#[cfg_attr(test, derive(Debug))]
+pub struct EntryIndex(pub usize);
+
+/// Most methods in LifeCore need to resolve a context for an event.
+/// This is primarily for the type and its constraints upon entry insertion
+/// (which can shift after a node has been added) but has uses in other systems.
+/// We consider `end` to be exclusive; i.e. the context is the range `0..end`
+/// (`0` inclusive, `end` exclusive)
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+#[cfg_attr(test, derive(Debug))]
+pub struct EntryContext {
+    thing: usize,
+    end: usize,
+}
+
+/// A window of entries in the database.
+///
+/// For most operations, the database is scanned in progressively larger
+/// windows. `0..end` may be past the bound of the database; which implies the
+/// whole database.
+///
+/// LifeCore events are strictly ordered and append-only. Given that meanings
+/// and intentions can shift over time, graph operations need a reference window
+/// even when inspecting an individual event.
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+#[cfg_attr(test, derive(Debug))]
+pub struct Context {
+    end: usize,
+}
 
 /// An instant in time. From `jiff`.
 pub use jiff::Timestamp;
@@ -23,19 +54,18 @@ pub use jiff::Zoned;
 pub use serde_json::Value as JSON;
 pub use serde_json::to_value as to_json_value;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
-pub struct NodeBodyExt(pub BTreeMap<String, PayloadExt>);
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Hash, Default)]
+pub struct Body(pub BTreeMap<String, Payload>);
 
-/// "Circumstance" is currently a simple method of logging event dates and
+/// "Circumstance" is currently a simple method of logging entry dates and
 /// places Not much weight to it at the moment, and doesn't make a functional
-/// difference.
+/// difference in usual operation.
 ///
 /// "Mock" circumstance is intended for running validation and analysis before
-/// writing nodes or edges to the database proper. Multiple events may share the
-/// single `Mock` circumstance as long as they form a contiguous suffix of graph
-/// history.
+/// writing nodes or edges to the database proper. `Mock` circumstances must be
+/// at the tail of circumstance list, and cannot appear in the middle.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
-pub enum CircumstanceExt {
+pub enum Circumstance {
     Mock,
     Session {
         when_1h: Zoned,
@@ -44,6 +74,7 @@ pub enum CircumstanceExt {
     },
 }
 
+/// Error type for this crate. Uses errors from `jiff` and `whoami`
 #[derive(thiserror::Error, Debug)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
 #[cfg_attr(test, strum_discriminants(name(LifeCoreErrorTest)))]
@@ -51,6 +82,12 @@ pub enum CircumstanceExt {
 #[cfg_attr(
     test,
     strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
+)]
+#[cfg_attr(
+    test,
+    strum_discriminants(
+        doc = "Helper enum to make sure we are testing for every failure scenario at least once"
+    )
 )]
 pub enum LifeCoreError {
     #[error("Some Oddity With Rounding Time!")]
@@ -67,7 +104,6 @@ pub enum LifeCoreError {
     DuplicateAnalyzer { dupe_name: String },
     #[error("Analyzer {name:?} not found!")]
     AnalyzerNotFound { name: String },
-    // TODO is this used anywhere?
     #[error("Systems Error")]
     SystemsError(Vec<analysis::Inconsistency>),
     #[error("Validation Failure")]
@@ -120,26 +156,33 @@ pub enum BasicValidationFailureScenario {
     strum::VariantNames,
     Debug,
 )]
-#[strum_discriminants(name(PayloadType))]
-#[strum_discriminants(vis(pub))]
-#[strum_discriminants(derive(Serialize, Deserialize, Hash, strum::Display))]
-#[strum_discriminants(
-    doc = "Denotes a type of payload. Automatically generated from `PayloadExt` variants"
-)]
-pub enum PayloadExt {
+pub enum Payload {
     PreciseTime(Timestamp),
     Text(String),
     Number(i64),
+    Aggregate(Vec<Payload>),
+
+    /// Opaque. May or may not be stored in an optimized manner on disk
     Serialized(JSON),
 }
 
-impl PayloadExt {
-    pub fn serialized_from<T: Serialize>(x: T) -> Self {
-        Self::Serialized(to_json_value(x).unwrap())
-    }
+/// Describes whether a field is mandatory or not.
+///
+/// A field can be:
+/// - Mandatory; must be filled out
+/// - Encouraged: should be filled out but could remain empty
+/// - Deprecated: should not be filled out but could be filled out
+/// - Optional: may or may not be filled out
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub enum FieldStatus {
+    Mandatory,
+    Encouraged,
+    Deprecated,
+    Optional,
 }
 
-/// Convenience type describing a Node.
+/// Convenience type for a Node.
 ///
 /// # Note
 /// - `ty` may not resolve to the type that was intended when the node was first
@@ -151,9 +194,8 @@ impl PayloadExt {
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct NodeExt {
     pub e: PointedEventContext,
-    pub ty: Option<NodeType>,
     pub ty_name: String,
-    pub field: NodeBodyExt,
+    pub field: Body,
     pub parent: Option<PointedEventContext>,
 }
 
@@ -189,6 +231,9 @@ pub enum LifeCoreFamily {
 pub trait LifeCore: Send + Sync {
     /// Get last event in LifeCore as a bounded EventContext
     fn last(&self) -> Option<PointedEventContext>;
+    /// Total event count; no index for any event is larger than or equal to
+    /// this number
+    fn total_event_count(&self) -> usize;
     /// Test for the basic rules of LifeCore.
     ///
     /// # Rules
@@ -212,7 +257,7 @@ pub trait LifeCore: Send + Sync {
     fn add(
         &mut self,
         ty: &str,
-        payload: NodeBodyExt,
+        payload: Body,
         parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError>;
     /// Add a provisional node to the validated mock suffix.
@@ -221,7 +266,7 @@ pub trait LifeCore: Send + Sync {
     fn add_mock(
         &mut self,
         ty: &str,
-        payload: NodeBodyExt,
+        payload: Body,
         parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError>;
     /// Whether this database contains a validated suffix of mock events.
@@ -234,13 +279,13 @@ pub trait LifeCore: Send + Sync {
     fn apply(&mut self) -> Result<(), LifeCoreError>;
     /// Get the event selected by a pointed context.
     fn get(&self, e: PointedEventContext) -> Option<EventExt>;
-    fn get_with_circumstance(&self, e: PointedEventContext) -> Option<(EventExt, CircumstanceExt)>;
+    fn get_with_circumstance(&self, e: PointedEventContext) -> Option<(EventExt, Circumstance)>;
     fn window<I>(&self, i: I) -> impl Iterator<Item = EventExt>
     where
         I: IntoIterator<Item = PointedEventContext>;
-    /// Check whether `e.thing` is stale within context. Return None for invalid input
-    /// Stale Node means a newer node has it as its parent within context
-    /// Stale Edge means at least one end is a Stale Node
+    /// Check whether `e.thing` is stale within context. Return None for invalid
+    /// input Stale Node means a newer node has it as its parent within
+    /// context Stale Edge means at least one end is a Stale Node
     fn is_stale(&self, e: PointedEventContext) -> Option<bool>;
     fn node(&self, ctx: PointedEventContext) -> Option<NodeExt>;
     fn edge(&self, ctx: PointedEventContext) -> Option<EdgeExt>;
@@ -336,7 +381,7 @@ pub use internal::LifeCoreList;
 pub use typing::{NodeType, NodeTypeClass, NodeTypeFieldStatus};
 
 /// A trait for downstream Analyzer and NodeType implementors
-pub trait TypedBody<'a>: Into<NodeBodyExt> + TryFrom<&'a NodeBodyExt> {
+pub trait TypedBody<'a>: Into<Body> + TryFrom<&'a Body> {
     fn describe_self() -> NodeType;
     fn name() -> &'static str;
 }
@@ -365,195 +410,12 @@ impl EventExt {
         }
     }
 }
-/// A window from the beginning of graph history to an exclusive end.
-///
-/// LifeCore events are strictly ordered and append-only. Given that meanings
-/// and intentions can shift over time, graph operations need a reference window
-/// even when inspecting an individual event.
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
-pub struct EventContext {
-    // Exclusive! `0..end` basically
-    // Used to calculate type, check for staleness etc
-    pub(crate) end: usize,
-}
-
-/// An [`EventContext`] window coupled with a concrete event in that window.
-// TOTEST PointedEventContext can never point to usize::MAX
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash, Debug)]
-pub struct PointedEventContext {
-    pub(crate) end: usize,
-    pub(crate) thing: usize,
-}
 
 /// The location associated with a diagnostic.
 #[derive(PartialEq, Eq, Clone, Copy, Hash, Debug, PartialOrd, Ord)]
 pub enum DiagnosticLocation {
     Window(EventContext),
     Event(PointedEventContext),
-}
-
-impl EventContext {
-    pub(crate) fn range(&self) -> Range<usize> {
-        0..self.end
-    }
-
-    pub fn last(&self) -> Option<PointedEventContext> {
-        if self.range().is_empty() {
-            None
-        } else {
-            Some(self.look_raw(self.end.saturating_sub(1)))
-        }
-    }
-
-    pub fn first(&self) -> Option<PointedEventContext> {
-        if self.range().is_empty() {
-            None
-        } else {
-            Some(self.look_raw(0))
-        }
-    }
-
-    // Look at every event within context, from the context
-    // NOTE potentially unbounded!
-    pub fn items(self) -> impl Iterator<Item = PointedEventContext> {
-        let ctx = self;
-        self.range().map(move |x| ctx.look_raw(x))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.range().is_empty()
-    }
-
-    // Builders
-    // Take care to write an interface that minimizes usage mistakes
-
-    /// NOTE throws away the context on `e` and looks at its event from `self`'s
-    /// perspective.
-    pub fn look_at(&self, e: PointedEventContext) -> PointedEventContext {
-        let r = PointedEventContext {
-            end: self.end,
-            thing: e.thing,
-        };
-        assert!(r.validate());
-        r
-    }
-
-    // NOTDO this is the only function that somewhat leaks implementation details.
-    // Handle with care!
-    pub(crate) fn look_raw(&self, e: usize) -> PointedEventContext {
-        let r = PointedEventContext {
-            end: self.end,
-            thing: e,
-        };
-        assert!(r.validate());
-        r
-    }
-
-    pub fn universe() -> Self {
-        Self { end: usize::MAX }
-    }
-}
-
-impl PointedEventContext {
-    pub(crate) fn range(&self) -> Range<usize> {
-        0..self.end
-    }
-
-    /// This is new functionality due to growing pains with regard to user code.
-    /// Handle with care!
-    pub fn new(thing: usize) -> Self {
-        Self {
-            end: thing.saturating_add(1),
-            thing,
-        }
-    }
-
-    pub fn validate(&self) -> bool {
-        self.range().contains(&self.thing)
-    }
-
-    pub fn window(self) -> EventContext {
-        EventContext { end: self.end }
-    }
-
-    pub fn absolute(self) -> Self {
-        EventContext::universe().look_at(self)
-    }
-
-    pub fn last(&self) -> Option<Self> {
-        self.window().last()
-    }
-
-    pub fn first(&self) -> Option<Self> {
-        self.window().first()
-    }
-
-    pub fn items(self) -> impl Iterator<Item = Self> {
-        self.window().items()
-    }
-
-    pub fn shrink_to_inclusive_left(&self) -> EventContext {
-        assert!(self.validate() && self.thing < usize::MAX);
-        EventContext {
-            end: self.thing + 1,
-        }
-    }
-
-    pub fn shrink_to_exclusive_left(&self) -> EventContext {
-        assert!(self.validate());
-        EventContext { end: self.thing }
-    }
-
-    pub fn inclusive_right_items(self) -> impl Iterator<Item = Self> {
-        (self.thing..self.end).map(move |thing| Self { thing, ..self })
-    }
-
-    pub fn exclusive_right_items(self) -> impl Iterator<Item = Self> {
-        (self.thing.saturating_add(1)..self.end).map(move |thing| Self { thing, ..self })
-    }
-
-    pub fn inclusive_left_items(self) -> impl Iterator<Item = Self> {
-        (0..self.thing.saturating_add(1)).map(move |thing| Self { thing, ..self })
-    }
-
-    pub fn exclusive_left_items(self) -> impl Iterator<Item = Self> {
-        (0..self.thing).map(move |thing| Self { thing, ..self })
-    }
-
-    pub fn is_empty(&self) -> bool {
-        assert!(self.validate());
-        self.range().is_empty()
-    }
-
-    pub fn look_at(&self, e: Self) -> Self {
-        self.window().look_at(e)
-    }
-
-    pub(crate) fn look_raw(&self, e: usize) -> Self {
-        self.window().look_raw(e)
-    }
-}
-
-impl Ord for PointedEventContext {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.end.cmp(&other.end) {
-        std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-        std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-        std::cmp::Ordering::Equal => self.thing.cmp(&other.thing),
-        }
-    }
-}
-
-impl PartialOrd for PointedEventContext {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl From<PointedEventContext> for EventContext {
-    fn from(value: PointedEventContext) -> Self {
-        value.window()
-    }
 }
 
 impl From<EventContext> for DiagnosticLocation {
@@ -588,9 +450,9 @@ impl IntoIterator for PointedEventContext {
     }
 }
 
-impl NodeBodyExt {
-    pub fn from(x: &[(&str, PayloadExt)]) -> Self {
-        let mut r = BTreeMap::<String, PayloadExt>::new();
+impl Body {
+    pub fn from(x: &[(&str, Payload)]) -> Self {
+        let mut r = BTreeMap::<String, Payload>::new();
         assert!(
             x.iter().map(|y| &y.0).counts().len() == x.len(),
             "Supplied list has a repeated key (not a proper set!)"
@@ -641,37 +503,15 @@ impl NodeBodyExt {
             Ok(self.0[name].clone().try_as_text().unwrap())
         }
     }
-
-    pub fn get_deserialized<T: DeserializeOwned>(&self, name: &str) -> Result<T, LifeCoreError> {
-        if !self.0.contains_key(name) {
-            Err(LifeCoreError::FieldNotFound {
-                field_name: name.to_string(),
-            })
-        } else if !self.0[name].is_serialized() {
-            Err(LifeCoreError::FieldContainsUnexpectedType {
-                field_name: name.to_string(),
-            })
-        } else {
-            if let Result::Ok(x) =
-                serde_json::from_value::<T>(self.0[name].clone().try_as_serialized().unwrap())
-            {
-                Ok(x)
-            } else {
-                Err(LifeCoreError::FieldDeserializationFailed {
-                    field_name: name.to_string(),
-                })
-            }
-        }
-    }
 }
 
-impl PayloadExt {
+impl Payload {
     pub fn discriminant(&self) -> PayloadType {
         match self {
-        PayloadExt::PreciseTime(_) => PayloadType::PreciseTime,
-        PayloadExt::Text(_) => PayloadType::Text,
-        PayloadExt::Number(_) => PayloadType::Number,
-        PayloadExt::Serialized(_) => PayloadType::Serialized,
+        Payload::PreciseTime(_) => PayloadType::PreciseTime,
+        Payload::Text(_) => PayloadType::Text,
+        Payload::Number(_) => PayloadType::Number,
+        Payload::Serialized(_) => PayloadType::Serialized,
         }
     }
 }
@@ -683,84 +523,14 @@ pub struct FamilyInsert {
     pub child: PointedEventContext,
 }
 
-impl LifeCoreFamily {
-    pub fn contains_absolute(&self, v: PointedEventContext) -> bool {
-        match self {
-        LifeCoreFamily::Leaf(pointed_event_context) => {
-            v.absolute() == pointed_event_context.absolute()
-        }
-        LifeCoreFamily::Parent(pointed_event_context, items) => {
-            v.absolute() == pointed_event_context.absolute()
-                || items.iter().any(|x| x.contains_absolute(v))
-        }
-        }
-    }
-
-    /// *Note:* inserts `v` as is. Silently fails if `v.parent` is not present.
-    pub fn insert(&mut self, v: FamilyInsert) {
-        if self.contains_absolute(v.parent) {
-            match self {
-            LifeCoreFamily::Leaf(pointed_event_context) => {
-                assert!(pointed_event_context.absolute() == v.parent.absolute());
-                *self = LifeCoreFamily::Parent(v.parent, vec![LifeCoreFamily::Leaf(v.child)])
-            }
-            LifeCoreFamily::Parent(pointed_event_context, items) => {
-                if pointed_event_context.absolute() == v.parent {
-                    items.push(LifeCoreFamily::Leaf(v.child));
-                } else {
-                    items.iter_mut().for_each(|x| x.insert(v));
-                }
-            }
-            }
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-        LifeCoreFamily::Leaf(_) => 1,
-        LifeCoreFamily::Parent(_, items) => 1 + items.iter().map(|x| x.len()).sum::<usize>(),
-        }
-    }
-
-    /// *Note:* inserts `v` as is.
-    pub fn new_with_root(v: PointedEventContext) -> Self {
-        Self::Leaf(v)
-    }
-
-    pub fn collect(&self) -> Vec<PointedEventContext> {
-        match self {
-        LifeCoreFamily::Leaf(pointed_event_context) => vec![*pointed_event_context],
-        LifeCoreFamily::Parent(pointed_event_context, items) => {
-            let mut r = vec![*pointed_event_context];
-            for v in items.iter().map(|x| x.collect()) {
-                r.extend(v);
-            }
-            r
-        }
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = PointedEventContext> {
-        self.collect().into_iter()
-    }
-}
-
-impl fmt::Display for PayloadExt {
+impl fmt::Display for Payload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-        PayloadExt::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
-        PayloadExt::Text(s) => f.write_fmt(format_args!("\"{}\"", s.as_str())),
-        PayloadExt::Number(i) => f.write_fmt(format_args!("{}", i)),
-        PayloadExt::Serialized(s) => f.write_fmt(format_args!("<{}>", s)),
+        Payload::PreciseTime(timestamp) => f.write_fmt(format_args!("{}", timestamp)),
+        Payload::Text(s) => f.write_fmt(format_args!("\"{}\"", s.as_str())),
+        Payload::Number(i) => f.write_fmt(format_args!("{}", i)),
+        Payload::Serialized(s) => f.write_fmt(format_args!("<{}>", s)),
         }
-    }
-}
-
-impl Index<&str> for NodeBodyExt {
-    type Output = PayloadExt;
-
-    fn index(&self, index: &str) -> &Self::Output {
-        self.0.index(index)
     }
 }
 
@@ -779,32 +549,10 @@ impl fmt::Display for PointedEventContext {
     }
 }
 
-impl From<whoami::Error> for LifeCoreError {
-    fn from(val: whoami::Error) -> LifeCoreError {
-        LifeCoreError::HostNameOrUserNameError { inner: val.into() }
-    }
-}
-
-impl From<jiff::Error> for LifeCoreError {
-    fn from(inner: jiff::Error) -> Self {
-        LifeCoreError::ErrorRoundingTime { inner }
-    }
-}
-
-impl From<BasicValidationFailure> for LifeCoreError {
-    fn from(value: BasicValidationFailure) -> Self {
-        Self::BasicValidationFailure(value)
-    }
-}
-
-impl Default for NodeBodyExt {
-    fn default() -> Self {
-        Self(BTreeMap::new())
-    }
-}
-
 pub mod analysis;
 mod internal;
 #[cfg(test)]
 mod test;
 mod typing;
+
+mod boilerplate;

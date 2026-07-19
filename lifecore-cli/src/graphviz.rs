@@ -161,7 +161,7 @@ fn escape_record(value: &str) -> String {
 mod tests {
     use std::process::Command;
 
-    use lifecore::{LifeCore, NodeBodyExt, PayloadExt};
+    use lifecore::{LifeCore, Body, Payload};
 
     use super::*;
 
@@ -171,12 +171,12 @@ mod tests {
         let root = lifecore
             .add(
                 "Note",
-                NodeBodyExt::from(&[("text", PayloadExt::Text("a|b".into()))]),
+                Body::from(&[("text", Payload::Text("a|b".into()))]),
                 None,
             )
             .unwrap();
         let child = lifecore
-            .add("Note", NodeBodyExt::default(), Some(root.e))
+            .add("Note", Body::default(), Some(root.e))
             .unwrap();
         let aliases = BTreeMap::from([("child".into(), child.e)]);
 
@@ -191,9 +191,9 @@ mod tests {
     #[test]
     fn fresh_graph_omits_stale_parent() {
         let mut lifecore = LifeCoreList::default();
-        let root = lifecore.add("Note", NodeBodyExt::default(), None).unwrap();
+        let root = lifecore.add("Note", Body::default(), None).unwrap();
         let child = lifecore
-            .add("Note", NodeBodyExt::default(), Some(root.e))
+            .add("Note", Body::default(), Some(root.e))
             .unwrap();
         let dot = render_dot(&lifecore, &BTreeMap::new(), false, false);
         assert!(!dot.contains(&format!("n{} [", pointed_index(root.e))));
@@ -206,7 +206,7 @@ mod tests {
             return;
         }
         let mut lifecore = LifeCoreList::default();
-        lifecore.add("Note", NodeBodyExt::default(), None).unwrap();
+        lifecore.add("Note", Body::default(), None).unwrap();
         let dot = render_dot(&lifecore, &BTreeMap::new(), false, false);
         let path = std::env::temp_dir().join(format!(
             "lifecore-cli-graphviz-test-{}.svg",

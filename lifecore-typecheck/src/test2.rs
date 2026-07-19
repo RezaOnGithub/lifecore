@@ -1,5 +1,5 @@
 use lifecore::{
-    DiagnosticLocation, EventContext, LifeCore, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass,
+    DiagnosticLocation, EventContext, LifeCore, LifeCoreList, Body, NodeType, NodeTypeClass,
     PointedEventContext, TypedBody,
     analysis::{AnalysisRunner, AnalyzerFactory, Message},
 };
@@ -38,9 +38,9 @@ fn invalid_override_graph() -> (LifeCoreList, PointedEventContext, PointedEventC
         None,
     )
     .unwrap();
-    let parent = lc.add("Parent", NodeBodyExt::default(), None).unwrap();
+    let parent = lc.add("Parent", Body::default(), None).unwrap();
     let child = lc
-        .add("Child", NodeBodyExt::default(), Some(parent.e))
+        .add("Child", Body::default(), Some(parent.e))
         .unwrap();
     (lc, parent.e, child.e)
 }
@@ -61,8 +61,8 @@ fn runner_analyzes_a_valid_typed_edge_without_panicking() {
         None,
     )
     .unwrap();
-    let from = lc.add("From", NodeBodyExt::default(), None).unwrap();
-    let to = lc.add("To", NodeBodyExt::default(), None).unwrap();
+    let from = lc.add("From", Body::default(), None).unwrap();
+    let to = lc.add("To", Body::default(), None).unwrap();
     lc.connect(from.e, "link", to.e).unwrap();
     configure(&mut lc);
 
@@ -189,8 +189,8 @@ fn edge_node_requires_both_an_incoming_and_an_outgoing_edge() {
         None,
     )
     .unwrap();
-    let edge_node = lc.add("Edge_Like", NodeBodyExt::default(), None).unwrap();
-    let target = lc.add("Target", NodeBodyExt::default(), None).unwrap();
+    let edge_node = lc.add("Edge_Like", Body::default(), None).unwrap();
+    let target = lc.add("Target", Body::default(), None).unwrap();
     lc.connect(edge_node.e, "link", target.e).unwrap();
     let final_window = lc.last().unwrap().inclusive_left_items();
     let mut factory = TypeCheckFactory::<LifeCoreList>::default();

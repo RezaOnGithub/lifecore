@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use diagnostics::{OutputFormat, print_diagnostics, print_rows, print_validation_failure};
 use lifecore::{
-    EventExt, LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeExt, PayloadExt,
+    EventExt, LifeCore, LifeCoreError, LifeCoreList, Body, NodeExt, Payload,
     PointedEventContext,
     analysis::{AnalysisRunner, Message, Output, SuggestedAction},
 };
@@ -799,7 +799,7 @@ fn analyzed_or_reported(
 fn stage_node(
     lifecore: &mut LifeCoreList,
     ty: &str,
-    body: NodeBodyExt,
+    body: Body,
     parent: Option<PointedEventContext>,
     cli: &CliState,
     format: OutputFormat,
@@ -1006,12 +1006,12 @@ fn ensure_new_alias(cli: &CliState, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_body(text: &[String], number: &[String]) -> Result<NodeBodyExt> {
+fn parse_body(text: &[String], number: &[String]) -> Result<Body> {
     let mut body = BTreeMap::new();
     for assignment in text {
         let (key, value) = parse_assignment(assignment, "text")?;
         if body
-            .insert(key.to_string(), PayloadExt::Text(value.to_string()))
+            .insert(key.to_string(), Payload::Text(value.to_string()))
             .is_some()
         {
             bail!("field {key:?} was specified more than once");
@@ -1023,13 +1023,13 @@ fn parse_body(text: &[String], number: &[String]) -> Result<NodeBodyExt> {
             .parse::<i64>()
             .with_context(|| format!("invalid i64 value in --number {assignment:?}"))?;
         if body
-            .insert(key.to_string(), PayloadExt::Number(value))
+            .insert(key.to_string(), Payload::Number(value))
             .is_some()
         {
             bail!("field {key:?} was specified more than once");
         }
     }
-    Ok(NodeBodyExt(body))
+    Ok(Body(body))
 }
 
 fn parse_assignment<'a>(assignment: &'a str, option: &str) -> Result<(&'a str, &'a str)> {
@@ -1096,7 +1096,7 @@ fn query_events(
                 },
                 CompiledPredicate::MatchText(regex) => match event {
                 EventExt::Node(node) => node.field.0.values().any(
-                    |payload| matches!(payload, PayloadExt::Text(value) if regex.is_match(value)),
+                    |payload| matches!(payload, Payload::Text(value) if regex.is_match(value)),
                 ),
                 EventExt::Edge(_) => false,
                 },
@@ -1334,8 +1334,8 @@ mod tests {
     #[test]
     fn filter_without_predicates_returns_every_event_and_pick_returns_none() {
         let mut lifecore = LifeCoreList::default();
-        lifecore.add("A", NodeBodyExt::default(), None).unwrap();
-        lifecore.add("B", NodeBodyExt::default(), None).unwrap();
+        lifecore.add("A", Body::default(), None).unwrap();
+        lifecore.add("B", Body::default(), None).unwrap();
         let aliases = BTreeMap::new();
         let predicates = QueryPredicates::default();
         assert_eq!(
@@ -1357,13 +1357,13 @@ mod tests {
         let root = lifecore
             .add(
                 "Note",
-                NodeBodyExt::from(&[("content", PayloadExt::Text("buy milk".into()))]),
+                Body::from(&[("content", Payload::Text("buy milk".into()))]),
                 None,
             )
             .unwrap();
-        lifecore.add("Other", NodeBodyExt::default(), None).unwrap();
+        lifecore.add("Other", Body::default(), None).unwrap();
         lifecore
-            .add("Note", NodeBodyExt::default(), Some(root.e))
+            .add("Note", Body::default(), Some(root.e))
             .unwrap();
         let aliases = BTreeMap::from([("root".into(), bounded_context(root.e))]);
 
@@ -1386,7 +1386,7 @@ mod tests {
     #[test]
     fn body_parser_preserves_equals_in_text_value_and_rejects_duplicates() {
         let body = parse_body(&["equation=a=b".into()], &[]).unwrap();
-        assert_eq!(body.0["equation"], PayloadExt::Text("a=b".into()));
+        assert_eq!(body.0["equation"], Payload::Text("a=b".into()));
         assert!(parse_body(&["x=one".into()], &["x=1".into()]).is_err());
     }
 
@@ -1617,11 +1617,11 @@ mod tests {
         let mut state = StateFile::empty();
         let parent = state
             .lifecore
-            .add("Thing", NodeBodyExt::default(), None)
+            .add("Thing", Body::default(), None)
             .unwrap();
         let other = state
             .lifecore
-            .add("Other", NodeBodyExt::default(), None)
+            .add("Other", Body::default(), None)
             .unwrap();
         state
             .lifecore
@@ -1629,7 +1629,7 @@ mod tests {
             .unwrap();
         let child = state
             .lifecore
-            .add("Thing", NodeBodyExt::default(), Some(parent.e))
+            .add("Thing", Body::default(), Some(parent.e))
             .unwrap();
         state
             .lifecore
@@ -1664,11 +1664,11 @@ mod tests {
         let mut state = StateFile::empty();
         let parent = state
             .lifecore
-            .add("Thing", NodeBodyExt::default(), None)
+            .add("Thing", Body::default(), None)
             .unwrap();
         let other = state
             .lifecore
-            .add("Other", NodeBodyExt::default(), None)
+            .add("Other", Body::default(), None)
             .unwrap();
         state
             .lifecore
@@ -1676,7 +1676,7 @@ mod tests {
             .unwrap();
         state
             .lifecore
-            .add("Thing", NodeBodyExt::default(), Some(parent.e))
+            .add("Thing", Body::default(), Some(parent.e))
             .unwrap();
         state
             .lifecore
@@ -1708,11 +1708,11 @@ mod tests {
         let mut state = StateFile::empty();
         let root = state
             .lifecore
-            .add("Note", NodeBodyExt::default(), None)
+            .add("Note", Body::default(), None)
             .unwrap();
         let child = state
             .lifecore
-            .add("Note", NodeBodyExt::default(), Some(root.e))
+            .add("Note", Body::default(), Some(root.e))
             .unwrap();
         state
             .cli

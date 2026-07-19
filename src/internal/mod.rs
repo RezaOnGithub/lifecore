@@ -13,8 +13,8 @@ use strum::{EnumIs, EnumTryAs, VariantNames};
 use whoami::{hostname, username};
 
 use crate::{
-    BasicValidationFailure, BasicValidationFailureScenario::*, EdgeExt, EventContext, FamilyInsert,
-    JSON, LifeCore, LifeCoreError, LifeCoreFamily, NodeBodyExt, NodeExt, NodeType, PayloadExt,
+    BasicValidationFailure, BasicValidationFailureScenario::*, Body, EdgeExt, EventContext,
+    FamilyInsert, JSON, LifeCore, LifeCoreError, LifeCoreFamily, NodeExt, NodeType, Payload,
     PointedEventContext, Timestamp, TypedBody, Zoned, analysis,
 };
 
@@ -46,10 +46,6 @@ struct CircumstanceIndex(u64);
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 #[cfg_attr(test, derive(Debug))]
 struct StringIndex(u64);
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-#[cfg_attr(test, derive(Debug))]
-struct EventIndex(u64);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 enum Circumstance {
@@ -101,6 +97,10 @@ impl LifeCore for LifeCoreList {
         }
     }
 
+    fn total_event_count(&self) -> usize {
+        self.event.len()
+    }
+
     fn connect(
         &mut self,
         from: PointedEventContext,
@@ -132,7 +132,7 @@ impl LifeCore for LifeCoreList {
     fn add(
         &mut self,
         ty: &str,
-        payload: NodeBodyExt,
+        payload: Body,
         parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError> {
         let mut candidate = self.clone();
@@ -147,7 +147,7 @@ impl LifeCore for LifeCoreList {
     fn add_mock(
         &mut self,
         ty: &str,
-        payload: NodeBodyExt,
+        payload: Body,
         parent: Option<PointedEventContext>,
     ) -> Result<NodeExt, LifeCoreError> {
         let mut candidate = self.clone();
@@ -259,7 +259,7 @@ impl LifeCore for LifeCoreList {
         {
             // Payload and PayloadExt cover the same types
             {
-                assert!(Payload::VARIANTS.to_vec() == PayloadExt::VARIANTS.to_vec())
+                assert!(Payload::VARIANTS.to_vec() == Payload::VARIANTS.to_vec())
             }
 
             // Any String in the StringTable is referenced at least once somewhere
@@ -657,7 +657,7 @@ impl LifeCore for LifeCoreList {
     fn get_with_circumstance(
         &self,
         e: PointedEventContext,
-    ) -> Option<(crate::EventExt, crate::CircumstanceExt)> {
+    ) -> Option<(crate::EventExt, crate::Circumstance)> {
         let i: EventIndex = e.into();
         let e = self.get(e)?;
         Some((
@@ -725,21 +725,21 @@ impl Index<CircumstanceIndex> for LifeCoreList {
 }
 
 impl LifeCoreList {
-    fn resolve(&self, t: &NodeBody) -> NodeBodyExt {
-        let mut r = BTreeMap::<String, PayloadExt>::new();
+    fn resolve(&self, t: &NodeBody) -> Body {
+        let mut r = BTreeMap::<String, Payload>::new();
         for (k, v) in t.0.iter() {
             r.insert(self[k].to_string(), {
                 match v {
-                Payload::PreciseTime(timestamp) => PayloadExt::PreciseTime(*timestamp),
-                Payload::Text(string_index) => PayloadExt::Text(self[string_index].to_string()),
-                Payload::Number(i) => PayloadExt::Number(*i),
+                Payload::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
+                Payload::Text(string_index) => Payload::Text(self[string_index].to_string()),
+                Payload::Number(i) => Payload::Number(*i),
                 Payload::Serialized(string_index) => {
-                    PayloadExt::Serialized(JSON::from_str(&self[string_index]).unwrap())
+                    Payload::Serialized(JSON::from_str(&self[string_index]).unwrap())
                 }
                 }
             });
         }
-        NodeBodyExt(r)
+        Body(r)
     }
 
     fn connect_and_validate(
@@ -763,7 +763,7 @@ impl LifeCoreList {
     fn add_and_validate(
         &mut self,
         ty: &str,
-        payload: NodeBodyExt,
+        payload: Body,
         parent: Option<PointedEventContext>,
         circumstance: CircumstanceIndex,
     ) -> Result<NodeExt, LifeCoreError> {
@@ -772,10 +772,10 @@ impl LifeCoreList {
         for (name, payload) in payload.0.iter() {
             let name = self.get_or_insert_string(name);
             let payload = match payload {
-            PayloadExt::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
-            PayloadExt::Text(value) => Payload::Text(self.get_or_insert_string(value.as_str())),
-            PayloadExt::Number(value) => Payload::Number(*value),
-            PayloadExt::Serialized(value) => {
+            Payload::PreciseTime(timestamp) => Payload::PreciseTime(*timestamp),
+            Payload::Text(value) => Payload::Text(self.get_or_insert_string(value.as_str())),
+            Payload::Number(value) => Payload::Number(*value),
+            Payload::Serialized(value) => {
                 Payload::Serialized(self.get_or_insert_string(&value.to_string()))
             }
             };
@@ -843,14 +843,14 @@ impl LifeCoreList {
         }
     }
 
-    fn resolve_circumstance(&self, circumstance: &Circumstance) -> crate::CircumstanceExt {
+    fn resolve_circumstance(&self, circumstance: &Circumstance) -> crate::Circumstance {
         match circumstance {
-        Circumstance::Mock => crate::CircumstanceExt::Mock,
+        Circumstance::Mock => crate::Circumstance::Mock,
         Circumstance::Session {
             when_1h,
             hostname,
             username,
-        } => crate::CircumstanceExt::Session {
+        } => crate::Circumstance::Session {
             when_1h: when_1h.clone(),
             hostname: self[*hostname].to_string(),
             username: self[*username].to_string(),
@@ -911,75 +911,7 @@ impl Default for LifeCoreList {
     }
 }
 
-impl PointedEventContext {
-    fn thing(self) -> EventIndex {
-        self.into()
-    }
-}
 
-impl EventIndex {
-    fn before(&self) -> EventContext {
-        EventContext { end: self.i() }
-    }
-
-    fn before_and_including(&self) -> PointedEventContext {
-        PointedEventContext {
-            end: self.i().saturating_add(1),
-            thing: self.i(),
-        }
-    }
-
-    fn absolute(&self) -> PointedEventContext {
-        EventContext::universe().look_raw(self.i())
-    }
-
-    fn i(self) -> usize {
-        self.0 as usize
-    }
-}
-
-impl From<PointedEventContext> for EventIndex {
-    fn from(value: PointedEventContext) -> Self {
-        assert!(value.validate());
-        Self(u64::try_from(value.thing).unwrap())
-    }
-}
-
-impl From<&PointedEventContext> for EventIndex {
-    fn from(value: &PointedEventContext) -> Self {
-        Self::from(*value)
-    }
-}
-
-impl From<&usize> for EventIndex {
-    fn from(value: &usize) -> Self {
-        Self(*value as u64)
-    }
-}
-
-impl From<usize> for EventIndex {
-    fn from(value: usize) -> Self {
-        Self::from(&value)
-    }
-}
-
-impl From<&EventIndex> for usize {
-    fn from(val: &EventIndex) -> Self {
-        val.0 as usize
-    }
-}
-
-impl From<EventIndex> for usize {
-    fn from(val: EventIndex) -> Self {
-        (&val).into()
-    }
-}
-
-impl Display for EventIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(format!("EventIndex({})", self.0 as usize).as_str())
-    }
-}
 
 impl Event {
     pub(crate) fn as_raw_node(&self) -> Node {

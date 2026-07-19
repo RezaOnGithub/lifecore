@@ -1,15 +1,14 @@
 use crate::{
     BasicValidationFailure,
     BasicValidationFailureScenario::{self, *},
-    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeType,
-    NodeTypeClass, NodeTypeFieldStatus, PayloadExt, PayloadType, PointedEventContext, TypedBody,
+    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, LifeCoreList, Body, NodeType,
+    NodeTypeClass, NodeTypeFieldStatus, Payload, PayloadType, PointedEventContext, TypedBody,
     analysis,
 };
 
-fn simple_body(value: &str) -> NodeBodyExt {
-    NodeBodyExt::from(&[("Hello", PayloadExt::Text(value.to_string()))])
+fn simple_body(value: &str) -> Body {
+    Body::from(&[("Hello", Payload::Text(value.to_string()))])
 }
-
 
 #[test]
 fn new_is_valid() {
@@ -173,7 +172,7 @@ fn node_type_resolution_depends_on_context() {
     let _thing = lc
         .add(
             "Thing",
-            NodeBodyExt::from(&[("old_field", PayloadExt::Text("old".to_string()))]),
+            Body::from(&[("old_field", Payload::Text("old".to_string()))]),
             None,
         )
         .unwrap();

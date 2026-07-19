@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    EdgeExt, LifeCore, LifeCoreList, NodeBodyExt, NodeExt, PointedEventContext,
+    EdgeExt, LifeCore, LifeCoreList, Body, NodeExt, PointedEventContext,
     analysis::{Suggestion, Warning},
 };
 
@@ -14,8 +14,8 @@ use super::*;
 
 fn connected_graph() -> (LifeCoreList, NodeExt, NodeExt, EdgeExt) {
     let mut lc = LifeCoreList::default();
-    let from = lc.add("From", NodeBodyExt::default(), None).unwrap();
-    let to = lc.add("To", NodeBodyExt::default(), None).unwrap();
+    let from = lc.add("From", Body::default(), None).unwrap();
+    let to = lc.add("To", Body::default(), None).unwrap();
     let edge = lc.connect(from.e, "link", to.e).unwrap();
     (lc, from, to, edge)
 }
@@ -63,7 +63,7 @@ fn fresh_incoming_edges_to_finds_an_edge_from_the_current_context() {
 #[test]
 fn fresh_edges_exclude_an_edge_with_a_stale_endpoint() {
     let (mut lc, from, to, _) = connected_graph();
-    lc.add("To", NodeBodyExt::default(), Some(to.e)).unwrap();
+    lc.add("To", Body::default(), Some(to.e)).unwrap();
 
     assert_eq!(lc.fresh_edges_of(from.e.absolute()).count(), 0);
 }
@@ -71,11 +71,11 @@ fn fresh_edges_exclude_an_edge_with_a_stale_endpoint() {
 #[test]
 fn node_parent_inherits_the_inspection_window() {
     let mut lc = LifeCoreList::default();
-    let root = lc.add("Root", NodeBodyExt::default(), None).unwrap();
+    let root = lc.add("Root", Body::default(), None).unwrap();
     let child = lc
-        .add("Child", NodeBodyExt::default(), Some(root.e))
+        .add("Child", Body::default(), Some(root.e))
         .unwrap();
-    let _later = lc.add("Later", NodeBodyExt::default(), None).unwrap();
+    let _later = lc.add("Later", Body::default(), None).unwrap();
     let child_at_end = lc.last().unwrap().look_at(child.e);
 
     let child = lc.node(child_at_end).unwrap();

@@ -25,6 +25,42 @@ use lifecore::{
 use std::{collections::BTreeMap, marker::PhantomData};
 use strum::IntoDiscriminant;
 
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub struct NodeType {
+    pub name: String,
+    pub class: NodeTypeClass,
+    pub outgoing: Vec<String>,
+    pub incoming: Vec<String>,
+    pub additional_override: Vec<String>,
+    pub field: Vec<(String, (ValueType, NodeTypeFieldStatus))>,
+}
+
+/// Describes the type and shape of a field's value
+#[derive(Clone, PartialEq, Eq, Hash, strum::EnumIs, strum::EnumTryAs)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub enum ValueType {
+    PreciseTime,
+    Text,
+    Number,
+
+    Sequence(Box<ValueType>),
+    Tuple(Vec<ValueType>),
+    Set(Box<ValueType>),
+    OneOf(Vec<ValueType>),
+
+    Serialized,
+}
+
+/// Describes a Field as a whole
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub struct FieldDecl {
+    name: String,
+    status: FieldStatus,
+    ty: ValueType,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
 #[cfg_attr(test, strum_discriminants(name(TypeCheckTest)))]

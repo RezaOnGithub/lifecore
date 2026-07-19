@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
 
 use crate::{
-    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, NodeBodyExt, PointedEventContext,
+    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, Body, PointedEventContext,
 };
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub struct Suggestion {
 pub enum SuggestedAction {
     AddNode {
         ty_name: String,
-        payload: NodeBodyExt,
+        payload: Body,
         parent: Option<PointedEventContext>,
     },
     AddEdge {

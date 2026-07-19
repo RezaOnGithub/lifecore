@@ -296,15 +296,14 @@ of the graph. The sample results in the following changes to the database:
 Sidecars entries may refer to aliases already introduced before attaching the
 sidecar. a side entry may refer to aliases defined in preceding entries.
 
-Rules for converting TOML values to PayloadExt are not settled on right now, and
-the only mandatory functionality for now is the straightforward forwarding of
-integers and strings to PayloadExt variants. The implementation must be flexible
-enough for adding future conversion methods regarding Timestamp and Serialized
-and, potentially, new PayloadExt types. These will likely involve inline tables.
-
 `sidecar dump` subcommand shall dump all events added in the provisional state.
 (One implementation strategy is to query for all events that have the `Mock`
 circumstance index)
+
+#### Node Fields in TOML
+
+- String and integer types are forwarded to their PayloadExt equivalents.
+- 
 
 ### Attaching The Sidecar
 

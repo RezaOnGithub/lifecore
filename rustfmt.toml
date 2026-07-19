@@ -1,1 +1,2 @@
 match_arm_indent = false
+wrap_comments = true

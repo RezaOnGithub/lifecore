@@ -1,6 +1,6 @@
 use crate::TypeCheck;
 use lifecore::{
-    LifeCore, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass, NodeTypeFieldStatus, PayloadExt,
+    LifeCore, LifeCoreList, Body, NodeType, NodeTypeClass, NodeTypeFieldStatus, Payload,
     PayloadType, TypedBody, analysis, analysis::Analyzer,
 };
 

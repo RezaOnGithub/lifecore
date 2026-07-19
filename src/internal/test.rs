@@ -7,8 +7,7 @@ use log;
 use crate::{
     BasicValidationFailure,
     BasicValidationFailureScenario::ExtraneousMockCircumstance,
-    CircumstanceExt, EdgeExt, EventContext, LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt,
-    NodeExt,
+    Body, Circumstance, EdgeExt, EventContext, LifeCore, LifeCoreError, LifeCoreList, NodeExt,
     internal::{Circumstance, Edge, Event, Node, NodeBody},
 };
 
@@ -39,7 +38,7 @@ fn raw_edge_window() {
 
     for x in 0..10 {
         n.push(
-            lc.add(format!("N{}", x).as_str(), NodeBodyExt::from(&[]), None)
+            lc.add(format!("N{}", x).as_str(), Body::from(&[]), None)
                 .unwrap(),
         );
     }
@@ -62,13 +61,9 @@ fn raw_edge_window() {
 #[test]
 fn mock_events_form_a_validated_tail_suffix() {
     let mut lc = LifeCoreList::default();
-    let _committed = lc.add("Committed", NodeBodyExt::default(), None).unwrap();
-    let first = lc
-        .add_mock("First_Mock", NodeBodyExt::default(), None)
-        .unwrap();
-    let second = lc
-        .add_mock("Second_Mock", NodeBodyExt::default(), None)
-        .unwrap();
+    let _committed = lc.add("Committed", Body::default(), None).unwrap();
+    let first = lc.add_mock("First_Mock", Body::default(), None).unwrap();
+    let second = lc.add_mock("Second_Mock", Body::default(), None).unwrap();
     let edge = lc.connect_mock(first.e, "Mock_Edge", second.e).unwrap();
 
     assert!(lc.is_mock());
@@ -76,13 +71,13 @@ fn mock_events_form_a_validated_tail_suffix() {
     for event in [first.e, second.e, edge.e] {
         assert!(matches!(
             lc.get_with_circumstance(event).unwrap().1,
-            CircumstanceExt::Mock
+            Circumstance::Mock
         ));
     }
 
     let before_rejected_add = lc.clone();
     let error = lc
-        .add("Committed_After_Mock", NodeBodyExt::default(), None)
+        .add("Committed_After_Mock", Body::default(), None)
         .unwrap_err();
     assert!(matches!(
         error,
@@ -97,15 +92,13 @@ fn mock_events_form_a_validated_tail_suffix() {
 #[test]
 fn apply_commits_the_mock_suffix_without_shifting_prior_circumstances() {
     let mut lc = LifeCoreList::default();
-    let committed = lc.add("Committed", NodeBodyExt::default(), None).unwrap();
+    let committed = lc.add("Committed", Body::default(), None).unwrap();
     let prior_circumstance_index = lc.circumstance[committed.e.thing];
     let prior_circumstance = lc[prior_circumstance_index].clone();
     assert!(matches!(&prior_circumstance, Circumstance::Session { .. }));
-    let first = lc
-        .add_mock("First_Mock", NodeBodyExt::default(), None)
-        .unwrap();
+    let first = lc.add_mock("First_Mock", Body::default(), None).unwrap();
     let second = lc
-        .add_mock("Second_Mock", NodeBodyExt::default(), Some(first.e))
+        .add_mock("Second_Mock", Body::default(), Some(first.e))
         .unwrap();
     let staged_events = [lc.get(first.e).unwrap(), lc.get(second.e).unwrap()];
 
@@ -117,10 +110,7 @@ fn apply_commits_the_mock_suffix_without_shifting_prior_circumstances() {
     assert!(lc[prior_circumstance_index] == prior_circumstance);
     let first_circumstance = lc.get_with_circumstance(first.e).unwrap().1;
     let second_circumstance = lc.get_with_circumstance(second.e).unwrap().1;
-    assert!(matches!(
-        &first_circumstance,
-        CircumstanceExt::Session { .. }
-    ));
+    assert!(matches!(&first_circumstance, Circumstance::Session { .. }));
     assert!(first_circumstance == second_circumstance);
     assert_eq!(lc.get(first.e).unwrap(), staged_events[0]);
     assert_eq!(lc.get(second.e).unwrap(), staged_events[1]);

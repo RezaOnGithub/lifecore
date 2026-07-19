@@ -3,8 +3,8 @@
 #![cfg(test)]
 
 use lifecore::{
-    LifeCore, LifeCoreError, LifeCoreList, NodeBodyExt, NodeType, NodeTypeClass,
-    NodeTypeFieldStatus, PayloadExt, PayloadType, TypedBody,
+    LifeCore, LifeCoreError, LifeCoreList, Body, NodeType, NodeTypeClass,
+    NodeTypeFieldStatus, Payload, PayloadType, TypedBody,
     analysis::{self, AnalyzerFactory},
 };
 use lifecore_typecheck::TypeCheckFactory;
@@ -27,7 +27,7 @@ fn configure_typecheck<LC: LifeCore + 'static>(lc: &mut LC) {
 fn generic_runner_reports_missing_type<LC: LifeCore + 'static>(mut lc: LC) {
     lc.add(
         "Missing_Type",
-        NodeBodyExt::from(&[("date", PayloadExt::Text("yellow".to_string()))]),
+        Body::from(&[("date", Payload::Text("yellow".to_string()))]),
         None,
     )
     .unwrap();
@@ -69,7 +69,7 @@ fn runner_combines_typecheck_warnings_and_inconsistencies() {
         None,
     )
     .unwrap();
-    lc.add("Task", NodeBodyExt::from(&[]), None).unwrap();
+    lc.add("Task", Body::from(&[]), None).unwrap();
     configure_typecheck(&mut lc);
     let mut runner = runner_with_typecheck::<LifeCoreList>();
 
