@@ -6,9 +6,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
 
-use crate::{
-    DiagnosticLocation, EventContext, LifeCore, LifeCoreError, Body, PointedEventContext,
-};
+use crate::{Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreError};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SuiteConfig(pub Vec<Config>);
@@ -33,7 +31,7 @@ pub struct Warning {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
-    pub relevance: Vec<PointedEventContext>,
+    pub relevance: Vec<EntryIndex>,
     pub message: String,
 }
 
@@ -42,7 +40,7 @@ pub struct Suggestion {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
-    pub relevance: Vec<PointedEventContext>,
+    pub relevance: Vec<EntryIndex>,
     pub message: String,
     pub action: Vec<SuggestedAction>,
 }
@@ -52,12 +50,12 @@ pub enum SuggestedAction {
     AddNode {
         ty_name: String,
         payload: Body,
-        parent: Option<PointedEventContext>,
+        parent: Option<EntryIndex>,
     },
     AddEdge {
-        from: PointedEventContext,
+        from: EntryIndex,
         ty_name: String,
-        to: PointedEventContext,
+        to: EntryIndex,
     },
 }
 
@@ -112,14 +110,14 @@ pub trait Analyzer<LC: LifeCore>: Send + Sync {
     fn initialize_inner(&mut self, lc: &LC) -> Self::OUTPUT
     where
         Self: Sized;
-    fn analyze_inner(&self, lc: &LC, window: EventContext) -> Self::OUTPUT
+    fn analyze_inner(&self, lc: &LC, window: Context) -> Self::OUTPUT
     where
         Self: Sized;
     fn convert_report(&self, r: Self::OUTPUT) -> Output
     where
         Self: Sized;
     fn initialize(&mut self, lc: &LC) -> Output;
-    fn analyze(&self, lc: &LC, window: EventContext) -> Output;
+    fn analyze(&self, lc: &LC, window: Context) -> Output;
 }
 
 pub trait AnalyzerFactory<LC: LifeCore> {
@@ -180,8 +178,8 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
             analyzer
                 .iter()
                 .cartesian_product(
-                    &lc.window(EventContext::universe().items())
-                        .map(|x| x.ctx().shrink_to_inclusive_left())
+                    &lc.window(Context::universe().items())
+                        .map(|x| x.entry_context().shrink_to_inclusive_left())
                         .collect_vec(), // TODO PERF get rid of this
                 )
                 .map(|(a, window)| a.analyze(&lc, *window).0)
