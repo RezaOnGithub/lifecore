@@ -25,8 +25,7 @@ pub struct EntryIndex(pub usize);
 ///
 /// *Note:* `Ord` is implemented manually to make sure `end` takes precedence
 /// when sorting.
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Clone, Copy, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Clone, Copy, Hash, Debug)]
 pub struct EntryContext {
     thing: usize,
     end: usize,
@@ -41,8 +40,7 @@ pub struct EntryContext {
 /// LifeCore events are strictly ordered and append-only. Given that meanings
 /// and intentions can shift over time, graph operations need a reference window
 /// even when inspecting an individual event.
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Hash)]
 pub struct Context {
     end: usize,
 }
@@ -56,8 +54,7 @@ pub struct Context {
 /// We do filtering based on this value. This is not required for
 /// [`analysis::Inconsistency`] and [`BasicValidationFailure`] as they must be
 /// resolved immediately anyway.
-#[derive(PartialEq, Eq, Clone, Copy, Hash, PartialOrd, Ord)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Copy, Hash, PartialOrd, Ord, Debug)]
 pub enum DiagnosticLocation {
     Context(Context),
     Entry(EntryContext),
@@ -256,39 +253,46 @@ pub enum LifeCoreFamily {
     Parent(EntryContext, Vec<LifeCoreFamily>),
 }
 
-/// Basic Query kinds for the database.
+/// Basic Query kinds for the database. Queries are over the set of all
+/// nodes.
 ///
 /// This is an ambitious feature that is now part of the core functionality due
 /// to user demand. Queries are deliberately divorced from higher-level concepts
 /// such as types to keep it simple.
-#[derive(PartialEq, Eq, EnumIs, EnumTryAs, Clone)]
+///
+/// *Note:* Having a wildcard in the field path turns a singular predicate into
+/// a _minterm!_ In other words, every single Payload that is referred to by the
+/// path must pass the predicate for the whole to be true!.
+// TODO look for the soundness of query primitives; Assuming we are conceptually iterating over only
+// `Node` entries that are within the bounds of the graph...
+#[derive(EnumIs, EnumTryAs, Clone)]
 pub enum NodeQueryPredicate {
-    Exists(QueryFieldPath),
+    // Field-related Query Primitives. All imply that such field path exists
+    FieldExists(QueryFieldPath),
     FieldKind(QueryFieldPath, PayloadKind),
     FieldEqual(QueryFieldPath, Payload),
     FieldIsStringAndMatches(QueryFieldPath, QueryRegex),
     FieldIsAggregateAndContains(QueryFieldPath, Payload),
     FieldIsAggregateAndElementCountIs(QueryFieldPath, usize),
+
+    // Related to Node itself
     FreshWithin(Context),
+    NodeType(String),
     HasOutgoingEdgeOfType(String),
     HasIncomingEdgeOfType(String),
-    HasFreshOutgoingEdgeOfType(String),
-    HasFreshIncomingEdgeOfType(String),
+    HasFreshOutgoingEdgeOfType(String, Context),
+    HasFreshIncomingEdgeOfType(String, Context),
+    Not(Box<Self>),
 }
 
 /// Path to a Node field.
 ///
 /// Under the current data model, a node field can have arbitrary levels of
 /// nested Aggregates.
-#[derive(PartialEq, Eq, EnumIs, EnumTryAs, Clone)]
-pub enum QueryFieldPath {
-    TopLevel {
-        field_name: String,
-    },
-    Indexed {
-        field_name: String,
-        index: Vec<QueryFieldPathIndex>,
-    },
+#[derive(Clone)]
+pub struct QueryFieldPath {
+    field_name: String,
+    index: Vec<QueryFieldPathIndex>,
 }
 
 #[derive(PartialEq, Eq, EnumIs, EnumTryAs, Clone)]
@@ -298,8 +302,9 @@ pub enum QueryFieldPathIndex {
     Index(usize),
 }
 
-#[derive(PartialEq, Eq, Clone)]
-pub struct QueryRegex;
+// TODO this particular flavor of regex may not be compatible with a future
+// database backend
+pub use regex::Regex as QueryRegex;
 
 #[derive(PartialEq, Eq, EnumIs, EnumTryAs, Clone)]
 pub enum QueryComparison {
@@ -318,6 +323,7 @@ pub enum QueryComparison {
 pub trait LifeCore: Send + Sync {
     /// Get last event in LifeCore as a bounded Context
     fn last(&self) -> Option<EntryContext>;
+
     /// Total event count; no index for any event is larger than or equal to
     /// this number.
     ///
@@ -326,6 +332,7 @@ pub trait LifeCore: Send + Sync {
     /// to get this number by iterating over every single entry!
     #[deprecated]
     fn total_event_count(&self) -> usize;
+
     /// Check for the basic rules of LifeCore.
     ///
     /// # Rules
@@ -362,7 +369,13 @@ pub trait LifeCore: Send + Sync {
     /// database unchanged.
     fn apply(&mut self) -> Result<(), LifeCoreError>;
 
-    /// Get the event selected by `e`.
+    /// Get the event selected by `e`. Preserves the context across invocations.
+    ///
+    /// *Note:* We used to also do type resolution for callers, but as typecheck
+    /// grew away from the main crate, it is no longer critical to get the
+    /// window exactly right; still, it is recommended that you use the best
+    /// context you can for the event to maintain consistency with Analyzers and
+    /// minimize confusion.
     fn get(&self, e: EntryContext) -> Option<Entry>;
     fn get_with_circumstance(&self, e: EntryContext) -> Option<(Entry, Circumstance)>;
     fn window<I>(&self, i: I) -> impl Iterator<Item = Entry>
@@ -385,10 +398,29 @@ pub trait LifeCore: Send + Sync {
     /// predicate.
     fn query_filter_node(&self, query: Vec<NodeQueryPredicate>) -> Vec<Node>;
 
-    fn node(&self, ctx: EntryContext) -> Option<Node>;
-    fn edge(&self, ctx: EntryContext) -> Option<Edge>;
+    /// Get node at the specified index and context, `None` if is not a node or
+    /// is out-of-bounds. See also: [`LifeCore::get`]
+    fn node(&self, ctx: EntryContext) -> Option<Node> {
+        if let Some(Entry::Node(n)) = self.get(ctx) {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// Get edge at the specified index and context, `None` if is not a edge or
+    /// is out-of-bounds. See also: [`LifeCore::get`]
+    fn edge(&self, ctx: EntryContext) -> Option<Edge> {
+        if let Some(Entry::Edge(e)) = self.get(ctx) {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
     fn nodes(&self, ctx: Context) -> impl Iterator<Item = Node>;
     fn edges(&self, ctx: Context) -> impl Iterator<Item = Edge>;
+
     fn fresh_nodes(&self, ctx: Context) -> impl Iterator<Item = Node> {
         self.nodes(ctx).filter(|x| !self.is_stale(x.e).unwrap())
     }
@@ -399,8 +431,9 @@ pub trait LifeCore: Send + Sync {
     /// Get non-stale edges connected to node `n`
     ///
     /// *Note:* for this function to return anything meaningful, `n` itself
-    /// needs to be fresh within the context that implies. That is, if `n` is
-    /// stale, any edge connected to it is also stale.
+    /// needs to be fresh within the context that implies. That is, if `end` is
+    /// far enough past the index so that `n` is stale, any edge connected to
+    /// it is also stale.
     ///
     /// # Example
     /// ```rust
@@ -420,27 +453,21 @@ pub trait LifeCore: Send + Sync {
         })
     }
 
-    /// Get fresh outgoing edges from `n` within the implied context.
+    /// Get fresh outgoing edges from `n` within the implied context. See
+    /// [`LifeCore::fresh_edges_of`]
     ///
     /// Outgoing edge means an edge where `n` is `from`, also known as the head
-    /// of the edge
-    ///
-    /// *Note:* for this function to return anything meaningful, `n` itself
-    /// needs to be fresh within the context that implies. That is, if `n` is
-    /// stale, any edge connected to it is also stale.
+    /// of the edge.
     fn fresh_outgoing_edges_of(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
         self.edges(n.window())
             .filter(move |x| !self.is_stale(x.e).unwrap() && x.from.absolute() == n.absolute())
     }
 
-    /// Get fresh Incoming edges from `n` within the implied context.
+    /// Get fresh Incoming edges from `n` within the implied context. See
+    /// [`LifeCore::fresh_edges_of`]
     ///
     /// Incoming edge means an edge where `n` is `to`, also known as the tail of
     /// the edge
-    ///
-    /// *Note:* for this function to return anything meaningful, `n` itself
-    /// needs to be fresh within the context that implies. That is, if `n` is
-    /// stale, any edge connected to it is also stale.
     fn fresh_incoming_edges_to(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
         self.edges(n.window())
             .filter(move |x| !self.is_stale(x.e).unwrap() && x.to.absolute() == n.absolute())
@@ -453,7 +480,9 @@ pub trait LifeCore: Send + Sync {
     /// Returns fresh successors within context.
     /// A 'successor' is defined as any non-stale node within context that has
     /// `node` as its ancestor. An 'ancestor' of a node is any node within
-    /// `.parent` chain of it. If a node has no parent, it is its own ancestor
+    /// `.parent` chain of it. If a node has no parent, it is its own ancestor.
+    ///
+    /// *Note:* Only searches within the context.
     fn fresh_successors(&self, node: EntryContext) -> Vec<EntryContext>;
 
     /// Find relative degree. Siblings (nodes that share a parent) have degree

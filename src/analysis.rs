@@ -8,7 +8,7 @@ use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
 
 use crate::{Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreError};
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SuiteConfig(pub Vec<Config>);
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -17,8 +17,7 @@ pub struct Config {
     pub config: String,
 }
 
-#[derive(Hash)] // no need for a custom implementation
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub struct Inconsistency {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
@@ -26,7 +25,8 @@ pub struct Inconsistency {
     pub message: String,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Warning {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
@@ -35,7 +35,8 @@ pub struct Warning {
     pub message: String,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Suggestion {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
@@ -45,7 +46,8 @@ pub struct Suggestion {
     pub action: Vec<SuggestedAction>,
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum SuggestedAction {
     AddNode {
         ty_name: String,
@@ -68,16 +70,18 @@ pub enum SuggestedAction {
 /// `relevance` are stale (for some sensible N) Additionally, UI may implement a
 /// `barklist` where messages of a certain hash are dismissed. (This led to
 /// needing a custom `Hash` implementation that specifically sorts this list)
-#[derive(PartialEq, Eq, Clone, Debug, EnumIs, EnumTryAs, Hash, EnumDiscriminants)]
+#[derive(PartialEq, Eq, Clone, EnumIs, EnumTryAs, Hash, EnumDiscriminants)]
 #[strum_discriminants(name(MessageType))]
 #[strum_discriminants(vis(pub))]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum Message {
     Inconsistency(Inconsistency),
     Warning(Warning),
     Suggestion(Suggestion),
 }
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Output(pub Vec<Message>);
 
 pub trait InnerMessageType: Clone + DebugTrait + PartialEq + Eq + Hash + Sized {
@@ -128,6 +132,7 @@ pub trait AnalyzerFactory<LC: LifeCore> {
     fn analyzer_name(&self) -> &'static str;
 }
 
+#[derive(Default)]
 pub struct AnalysisRunner<LC: LifeCore> {
     factory: BTreeMap<String, Box<dyn AnalyzerFactory<LC>>>,
     analyzer: Vec<Box<dyn Analyzer<LC>>>,
@@ -273,15 +278,6 @@ impl Into<LifeCoreError> for Output {
                 .flat_map(|x| x.try_as_inconsistency())
                 .collect_vec(),
         )
-    }
-}
-
-impl<LC: LifeCore> Default for AnalysisRunner<LC> {
-    fn default() -> Self {
-        Self {
-            factory: Default::default(),
-            analyzer: Default::default(),
-        }
     }
 }
 

@@ -13,15 +13,14 @@
 use crate::{
     BasicValidationFailure,
     BasicValidationFailureScenario::{self, *},
-    Circumstance, Context, Entry, EntryContext, EntryIndex, LifeCore, LifeCoreError, Payload,
-    Timestamp,
+    Circumstance, Context, Entry, EntryContext, EntryIndex, FamilyInsert, LifeCore, LifeCoreError,
+    LifeCoreFamily, NodeQueryPredicate, Payload, QueryFieldPathIndex, Timestamp, analysis,
 };
 use indexmap::IndexSet;
 use itertools::Itertools;
-use jiff::{Unit, Zoned};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, str::FromStr};
-use strum::VariantNames;
+use std::collections::{BTreeMap, BTreeSet};
+use strum::{IntoDiscriminant, VariantNames};
 
 // TODO rename all X-prefixed names to more verbose names
 
@@ -68,10 +67,11 @@ struct XEdge {
     to: EntryIndex,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct LifeCoreList {
     entry: Vec<XEntry>,
     circumstance: Vec<CircumstanceIndex>,
+    suite: analysis::SuiteConfig,
 
     // Layers of Indirection
     circumstance_table: IndexSet<Circumstance>,
@@ -81,128 +81,6 @@ pub struct LifeCoreList {
 }
 
 impl LifeCoreList {
-    fn get_or_insert_value(&mut self, v: &Value) -> ValueIndex {
-        if let Some(i) = self.value_table.get_index_of(v).map(|x| ValueIndex(x)) {
-            i
-        } else {
-            assert!(
-                self.value_table.insert(v.clone()),
-                "The value should not be present; we just checked!"
-            );
-            ValueIndex(self.value_table.len() - 1)
-        }
-    }
-
-    fn resolve_value(&self, i: ValueIndex) -> Payload {
-        match self.value_table[i.0] {
-        Value::PreciseTime(timestamp) => Payload::PreciseTime(timestamp),
-        Value::Text(string_index) => Payload::Text(self.resolve_string(string_index)),
-        Value::Number(x) => Payload::Number(x),
-        Value::Aggregate(aggregate_index) => {
-            Payload::Aggregate(self.resolve_aggregate(aggregate_index))
-        }
-        Value::Serialized(string_index) => {
-            Payload::Serialized(crate::JSON::from_str(&self.resolve_string(string_index)).unwrap())
-        }
-        }
-    }
-
-    // COPY_PASTE
-    fn get_or_insert_string(&mut self, v: &str) -> StringIndex {
-        if let Some(i) = self.string_table.get_index_of(v).map(|x| StringIndex(x)) {
-            i
-        } else {
-            assert!(
-                self.string_table.insert(v.to_string()),
-                "The value should not be present; we just checked!"
-            );
-            StringIndex(self.string_table.len() - 1)
-        }
-    }
-
-    fn resolve_string(&self, i: StringIndex) -> String {
-        self.string_table[i.0].to_string()
-    }
-
-    // COPY_PASTE
-    fn get_or_insert_aggregate(&mut self, v: &Vec<ValueIndex>) -> AggregateIndex {
-        if let Some(i) = self
-            .aggregate_table
-            .get_index_of(v)
-            .map(|x| AggregateIndex(x))
-        {
-            i
-        } else {
-            assert!(
-                self.aggregate_table.insert(v.clone()),
-                "The value should not be present; we just checked!"
-            );
-            AggregateIndex(self.aggregate_table.len() - 1)
-        }
-    }
-
-    fn resolve_aggregate(&self, i: AggregateIndex) -> Vec<Payload> {
-        self.aggregate_table[i.0]
-            .iter()
-            .map(|x| self.resolve_value(*x))
-            .collect()
-    }
-
-    // COPY_PASTE
-    fn get_or_insert_circumstance(&mut self, c: &Circumstance) -> CircumstanceIndex {
-        if let Some(i) = self
-            .circumstance_table
-            .get_index_of(c)
-            .map(|x| CircumstanceIndex(x))
-        {
-            i
-        } else {
-            assert!(
-                self.circumstance_table.insert(c.clone()),
-                "The value should not be present; we just checked!"
-            );
-            CircumstanceIndex(self.circumstance_table.len() - 1)
-        }
-    }
-
-    fn resolve_circumstance(&self, i: CircumstanceIndex) -> Circumstance {
-        self.circumstance_table[i.0].clone()
-    }
-
-    fn insert_payload(&mut self, v: &Payload) -> ValueIndex {
-        match v {
-        Payload::PreciseTime(timestamp) => {
-            self.get_or_insert_value(&Value::PreciseTime(*timestamp))
-        }
-        Payload::Text(s) => {
-            let string_index = self.get_or_insert_string(s);
-            self.get_or_insert_value(&Value::Text(string_index))
-        }
-        Payload::Number(n) => self.get_or_insert_value(&Value::Number(*n)),
-        Payload::Aggregate(payloads) => {
-            let value_indices = payloads
-                .iter()
-                .map(|x| self.insert_payload(x))
-                .collect_vec();
-            let aggregate_index = self.get_or_insert_aggregate(&value_indices);
-            self.get_or_insert_value(&Value::Aggregate(aggregate_index))
-        }
-        Payload::Serialized(v) => {
-            let json_string = v.to_string();
-            let string_index = self.get_or_insert_string(&json_string);
-            self.get_or_insert_value(&Value::Text(string_index))
-        }
-        }
-    }
-
-    fn payload_exists(&self, v: &Payload) -> bool {
-        // Contrary to what `rust-analyzer` says, `mut` is very much necessary here
-        // TODO open an issue?
-        let mut clone = self.clone();
-        let value_index = clone.insert_payload(v);
-        self.value_table.len() > value_index.0
-    }
-
     fn raw_window<I>(&self, i: I) -> impl Iterator<Item = XEntry>
     where
         I: IntoIterator<Item = EntryContext>,
@@ -222,6 +100,51 @@ impl LifeCoreList {
         w().zip(self.raw_window(w()))
             .filter_map(|(a, b)| b.try_as_node().map(|x| (a, x)))
     }
+
+    // NOTE take care not to call this on the actual database! First, invoke on a
+    // clone; if successful, write clone into &mut self elsewhere.
+    fn add_and_validate(
+        &mut self,
+        ty: &str,
+        body: crate::Body,
+        parent: Option<crate::EntryContext>,
+    ) -> Result<(), crate::LifeCoreError> {
+        let circumstance = self.get_or_insert_circumstance(&Circumstance::Mock);
+        let ty = self.get_or_insert_string(ty);
+        let mut internal_body = BTreeMap::<StringIndex, ValueIndex>::new();
+        for (name, payload) in body.0.iter() {
+            let name = self.get_or_insert_string(name);
+            let internal_value_index = self.insert_payload(payload);
+            internal_body.insert(name, internal_value_index);
+        }
+        self.entry.push(XEntry::Node(XNode {
+            ty,
+            parent: parent.map(|x| x.entry()),
+            body: internal_body,
+        }));
+        self.circumstance.push(circumstance);
+        self.basic_validation()?;
+        Ok(())
+    }
+    // NOTE take care not to call this on the actual database! First, invoke on a
+    // clone; if successful, write clone into &mut self elsewhere.
+    fn connect_and_validate(
+        &mut self,
+        from: crate::EntryContext,
+        ty: &str,
+        to: crate::EntryContext,
+    ) -> Result<(), LifeCoreError> {
+        let ty = self.get_or_insert_string(ty);
+        let circumstance = self.get_or_insert_circumstance(&Circumstance::Mock);
+        self.entry.push(XEntry::Edge(XEdge {
+            ty,
+            from: from.entry(),
+            to: to.entry(),
+        }));
+        self.circumstance.push(circumstance);
+        self.basic_validation()?;
+        Ok(())
+    }
 }
 
 impl LifeCore for LifeCoreList {
@@ -238,6 +161,17 @@ impl LifeCore for LifeCoreList {
 
     fn total_event_count(&self) -> usize {
         self.entry.len()
+    }
+
+    fn add_analyzer(&mut self, name: &str, config: &str) {
+        self.suite.0.push(analysis::Config {
+            name: name.to_string(),
+            config: config.to_string(),
+        });
+    }
+
+    fn current_analysis_suite(&self) -> crate::analysis::SuiteConfig {
+        self.suite.clone()
     }
 
     fn basic_validation(&self) -> Result<(), crate::BasicValidationFailure> {
@@ -291,8 +225,8 @@ impl LifeCore for LifeCoreList {
                         .circumstance
                         .iter()
                         .enumerate()
-                        .filter(|x| x.1.0 == mock_index)
-                        .map(|x| x.0)
+                        .filter(|(_, CircumstanceIndex(i))| *i == mock_index)
+                        .map(|(index, _)| index)
                         .collect_vec();
                     assert!(!mock_event_index.is_empty());
                     if !mock_event_index
@@ -383,8 +317,13 @@ impl LifeCore for LifeCoreList {
         // future Rule: Edges can only be between nodes
         // Rule: Node parent can only be another node
 
-        for e in self.entry.iter().enumerate().map(|(a,b)| (Into::<EntryIndex>::into(a), b)) {
-            let idx_in_range = |idx: &EntryIndex| (idx.0) < e.0.0;
+        for e in self
+            .entry
+            .iter()
+            .enumerate()
+            .map(|(a, b)| (Into::<EntryIndex>::into(a), b))
+        {
+            let idx_in_range = |idx: &EntryIndex| *idx < e.0;
             let offending_event = ctx().look_at(e.0.before_and_including());
             match e.1 {
             XEntry::Node(XNode {
@@ -407,15 +346,15 @@ impl LifeCore for LifeCoreList {
                     }
                 }
             }
-            Event::Edge(Edge { ty: _, from, to }) => {
-                let idx = EntryIndex::from(e.0);
+            XEntry::Edge(XEdge { ty: _, from, to }) => {
+                let idx = e.0;
                 if !idx_in_range(from) || !idx_in_range(to) {
                     return Err(BasicValidationFailure {
                         offending_event: ctx().look_at(idx.before_and_including()).into(),
                         reason: OutOfRangeEdgeEnd,
                     });
                 }
-                if self[from].is_edge() || self[to].is_edge() {
+                if self.entry[from.0].is_edge() || self.entry[to.0].is_edge() {
                     return Err(BasicValidationFailure {
                         offending_event: ctx().look_at(idx.before_and_including()).into(),
                         reason: EdgeEndIsEdge,
@@ -431,7 +370,7 @@ impl LifeCore for LifeCoreList {
             // Throw away the loop context. Now we are looking at 0..edge_index
             // (inclusive or exclusive doesn't matter in this particular case)
             let ctx = edge_context.shrink_to_exclusive_left();
-            assert!(edge_context.thing.0 > edge.from.0 && edge_context.thing.0 > edge.to.0);
+            assert!(edge_context.entry() > edge.from && edge_context.entry() > edge.to.into());
             if self
                 .is_stale(ctx.look_at(edge.from.before_and_including()))
                 .unwrap()
@@ -459,93 +398,459 @@ impl LifeCore for LifeCoreList {
         ty: &str,
         to: crate::EntryContext,
     ) -> Result<crate::Edge, crate::LifeCoreError> {
-        todo!()
+        let mut clone = self.clone();
+        clone.connect_and_validate(from, ty, to)?;
+        *self = clone;
+        Ok(self.edge(self.last().unwrap()).unwrap())
     }
 
     fn add_mock(
         &mut self,
         ty: &str,
-        payload: crate::Body,
+        body: crate::Body,
         parent: Option<crate::EntryContext>,
     ) -> Result<crate::Node, crate::LifeCoreError> {
-        todo!()
+        let mut clone = self.clone();
+        clone.add_and_validate(ty, body, parent)?;
+        *self = clone;
+        Ok(self.node(self.last().unwrap()).unwrap())
     }
 
     fn is_mock(&self) -> bool {
-        todo!()
+        self.circumstance_table.contains(&Circumstance::Mock)
     }
 
+    // SUS have a second look at "current circumstance actually pre-existed" case
     fn apply(&mut self) -> Result<(), crate::LifeCoreError> {
-        todo!()
+        if !self.is_mock() {
+            return Ok(());
+        }
+
+        let mut candidate = self.clone();
+        candidate.basic_validation()?;
+        let current_circumstance_index =
+            candidate.get_or_insert_circumstance(&Circumstance::current_session()?);
+        let mock_index = CircumstanceIndex(
+            candidate
+                .circumstance_table
+                .get_index_of(&Circumstance::Mock)
+                .unwrap(),
+        );
+
+        assert!(
+            matches!(
+                candidate.circumstance_table.last(),
+                Some(Circumstance::Mock)
+            ),
+            "Mock must be the final circumstance"
+        );
+        assert!(
+            matches!(candidate.circumstance_table.pop(), Some(Circumstance::Mock)),
+            "The final circumstance must be Mock"
+        );
+
+        if current_circumstance_index != mock_index {
+            for circumstance in candidate.circumstance.iter_mut() {
+                if *circumstance == mock_index {
+                    *circumstance = current_circumstance_index;
+                }
+            }
+        }
+
+        candidate.basic_validation()?;
+        *self = candidate;
+        Ok(())
     }
 
     fn get(&self, e: crate::EntryContext) -> Option<crate::Entry> {
-        todo!()
+        let x = self.entry.get(e.thing);
+        x.map(|x| match x {
+        XEntry::Node(xnode) => crate::Entry::Node(crate::Node {
+            e,
+            ty_name: self[xnode.ty].to_string(),
+            field: crate::Body(
+                xnode
+                    .body
+                    .iter()
+                    .map(|(k, v)| (self[*k].to_string(), self.get_payload(v)))
+                    .collect(),
+            ),
+            parent: xnode.parent,
+        }),
+        XEntry::Edge(xedge) => crate::Entry::Edge(crate::Edge {
+            e,
+            ty_name: self[xedge.ty].to_string(),
+            from: xedge.from,
+            to: xedge.to,
+        }),
+        })
     }
 
     fn get_with_circumstance(
         &self,
         e: crate::EntryContext,
     ) -> Option<(crate::Entry, Circumstance)> {
-        todo!()
+        self.get(e)
+            .map(|entry| (entry, self[CircumstanceIndex(e.thing)].clone()))
     }
 
     fn window<I>(&self, i: I) -> impl Iterator<Item = crate::Entry>
     where
         I: IntoIterator<Item = crate::EntryContext>,
     {
-        todo!()
+        i.into_iter().map_while(|x| self.get(x))
     }
 
     fn is_stale(&self, e: crate::EntryContext) -> Option<bool> {
-        todo!()
+        if e.thing >= self.entry.len() {
+            return None;
+        }
+        match &self.raw(e.entry()) {
+        XEntry::Node(_) => {
+            let ctx = || e.inclusive_right_items();
+            for event in self.raw_window(ctx()) {
+                if event
+                    .try_as_node()
+                    .map(|node| {
+                        node.parent
+                            .is_some_and(|parent| parent.absolute() == e.absolute())
+                    })
+                    .is_some_and(|x| x)
+                {
+                    return Some(true);
+                }
+            }
+        }
+        XEntry::Edge(XEdge { ty: _, from, to }) => {
+            // SUS
+            // TODO use is_some but it also has to be false
+            if self.is_stale(e.look_at(from.absolute())).unwrap()
+                || self.is_stale(e.look_at(to.absolute())).unwrap()
+            {
+                return Some(true);
+            }
+        }
+        }
+        Some(false)
     }
 
-    fn query_pick_node(&self, query: Vec<crate::NodeQueryPredicate>) -> Vec<crate::Node> {
-        todo!()
-    }
-
-    fn query_filter_node(&self, query: Vec<crate::NodeQueryPredicate>) -> Vec<crate::Node> {
-        todo!()
-    }
-
-    fn node(&self, ctx: crate::EntryContext) -> Option<crate::Node> {
-        todo!()
-    }
-
-    fn edge(&self, ctx: crate::EntryContext) -> Option<crate::Edge> {
-        todo!()
-    }
-
+    // TODO don't resolve every value for every single entry!
     fn nodes(&self, ctx: crate::Context) -> impl Iterator<Item = crate::Node> {
-        todo!()
+        ctx.into_iter()
+            .map_while(move |x| self.get(ctx.look_at(EntryIndex(x).before_and_including())))
+            .filter_map(|x| x.try_as_node())
     }
 
+    // COPY_PASTE
     fn edges(&self, ctx: crate::Context) -> impl Iterator<Item = crate::Edge> {
-        todo!()
+        ctx.into_iter()
+            .map_while(move |x| self.get(ctx.look_at(EntryIndex(x).before_and_including())))
+            .filter_map(|x| x.try_as_edge())
     }
 
     fn root_of(&self, e: crate::EntryContext) -> Option<crate::EntryContext> {
-        todo!()
+        let index = e.entry();
+        if self.raw(index).is_edge() {
+            return None;
+        }
+        let mut r = index;
+        while let Some(parent_event) = self.raw(r).clone().try_as_node().unwrap().parent {
+            r = parent_event;
+        }
+        Some(e.look_at(r.absolute()))
     }
 
     fn fresh_successors(&self, node: crate::EntryContext) -> Vec<crate::EntryContext> {
-        todo!()
+        if self.get(node).is_none_or(|x| x.is_edge()) {
+            return vec![];
+        }
+        let w = || node.exclusive_right_items();
+        let mut successors = BTreeSet::<EntryContext>::from([node.absolute()]);
+        let mut roots = BTreeSet::<EntryContext>::new();
+        for (candidate_index, candidate) in w()
+            .zip(self.raw_window(w()))
+            .filter(|(_, event)| event.is_node())
+            .map(|(i, e)| (i, e.try_as_node().unwrap()))
+        {
+            assert!(successors.intersection(&roots).nth(0).is_none());
+            assert!(successors.iter().all(|x| *x == x.absolute()));
+            assert!(roots.iter().all(|x| *x == x.absolute()));
+            if let Some(candidate_parent) = candidate.parent {
+                let candidate_parent: EntryContext = candidate_parent.absolute();
+                if successors.contains(&candidate_parent) {
+                    successors.remove(&candidate_parent);
+                    roots.insert(candidate_parent);
+                    successors.insert(candidate_index.absolute());
+                } else if roots.contains(&candidate_parent) {
+                    successors.insert(candidate_index.absolute());
+                }
+            }
+        }
+        successors.into_iter().map(|x| node.look_at(x)).collect()
     }
 
     fn relative_degree(&self, a: crate::EntryContext, b: crate::EntryContext) -> Option<usize> {
-        todo!()
+        let ancestor_chain = |mut n: EntryContext| {
+            let mut chain = vec![];
+            while let Some(parent) = self.node(n).unwrap().parent {
+                let parent = n.look_at(parent.absolute());
+                chain.push(parent.absolute());
+                n = parent;
+            }
+            chain
+        };
+
+        if !self.get(a).is_some_and(|x| x.is_node()) || !self.get(b).is_some_and(|x| x.is_node()) {
+            return None;
+        }
+
+        let left_ancestors = ancestor_chain(a);
+        let right_ancestors = ancestor_chain(b);
+        left_ancestors
+            .iter()
+            .enumerate()
+            .flat_map(|(left_degree, left_ancestor)| {
+                right_ancestors
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, right_ancestor)| *right_ancestor == left_ancestor)
+                    .map(move |(right_degree, _)| left_degree.max(right_degree))
+            })
+            .min()
     }
 
     fn families(&self, ctx: crate::Context) -> Vec<crate::LifeCoreFamily> {
-        todo!()
+        let mut r = Vec::<LifeCoreFamily>::new();
+        for (index, node) in self.raw_nodes(ctx) {
+            if node.parent.is_none_or(|p| !ctx.range().contains(&p.0)) {
+                // We consider this a root node
+                r.push(LifeCoreFamily::new_with_root(index));
+            } else {
+                // This must be a child node
+                assert!(index == ctx.look_at(index.absolute()));
+                r.iter_mut().for_each(|x| {
+                    x.insert(FamilyInsert {
+                        parent: ctx.look_at(node.parent.unwrap().absolute()),
+                        child: index,
+                    })
+                });
+            }
+        }
+        r
     }
 
-    fn add_analyzer(&mut self, name: &str, config: &str) {
-        todo!()
+    fn query_pick_node(&self, query: Vec<crate::NodeQueryPredicate>) -> Vec<crate::Node> {
+        if query.is_empty() {
+            return vec![];
+        }
+        self.raw_nodes(Context::universe())
+            .filter(|(ctx, _)| {
+                query
+                    .iter()
+                    .all(|predicate| predicate.test(self, ctx.entry()))
+            })
+            .map(|(ctx, _)| self.node(ctx).unwrap())
+            .collect()
     }
 
-    fn current_analysis_suite(&self) -> crate::analysis::SuiteConfig {
-        todo!()
+    fn query_filter_node(&self, query: Vec<crate::NodeQueryPredicate>) -> Vec<crate::Node> {
+        assert!(
+            !query.is_empty(),
+            "An empty predicate list would result in returning every node in the database!"
+        );
+        // COPY_PASTE
+        self.raw_nodes(Context::universe())
+            .filter(|(ctx, _)| {
+                query
+                    .iter()
+                    .any(|predicate| predicate.test(self, ctx.entry()))
+            })
+            .map(|(ctx, _)| self.node(ctx).unwrap())
+            .collect()
     }
 }
+
+impl NodeQueryPredicate {
+    // There is some confusion regarding what the return value of this function
+    // denotes. One way to think about it is that, if `path` did not have a wild
+    // card, it would be a singular item Otherwise, finding multiple Payload for
+    // a given path necessitates that we perform query test on _each one_.
+    // **Meaning wildcards turn a singular predicate into a minterm!**
+    // TODO assert that if no `Any`, we return at most one value
+    fn all_possible_values(payload: &Payload, path: &Vec<QueryFieldPathIndex>) -> Vec<Payload> {
+        if path.is_empty() {
+            vec![payload.clone()]
+        } else {
+            if !payload.is_aggregate() {
+                return vec![];
+            }
+            let lower_path = path[1..].iter().cloned().collect_vec();
+            let inner_items = payload.clone().try_as_aggregate().unwrap();
+            match path[0] {
+            QueryFieldPathIndex::Last => inner_items
+                .last()
+                .map(|x| Self::all_possible_values(x, &lower_path))
+                .unwrap(),
+            QueryFieldPathIndex::Any => inner_items
+                .iter()
+                .map(|x| Self::all_possible_values(x, &lower_path))
+                .flatten()
+                .collect(),
+            QueryFieldPathIndex::Index(index) => inner_items
+                .get(index)
+                .map(|x| Self::all_possible_values(x, &lower_path))
+                .unwrap(),
+            }
+        }
+    }
+
+    // SUS `.all()` returns true on empty iterator; So we need to
+    fn test(&self, lc: &LifeCoreList, e: EntryIndex) -> bool {
+        let Some(_) = lc.raw(e).clone().try_as_node() else {
+            eprintln!("Somehow, an edge index was passed to a node query");
+            return false;
+        };
+        use NodeQueryPredicate::*;
+        match self {
+        FieldExists(query_field_path) => {
+            let x = lc.node(e.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
+                return false;
+            };
+            !Self::all_possible_values(&field_content, &query_field_path.index).is_empty()
+        }
+
+        FieldKind(query_field_path, payload_kind) => {
+            let x = lc.node(e.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
+                return false;
+            };
+            FieldExists(query_field_path.clone()).test(lc, e)
+                && Self::all_possible_values(&field_content, &query_field_path.index)
+                    .iter()
+                    .all(|x| x.discriminant() == *payload_kind)
+        }
+
+        FieldEqual(query_field_path, payload) => {
+            let x = lc.node(e.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
+                return false;
+            };
+            FieldExists(query_field_path.clone()).test(lc, e)
+                && Self::all_possible_values(&field_content, &query_field_path.index)
+                    .iter()
+                    .all(|x| *x == *payload)
+        }
+
+        FieldIsStringAndMatches(query_field_path, query_regex) => {
+            let x = lc.node(e.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
+                return false;
+            };
+            FieldExists(query_field_path.clone()).test(lc, e)
+                && Self::all_possible_values(&field_content, &query_field_path.index)
+                    .iter()
+                    .all(|x| {
+                        x.clone()
+                            .try_as_text()
+                            .map_or(false, |text| query_regex.is_match(text.as_str()))
+                    })
+        }
+
+        FieldIsAggregateAndContains(query_field_path, payload) => {
+            let x = lc.node(e.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
+                return false;
+            };
+            FieldExists(query_field_path.clone()).test(lc, e)
+                && Self::all_possible_values(&field_content, &query_field_path.index)
+                    .iter()
+                    .all(|x| {
+                        x.clone()
+                            .try_as_aggregate()
+                            .map_or(false, |aggregate| aggregate.contains(payload))
+                    })
+        }
+
+        FieldIsAggregateAndElementCountIs(query_field_path, count) => {
+            let x = lc.node(e.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
+                return false;
+            };
+            FieldExists(query_field_path.clone()).test(lc, e)
+                && Self::all_possible_values(&field_content, &query_field_path.index)
+                    .iter()
+                    .all(|x| {
+                        x.clone()
+                            .try_as_aggregate()
+                            .map_or(false, |aggregate| aggregate.len() == *count)
+                    })
+        }
+
+        FreshWithin(context) => !lc.is_stale(context.look_at(e.absolute())).unwrap(),
+        NodeType(node_ty_name) => lc
+            .string_table
+            .get_index_of(node_ty_name)
+            .map_or(false, |index| {
+                index == lc.raw(e).clone().try_as_node().unwrap().ty.0
+            }),
+        HasOutgoingEdgeOfType(edge_ty_name) => {
+            lc.string_table.contains(edge_ty_name)
+                && lc
+                    .entry
+                    .iter()
+                    .filter_map(|x| x.clone().try_as_edge())
+                    .any(|x| x.from == e)
+        }
+        HasIncomingEdgeOfType(edge_ty_name) => {
+            lc.string_table.contains(edge_ty_name)
+                && lc
+                    .entry
+                    .iter()
+                    .filter_map(|x| x.clone().try_as_edge())
+                    .any(|x| x.to == e)
+        }
+        HasFreshOutgoingEdgeOfType(edge_ty_name, ctx) => lc
+            .string_table
+            .get_index_of(edge_ty_name)
+            .map_or(false, |edge_ty_name_index| {
+                ctx.into_iter()
+                    .map(|x| (x, lc.entry[x].clone()))
+                    .filter(|(_, xentry)| {
+                        xentry.clone().try_as_edge().map_or(false, |xedge| {
+                            xedge.ty.0 == edge_ty_name_index && xedge.from == e
+                        })
+                    })
+                    .any(|(index, _)| {
+                        !lc.is_stale(ctx.look_at(EntryIndex(index).absolute()))
+                            .unwrap()
+                    })
+            }),
+        // COPY_PASTE
+        HasFreshIncomingEdgeOfType(edge_ty_name, ctx) => lc
+            .string_table
+            .get_index_of(edge_ty_name)
+            .map_or(false, |edge_ty_name_index| {
+                ctx.into_iter()
+                    .map(|x| (x, lc.entry[x].clone()))
+                    .filter(|(_, xentry)| {
+                        xentry.clone().try_as_edge().map_or(false, |xedge| {
+                            xedge.ty.0 == edge_ty_name_index && xedge.to == e
+                        })
+                    })
+                    .any(|(index, _)| {
+                        !lc.is_stale(ctx.look_at(EntryIndex(index).absolute()))
+                            .unwrap()
+                    })
+            }),
+        Not(node_query_predicate) => !node_query_predicate.test(lc, e),
+        }
+    }
+}
+
+mod boilerplate;
+
+// TODO bring tests up-to-date with the latest refactor
+#[cfg(revise)]
+#[cfg(test)]
+mod test;
