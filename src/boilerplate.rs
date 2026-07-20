@@ -38,7 +38,7 @@ impl From<BasicValidationFailure> for LifeCoreError {
 
 impl From<&EntryContext> for EntryIndex {
     fn from(value: &EntryContext) -> Self {
-        Self(value.event)
+        Self(value.thing)
     }
 }
 
@@ -55,7 +55,7 @@ impl EntryIndex {
 
     pub fn before_and_including(&self) -> EntryContext {
         EntryContext {
-            event: self.i(),
+            thing: self.i(),
             end: self.i().saturating_add(1),
         }
     }
@@ -84,7 +84,7 @@ impl Context {
 
     pub(crate) fn look_raw(&self, e: usize) -> EntryContext {
         let r = EntryContext {
-            event: e,
+            thing: e,
             end: self.end,
         };
         assert!(r.validate());
@@ -125,7 +125,7 @@ impl Context {
     /// perspective.
     pub fn look_at(&self, e: EntryContext) -> EntryContext {
         let r = EntryContext {
-            event: e.event,
+            thing: e.thing,
             end: self.end,
         };
         assert!(r.validate());
@@ -144,10 +144,10 @@ impl EntryContext {
 
     /// This is new functionality due to growing pains with regard to user code.
     /// Handle with care!
-    pub fn new(event: usize) -> Self {
+    pub fn new(thing: usize) -> Self {
         Self {
-            event,
-            end: event.saturating_add(1),
+            thing,
+            end: thing.saturating_add(1),
         }
     }
 
