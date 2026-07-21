@@ -57,11 +57,9 @@
 
 # Agenda
 
-- [ ] Look over the codebase: `EventContext::universe()` is dangerous and an
-      anti-pattern
-- [ ] Fix `Hash` for Message variants...
-- [ ] loaded → staged candidate → analyzed → applied → atomically persisted
-- [ ] sidecar detach safety
+- [ ] sprinkle fallible iterators over LifeCore trait
+- [ ] listen to clanker and split Aggregate into two different types
+- [ ] add additional set-based predicates
 
 # Learning
 

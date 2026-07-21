@@ -11,10 +11,7 @@
 //! which due to complexity in querying.
 
 use crate::{
-    BasicValidationFailure,
-    BasicValidationFailureScenario::{self, *},
-    Circumstance, Context, Entry, EntryContext, EntryIndex, FamilyInsert, LifeCore, LifeCoreError,
-    LifeCoreFamily, NodeQueryPredicate, Payload, QueryFieldPathIndex, Timestamp, analysis,
+    BasicValidationFailure, BasicValidationFailureScenario::{self, *}, Circumstance, Context, Entry, EntryContext, EntryIndex, FamilyInsert, FieldQueryPathComponent, LifeCore, LifeCoreError, LifeCoreFamily, NodeQuery, NodeQueryCombinator, NodeQueryPredicate, OrderedSet, Payload, Timestamp, analysis,
 };
 use indexmap::IndexSet;
 use itertools::Itertools;
@@ -28,7 +25,10 @@ use strum::{IntoDiscriminant, VariantNames};
 struct ValueIndex(usize);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-struct AggregateIndex(usize);
+struct SeqeunceIndex(usize);
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+struct OrderedSetIndex(usize);
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 struct StringIndex(usize);
@@ -43,8 +43,8 @@ enum Value {
     PreciseTime(Timestamp),
     Text(StringIndex),
     Number(i64),
-    Aggregate(AggregateIndex),
-    Serialized(StringIndex),
+    Sequence(SeqeunceIndex),
+    OrderedSet(OrderedSetIndex),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, strum::EnumTryAs, strum::EnumIs, Hash)]
@@ -76,7 +76,8 @@ pub struct LifeCoreList {
     // Layers of Indirection
     circumstance_table: IndexSet<Circumstance>,
     string_table: IndexSet<String>,
-    aggregate_table: IndexSet<Vec<ValueIndex>>,
+    sequence_table: IndexSet<Vec<ValueIndex>>,
+    ordered_set_table: IndexSet<IndexSet<ValueIndex>>,
     value_table: IndexSet<Value>,
 }
 
@@ -639,31 +640,19 @@ impl LifeCore for LifeCoreList {
         r
     }
 
-    fn query_pick_node(&self, query: Vec<crate::NodeQueryPredicate>) -> Vec<crate::Node> {
-        if query.is_empty() {
-            return vec![];
-        }
-        self.raw_nodes(Context::universe())
+    fn query(&self, query: NodeQuery) -> Vec<crate::Node> {
+        self.raw_nodes(query.context)
             .filter(|(ctx, _)| {
-                query
-                    .iter()
-                    .all(|predicate| predicate.test(self, ctx.entry()))
-            })
-            .map(|(ctx, _)| self.node(ctx).unwrap())
-            .collect()
-    }
+                let combinator = query.expression.discriminant();
 
-    fn query_filter_node(&self, query: Vec<crate::NodeQueryPredicate>) -> Vec<crate::Node> {
-        assert!(
-            !query.is_empty(),
-            "An empty predicate list would result in returning every node in the database!"
-        );
-        // COPY_PASTE
-        self.raw_nodes(Context::universe())
-            .filter(|(ctx, _)| {
+                // SUS `.is_some_and` when we explicitly have a query combinator!
                 query
+                    .expression
+                    .predicates()
                     .iter()
-                    .any(|predicate| predicate.test(self, ctx.entry()))
+                    .map(|pred| pred.test(self, ctx.entry(), ctx.window(), combinator))
+                    .reduce(|x, y| combinator.reduce(x, y))
+                    .is_some_and(|x| x)
             })
             .map(|(ctx, _)| self.node(ctx).unwrap())
             .collect()
@@ -671,179 +660,166 @@ impl LifeCore for LifeCoreList {
 }
 
 impl NodeQueryPredicate {
-    // There is some confusion regarding what the return value of this function
-    // denotes. One way to think about it is that, if `path` did not have a wild
-    // card, it would be a singular item Otherwise, finding multiple Payload for
-    // a given path necessitates that we perform query test on _each one_.
-    // **Meaning wildcards turn a singular predicate into a minterm!**
-    // TODO assert that if no `Any`, we return at most one value
-    fn all_possible_values(payload: &Payload, path: &Vec<QueryFieldPathIndex>) -> Vec<Payload> {
-        if path.is_empty() {
-            vec![payload.clone()]
-        } else {
-            if !payload.is_aggregate() {
-                return vec![];
-            }
-            let lower_path = path[1..].iter().cloned().collect_vec();
-            let inner_items = payload.clone().try_as_aggregate().unwrap();
-            match path[0] {
-            QueryFieldPathIndex::Last => inner_items
-                .last()
-                .map(|x| Self::all_possible_values(x, &lower_path))
-                .unwrap(),
-            QueryFieldPathIndex::Any => inner_items
-                .iter()
-                .map(|x| Self::all_possible_values(x, &lower_path))
-                .flatten()
-                .collect(),
-            QueryFieldPathIndex::Index(index) => inner_items
-                .get(index)
-                .map(|x| Self::all_possible_values(x, &lower_path))
-                .unwrap(),
-            }
-        }
-    }
-
-    // SUS `.all()` returns true on empty iterator; So we need to
-    fn test(&self, lc: &LifeCoreList, e: EntryIndex) -> bool {
-        let Some(_) = lc.raw(e).clone().try_as_node() else {
+    fn test(
+        &self,
+        lc: &LifeCoreList,
+        candidate_index: EntryIndex,
+        query_context: Context,
+        query_combinator: NodeQueryCombinator,
+    ) -> bool {
+        let Some(_) = lc.raw(candidate_index).clone().try_as_node() else {
             eprintln!("Somehow, an edge index was passed to a node query");
             return false;
         };
         use NodeQueryPredicate::*;
         match self {
         FieldExists(query_field_path) => {
-            let x = lc.node(e.absolute()).unwrap();
+            let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            !Self::all_possible_values(&field_content, &query_field_path.index).is_empty()
+            !field_content.get(query_field_path.path).is_empty()
         }
 
         FieldKind(query_field_path, payload_kind) => {
-            let x = lc.node(e.absolute()).unwrap();
+            let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            FieldExists(query_field_path.clone()).test(lc, e)
-                && Self::all_possible_values(&field_content, &query_field_path.index)
-                    .iter()
-                    .all(|x| x.discriminant() == *payload_kind)
+            // SUS the conjunction here! I think it would make sense for it to be here but
+            // I'm not quite sure.
+
+            // TO_TEST find a scenario where `.is_some_and` would cause unexpected output
+            field_content
+                .get(query_field_path.path)
+                .iter()
+                .map(|x| x.discriminant() == *payload_kind)
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
         }
 
         FieldEqual(query_field_path, payload) => {
-            let x = lc.node(e.absolute()).unwrap();
+            let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            FieldExists(query_field_path.clone()).test(lc, e)
-                && Self::all_possible_values(&field_content, &query_field_path.index)
-                    .iter()
-                    .all(|x| *x == *payload)
+            field_content
+                .get(query_field_path.path)
+                .iter()
+                .map(|x| *x == *payload)
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
         }
 
         FieldIsStringAndMatches(query_field_path, query_regex) => {
-            let x = lc.node(e.absolute()).unwrap();
+            let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            FieldExists(query_field_path.clone()).test(lc, e)
-                && Self::all_possible_values(&field_content, &query_field_path.index)
-                    .iter()
-                    .all(|x| {
-                        x.clone()
-                            .try_as_text()
-                            .map_or(false, |text| query_regex.is_match(text.as_str()))
-                    })
+            field_content
+                .get(query_field_path.path)
+                .iter()
+                .map(|x| {
+                    x.clone()
+                        .try_as_text()
+                        .map_or(false, |text| query_regex.is_match(text.as_str()))
+                })
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
         }
 
         FieldIsAggregateAndContains(query_field_path, payload) => {
-            let x = lc.node(e.absolute()).unwrap();
+            let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            FieldExists(query_field_path.clone()).test(lc, e)
-                && Self::all_possible_values(&field_content, &query_field_path.index)
-                    .iter()
-                    .all(|x| {
-                        x.clone()
-                            .try_as_aggregate()
-                            .map_or(false, |aggregate| aggregate.contains(payload))
-                    })
+            field_content
+                .get(query_field_path.path)
+                .iter()
+                .map(|x| {
+                    x.clone()
+                        .try_as_aggregate()
+                        .map_or(false, |aggregate| aggregate.contains(payload))
+                })
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
         }
 
         FieldIsAggregateAndElementCountIs(query_field_path, count) => {
-            let x = lc.node(e.absolute()).unwrap();
+            let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            FieldExists(query_field_path.clone()).test(lc, e)
-                && Self::all_possible_values(&field_content, &query_field_path.index)
-                    .iter()
-                    .all(|x| {
-                        x.clone()
-                            .try_as_aggregate()
-                            .map_or(false, |aggregate| aggregate.len() == *count)
-                    })
+            field_content
+                .get(query_field_path.path)
+                .iter()
+                .map(|x| {
+                    x.clone()
+                        .try_as_aggregate()
+                        .map_or(false, |aggregate| aggregate.len() == *count)
+                })
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
         }
 
-        FreshWithin(context) => !lc.is_stale(context.look_at(e.absolute())).unwrap(),
+        Fresh => !lc
+            .is_stale(query_context.look_at(candidate_index.absolute()))
+            .unwrap(),
         NodeType(node_ty_name) => lc
             .string_table
             .get_index_of(node_ty_name)
             .map_or(false, |index| {
-                index == lc.raw(e).clone().try_as_node().unwrap().ty.0
+                index == lc.raw(candidate_index).clone().try_as_node().unwrap().ty.0
             }),
         HasOutgoingEdgeOfType(edge_ty_name) => {
-            lc.string_table.contains(edge_ty_name)
-                && lc
-                    .entry
-                    .iter()
-                    .filter_map(|x| x.clone().try_as_edge())
-                    .any(|x| x.from == e)
+            lc.string_table
+                .get_index_of(edge_ty_name)
+                .map_or(false, |edge_ty_name_index| {
+                    lc.raw_edges(query_context).any(|(edge_index, xedge)| {
+                        xedge.from == candidate_index && xedge.ty.0 == edge_ty_name_index
+                    })
+                })
         }
+
+        // COPY_PASTE
         HasIncomingEdgeOfType(edge_ty_name) => {
-            lc.string_table.contains(edge_ty_name)
-                && lc
-                    .entry
-                    .iter()
-                    .filter_map(|x| x.clone().try_as_edge())
-                    .any(|x| x.to == e)
+            lc.string_table
+                .get_index_of(edge_ty_name)
+                .map_or(false, |edge_ty_name_index| {
+                    lc.raw_edges(query_context).any(|(edge_index, xedge)| {
+                        xedge.to == candidate_index && xedge.ty.0 == edge_ty_name_index
+                    })
+                })
         }
-        HasFreshOutgoingEdgeOfType(edge_ty_name, ctx) => lc
+
+        HasFreshOutgoingEdgeOfType(edge_ty_name) => lc
             .string_table
             .get_index_of(edge_ty_name)
             .map_or(false, |edge_ty_name_index| {
-                ctx.into_iter()
-                    .map(|x| (x, lc.entry[x].clone()))
-                    .filter(|(_, xentry)| {
-                        xentry.clone().try_as_edge().map_or(false, |xedge| {
-                            xedge.ty.0 == edge_ty_name_index && xedge.from == e
-                        })
-                    })
-                    .any(|(index, _)| {
-                        !lc.is_stale(ctx.look_at(EntryIndex(index).absolute()))
+                lc.raw_edges(query_context).any(|(edge_index, xedge)| {
+                    xedge.from == candidate_index
+                        && xedge.ty.0 == edge_ty_name_index
+                        && !lc
+                            .is_stale(query_context.look_at(edge_index.absolute()))
                             .unwrap()
-                    })
+                })
             }),
         // COPY_PASTE
-        HasFreshIncomingEdgeOfType(edge_ty_name, ctx) => lc
+        HasFreshIncomingEdgeOfType(edge_ty_name) => lc
             .string_table
             .get_index_of(edge_ty_name)
             .map_or(false, |edge_ty_name_index| {
-                ctx.into_iter()
-                    .map(|x| (x, lc.entry[x].clone()))
-                    .filter(|(_, xentry)| {
-                        xentry.clone().try_as_edge().map_or(false, |xedge| {
-                            xedge.ty.0 == edge_ty_name_index && xedge.to == e
-                        })
-                    })
-                    .any(|(index, _)| {
-                        !lc.is_stale(ctx.look_at(EntryIndex(index).absolute()))
+                lc.raw_edges(query_context).any(|(edge_index, xedge)| {
+                    xedge.to == candidate_index
+                        && xedge.ty.0 == edge_ty_name_index
+                        && !lc
+                            .is_stale(query_context.look_at(edge_index.absolute()))
                             .unwrap()
-                    })
+                })
             }),
-        Not(node_query_predicate) => !node_query_predicate.test(lc, e),
+        Not(node_query_predicate) => {
+            !node_query_predicate.test(lc, candidate_index, query_context, query_combinator)
+        }
         }
     }
 }

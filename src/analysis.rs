@@ -6,7 +6,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
 
-use crate::{Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreError};
+use crate::{Body, Context, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreError};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SuiteConfig(pub Vec<Config>);

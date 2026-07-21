@@ -1,10 +1,12 @@
-use std::{ops::Index, str::FromStr as _};
+use std::ops::Index;
 
 use itertools::Itertools;
 
 use crate::{
-    Circumstance, EntryIndex, LifeCore, LifeCoreList, Payload,
-    reference_impl::{AggregateIndex, CircumstanceIndex, StringIndex, Value, ValueIndex, XEntry},
+    Circumstance, EntryIndex, LifeCoreList, OrderedSet, Payload,
+    reference_impl::{
+        CircumstanceIndex, OrderedSetIndex, SeqeunceIndex, StringIndex, Value, ValueIndex, XEntry,
+    },
 };
 
 impl From<&StringIndex> for usize {
@@ -31,14 +33,14 @@ impl From<ValueIndex> for usize {
     }
 }
 
-impl From<&AggregateIndex> for usize {
-    fn from(value: &AggregateIndex) -> Self {
+impl From<&SeqeunceIndex> for usize {
+    fn from(value: &SeqeunceIndex) -> Self {
         value.0
     }
 }
 
-impl From<AggregateIndex> for usize {
-    fn from(value: AggregateIndex) -> Self {
+impl From<SeqeunceIndex> for usize {
+    fn from(value: SeqeunceIndex) -> Self {
         (&value).into()
     }
 }
@@ -70,11 +72,11 @@ impl Index<CircumstanceIndex> for LifeCoreList {
     }
 }
 
-impl Index<AggregateIndex> for LifeCoreList {
+impl Index<SeqeunceIndex> for LifeCoreList {
     type Output = Vec<ValueIndex>;
 
-    fn index(&self, index: AggregateIndex) -> &Self::Output {
-        &self.aggregate_table[index.0]
+    fn index(&self, index: SeqeunceIndex) -> &Self::Output {
+        &self.sequence_table[index.0]
     }
 }
 
@@ -87,7 +89,6 @@ impl Index<ValueIndex> for LifeCoreList {
 }
 
 impl LifeCoreList {
-
     pub(in crate::reference_impl) fn raw(&self, x: EntryIndex) -> XEntry {
         self.entry[x.0].clone()
     }
@@ -109,11 +110,11 @@ impl LifeCoreList {
         Value::PreciseTime(timestamp) => Payload::PreciseTime(timestamp),
         Value::Text(string_index) => Payload::Text(self.resolve_string(string_index)),
         Value::Number(x) => Payload::Number(x),
-        Value::Aggregate(aggregate_index) => {
-            Payload::Aggregate(self.resolve_aggregate(aggregate_index))
+        Value::Sequence(aggregate_index) => {
+            Payload::Sequence(self.resolve_sequence(aggregate_index))
         }
-        Value::Serialized(string_index) => {
-            Payload::Serialized(crate::JSON::from_str(&self.resolve_string(string_index)).unwrap())
+        Value::OrderedSet(ordered_set_index) => {
+            Payload::OrderedSet(self.resolve_ordered_set(ordered_set_index))
         }
         }
     }
@@ -136,27 +137,58 @@ impl LifeCoreList {
     }
 
     // COPY_PASTE
-    pub(in crate::reference_impl) fn get_or_insert_aggregate(
+    pub(in crate::reference_impl) fn get_or_insert_sequence(
         &mut self,
         v: &Vec<ValueIndex>,
-    ) -> AggregateIndex {
+    ) -> SeqeunceIndex {
         if let Some(i) = self
-            .aggregate_table
+            .sequence_table
             .get_index_of(v)
-            .map(|x| AggregateIndex(x))
+            .map(|x| SeqeunceIndex(x))
         {
             i
         } else {
             assert!(
-                self.aggregate_table.insert(v.clone()),
+                self.sequence_table.insert(v.clone()),
                 "The value should not be present; we just checked!"
             );
-            AggregateIndex(self.aggregate_table.len() - 1)
+            SeqeunceIndex(self.sequence_table.len() - 1)
         }
     }
 
-    pub(in crate::reference_impl) fn resolve_aggregate(&self, i: AggregateIndex) -> Vec<Payload> {
-        self.aggregate_table[i.0]
+    pub(in crate::reference_impl) fn resolve_sequence(&self, i: SeqeunceIndex) -> Vec<Payload> {
+        self.sequence_table[i.0]
+            .iter()
+            .map(|x| self.resolve_value(*x))
+            .collect()
+    }
+
+    // COPY_PASTE
+    pub(in crate::reference_impl) fn get_or_insert_ordered_set(
+        &mut self,
+        v: &OrderedSet,
+    ) -> OrderedSetIndex {
+        if let Some(i) = self
+            .ordered_set_table
+            .get_index_of(v)
+            .map(|x| OrderedSetIndex(x))
+        {
+            i
+        } else {
+            assert!(
+                self.ordered_set_table.insert(v.clone()),
+                "The value should not be present; we just checked!"
+            );
+            OrderedSetIndex(self.ordered_set_table.len() - 1)
+        }
+    }
+
+    pub(in crate::reference_impl) fn resolve_ordered_set(
+        &self,
+        i: OrderedSetIndex,
+    ) -> Vec<Payload> {
+        self.ordered_set_table[i.0]
+            .0
             .iter()
             .map(|x| self.resolve_value(*x))
             .collect()
@@ -199,13 +231,13 @@ impl LifeCoreList {
             self.get_or_insert_value(&Value::Text(string_index))
         }
         Payload::Number(n) => self.get_or_insert_value(&Value::Number(*n)),
-        Payload::Aggregate(payloads) => {
+        Payload::Sequence(payloads) => {
             let value_indices = payloads
                 .iter()
                 .map(|x| self.insert_payload(x))
                 .collect_vec();
-            let aggregate_index = self.get_or_insert_aggregate(&value_indices);
-            self.get_or_insert_value(&Value::Aggregate(aggregate_index))
+            let aggregate_index = self.get_or_insert_sequence(&value_indices);
+            self.get_or_insert_value(&Value::Sequence(aggregate_index))
         }
         Payload::Serialized(v) => {
             let json_string = v.to_string();
@@ -228,7 +260,7 @@ impl LifeCoreList {
         Value::PreciseTime(timestamp) => Payload::PreciseTime(timestamp),
         Value::Text(string_index) => Payload::Text(self[string_index].to_string()),
         Value::Number(i) => Payload::Number(i),
-        Value::Aggregate(aggregate_index) => Payload::Aggregate(
+        Value::Sequence(aggregate_index) => Payload::Sequence(
             self[aggregate_index]
                 .iter()
                 .map(|value_index| self.get_payload(value_index))

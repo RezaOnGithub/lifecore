@@ -1,7 +1,15 @@
-use std::{ops::Index, ops::Range};
+use std::{
+    ops::{Index, Range},
+    str::FromStr,
+};
+
+use itertools::Itertools;
 
 use crate::{
-    BasicValidationFailure, Body, Context, DiagnosticLocation, Edge, Entry, EntryContext, EntryIndex, FamilyInsert, LifeCoreError, LifeCoreFamily, Node, Payload,
+    BasicValidationFailure, Body, Context, DiagnosticLocation, Edge, Entry, EntryContext,
+    EntryIndex, FamilyInsert, FieldQuery, FieldQueryPathComponent, JSON, LifeCoreError,
+    LifeCoreFamily, Node, NodeQueryCombinator, NodeQueryExpression, NodeQueryPredicate, OrderedSet,
+    Payload,
 };
 
 mod indexing_and_context {
@@ -139,7 +147,7 @@ mod indexing_and_context {
         }
 
         /// Throw away the context and get the index without it.
-        /// 
+        ///
         /// *Note:* This method throws away information! Handle with care.
         pub fn entry(&self) -> EntryIndex {
             EntryIndex(self.thing)
@@ -360,6 +368,87 @@ impl LifeCoreFamily {
 
     pub fn iter(&self) -> impl Iterator<Item = EntryContext> {
         self.collect().into_iter()
+    }
+}
+
+impl NodeQueryCombinator {
+    pub fn reduce(&self, a: bool, b: bool) -> bool {
+        match self {
+        NodeQueryCombinator::All => a && b,
+        NodeQueryCombinator::Any => a || b,
+        NodeQueryCombinator::None => (!a) && (!b),
+        }
+    }
+}
+
+impl Node {
+    pub fn get(&self, field_path: FieldQuery) -> Vec<Payload> {
+        let Some(payload) = self.field.0.get(field_path.field_name.as_str()) else {
+            return vec![];
+        };
+        payload.get(field_path.path)
+    }
+}
+
+impl Payload {
+    pub fn get(&self, path: Vec<FieldQueryPathComponent>) -> Vec<Payload> {
+        if path.is_empty() {
+            vec![self.clone()]
+        } else {
+            if !self.is_aggregate() {
+                return vec![];
+            }
+            let lower_path = path[1..].iter().cloned().collect_vec();
+            let inner_items = self.clone().try_as_aggregate().unwrap();
+            match path[0] {
+            FieldQueryPathComponent::Last => inner_items.last().map(|x| x.get(lower_path)).unwrap(),
+            FieldQueryPathComponent::Wildcard => inner_items
+                .iter()
+                .map(|x| x.get(lower_path.clone()))
+                .flatten()
+                .collect(),
+            FieldQueryPathComponent::Index(index) => {
+                inner_items.get(index).map(|x| x.get(lower_path)).unwrap()
+            }
+            }
+        }
+    }
+}
+
+impl NodeQueryExpression {
+    pub fn predicates(&self) -> &Vec<NodeQueryPredicate> {
+        match self {
+        NodeQueryExpression::All(node_query_predicates) => node_query_predicates,
+        NodeQueryExpression::Any(node_query_predicates) => node_query_predicates,
+        NodeQueryExpression::None(node_query_predicates) => node_query_predicates,
+        }
+    }
+}
+
+use std::hash::Hash;
+
+impl Hash for OrderedSet {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // This ensures that OrderedSet is always unique from Sequence
+        const UUID: uuid::Uuid = uuid::uuid!("019f849d-0a29-798c-b717-c8c405d07b5a");
+        for byte in UUID.as_bytes() {
+            byte.hash(state);
+        }
+        for element in self.0.as_slice() {
+            element.hash(state);
+        }
+    }
+}
+
+// TODO implement a compatible `Display`
+// TODO mandate! rules governing field names!
+// TO_TEST roundtripping
+impl FromStr for FieldQuery {
+    type Err = LifeCoreError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // FIELDNAME INDEX*
+        todo!()
     }
 }
 

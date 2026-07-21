@@ -66,16 +66,12 @@ pub use jiff::Timestamp;
 /// A timezone-aware instant in time. From `jiff`.
 pub use jiff::Zoned;
 
-/// Payload type for a complex object. From `serde_json`
-///
-/// # Note
-///
-/// Use of JSON is highly discouraged; stick to primitive types and
-/// consider this an escape hatch just in case.
-pub use serde_json::Value as JSON;
-pub use serde_json::to_value as to_json_value;
+/// A set of other Payload values with ordered elements. Based on [`indexmap::IndexSet`]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub struct OrderedSet(indexmap::IndexSet<Payload>);
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Body(pub BTreeMap<String, Payload>);
 
@@ -143,6 +139,8 @@ pub enum LifeCoreError {
     SystemsError(Vec<analysis::Inconsistency>),
     #[error("Validation Failure")]
     BasicValidationFailure(BasicValidationFailure),
+    #[error("Unable to parse FieldQuery")]
+    FieldQueryParsingError,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -206,10 +204,8 @@ pub enum Payload {
     PreciseTime(Timestamp),
     Text(String),
     Number(i64),
-    Aggregate(Vec<Payload>),
-
-    /// Opaque. May or may not be stored in an optimized manner on disk
-    Serialized(JSON),
+    Sequence(Vec<Payload>),
+    OrderedSet(OrderedSet),
 }
 
 /// Convenience type for a Node.
@@ -253,6 +249,19 @@ pub enum LifeCoreFamily {
     Parent(EntryContext, Vec<LifeCoreFamily>),
 }
 
+pub struct NodeQuery {
+    pub context: Context,
+    pub expression: NodeQueryExpression,
+}
+
+#[derive(strum::EnumDiscriminants)]
+#[strum_discriminants(name(NodeQueryCombinator))]
+pub enum NodeQueryExpression {
+    All(Vec<NodeQueryPredicate>),
+    Any(Vec<NodeQueryPredicate>),
+    None(Vec<NodeQueryPredicate>),
+}
+
 /// Basic Query kinds for the database. Queries are over the set of all
 /// nodes.
 ///
@@ -260,28 +269,26 @@ pub enum LifeCoreFamily {
 /// to user demand. Queries are deliberately divorced from higher-level concepts
 /// such as types to keep it simple.
 ///
-/// *Note:* Having a wildcard in the field path turns a singular predicate into
-/// a _minterm!_ In other words, every single Payload that is referred to by the
-/// path must pass the predicate for the whole to be true!.
-// TODO look for the soundness of query primitives; Assuming we are conceptually iterating over only
-// `Node` entries that are within the bounds of the graph...
+/// *Note:* When [`QueryFieldPathComponent::Any`] is present in the field path,
+/// the results are combined according to [`NodeQueryCombinator`]; that is,
+/// minterms is `All`; maxterms if `Any`; minterms of logical inverse otherwise.
 #[derive(EnumIs, EnumTryAs, Clone)]
 pub enum NodeQueryPredicate {
     // Field-related Query Primitives. All imply that such field path exists
-    FieldExists(QueryFieldPath),
-    FieldKind(QueryFieldPath, PayloadKind),
-    FieldEqual(QueryFieldPath, Payload),
-    FieldIsStringAndMatches(QueryFieldPath, QueryRegex),
-    FieldIsAggregateAndContains(QueryFieldPath, Payload),
-    FieldIsAggregateAndElementCountIs(QueryFieldPath, usize),
+    FieldExists(FieldQuery),
+    FieldKind(FieldQuery, PayloadKind),
+    FieldEqual(FieldQuery, Payload),
+    FieldIsStringAndMatches(FieldQuery, QueryRegex),
+    FieldIsAggregateAndContains(FieldQuery, Payload),
+    FieldIsAggregateAndElementCountIs(FieldQuery, usize),
 
     // Related to Node itself
-    FreshWithin(Context),
+    Fresh,
     NodeType(String),
     HasOutgoingEdgeOfType(String),
     HasIncomingEdgeOfType(String),
-    HasFreshOutgoingEdgeOfType(String, Context),
-    HasFreshIncomingEdgeOfType(String, Context),
+    HasFreshOutgoingEdgeOfType(String),
+    HasFreshIncomingEdgeOfType(String),
     Not(Box<Self>),
 }
 
@@ -290,15 +297,15 @@ pub enum NodeQueryPredicate {
 /// Under the current data model, a node field can have arbitrary levels of
 /// nested Aggregates.
 #[derive(Clone)]
-pub struct QueryFieldPath {
+pub struct FieldQuery {
     field_name: String,
-    index: Vec<QueryFieldPathIndex>,
+    path: Vec<FieldQueryPathComponent>,
 }
 
 #[derive(PartialEq, Eq, EnumIs, EnumTryAs, Clone)]
-pub enum QueryFieldPathIndex {
+pub enum FieldQueryPathComponent {
     Last,
-    Any,
+    Wildcard,
     Index(usize),
 }
 
@@ -387,16 +394,7 @@ pub trait LifeCore: Send + Sync {
     fn is_stale(&self, e: EntryContext) -> Option<bool>;
 
     /// Find all Entries that pass **all** [`Query`] predicates
-    ///
-    /// *Note:* passing an empty query list returns an empty list.
-    fn query_pick_node(&self, query: Vec<NodeQueryPredicate>) -> Vec<Node>;
-
-    /// Find all Entrues that pass **any** [`Query`] predicate.
-    ///
-    /// *Note:* passing an empty query list would technically return all
-    /// Entries, but it is not allowed; `query` must have at least one [`Query`]
-    /// predicate.
-    fn query_filter_node(&self, query: Vec<NodeQueryPredicate>) -> Vec<Node>;
+    fn query(&self, query: NodeQuery) -> Vec<Node>;
 
     /// Get node at the specified index and context, `None` if is not a node or
     /// is out-of-bounds. See also: [`LifeCore::get`]
