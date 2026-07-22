@@ -17,50 +17,84 @@
 //! approach but correctness for now. NOTDO PERF
 
 use itertools::Itertools;
-use lifecore::{
-    EventContext, LifeCore, LifeCoreError, NodeType, NodeTypeClass, NodeTypeFieldStatus,
-    PayloadType, PointedEventContext, TypedBody,
-    analysis::{self, InnerMessageType, InnerOutput},
-};
 use std::{collections::BTreeMap, marker::PhantomData};
 use strum::IntoDiscriminant;
 
+/// Describes whether a field is mandatory or not.
+///
+/// A field can be:
+/// - Mandatory; must be filled out
+/// - Encouraged: should be filled out but could remain non-existent for now.
+///   The field may become mandatory in the future.
+/// - Deprecated: should not be filled out but could remain filled out for now.
+///   The field may be removed in the future.
+/// - Optional: may or may not be filled out
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub enum FieldStatus {
+    Mandatory,
+    Encouraged,
+    Deprecated,
+    Optional,
+}
 
-// /// Describes whether a field is mandatory or not.
-// ///
-// /// A field can be:
-// /// - Mandatory; must be filled out
-// /// - Encouraged: should be filled out but could remain empty
-// /// - Deprecated: should not be filled out but could be filled out
-// /// - Optional: may or may not be filled out
-// #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-// #[cfg_attr(debug_assertions, derive(Debug))]
-// pub enum FieldStatus {
-//     Mandatory,
-//     Encouraged,
-//     Deprecated,
-//     Optional,
-// }
+/// Describes the type and shape of a field's value
+#[derive(Clone, PartialEq, Eq, Hash, strum::EnumIs, strum::EnumTryAs)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub enum ValueType {
+    PreciseTime,
+    Text,
+    Number,
 
-//! The types here used to be a tightly integrated part of `lifecore-typecheck`
-//! However, it is much more convenient to have types as a first-class citizen
-//! But this creates issues with regard to how the type system should evolve in
-//! the future. In general, if this module changes, databases with an older
-//! instance of this type need careful modification to ensure typechecking
-//! proceeds as normal
+    Sequence(Box<ValueType>),
+    Tuple(Vec<ValueType>),
+    Set(Box<ValueType>),
+    OneOf(Vec<ValueType>),
+}
 
-use std::collections::BTreeMap;
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub struct FieldDecl {
+    name: String,
+    status: FieldStatus,
+    ty: ValueType,
+}
 
-use serde::{Deserialize, Serialize};
-use strum::Display;
+/// Describes a type in LifeCore
+///
+/// Types operate primarily on Nodes and describe their fields, the
+/// edge types that can be connected to them, and what other node types (besides
+/// their own) can override them.
+#[derive(Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub struct Type {
+    pub name: String,
+    pub body: HashSet<FieldDecl>,
+    pub outgoing: Vec<String>,
+    pub incoming: Vec<String>,
+    pub additional_override: Vec<String>,
+}
 
-use crate::{Body, LifeCoreError, Payload, TypedBody, ValueType};
+/// A trait for downstream Analyzer and NodeType implementors
+pub trait NodeType<'a>: Into<Body> + TryFrom<&'a Body> {
+    fn describe_self() -> Type;
+    fn name() -> &'static str;
+}
 
-// /// A trait for downstream Analyzer and NodeType implementors
-// pub trait TypedBody<'a>: Into<Body> + TryFrom<&'a Body> {
-//     fn describe_self() -> NodeType;
-//     fn name() -> &'static str;
-// }
+/// Types for nodes are defined by nodes! In other words, the type information
+/// also resides on the database.
+///
+/// To achieve this, we define implement [`TypedBody`] for [`Type`] node type, which will be a
+/// node that can be added to the database like any other node.
+impl<'a> NodeType<'a> for Type {
+    fn describe_self() -> Type {
+        todo!()
+    }
+
+    fn name() -> &'static str {
+        todo!()
+    }
+}
 
 // impl<'a> TypedBody<'a> for NodeType {
 //     fn describe_self() -> NodeType {
@@ -133,8 +167,9 @@ use crate::{Body, LifeCoreError, Payload, TypedBody, ValueType};
 //         let class: NodeTypeClass = v.get_deserialized("class")?;
 //         let from_end: Vec<String> = v.get_deserialized("from_end")?;
 //         let to_end: Vec<String> = v.get_deserialized("to_end")?;
-//         let additional_override: Vec<String> = v.get_deserialized("additional_override")?;
-//         let field: Vec<(String, (ValueType, NodeTypeFieldStatus))> = v.get_deserialized("field")?;
+//         let additional_override: Vec<String> =
+// v.get_deserialized("additional_override")?;         let field: Vec<(String,
+// (ValueType, NodeTypeFieldStatus))> = v.get_deserialized("field")?;
 
 //         Ok(Self {
 //             name,
@@ -160,8 +195,8 @@ use crate::{Body, LifeCoreError, Payload, TypedBody, ValueType};
 //             class: NodeTypeClass::Regular,
 //             outgoing: outgoing.iter().map(|x| x.to_string()).collect(),
 //             incoming: incoming.iter().map(|x| x.to_string()).collect(),
-//             additional_override: additional_override.iter().map(|x| x.to_string()).collect(),
-//             field: fields
+//             additional_override: additional_override.iter().map(|x|
+// x.to_string()).collect(),             field: fields
 //                 .iter()
 //                 .map(|(name, value)| (name.to_string(), value.clone()))
 //                 .collect(),
@@ -173,43 +208,7 @@ use crate::{Body, LifeCoreError, Payload, TypedBody, ValueType};
 //     /// Parser for a DSL for expressing types
 //     pub fn parse(s: &str) -> Self {}
 // }
-
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct NodeType {
-    pub name: String,
-    pub class: NodeTypeClass,
-    pub outgoing: Vec<String>,
-    pub incoming: Vec<String>,
-    pub additional_override: Vec<String>,
-    pub field: Vec<(String, (ValueType, NodeTypeFieldStatus))>,
-}
-
-/// Describes the type and shape of a field's value
-#[derive(Clone, PartialEq, Eq, Hash, strum::EnumIs, strum::EnumTryAs)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub enum ValueType {
-    PreciseTime,
-    Text,
-    Number,
-
-    Sequence(Box<ValueType>),
-    Tuple(Vec<ValueType>),
-    Set(Box<ValueType>),
-    OneOf(Vec<ValueType>),
-
-    Serialized,
-}
-
 /// Describes a Field as a whole
-#[derive(Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct FieldDecl {
-    name: String,
-    status: FieldStatus,
-    ty: ValueType,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
@@ -339,8 +338,8 @@ impl<LC: LifeCore> TypeCheck<LC> {
             relevance: vec![],
             message: "Consider adding the bootstrap node for TypeCheck to work".to_string(),
             action: vec![AddNode {
-                ty_name: NodeType::name().to_string(),
-                payload: NodeType::describe_self().into(),
+                ty_name: Type::name().to_string(),
+                payload: Type::describe_self().into(),
                 parent: None,
             }],
         }
@@ -551,7 +550,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
     {
         if lc
             .types(EventContext::universe())
-            .any(|(name, _)| name == NodeType::name())
+            .any(|(name, _)| name == Type::name())
         {
             return TypeCheckOutput(vec![]);
         }
@@ -569,14 +568,13 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
         // but non-stale Node_Type declaring a type of the same name.
         for some_type_at_some_point_node in lc
             .nodes(window)
-            .filter(|node| node.ty_name.as_str() == NodeType::name())
+            .filter(|node| node.ty_name.as_str() == Type::name())
         {
             let type_table = lc
                 .types(some_type_at_some_point_node.e.shrink_to_exclusive_left())
                 .collect::<BTreeMap<_, _>>();
 
-            let Ok(some_type_at_some_point) =
-                NodeType::try_from(&some_type_at_some_point_node.field)
+            let Ok(some_type_at_some_point) = Type::try_from(&some_type_at_some_point_node.field)
             else {
                 r.push(MalformedNodeTypeBody {
                     offending_event: some_type_at_some_point_node.e,

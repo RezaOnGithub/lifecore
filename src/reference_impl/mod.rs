@@ -11,7 +11,9 @@
 //! which due to complexity in querying.
 
 use crate::{
-    BasicValidationFailure, BasicValidationFailureScenario::{self, *}, Circumstance, Context, Entry, EntryContext, EntryIndex, FamilyInsert, FieldQueryPathComponent, LifeCore, LifeCoreError, LifeCoreFamily, NodeQuery, NodeQueryCombinator, NodeQueryPredicate, OrderedSet, Payload, Timestamp, analysis,
+    BasicValidationFailure, BasicValidationFailureScenario::*, Circumstance, Context, EntryContext,
+    EntryIndex, FamilyInsert, LifeCore, LifeCoreError, LifeCoreFamily, NodeQuery,
+    NodeQueryCombinator, NodeQueryPredicate, OrderedSet, Payload, Timestamp, analysis,
 };
 use indexmap::IndexSet;
 use itertools::Itertools;
@@ -77,7 +79,7 @@ pub struct LifeCoreList {
     circumstance_table: IndexSet<Circumstance>,
     string_table: IndexSet<String>,
     sequence_table: IndexSet<Vec<ValueIndex>>,
-    ordered_set_table: IndexSet<IndexSet<ValueIndex>>,
+    ordered_set_table: IndexSet<OrderedSet<ValueIndex>>,
     value_table: IndexSet<Value>,
 }
 
@@ -678,7 +680,7 @@ impl NodeQueryPredicate {
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            !field_content.get(query_field_path.path).is_empty()
+            !field_content.get(&query_field_path.path).is_empty()
         }
 
         FieldKind(query_field_path, payload_kind) => {
@@ -691,7 +693,7 @@ impl NodeQueryPredicate {
 
             // TO_TEST find a scenario where `.is_some_and` would cause unexpected output
             field_content
-                .get(query_field_path.path)
+                .get(&query_field_path.path)
                 .iter()
                 .map(|x| x.discriminant() == *payload_kind)
                 .reduce(|x, y| query_combinator.reduce(x, y))
@@ -704,7 +706,7 @@ impl NodeQueryPredicate {
                 return false;
             };
             field_content
-                .get(query_field_path.path)
+                .get(&query_field_path.path)
                 .iter()
                 .map(|x| *x == *payload)
                 .reduce(|x, y| query_combinator.reduce(x, y))
@@ -717,7 +719,7 @@ impl NodeQueryPredicate {
                 return false;
             };
             field_content
-                .get(query_field_path.path)
+                .get(&query_field_path.path)
                 .iter()
                 .map(|x| {
                     x.clone()
@@ -728,38 +730,79 @@ impl NodeQueryPredicate {
                 .is_some_and(|x| x)
         }
 
-        FieldIsAggregateAndContains(query_field_path, payload) => {
+        FieldIsSequenceAndContains(query_field_path, payload) => {
             let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
             field_content
-                .get(query_field_path.path)
+                .get(&query_field_path.path)
                 .iter()
                 .map(|x| {
                     x.clone()
-                        .try_as_aggregate()
+                        .try_as_sequence()
                         .map_or(false, |aggregate| aggregate.contains(payload))
                 })
                 .reduce(|x, y| query_combinator.reduce(x, y))
                 .is_some_and(|x| x)
         }
 
-        FieldIsAggregateAndElementCountIs(query_field_path, count) => {
+        FieldIsSequenceAndElementCountIs(query_field_path, count) => {
             let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
             field_content
-                .get(query_field_path.path)
+                .get(&query_field_path.path)
                 .iter()
                 .map(|x| {
                     x.clone()
-                        .try_as_aggregate()
+                        .try_as_sequence()
                         .map_or(false, |aggregate| aggregate.len() == *count)
                 })
                 .reduce(|x, y| query_combinator.reduce(x, y))
                 .is_some_and(|x| x)
+        }
+
+        FieldIsOrderedSetAndContains(field_query, payload) => {
+            let x = lc.node(candidate_index.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&field_query.field_name).cloned() else {
+                return false;
+            };
+            field_content
+                .get(&field_query.path)
+                .iter()
+                .map(|x| {
+                    x.clone()
+                        .try_as_ordered_set()
+                        .map_or(false, |set| set.0.contains(payload))
+                })
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
+        }
+        FieldIsOrderedSetAndElementCountIs(field_query, count) => {
+            let x = lc.node(candidate_index.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&field_query.field_name).cloned() else {
+                return false;
+            };
+            field_content
+                .get(&field_query.path)
+                .iter()
+                .map(|x| {
+                    x.clone()
+                        .try_as_ordered_set()
+                        .map_or(false, |set| set.0.len() == *count)
+                })
+                .reduce(|x, y| query_combinator.reduce(x, y))
+                .is_some_and(|x| x)
+        }
+
+        FieldQueryResultCount(field_query, count) => {
+            let x = lc.node(candidate_index.absolute()).unwrap();
+            let Some(field_content) = x.field.0.get(&field_query.field_name).cloned() else {
+                return false;
+            };
+            field_content.get(&field_query.path).iter().count() == *count
         }
 
         Fresh => !lc

@@ -1,7 +1,6 @@
-use itertools::Itertools;
 use jiff::Unit;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt, hash::Hash};
+use std::{collections::BTreeMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 
 /// The Index For Any Event
@@ -66,12 +65,13 @@ pub use jiff::Timestamp;
 /// A timezone-aware instant in time. From `jiff`.
 pub use jiff::Zoned;
 
-/// A set of other Payload values with ordered elements. Based on [`indexmap::IndexSet`]
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
+/// A set of other Payload values with ordered elements. Based on
+/// [`indexmap::IndexSet`]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub struct OrderedSet(indexmap::IndexSet<Payload>);
+pub struct OrderedSet<T: Eq + Hash>(indexmap::IndexSet<T>);
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Body(pub BTreeMap<String, Payload>);
 
@@ -205,7 +205,7 @@ pub enum Payload {
     Text(String),
     Number(i64),
     Sequence(Vec<Payload>),
-    OrderedSet(OrderedSet),
+    OrderedSet(OrderedSet<Payload>),
 }
 
 /// Convenience type for a Node.
@@ -237,7 +237,7 @@ pub enum Entry {
 
 /// Keyword Arguments to [`LifeCoreFamily::insert`]
 #[derive(Clone, Copy)]
-struct FamilyInsert {
+pub struct FamilyInsert {
     pub parent: EntryContext,
     pub child: EntryContext,
 }
@@ -279,8 +279,15 @@ pub enum NodeQueryPredicate {
     FieldKind(FieldQuery, PayloadKind),
     FieldEqual(FieldQuery, Payload),
     FieldIsStringAndMatches(FieldQuery, QueryRegex),
-    FieldIsAggregateAndContains(FieldQuery, Payload),
-    FieldIsAggregateAndElementCountIs(FieldQuery, usize),
+    FieldIsSequenceAndContains(FieldQuery, Payload),
+    FieldIsSequenceAndElementCountIs(FieldQuery, usize),
+    FieldIsOrderedSetAndContains(FieldQuery, Payload),
+    FieldIsOrderedSetAndElementCountIs(FieldQuery, usize),
+
+    /// A weird one out of the bunch. If path does not contain a wildcard, the
+    /// count is either zero or one. I'm not even sure what its syntax could be
+    /// like!
+    FieldQueryResultCount(FieldQuery, usize),
 
     // Related to Node itself
     Fresh,

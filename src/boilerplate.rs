@@ -7,9 +7,8 @@ use itertools::Itertools;
 
 use crate::{
     BasicValidationFailure, Body, Context, DiagnosticLocation, Edge, Entry, EntryContext,
-    EntryIndex, FamilyInsert, FieldQuery, FieldQueryPathComponent, JSON, LifeCoreError,
-    LifeCoreFamily, Node, NodeQueryCombinator, NodeQueryExpression, NodeQueryPredicate, OrderedSet,
-    Payload,
+    EntryIndex, FamilyInsert, FieldQuery, FieldQueryPathComponent, LifeCoreError, LifeCoreFamily,
+    Node, NodeQueryCombinator, NodeQueryExpression, NodeQueryPredicate, OrderedSet, Payload,
 };
 
 mod indexing_and_context {
@@ -386,29 +385,46 @@ impl Node {
         let Some(payload) = self.field.0.get(field_path.field_name.as_str()) else {
             return vec![];
         };
-        payload.get(field_path.path)
+        payload.get(&field_path.path)
     }
 }
 
 impl Payload {
-    pub fn get(&self, path: Vec<FieldQueryPathComponent>) -> Vec<Payload> {
+    pub fn get(&self, path: &Vec<FieldQueryPathComponent>) -> Vec<Payload> {
         if path.is_empty() {
             vec![self.clone()]
         } else {
-            if !self.is_aggregate() {
+            if !self.is_sequence() || !self.is_ordered_set() {
                 return vec![];
             }
             let lower_path = path[1..].iter().cloned().collect_vec();
-            let inner_items = self.clone().try_as_aggregate().unwrap();
+
+            // Because "Set" items do have an ordering, we need to check whether `self` is a
+            // set or a sequence
+            let inner_items = {
+                if self.is_sequence() {
+                    self.clone().try_as_sequence().unwrap()
+                } else {
+                    self.clone()
+                        .try_as_ordered_set()
+                        .unwrap()
+                        .0
+                        .iter()
+                        .cloned()
+                        .collect_vec()
+                }
+            };
             match path[0] {
-            FieldQueryPathComponent::Last => inner_items.last().map(|x| x.get(lower_path)).unwrap(),
+            FieldQueryPathComponent::Last => {
+                inner_items.last().map(|x| x.get(&lower_path)).unwrap()
+            }
             FieldQueryPathComponent::Wildcard => inner_items
                 .iter()
-                .map(|x| x.get(lower_path.clone()))
+                .map(|x| x.get(&lower_path))
                 .flatten()
                 .collect(),
             FieldQueryPathComponent::Index(index) => {
-                inner_items.get(index).map(|x| x.get(lower_path)).unwrap()
+                inner_items.get(index).map(|x| x.get(&lower_path)).unwrap()
             }
             }
         }
@@ -427,7 +443,7 @@ impl NodeQueryExpression {
 
 use std::hash::Hash;
 
-impl Hash for OrderedSet {
+impl<T: Eq + Hash> Hash for OrderedSet<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // This ensures that OrderedSet is always unique from Sequence
         const UUID: uuid::Uuid = uuid::uuid!("019f849d-0a29-798c-b717-c8c405d07b5a");

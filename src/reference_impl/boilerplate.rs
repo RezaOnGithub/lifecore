@@ -1,5 +1,6 @@
 use std::ops::Index;
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 use crate::{
@@ -77,6 +78,14 @@ impl Index<SeqeunceIndex> for LifeCoreList {
 
     fn index(&self, index: SeqeunceIndex) -> &Self::Output {
         &self.sequence_table[index.0]
+    }
+}
+
+impl Index<OrderedSetIndex> for LifeCoreList {
+    type Output = OrderedSet<ValueIndex>;
+
+    fn index(&self, index: OrderedSetIndex) -> &Self::Output {
+        &self.ordered_set_table[index.0]
     }
 }
 
@@ -166,7 +175,7 @@ impl LifeCoreList {
     // COPY_PASTE
     pub(in crate::reference_impl) fn get_or_insert_ordered_set(
         &mut self,
-        v: &OrderedSet,
+        v: &OrderedSet<ValueIndex>,
     ) -> OrderedSetIndex {
         if let Some(i) = self
             .ordered_set_table
@@ -186,12 +195,14 @@ impl LifeCoreList {
     pub(in crate::reference_impl) fn resolve_ordered_set(
         &self,
         i: OrderedSetIndex,
-    ) -> Vec<Payload> {
-        self.ordered_set_table[i.0]
+    ) -> OrderedSet<Payload> {
+        let resolved_values = self.ordered_set_table[i.0]
             .0
             .iter()
             .map(|x| self.resolve_value(*x))
-            .collect()
+            .collect_vec();
+        let inner = IndexSet::from_iter(resolved_values);
+        OrderedSet(inner)
     }
 
     // COPY_PASTE
@@ -236,13 +247,19 @@ impl LifeCoreList {
                 .iter()
                 .map(|x| self.insert_payload(x))
                 .collect_vec();
-            let aggregate_index = self.get_or_insert_sequence(&value_indices);
-            self.get_or_insert_value(&Value::Sequence(aggregate_index))
+            let sequence_index = self.get_or_insert_sequence(&value_indices);
+            self.get_or_insert_value(&Value::Sequence(sequence_index))
         }
-        Payload::Serialized(v) => {
-            let json_string = v.to_string();
-            let string_index = self.get_or_insert_string(&json_string);
-            self.get_or_insert_value(&Value::Text(string_index))
+        Payload::OrderedSet(ordered_set) => {
+            let value_indices = OrderedSet(IndexSet::from_iter(
+                ordered_set
+                    .0
+                    .iter()
+                    .map(|x| self.insert_payload(x))
+                    .collect_vec(),
+            ));
+            let ordered_set_index = self.get_or_insert_ordered_set(&value_indices);
+            self.get_or_insert_value(&Value::OrderedSet(ordered_set_index))
         }
         }
     }
@@ -266,7 +283,15 @@ impl LifeCoreList {
                 .map(|value_index| self.get_payload(value_index))
                 .collect(),
         ),
-        Value::Serialized(string_index) => Payload::Text(self[string_index].to_string()),
+        Value::OrderedSet(ordered_set_index) => {
+            Payload::OrderedSet(OrderedSet(IndexSet::from_iter(
+                self[ordered_set_index]
+                    .0
+                    .iter()
+                    .map(|value_index| self.get_payload(value_index))
+                    .collect_vec(),
+            )))
+        }
         }
     }
 }
