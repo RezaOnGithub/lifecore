@@ -16,8 +16,14 @@
 //! This can be terribly inefficient, and of course there is a streaming
 //! approach but correctness for now. NOTDO PERF
 
-use itertools::Itertools;
-use std::{collections::BTreeMap, marker::PhantomData};
+use itertools::{Iterate, Itertools};
+use lifecore::{
+    Body, Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, OrderedSet, Payload, PayloadKind, analysis::InnerMessageType,
+};
+use std::{
+    collections::{BTreeMap, HashMap},
+    marker::PhantomData,
+};
 use strum::IntoDiscriminant;
 
 /// Describes whether a field is mandatory or not.
@@ -48,7 +54,7 @@ pub enum ValueType {
 
     Sequence(Box<ValueType>),
     Tuple(Vec<ValueType>),
-    Set(Box<ValueType>),
+    OrderedSet(Box<ValueType>),
     OneOf(Vec<ValueType>),
 }
 
@@ -56,8 +62,8 @@ pub enum ValueType {
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FieldDecl {
     name: String,
-    status: FieldStatus,
     ty: ValueType,
+    status: FieldStatus,
 }
 
 /// Describes a type in LifeCore
@@ -65,151 +71,37 @@ pub struct FieldDecl {
 /// Types operate primarily on Nodes and describe their fields, the
 /// edge types that can be connected to them, and what other node types (besides
 /// their own) can override them.
+///
+/// Types for nodes are defined by nodes! In other words, the type information
+/// also resides on the database.
+///
+/// To achieve this, we define implement [`NodeType`] for [`Type`] node type,
+/// which will be a node that can be added to the database like any other node.
 #[derive(Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Type {
     pub name: String,
-    pub body: HashSet<FieldDecl>,
-    pub outgoing: Vec<String>,
-    pub incoming: Vec<String>,
-    pub additional_override: Vec<String>,
+    pub body: OrderedSet<FieldDecl>,
+    pub outgoing: OrderedSet<String>,
+    pub incoming: OrderedSet<String>,
+    pub additional_override: OrderedSet<String>,
 }
 
-/// A trait for downstream Analyzer and NodeType implementors
+/// A struct that implements this can easily be adapted to insert and retrieve
+/// data from LifeCore
 pub trait NodeType<'a>: Into<Body> + TryFrom<&'a Body> {
     fn describe_self() -> Type;
     fn name() -> &'static str;
 }
 
-/// Types for nodes are defined by nodes! In other words, the type information
-/// also resides on the database.
-///
-/// To achieve this, we define implement [`TypedBody`] for [`Type`] node type, which will be a
-/// node that can be added to the database like any other node.
-impl<'a> NodeType<'a> for Type {
-    fn describe_self() -> Type {
-        todo!()
-    }
-
-    fn name() -> &'static str {
-        todo!()
-    }
+/// A trait for NodeType implementors. If every field of a struct implements
+/// this, implementing NodeType becomes easier too- the only missing pieces are
+/// field name and field status.
+pub trait NodeField<'a>: Into<Payload> + TryFrom<&'a Payload> {
+    fn describe_self() -> ValueType;
 }
 
-// impl<'a> TypedBody<'a> for NodeType {
-//     fn describe_self() -> NodeType {
-//         NodeType {
-//             name: Self::name().to_string(),
-//             class: NodeTypeClass::Regular,
-//             outgoing: vec![],
-//             incoming: vec![],
-//             additional_override: vec!["Tombstone".to_string()],
-//             field: vec![
-//                 (
-//                     "name".to_string(),
-//                     (ValueType::Text, NodeTypeFieldStatus::Mandatory),
-//                 ),
-//                 (
-//                     "class".to_string(),
-//                     (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
-//                 ),
-//                 (
-//                     "from_end".to_string(),
-//                     (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
-//                 ),
-//                 (
-//                     "to_end".to_string(),
-//                     (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
-//                 ),
-//                 (
-//                     "additional_override".to_string(),
-//                     (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
-//                 ),
-//                 (
-//                     "field".to_string(),
-//                     (ValueType::Serialized, NodeTypeFieldStatus::Mandatory),
-//                 ),
-//             ],
-//         }
-//     }
-
-//     fn name() -> &'static str {
-//         "Node_Type"
-//     }
-// }
-
-// impl From<NodeType> for Body {
-//     fn from(val: NodeType) -> Self {
-//         Body(
-//             vec![
-//                 ("name", Payload::Text(val.name)),
-//                 ("class", Payload::serialized_from(val.class)),
-//                 ("from_end", Payload::serialized_from(val.outgoing)),
-//                 ("to_end", Payload::serialized_from(val.incoming)),
-//                 (
-//                     "additional_override",
-//                     Payload::serialized_from(val.additional_override),
-//                 ),
-//                 ("field", Payload::serialized_from(val.field)),
-//             ]
-//             .into_iter()
-//             .map(|(x, y)| (x.to_string(), y))
-//             .collect::<BTreeMap<String, Payload>>(),
-//         )
-//     }
-// }
-
-// impl TryFrom<&Body> for NodeType {
-//     type Error = LifeCoreError;
-
-//     fn try_from(v: &Body) -> Result<Self, Self::Error> {
-//         let name = v.get_text("name")?;
-//         let class: NodeTypeClass = v.get_deserialized("class")?;
-//         let from_end: Vec<String> = v.get_deserialized("from_end")?;
-//         let to_end: Vec<String> = v.get_deserialized("to_end")?;
-//         let additional_override: Vec<String> =
-// v.get_deserialized("additional_override")?;         let field: Vec<(String,
-// (ValueType, NodeTypeFieldStatus))> = v.get_deserialized("field")?;
-
-//         Ok(Self {
-//             name,
-//             class,
-//             outgoing: from_end,
-//             incoming: to_end,
-//             additional_override,
-//             field,
-//         })
-//     }
-// }
-
-// impl NodeType {
-//     pub fn new(
-//         name: &str,
-//         fields: &[(&str, (ValueType, NodeTypeFieldStatus))],
-//         outgoing: &[&str],
-//         incoming: &[&str],
-//         additional_override: &[&str],
-//     ) -> Self {
-//         Self {
-//             name: name.to_string(),
-//             class: NodeTypeClass::Regular,
-//             outgoing: outgoing.iter().map(|x| x.to_string()).collect(),
-//             incoming: incoming.iter().map(|x| x.to_string()).collect(),
-//             additional_override: additional_override.iter().map(|x|
-// x.to_string()).collect(),             field: fields
-//                 .iter()
-//                 .map(|(name, value)| (name.to_string(), value.clone()))
-//                 .collect(),
-//         }
-//     }
-// }
-
-// impl ValueType {
-//     /// Parser for a DSL for expressing types
-//     pub fn parse(s: &str) -> Self {}
-// }
 /// Describes a Field as a whole
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
 #[cfg_attr(test, strum_discriminants(name(TypeCheckTest)))]
@@ -221,67 +113,71 @@ impl<'a> NodeType<'a> for Type {
 pub enum TypeCheckMessage {
     AddBootstrapNode,
     MalformedNodeTypeBody {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
     },
     DuplicateTypeDefinition {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         name: String,
     },
     NonexistantOverrideType {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         base_ty_name: String,
         override_ty_name: String,
-        relevance: Vec<PointedEventContext>,
+        relevance: Vec<EntryIndex>,
     },
     NodeTypeNonexistant {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         ty_name: String,
     },
     ElidedMandatoryField {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         ty_name: String,
         field_name: String,
     },
     // TODO add relevance
     ElidedEncouragedField {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         ty_name: String,
         field_name: String,
     },
     // TODO add relevance
     DeprecatedField {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         ty_name: String,
         field_name: String,
     },
     FieldTypeMismatch {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         ty_name: String,
         field_name: String,
-        expected_type: PayloadType,
-        present_type: PayloadType,
+        expected_type: PayloadKind,
+        present_type: PayloadKind,
     },
     ExtraneousField {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         ty_name: String,
         field_name: String,
     },
     BadEdgeEndpoint {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         edge_ty_name: String,
         bad_node_ty_name: String,
         bad_node_is_head: bool,
     },
     BadOverride {
-        offending_event: PointedEventContext,
+        offending_event: EntryContext,
         parent_ty_name: String,
         child_ty_name: String,
     },
-    NodeClassNotRespected {
-        offending_event: PointedEventContext,
-        ty_name: String,
-        expected_class: NodeTypeClass,
-    },
+}
+
+pub fn types<LC: LifeCore>(lc: &LC, ctx: Context) -> impl Iterator<Item = (String, Type)> {
+    lc.fresh_nodes(ctx)
+        .filter(|n| n.ty_name.as_str() == Type::name())
+        .filter_map(|n| {
+            let ty: Type = (&n.field).try_into().ok()?;
+            Some((ty.name.clone(), ty))
+        })
 }
 
 #[derive(Clone)]
@@ -305,8 +201,8 @@ pub struct TypeCheck<LC: LifeCore> {
 // impl Analyzer
 
 impl InnerMessageType for TypeCheckMessage {
-    fn ty(&self) -> analysis::MessageType {
-        use analysis::MessageType::*;
+    fn ty(&self) -> lifecore::analysis::MessageType {
+        use lifecore::analysis::MessageType::*;
         match self {
         TypeCheckMessage::AddBootstrapNode => Suggestion,
         TypeCheckMessage::MalformedNodeTypeBody { .. } => Inconsistency,
@@ -320,19 +216,18 @@ impl InnerMessageType for TypeCheckMessage {
         TypeCheckMessage::ExtraneousField { .. } => Inconsistency,
         TypeCheckMessage::BadEdgeEndpoint { .. } => Inconsistency,
         TypeCheckMessage::BadOverride { .. } => Inconsistency,
-        TypeCheckMessage::NodeClassNotRespected { .. } => Inconsistency,
         }
     }
 }
 
 impl<LC: LifeCore> TypeCheck<LC> {
-    fn convert_message(&self, x: TypeCheckMessage) -> analysis::Message {
-        use analysis::{Inconsistency, SuggestedAction::*, Suggestion, Warning};
+    fn convert_message(&self, x: TypeCheckMessage) -> lifecore::analysis::Message {
+        use lifecore::analysis::{Inconsistency, SuggestedAction::*, Suggestion, Warning};
         let system_name = TypeCheckFactory::<LC>::name().to_string();
         let system_config = self.config.to_string();
-        let r: analysis::Message = match x.clone() {
+        let r: lifecore::analysis::Message = match x.clone() {
         TypeCheckMessage::AddBootstrapNode => Suggestion {
-            offending_event: EventContext::universe().into(),
+            offending_event: Context::universe().into(),
             system_name: TypeCheckFactory::<LC>::name().to_string(),
             system_config: self.config.to_string(),
             relevance: vec![],
@@ -507,34 +402,19 @@ impl<LC: LifeCore> TypeCheck<LC> {
             ),
         }
         .into(),
-        TypeCheckMessage::NodeClassNotRespected {
-            offending_event,
-            ty_name,
-            expected_class,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Node class {} of type {} is not respected.",
-                expected_class,
-                ty_name.as_str()
-            ),
-        }
-        .into(),
         };
         assert!(r.discriminant() == x.ty());
         r
     }
 }
 
-impl analysis::InnerOutput<TypeCheckMessage> for TypeCheckOutput {
+impl lifecore::analysis::InnerOutput<TypeCheckMessage> for TypeCheckOutput {
     fn push(&mut self, v: TypeCheckMessage) {
         self.0.push(v);
     }
 }
 
-impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
+impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
     type MSG
         = TypeCheckMessage
     where
@@ -548,17 +428,14 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
     where
         Self: Sized,
     {
-        if lc
-            .types(EventContext::universe())
-            .any(|(name, _)| name == Type::name())
-        {
+        if types(lc, Context::universe()).any(|(name, _)| name == Type::name()) {
             return TypeCheckOutput(vec![]);
         }
 
         TypeCheckOutput(vec![TypeCheckMessage::AddBootstrapNode])
     }
 
-    fn analyze_inner(&self, lc: &LC, window: EventContext) -> TypeCheckOutput
+    fn analyze_inner(&self, lc: &LC, window: Context) -> TypeCheckOutput
     where
         Self: Sized,
     {
@@ -570,9 +447,11 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
             .nodes(window)
             .filter(|node| node.ty_name.as_str() == Type::name())
         {
-            let type_table = lc
-                .types(some_type_at_some_point_node.e.shrink_to_exclusive_left())
-                .collect::<BTreeMap<_, _>>();
+            let type_table = types(
+                lc,
+                some_type_at_some_point_node.e.shrink_to_exclusive_left(),
+            )
+            .collect::<BTreeMap<_, _>>();
 
             let Ok(some_type_at_some_point) = Type::try_from(&some_type_at_some_point_node.field)
             else {
@@ -636,7 +515,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
             // Fields that may be present and mandatory
             for (field_name, (field_type, field_policy)) in node_type.field.iter() {
                 match field_policy {
-                NodeTypeFieldStatus::Mandatory => {
+                FieldStatus::Mandatory => {
                     if !node.field.0.contains_key(field_name) {
                         r.push(ElidedMandatoryField {
                             offending_event: pointed_context,
@@ -645,7 +524,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                         });
                     }
                 }
-                NodeTypeFieldStatus::Encouraged => {
+                FieldStatus::Encouraged => {
                     if !node.field.0.contains_key(field_name) {
                         r.push(ElidedEncouragedField {
                             offending_event: pointed_context,
@@ -654,7 +533,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                         });
                     }
                 }
-                NodeTypeFieldStatus::Deprecated => {
+                FieldStatus::Deprecated => {
                     if node.field.0.contains_key(field_name) {
                         r.push(DeprecatedField {
                             offending_event: pointed_context,
@@ -663,7 +542,7 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
                         });
                     }
                 }
-                NodeTypeFieldStatus::Optional => {
+                FieldStatus::Optional => {
                     // Nothing to do.
                 }
                 }
@@ -785,86 +664,35 @@ impl<LC: LifeCore> analysis::Analyzer<LC> for TypeCheck<LC> {
             }
         }
 
-        // Check Node Classes
-        for fresh_node in lc.nodes(window).filter(|x| !lc.is_stale(x.e).unwrap()) {
-            use lifecore::NodeTypeClass::*;
-            let Some(ty) = fresh_node.ty else {
-                // We have bigger problems
-                continue;
-            };
-            let outgoing_count = lc.fresh_outgoing_edges_of(fresh_node.e).count();
-            let incoming_count = lc.fresh_incoming_edges_to(fresh_node.e).count();
-            // TODO dry
-            match ty.class {
-            Spike => {
-                if incoming_count > 0 {
-                    r.push(NodeClassNotRespected {
-                        offending_event: fresh_node.e,
-                        ty_name: ty.name.to_string(),
-                        expected_class: Spike,
-                    })
-                }
-            }
-            Hub => {
-                if outgoing_count > 0 {
-                    r.push(NodeClassNotRespected {
-                        offending_event: fresh_node.e,
-                        ty_name: ty.name.to_string(),
-                        expected_class: Hub,
-                    })
-                }
-            }
-            Toothpick => {
-                if outgoing_count > 1 || incoming_count > 0 {
-                    r.push(NodeClassNotRespected {
-                        offending_event: fresh_node.e,
-                        ty_name: ty.name.to_string(),
-                        expected_class: Toothpick,
-                    })
-                }
-            }
-            EdgeNode => {
-                if outgoing_count > 1 || incoming_count > 1 {
-                    r.push(NodeClassNotRespected {
-                        offending_event: fresh_node.e,
-                        ty_name: ty.name.to_string(),
-                        expected_class: EdgeNode,
-                    })
-                }
-            }
-            Regular => continue, // Anything goes
-            }
-        }
-
         r
     }
 
-    fn convert_report(&self, r: TypeCheckOutput) -> analysis::Output
+    fn convert_report(&self, r: TypeCheckOutput) -> lifecore::analysis::Output
     where
         Self: Sized,
     {
-        analysis::Output(
+        lifecore::analysis::Output(
             r.0.into_iter()
                 .map(|x| self.convert_message(x))
                 .collect_vec(),
         )
     }
 
-    fn initialize(&mut self, lc: &LC) -> analysis::Output {
+    fn initialize(&mut self, lc: &LC) -> lifecore::analysis::Output {
         let x = self.initialize_inner(lc);
         self.convert_report(x)
     }
 
-    fn analyze(&self, lc: &LC, window: EventContext) -> analysis::Output {
+    fn analyze(&self, lc: &LC, window: Context) -> lifecore::analysis::Output {
         self.convert_report(self.analyze_inner(lc, window))
     }
 }
 
-impl<LC: LifeCore + 'static> analysis::AnalyzerFactory<LC> for TypeCheckFactory<LC> {
+impl<LC: LifeCore + 'static> lifecore::analysis::AnalyzerFactory<LC> for TypeCheckFactory<LC> {
     fn analyzer_with_config(
         &mut self,
         config: &str,
-    ) -> Result<Box<dyn analysis::Analyzer<LC>>, LifeCoreError> {
+    ) -> Result<Box<dyn lifecore::analysis::Analyzer<LC>>, LifeCoreError> {
         Ok(Box::new(TypeCheck {
             config: config.to_string(),
             _lc: PhantomData,
@@ -885,9 +713,6 @@ impl<LC: LifeCore> Default for TypeCheckFactory<LC> {
     }
 }
 
+mod boilerplate;
 #[cfg(test)]
 mod test;
-
-/// Tests written by Agents
-#[cfg(test)]
-mod test2;

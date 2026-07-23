@@ -3,6 +3,7 @@ use std::{
     str::FromStr,
 };
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 use crate::{
@@ -429,6 +430,38 @@ impl Payload {
             }
         }
     }
+
+    // Let's not implement FromStr because... something about parsing? TODO
+    pub fn text(s: &str) -> Self {
+        Payload::Text(s.to_string())
+    }
+
+    pub fn sequence(x: &[Payload]) -> Payload {
+        Payload::Sequence(x.iter().cloned().collect())
+    }
+}
+
+macro_rules! payload_number_try_from {
+    ($T:ty) => {
+        impl TryFrom<$T> for Payload {
+            type Error = LifeCoreError;
+
+            fn try_from(value: $T) -> Result<Self, Self::Error> {
+                let x = TryInto::<i64>::try_into(value);
+                if x.is_err() {
+                    return Err(LifeCoreError::Bap);
+                }
+                Ok(Payload::Number(x.unwrap()))
+            }
+        }
+    };
+}
+payload_number_try_from!(usize);
+
+impl From<i64> for Payload {
+    fn from(value: i64) -> Self {
+        Payload::Number(value)
+    }
 }
 
 impl NodeQueryExpression {
@@ -472,5 +505,17 @@ impl FromStr for FieldQuery {
 impl Payload {
     pub fn as_number(&self) -> i64 {
         self.clone().try_as_number().unwrap()
+    }
+}
+
+impl<T: Hash + Eq> FromIterator<T> for OrderedSet<T> {
+    fn from_iter<A: IntoIterator<Item = T>>(iter: A) -> Self {
+        Self(IndexSet::from_iter(iter))
+    }
+}
+
+impl<T: Eq + Hash> Default for OrderedSet<T> {
+    fn default() -> Self {
+        Self(Default::default())
     }
 }

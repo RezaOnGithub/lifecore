@@ -1,5 +1,6 @@
 use jiff::Unit;
 use serde::{Deserialize, Serialize};
+use strum::Display;
 use std::{collections::BTreeMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 
@@ -141,6 +142,17 @@ pub enum LifeCoreError {
     BasicValidationFailure(BasicValidationFailure),
     #[error("Unable to parse FieldQuery")]
     FieldQueryParsingError,
+    // TODO clean up this enum; removed funcionality
+    // TODO comeup with better error string; caller that got this value is responsible for adding
+    // more details.
+    #[error("Unable to convert field payload to type")]
+    NodeFieldDeserializationError {
+        target_type: Option<String>,
+        field_name: Option<String>,
+    },
+    // TODO create new, better errors for whatever uses this; remove it
+    #[error("Bap!")]
+    Bap,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
@@ -196,7 +208,7 @@ pub enum BasicValidationFailureScenario {
 #[cfg_attr(debug_assertions, derive(Debug))]
 #[strum_discriminants(name(PayloadKind))]
 #[strum_discriminants(vis(pub))]
-#[strum_discriminants(derive(Serialize, Deserialize))]
+#[strum_discriminants(derive(Serialize, Deserialize, Hash, Display))]
 #[strum_discriminants(
     doc = "An enum with unit variants denoting every kind of Payload. Useful for queries."
 )]
