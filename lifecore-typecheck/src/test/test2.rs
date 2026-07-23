@@ -203,3 +203,116 @@
 //             if message.message.contains("Node class EdgeNode of type Edge_Like"))
 //     }));
 // }
+
+use crate::{FieldDecl, FieldStatus, ValueType};
+
+#[test]
+fn value_type_parser_and_display_round_trip_recursive_types() {
+    let values = [
+        ValueType::PreciseTime,
+        ValueType::Sequence(Box::new(ValueType::OneOf(vec![
+            ValueType::Text,
+            ValueType::Number,
+        ]))),
+        ValueType::Tuple(vec![
+            ValueType::OrderedSet(Box::new(ValueType::Text)),
+            ValueType::Sequence(Box::new(ValueType::Tuple(vec![
+                ValueType::Number,
+                ValueType::PreciseTime,
+            ]))),
+        ]),
+    ];
+
+    for value in values {
+        let displayed = value.to_string();
+        assert_eq!(displayed.parse::<ValueType>().unwrap(), value);
+    }
+}
+
+#[test]
+fn value_type_parser_accepts_lowercase_or_canonical_keywords() {
+    let parsed = "sequence(oneof(text, OrderedSet(number)))"
+        .parse::<ValueType>()
+        .unwrap();
+
+    assert_eq!(
+        parsed,
+        ValueType::Sequence(Box::new(ValueType::OneOf(vec![
+            ValueType::Text,
+            ValueType::OrderedSet(Box::new(ValueType::Number)),
+        ])))
+    );
+    assert_eq!(
+        parsed.to_string(),
+        "Sequence(OneOf(Text, OrderedSet(Number)))"
+    );
+}
+
+#[test]
+fn field_decl_parser_and_display_round_trip() {
+    let parsed = " tags = sequence(oneof(text, Number)) : mandatory "
+        .parse::<FieldDecl>()
+        .unwrap();
+
+    assert_eq!(parsed.name, "tags");
+    assert_eq!(parsed.status, FieldStatus::Mandatory);
+    assert_eq!(
+        parsed.ty,
+        ValueType::Sequence(Box::new(ValueType::OneOf(vec![
+            ValueType::Text,
+            ValueType::Number,
+        ])))
+    );
+    assert_eq!(
+        parsed.to_string(),
+        "tags = Sequence(OneOf(Text, Number)) : Mandatory"
+    );
+    assert_eq!(parsed.to_string().parse::<FieldDecl>().unwrap(), parsed);
+}
+
+#[test]
+fn field_decl_parser_accepts_each_status_spelling() {
+    for (keyword, expected) in [
+        ("Mandatory", FieldStatus::Mandatory),
+        ("encouraged", FieldStatus::Encouraged),
+        ("Deprecated", FieldStatus::Deprecated),
+        ("optional", FieldStatus::Optional),
+    ] {
+        let parsed = format!("field_name = Text : {keyword}")
+            .parse::<FieldDecl>()
+            .unwrap();
+        assert_eq!(parsed.status, expected);
+    }
+}
+
+#[test]
+fn type_declaration_parsers_reject_bad_names_keywords_and_grammar() {
+    for input in [
+        "TEXT",
+        "tExT",
+        "Sequence(Text, Number)",
+        "OneOf(Text,)",
+        "Tuple(Text Number)",
+    ] {
+        assert!(
+            input.parse::<ValueType>().is_err(),
+            "{input:?} unexpectedly parsed"
+        );
+    }
+
+    for input in [
+        "Tags = Text : Mandatory",
+        "_tags = Text : Mandatory",
+        "tagName = Text : Mandatory",
+        "tags = Text : MANDATORY",
+        "tags = Text : mAndatory",
+        "tags = Sequence(Text, Number) : Mandatory",
+        "tags Text : Mandatory",
+        "tags = Text Mandatory",
+    ] {
+        assert!(
+            input.parse::<FieldDecl>().is_err(),
+            "{input:?} unexpectedly parsed"
+        );
+    }
+}

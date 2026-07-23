@@ -1,7 +1,4 @@
-use std::{
-    ops::{Index, Range},
-    str::FromStr,
-};
+use std::ops::{Index, Range};
 
 use indexmap::IndexSet;
 use itertools::Itertools;

@@ -5,12 +5,12 @@ use itertools::{self, Itertools};
 
 pub(in crate::test) fn basic01<LC: LifeCore>(mut lc: LC) {
     assert!(lc.last().is_none());
-    let parent = lc.add("", simple_body("parent"), None).unwrap();
+    let parent = lc.add_mock("", simple_body("parent"), None).unwrap();
     let first_child = lc
-        .add("", simple_body("first_child"), Some(parent.e))
+        .add_mock("", simple_body("first_child"), Some(parent.e))
         .unwrap();
     let second_child = lc
-        .add("", simple_body("second_child"), Some(parent.e))
+        .add_mock("", simple_body("second_child"), Some(parent.e))
         .unwrap();
     let initial_end_marker = lc.last().unwrap();
     macro_rules! old_state_validation {
@@ -41,10 +41,10 @@ pub(in crate::test) fn basic01<LC: LifeCore>(mut lc: LC) {
     old_state_validation!(false);
 
     let child_of_first_child = lc
-        .add("", simple_body("child_of_first_child"), Some(first_child.e))
+        .add_mock("", simple_body("child_of_first_child"), Some(first_child.e))
         .unwrap();
-    let _ = lc.connect(second_child.e, "Uncle_To", child_of_first_child.e);
-    let _ = lc.add(
+    let _ = lc.connect_mock(second_child.e, "Uncle_To", child_of_first_child.e);
+    let _ = lc.add_mock(
         "",
         simple_body("child_of_second_child"),
         Some(second_child.e),
@@ -56,7 +56,7 @@ pub(in crate::test) fn basic01<LC: LifeCore>(mut lc: LC) {
 
 pub(in crate::test) fn fresh_successors<LC: LifeCore>(mut lc: LC) {
     assert!(lc.last().is_none());
-    let parent = lc.add("", simple_body("parent"), None).unwrap();
+    let parent = lc.add_mock("", simple_body("parent"), None).unwrap();
     itertools::assert_equal(
         lc.fresh_successors(parent.e)
             .into_iter()
@@ -64,10 +64,10 @@ pub(in crate::test) fn fresh_successors<LC: LifeCore>(mut lc: LC) {
         [parent.e.absolute()],
     );
     let first_child = lc
-        .add("", simple_body("first_child"), Some(parent.e))
+        .add_mock("", simple_body("first_child"), Some(parent.e))
         .unwrap();
     let second_child = lc
-        .add("", simple_body("second_child"), Some(parent.e))
+        .add_mock("", simple_body("second_child"), Some(parent.e))
         .unwrap();
     itertools::assert_equal(
         lc.fresh_successors(lc.last().unwrap().look_at(parent.e))

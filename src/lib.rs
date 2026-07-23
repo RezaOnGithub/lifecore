@@ -1,8 +1,7 @@
 use jiff::Unit;
 use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, fmt, hash::Hash, str::FromStr};
 use strum::Display;
-use std::str::FromStr;
-use std::{collections::BTreeMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 
 /// The Index For Any Event
@@ -518,15 +517,116 @@ pub trait LifeCore: Send + Sync {
 /// Reference implementor of LifeCore
 pub use reference_impl::LifeCoreList;
 
-// TODO implement a compatible `Display`
-// TODO mandate! rules governing field names!
-// TO_TEST roundtripping
 impl FromStr for FieldQuery {
     type Err = LifeCoreError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // FIELDNAME INDEX*
-        todo!()
+        // FIELD_QUERY := FIELDNAME INDEX*
+        // INDEX := '[' (NUMBER | STAR | LAST) ']'
+        fn error() -> LifeCoreError {
+            LifeCoreError::FieldQueryParsingError
+        }
+
+        fn skip_whitespace(s: &str, cursor: &mut usize) {
+            while let Some(c) = s[*cursor..].chars().next()
+                && c.is_whitespace()
+            {
+                *cursor += c.len_utf8();
+            }
+        }
+
+        fn consume(s: &str, cursor: &mut usize, expected: char) -> bool {
+            skip_whitespace(s, cursor);
+            if s[*cursor..].starts_with(expected) {
+                *cursor += expected.len_utf8();
+                true
+            } else {
+                false
+            }
+        }
+
+        fn expect(s: &str, cursor: &mut usize, expected: char) -> Result<(), LifeCoreError> {
+            if consume(s, cursor, expected) {
+                Ok(())
+            } else {
+                Err(error())
+            }
+        }
+
+        fn field_name(s: &str, cursor: &mut usize) -> Result<String, LifeCoreError> {
+            skip_whitespace(s, cursor);
+            let start = *cursor;
+            let Some(first) = s[*cursor..].chars().next() else {
+                return Err(error());
+            };
+            if !first.is_ascii_lowercase() {
+                return Err(error());
+            }
+            *cursor += first.len_utf8();
+            while let Some(c) = s[*cursor..].chars().next()
+                && (c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                *cursor += c.len_utf8();
+            }
+            Ok(s[start..*cursor].to_string())
+        }
+
+        fn index(s: &str, cursor: &mut usize) -> Result<FieldQueryPathComponent, LifeCoreError> {
+            skip_whitespace(s, cursor);
+            if consume(s, cursor, '*') {
+                return Ok(FieldQueryPathComponent::Wildcard);
+            }
+
+            let start = *cursor;
+            while let Some(c) = s[*cursor..].chars().next()
+                && c.is_ascii_digit()
+            {
+                *cursor += c.len_utf8();
+            }
+            if start != *cursor {
+                return s[start..*cursor]
+                    .parse::<usize>()
+                    .map(FieldQueryPathComponent::Index)
+                    .map_err(|_| error());
+            }
+
+            while let Some(c) = s[*cursor..].chars().next()
+                && c.is_ascii_alphabetic()
+            {
+                *cursor += c.len_utf8();
+            }
+            match &s[start..*cursor] {
+            "Last" | "last" => Ok(FieldQueryPathComponent::Last),
+            _ => Err(error()),
+            }
+        }
+
+        let mut cursor = 0;
+        let field_name = field_name(s, &mut cursor)?;
+        let mut path = vec![];
+        loop {
+            skip_whitespace(s, &mut cursor);
+            if cursor == s.len() {
+                return Ok(Self { field_name, path });
+            }
+            expect(s, &mut cursor, '[')?;
+            path.push(index(s, &mut cursor)?);
+            expect(s, &mut cursor, ']')?;
+        }
+    }
+}
+
+impl fmt::Display for FieldQuery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.field_name)?;
+        for component in &self.path {
+            match component {
+            FieldQueryPathComponent::Last => f.write_str("[Last]")?,
+            FieldQueryPathComponent::Wildcard => f.write_str("[*]")?,
+            FieldQueryPathComponent::Index(index) => write!(f, "[{index}]")?,
+            }
+        }
+        Ok(())
     }
 }
 
