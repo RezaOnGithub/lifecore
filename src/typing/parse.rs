@@ -1,19 +1,15 @@
 use std::{fmt, str::FromStr};
 
-use lifecore::LifeCoreError;
+use crate::serialize::Error;
 
-use crate::{FieldDecl, FieldStatus, ValueType};
+use super::{FieldDecl, FieldStatus, ValueType};
 
 impl FromStr for ValueType {
-    type Err = LifeCoreError;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // VALUE_TYPE := PRIMITIVE | TEXT_LITERAL | NUMBER_LITERAL
-        //             | ('Sequence' | 'OrderedSet') '(' VALUE_TYPE ')'
-        //             | ('Tuple' | 'OneOf') '(' (VALUE_TYPE (',' VALUE_TYPE)*)? ')'
-
-        fn error() -> LifeCoreError {
-            LifeCoreError::Bap
+        fn error() -> Error {
+            Error::InvalidValueTypeSyntax
         }
 
         fn skip_whitespace(s: &str, cursor: &mut usize) {
@@ -34,15 +30,11 @@ impl FromStr for ValueType {
             }
         }
 
-        fn expect(s: &str, cursor: &mut usize, expected: char) -> Result<(), LifeCoreError> {
-            if consume(s, cursor, expected) {
-                Ok(())
-            } else {
-                Err(error())
-            }
+        fn expect(s: &str, cursor: &mut usize, expected: char) -> Result<(), Error> {
+            consume(s, cursor, expected).then_some(()).ok_or_else(error)
         }
 
-        fn keyword<'a>(s: &'a str, cursor: &mut usize) -> Result<&'a str, LifeCoreError> {
+        fn keyword<'a>(s: &'a str, cursor: &mut usize) -> Result<&'a str, Error> {
             skip_whitespace(s, cursor);
             let start = *cursor;
             while let Some(c) = s[*cursor..].chars().next()
@@ -50,14 +42,12 @@ impl FromStr for ValueType {
             {
                 *cursor += c.len_utf8();
             }
-            if start == *cursor {
-                Err(error())
-            } else {
-                Ok(&s[start..*cursor])
-            }
+            (start != *cursor)
+                .then_some(&s[start..*cursor])
+                .ok_or_else(error)
         }
 
-        fn type_list(s: &str, cursor: &mut usize) -> Result<Vec<ValueType>, LifeCoreError> {
+        fn type_list(s: &str, cursor: &mut usize) -> Result<Vec<ValueType>, Error> {
             let mut values = vec![];
             if consume(s, cursor, ')') {
                 return Ok(values);
@@ -71,7 +61,7 @@ impl FromStr for ValueType {
             }
         }
 
-        fn text_literal(s: &str, cursor: &mut usize) -> Result<ValueType, LifeCoreError> {
+        fn text_literal(s: &str, cursor: &mut usize) -> Result<ValueType, Error> {
             skip_whitespace(s, cursor);
             expect(s, cursor, '"')?;
             let start = *cursor;
@@ -86,7 +76,7 @@ impl FromStr for ValueType {
             Err(error())
         }
 
-        fn number_literal(s: &str, cursor: &mut usize) -> Result<ValueType, LifeCoreError> {
+        fn number_literal(s: &str, cursor: &mut usize) -> Result<ValueType, Error> {
             skip_whitespace(s, cursor);
             let start = *cursor;
             if s[*cursor..].starts_with('-') {
@@ -107,7 +97,7 @@ impl FromStr for ValueType {
                 .map_err(|_| error())
         }
 
-        fn value_type(s: &str, cursor: &mut usize) -> Result<ValueType, LifeCoreError> {
+        fn value_type(s: &str, cursor: &mut usize) -> Result<ValueType, Error> {
             use ValueType::*;
             skip_whitespace(s, cursor);
             match s[*cursor..].chars().next() {
@@ -146,16 +136,12 @@ impl FromStr for ValueType {
         let mut cursor = 0;
         let parsed = value_type(s, &mut cursor)?;
         skip_whitespace(s, &mut cursor);
-        if cursor == s.len() {
-            Ok(parsed)
-        } else {
-            Err(error())
-        }
+        (cursor == s.len()).then_some(parsed).ok_or_else(error)
     }
 }
 
 impl FromStr for FieldStatus {
-    type Err = LifeCoreError;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -163,7 +149,7 @@ impl FromStr for FieldStatus {
         "Encouraged" | "encouraged" => Ok(Self::Encouraged),
         "Deprecated" | "deprecated" => Ok(Self::Deprecated),
         "Optional" | "optional" => Ok(Self::Optional),
-        _ => Err(LifeCoreError::Bap),
+        _ => Err(Error::InvalidFieldDeclSyntax),
         }
     }
 }
@@ -196,7 +182,7 @@ impl fmt::Display for ValueType {
         ValueType::Text => f.write_str("Text"),
         ValueType::Number => f.write_str("Number"),
         ValueType::TextLiteral(s) => write!(f, "\"{}\"", s.as_str()),
-        ValueType::NumberLiteral(i) => write!(f, "{}", i),
+        ValueType::NumberLiteral(i) => write!(f, "{i}"),
         ValueType::Sequence(inner) => write!(f, "Sequence({inner})"),
         ValueType::Tuple(values) => {
             f.write_str("Tuple(")?;
@@ -214,12 +200,11 @@ impl fmt::Display for ValueType {
 }
 
 impl FromStr for FieldDecl {
-    type Err = LifeCoreError;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // FIELD_DECL := FIELD_NAME '=' VALUE_TYPE ':' FIELD_STATUS
-        fn error() -> LifeCoreError {
-            LifeCoreError::Bap
+        fn error() -> Error {
+            Error::InvalidFieldDeclSyntax
         }
 
         fn skip_whitespace(s: &str, cursor: &mut usize) {
@@ -240,15 +225,11 @@ impl FromStr for FieldDecl {
             }
         }
 
-        fn expect(s: &str, cursor: &mut usize, expected: char) -> Result<(), LifeCoreError> {
-            if consume(s, cursor, expected) {
-                Ok(())
-            } else {
-                Err(error())
-            }
+        fn expect(s: &str, cursor: &mut usize, expected: char) -> Result<(), Error> {
+            consume(s, cursor, expected).then_some(()).ok_or_else(error)
         }
 
-        fn field_name(s: &str, cursor: &mut usize) -> Result<String, LifeCoreError> {
+        fn field_name(s: &str, cursor: &mut usize) -> Result<String, Error> {
             skip_whitespace(s, cursor);
             let start = *cursor;
             let Some(first) = s[*cursor..].chars().next() else {
@@ -266,7 +247,7 @@ impl FromStr for FieldDecl {
             Ok(s[start..*cursor].to_string())
         }
 
-        fn value_type<'a>(s: &'a str, cursor: &mut usize) -> Result<&'a str, LifeCoreError> {
+        fn value_type<'a>(s: &'a str, cursor: &mut usize) -> Result<&'a str, Error> {
             skip_whitespace(s, cursor);
             let start = *cursor;
             let mut depth = 0usize;
@@ -283,9 +264,7 @@ impl FromStr for FieldDecl {
                 }
                 match c {
                 '(' => depth += 1,
-                ')' => {
-                    depth = depth.checked_sub(1).ok_or_else(error)?;
-                }
+                ')' => depth = depth.checked_sub(1).ok_or_else(error)?,
                 ':' if depth == 0 => break,
                 _ => {}
                 }
@@ -298,7 +277,7 @@ impl FromStr for FieldDecl {
             }
         }
 
-        fn status(s: &str, cursor: &mut usize) -> Result<FieldStatus, LifeCoreError> {
+        fn status(s: &str, cursor: &mut usize) -> Result<FieldStatus, Error> {
             skip_whitespace(s, cursor);
             let start = *cursor;
             while let Some(c) = s[*cursor..].chars().next()
@@ -312,21 +291,25 @@ impl FromStr for FieldDecl {
         let mut cursor = 0;
         let name = field_name(s, &mut cursor)?;
         expect(s, &mut cursor, '=')?;
-        let ty = value_type(s, &mut cursor)?
-            .parse::<ValueType>()
-            .map_err(|_| error())?;
+        let ty = value_type(s, &mut cursor)?.parse().map_err(|_| error())?;
         expect(s, &mut cursor, ':')?;
         let status = status(s, &mut cursor)?;
         skip_whitespace(s, &mut cursor);
         if cursor != s.len() {
             return Err(error());
         }
-        Ok(Self { name, ty, status })
+        Ok(Self::new(name, ty, status))
     }
 }
 
 impl fmt::Display for FieldDecl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} = {} : {}", self.name, self.ty, self.status)
+        write!(
+            f,
+            "{} = {} : {}",
+            self.name(),
+            self.value_type(),
+            self.status()
+        )
     }
 }

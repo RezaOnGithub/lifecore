@@ -633,5 +633,9 @@ impl fmt::Display for FieldQuery {
 pub mod analysis;
 mod boilerplate;
 mod reference_impl;
+/// Explicit conversion contracts between Rust values and graph payloads.
+pub mod serialize;
 #[cfg(test)]
 mod test;
+/// Vocabulary for declaring the shape of typed node bodies.
+pub mod typing;

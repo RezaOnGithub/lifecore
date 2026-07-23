@@ -74,7 +74,8 @@
 
 # Wishlist
 
-- There should be a derive macro that creates a NodeType based on its body
+- There should be a derive macro that creates a `serialize::NodeBody` based on
+  its body
   struct.
   - Basic types (like Timestamp, i64, String) get serialized as their own
   - Option becomes Optional, additional attributes for Encouraged and Deprecated

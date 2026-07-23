@@ -18,92 +18,11 @@
 
 use itertools::Itertools;
 use lifecore::{
-    Body, Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, OrderedSet, Payload,
-    PayloadKind, analysis::InnerMessageType,
+    Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, PayloadKind,
+    analysis::InnerMessageType, serialize::NodeBody, typing::Type,
 };
 use std::{collections::BTreeMap, marker::PhantomData};
 use strum::IntoDiscriminant;
-
-/// Describes whether a field is mandatory or not.
-///
-/// A field can be:
-/// - Mandatory; must be filled out
-/// - Encouraged: should be filled out but could remain non-existent for now.
-///   The field may become mandatory in the future.
-/// - Deprecated: should not be filled out but could remain filled out for now.
-///   The field may be removed in the future.
-/// - Optional: may or may not be filled out
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub enum FieldStatus {
-    Mandatory,
-    Encouraged,
-    Deprecated,
-    Optional,
-}
-
-/// Describes the type and shape of a field's value
-#[derive(Clone, PartialEq, Eq, Hash, strum::EnumIs, strum::EnumTryAs)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub enum ValueType {
-    // Primitive
-    PreciseTime,
-    Text,
-    Number,
-
-    // Literal
-    TextLiteral(String),
-    NumberLiteral(i64),
-
-    // Composite
-    Sequence(Box<ValueType>),
-    Tuple(Vec<ValueType>),
-    OrderedSet(Box<ValueType>),
-    OneOf(Vec<ValueType>),
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct FieldDecl {
-    name: String,
-    ty: ValueType,
-    status: FieldStatus,
-}
-
-/// Describes a type in LifeCore
-///
-/// Types operate primarily on Nodes and describe their fields, the
-/// edge types that can be connected to them, and what other node types (besides
-/// their own) can override them.
-///
-/// Types for nodes are defined by nodes! In other words, the type information
-/// also resides on the database.
-///
-/// To achieve this, we define implement [`NodeType`] for [`Type`] node type,
-/// which will be a node that can be added to the database like any other node.
-#[derive(Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct Type {
-    pub name: String,
-    pub body: OrderedSet<FieldDecl>,
-    pub outgoing: OrderedSet<String>,
-    pub incoming: OrderedSet<String>,
-    pub additional_override: OrderedSet<String>,
-}
-
-/// A struct that implements this can easily be adapted to insert and retrieve
-/// data from LifeCore
-pub trait NodeType<'a>: Into<Body> + TryFrom<&'a Body> {
-    fn describe_self() -> Type;
-    fn name() -> &'static str;
-}
-
-/// A trait for NodeType implementors. If every field of a struct implements
-/// this, implementing NodeType becomes easier too- the only missing pieces are
-/// field name and field status.
-pub trait NodeField<'a>: Into<Payload> + TryFrom<&'a Payload> {
-    fn describe_self() -> ValueType;
-}
 
 /// Describes a Field as a whole
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -180,9 +99,9 @@ pub fn types<LC: LifeCore>(
     ctx: Context,
 ) -> impl Iterator<Item = (String, (EntryContext, Type))> {
     lc.fresh_nodes(ctx)
-        .filter(|n| n.ty_name.as_str() == Type::name())
+        .filter(|n| n.ty_name.as_str() == Type::TYPE_NAME)
         .filter_map(|n| {
-            let ty: Type = (&n.field).try_into().ok()?;
+            let ty = Type::try_from_body(&n.field).ok()?;
             Some((ty.name.clone(), (n.e, ty)))
         })
 }
@@ -240,8 +159,8 @@ impl<LC: LifeCore> TypeCheck<LC> {
             relevance: vec![],
             message: "Consider adding the bootstrap node for TypeCheck to work".to_string(),
             action: vec![AddNode {
-                ty_name: Type::name().to_string(),
-                payload: Type::describe_self().into(),
+                ty_name: Type::TYPE_NAME.to_string(),
+                payload: Type::describe_self().into_body(),
                 parent: None,
             }],
         }
@@ -435,7 +354,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
     where
         Self: Sized,
     {
-        if types(lc, Context::universe()).any(|(name, _)| name == Type::name()) {
+        if types(lc, Context::universe()).any(|(name, _)| name == Type::TYPE_NAME) {
             return TypeCheckOutput(vec![]);
         }
 
@@ -452,7 +371,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
         // but non-stale Node_Type declaring a type of the same name.
         for some_type_at_some_point_node in lc
             .nodes(window)
-            .filter(|node| node.ty_name.as_str() == Type::name())
+            .filter(|node| node.ty_name.as_str() == Type::TYPE_NAME)
         {
             let type_table = types(
                 lc,
@@ -460,7 +379,8 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             )
             .collect::<BTreeMap<_, _>>();
 
-            let Ok(some_type_at_some_point) = Type::try_from(&some_type_at_some_point_node.field)
+            let Ok(some_type_at_some_point) =
+                Type::try_from_body(&some_type_at_some_point_node.field)
             else {
                 r.push(MalformedNodeTypeBody {
                     offending_event: some_type_at_some_point_node.e,
@@ -656,44 +576,6 @@ impl<LC: LifeCore + 'static> lifecore::analysis::AnalyzerFactory<LC> for TypeChe
     }
 }
 
-impl ValueType {
-    pub fn check(&self, payload: &Payload) -> Result<(), LifeCoreError> {
-        fn error(_expected: &ValueType, _actual: &Payload) -> LifeCoreError {
-            LifeCoreError::Bap
-        }
-
-        match (self, payload) {
-        (Self::PreciseTime, Payload::PreciseTime(_))
-        | (Self::Text, Payload::Text(_))
-        | (Self::Number, Payload::Number(_)) => Ok(()),
-        (Self::TextLiteral(expected), Payload::Text(actual)) if expected == actual => Ok(()),
-        (Self::NumberLiteral(expected), Payload::Number(actual)) if expected == actual => Ok(()),
-        (Self::Sequence(expected), Payload::Sequence(actual)) => {
-            actual.iter().try_for_each(|value| expected.check(value))
-        }
-        (Self::Tuple(expected), Payload::Sequence(actual)) if expected.len() == actual.len() => {
-            expected
-                .iter()
-                .zip(actual)
-                .try_for_each(|(expected, actual)| expected.check(actual))
-        }
-        (Self::OrderedSet(expected), Payload::OrderedSet(actual)) => {
-            actual.iter().try_for_each(|value| expected.check(value))
-        }
-        (Self::OneOf(expected), actual)
-            if expected
-                .iter()
-                .any(|expected| expected.check(actual).is_ok()) =>
-        {
-            Ok(())
-        }
-        _ => Err(error(self, payload)),
-        }
-    }
-}
-
 mod boilerplate;
-mod parse;
-mod serialize;
 #[cfg(test)]
 mod test;

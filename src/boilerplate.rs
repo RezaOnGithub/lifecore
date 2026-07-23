@@ -263,6 +263,105 @@ impl Index<&str> for Body {
     }
 }
 
+impl Body {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Payload> {
+        self.0.get(key)
+    }
+
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Payload> {
+        self.0.get_mut(key)
+    }
+
+    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Payload>) -> Option<Payload> {
+        self.0.insert(key.into(), value.into())
+    }
+
+    pub fn remove(&mut self, key: &str) -> Option<Payload> {
+        self.0.remove(key)
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Payload)> {
+        self.0.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&String, &mut Payload)> {
+        self.0.iter_mut()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.0.keys()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Payload> {
+        self.0.values()
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Payload> {
+        self.0.values_mut()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<K, V> FromIterator<(K, V)> for Body
+where
+    K: Into<String>,
+    V: Into<Payload>,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Self(
+            iter.into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+        )
+    }
+}
+
+impl<K, V> Extend<(K, V)> for Body
+where
+    K: Into<String>,
+    V: Into<Payload>,
+{
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        self.0.extend(
+            iter.into_iter()
+                .map(|(key, value)| (key.into(), value.into())),
+        );
+    }
+}
+
+impl<const N: usize> From<[(&str, Payload); N]> for Body {
+    fn from(value: [(&str, Payload); N]) -> Self {
+        value.into_iter().collect()
+    }
+}
+
+impl<const N: usize> From<&[(&str, Payload); N]> for Body {
+    fn from(value: &[(&str, Payload); N]) -> Self {
+        value.iter().cloned().collect()
+    }
+}
+
+impl From<&[(&str, Payload)]> for Body {
+    fn from(value: &[(&str, Payload)]) -> Self {
+        value.iter().cloned().collect()
+    }
+}
+
 impl From<whoami::Error> for LifeCoreError {
     fn from(val: whoami::Error) -> LifeCoreError {
         LifeCoreError::HostNameOrUserNameError { inner: val.into() }
@@ -406,7 +505,6 @@ impl Payload {
                     self.clone()
                         .try_as_ordered_set()
                         .unwrap()
-                        .0
                         .iter()
                         .cloned()
                         .collect_vec()
@@ -499,6 +597,60 @@ impl<T: Hash + Eq> FromIterator<T> for OrderedSet<T> {
     }
 }
 
+impl<T: Hash + Eq> Extend<T> for OrderedSet<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+impl<T: Hash + Eq> From<Vec<T>> for OrderedSet<T> {
+    fn from(value: Vec<T>) -> Self {
+        value.into_iter().collect()
+    }
+}
+
+impl<T: Hash + Eq, const N: usize> From<[T; N]> for OrderedSet<T> {
+    fn from(value: [T; N]) -> Self {
+        value.into_iter().collect()
+    }
+}
+
+pub struct OrderedSetIter<'a, T: Eq + Hash> {
+    inner: indexmap::set::Iter<'a, T>,
+}
+
+impl<'a, T: Eq + Hash> Iterator for OrderedSetIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<'a, T: Eq + Hash> ExactSizeIterator for OrderedSetIter<'a, T> {}
+
+pub struct OrderedSetIntoIter<T: Eq + Hash> {
+    inner: indexmap::set::IntoIter<T>,
+}
+
+impl<T: Eq + Hash> Iterator for OrderedSetIntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<T: Eq + Hash> ExactSizeIterator for OrderedSetIntoIter<T> {}
+
 impl<T: Eq + Hash> Default for OrderedSet<T> {
     fn default() -> Self {
         Self(Default::default())
@@ -506,11 +658,73 @@ impl<T: Eq + Hash> Default for OrderedSet<T> {
 }
 
 impl<T: Eq + Hash> OrderedSet<T> {
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.0.iter()
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn contains(&self, value: &T) -> bool {
         self.0.contains(value)
+    }
+
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.0.get_index(index)
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.get(0)
+    }
+
+    pub fn last(&self) -> Option<&T> {
+        self.0.last()
+    }
+
+    pub fn insert(&mut self, value: T) -> bool {
+        self.0.insert(value)
+    }
+
+    pub fn remove(&mut self, value: &T) -> bool {
+        self.0.shift_remove(value)
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn retain(&mut self, f: impl FnMut(&T) -> bool) {
+        self.0.retain(f);
+    }
+
+    pub fn iter(&self) -> OrderedSetIter<'_, T> {
+        OrderedSetIter {
+            inner: self.0.iter(),
+        }
+    }
+}
+
+impl<'a, T: Eq + Hash> IntoIterator for &'a OrderedSet<T> {
+    type Item = &'a T;
+    type IntoIter = OrderedSetIter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<T: Eq + Hash> IntoIterator for OrderedSet<T> {
+    type Item = T;
+    type IntoIter = OrderedSetIntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        OrderedSetIntoIter {
+            inner: self.0.into_iter(),
+        }
     }
 }
