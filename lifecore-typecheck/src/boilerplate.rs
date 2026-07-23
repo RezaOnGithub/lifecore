@@ -34,16 +34,6 @@ impl Type {
     }
 }
 
-impl FromStr for ValueType {
-    type Err = LifeCoreError;
-
-    // TODO
-    // sequence(oneof(text, oneof(number, text)))
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        todo!()
-    }
-}
-
 impl<'a> TryFrom<&'a Payload> for FieldStatus {
     type Error = LifeCoreError;
 

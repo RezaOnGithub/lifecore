@@ -1,6 +1,7 @@
 use jiff::Unit;
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use std::str::FromStr;
 use std::{collections::BTreeMap, hash::Hash};
 use strum::{EnumIs, EnumTryAs};
 
@@ -516,6 +517,18 @@ pub trait LifeCore: Send + Sync {
 
 /// Reference implementor of LifeCore
 pub use reference_impl::LifeCoreList;
+
+// TODO implement a compatible `Display`
+// TODO mandate! rules governing field names!
+// TO_TEST roundtripping
+impl FromStr for FieldQuery {
+    type Err = LifeCoreError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // FIELDNAME INDEX*
+        todo!()
+    }
+}
 
 pub mod analysis;
 mod boilerplate;

@@ -16,14 +16,12 @@
 //! This can be terribly inefficient, and of course there is a streaming
 //! approach but correctness for now. NOTDO PERF
 
-use itertools::{Iterate, Itertools};
+use itertools::Itertools;
 use lifecore::{
-    Body, Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, OrderedSet, Payload, PayloadKind, analysis::InnerMessageType,
+    Body, Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, OrderedSet, Payload,
+    PayloadKind, analysis::InnerMessageType,
 };
-use std::{
-    collections::{BTreeMap, HashMap},
-    marker::PhantomData,
-};
+use std::{collections::BTreeMap, marker::PhantomData, str::FromStr};
 use strum::IntoDiscriminant;
 
 /// Describes whether a field is mandatory or not.
@@ -171,12 +169,15 @@ pub enum TypeCheckMessage {
     },
 }
 
-pub fn types<LC: LifeCore>(lc: &LC, ctx: Context) -> impl Iterator<Item = (String, Type)> {
+pub fn types<LC: LifeCore>(
+    lc: &LC,
+    ctx: Context,
+) -> impl Iterator<Item = (String, (EntryContext, Type))> {
     lc.fresh_nodes(ctx)
         .filter(|n| n.ty_name.as_str() == Type::name())
         .filter_map(|n| {
             let ty: Type = (&n.field).try_into().ok()?;
-            Some((ty.name.clone(), ty))
+            Some((ty.name.clone(), (n.e, ty)))
         })
 }
 
@@ -476,7 +477,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             }
         }
 
-        let type_table = lc.types(window).collect::<BTreeMap<_, _>>();
+        let type_table = types(lc, window).collect::<BTreeMap<_, _>>();
 
         // Check that override types exist
         // TODO I'm not sure whether this should be an error or not.
@@ -490,7 +491,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
                         offending_event: *ty_event,
                         base_ty_name: ty.name.to_string(),
                         override_ty_name: override_ty.to_string(),
-                        relevance: vec![*ty_event],
+                        relevance: vec![ty_event.entry()],
                     })
                 }
             }
@@ -503,76 +504,15 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             .filter(|e| !lc.is_stale(*e).unwrap() && lc.get(*e).is_some_and(|x| x.is_node()))
         {
             let node = lc.node(pointed_context).unwrap();
-            if node.ty.is_none() {
+            let Some((_type_event, _node_type)) = type_table.get(node.ty_name.as_str()) else {
                 r.push(NodeTypeNonexistant {
                     offending_event: pointed_context,
                     ty_name: node.ty_name.to_string(),
                 });
                 continue;
-            }
-            let node_type = node.ty.unwrap();
+            };
 
-            // Fields that may be present and mandatory
-            for (field_name, (field_type, field_policy)) in node_type.field.iter() {
-                match field_policy {
-                FieldStatus::Mandatory => {
-                    if !node.field.0.contains_key(field_name) {
-                        r.push(ElidedMandatoryField {
-                            offending_event: pointed_context,
-                            ty_name: node_type.name.to_string(),
-                            field_name: field_name.to_string(),
-                        });
-                    }
-                }
-                FieldStatus::Encouraged => {
-                    if !node.field.0.contains_key(field_name) {
-                        r.push(ElidedEncouragedField {
-                            offending_event: pointed_context,
-                            ty_name: node_type.name.to_string(),
-                            field_name: field_name.to_string(),
-                        });
-                    }
-                }
-                FieldStatus::Deprecated => {
-                    if node.field.0.contains_key(field_name) {
-                        r.push(DeprecatedField {
-                            offending_event: pointed_context,
-                            ty_name: node_type.name.to_string(),
-                            field_name: field_name.to_string(),
-                        });
-                    }
-                }
-                FieldStatus::Optional => {
-                    // Nothing to do.
-                }
-                }
-                if let Some(field_payload) = node.field.0.get(field_name)
-                    && field_payload.discriminant() != *field_type
-                {
-                    r.push(FieldTypeMismatch {
-                        offending_event: pointed_context,
-                        ty_name: node_type.name.to_string(),
-                        field_name: field_name.to_string(),
-                        expected_type: *field_type,
-                        present_type: field_payload.discriminant(),
-                    })
-                }
-            }
-
-            // Extraneous fields
-            for extra_field in node.field.0.keys().filter(|body_field| {
-                !node_type
-                    .field
-                    .iter()
-                    .map(|x| x.0.as_str())
-                    .contains(body_field.as_str())
-            }) {
-                r.push(ExtraneousField {
-                    offending_event: pointed_context,
-                    ty_name: node_type.name.to_string(),
-                    field_name: extra_field.to_string(),
-                })
-            }
+            // TODO: Check fields against the resolved type's FieldDecl values.
         }
 
         // Check edges ends so that they allow for that edge
@@ -583,8 +523,8 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             // from end -> "outgoing" relative to that node
             // to end -> "incoming" relative to that node
             let edge = lc.edge(pointed_context).unwrap();
-            let outgoing_node = lc.node(edge.from).unwrap();
-            let incoming_node = lc.node(edge.to).unwrap();
+            let outgoing_node = lc.node(edge.e.look_at(edge.from.absolute())).unwrap();
+            let incoming_node = lc.node(edge.e.look_at(edge.to.absolute())).unwrap();
 
             if !(type_table.contains_key(outgoing_node.ty_name.as_str())
                 && type_table.contains_key(incoming_node.ty_name.as_str()))
@@ -603,9 +543,10 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
                 continue;
             }
 
-            if !outgoing_node
-                .ty
+            if !type_table
+                .get(outgoing_node.ty_name.as_str())
                 .unwrap()
+                .1
                 .outgoing
                 .iter()
                 .map(String::as_str)
@@ -619,9 +560,10 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
                 });
             }
             // COPY_PASTE
-            if !incoming_node
-                .ty
+            if !type_table
+                .get(incoming_node.ty_name.as_str())
                 .unwrap()
+                .1
                 .incoming
                 .iter()
                 .map(String::as_str)
@@ -638,7 +580,8 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
 
         // Check whether a child is allowed to override parent at the point of override
         for last_event_in_context in lc.window(window.items()) {
-            let preceding = last_event_in_context.ctx().shrink_to_exclusive_left();
+            let entry_context = last_event_in_context.entry_context();
+            let preceding = entry_context.shrink_to_exclusive_left();
             if last_event_in_context.is_edge()
                 || last_event_in_context.is_node_and(|x| x.parent.is_none())
             {
@@ -647,8 +590,12 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
 
             let child_type_name = last_event_in_context.as_node().ty_name.clone();
             let parent_in_context =
-                preceding.look_at(last_event_in_context.as_node().parent.unwrap());
-            let Some(parent_type) = lc.node(parent_in_context).unwrap().ty else {
+                preceding.look_at(last_event_in_context.as_node().parent.unwrap().absolute());
+            let parent_node = lc.node(parent_in_context).unwrap();
+            let preceding_type_table = types(lc, preceding).collect::<BTreeMap<_, _>>();
+            let Some((_type_event, parent_type)) =
+                preceding_type_table.get(parent_node.ty_name.as_str())
+            else {
                 // We have bigger problems.
                 continue;
             };
@@ -657,7 +604,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
                 && !parent_type.additional_override.contains(&child_type_name)
             {
                 r.push(BadOverride {
-                    offending_event: last_event_in_context.ctx(),
+                    offending_event: entry_context,
                     parent_ty_name: parent_type.name.to_string(),
                     child_ty_name: child_type_name.to_string(),
                 });
@@ -710,6 +657,28 @@ impl<LC: LifeCore> Default for TypeCheckFactory<LC> {
         Self {
             _x: Default::default(),
         }
+    }
+}
+
+// TODO compatible Display
+impl FromStr for ValueType {
+    type Err = LifeCoreError;
+
+    // TODO
+    // sequence(oneof(text, oneof(number, text)))
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!()
+    }
+}
+
+// TODO compatible Display
+impl FromStr for FieldDecl {
+    type Err = LifeCoreError;
+
+    // TODO
+    // tags = sequence(oneof(text, number)) : mandatory
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!()
     }
 }
 

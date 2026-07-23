@@ -489,18 +489,6 @@ impl<T: Eq + Hash> Hash for OrderedSet<T> {
     }
 }
 
-// TODO implement a compatible `Display`
-// TODO mandate! rules governing field names!
-// TO_TEST roundtripping
-impl FromStr for FieldQuery {
-    type Err = LifeCoreError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // FIELDNAME INDEX*
-        todo!()
-    }
-}
-
 // TODO expand to other types
 impl Payload {
     pub fn as_number(&self) -> i64 {
@@ -517,5 +505,15 @@ impl<T: Hash + Eq> FromIterator<T> for OrderedSet<T> {
 impl<T: Eq + Hash> Default for OrderedSet<T> {
     fn default() -> Self {
         Self(Default::default())
+    }
+}
+
+impl<T: Eq + Hash> OrderedSet<T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+
+    pub fn contains(&self, value: &T) -> bool {
+        self.0.contains(value)
     }
 }
