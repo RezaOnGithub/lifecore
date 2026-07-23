@@ -454,13 +454,13 @@ pub trait LifeCore: Send + Sync {
     ///
     /// # Example
     /// ```rust
-    /// # use lifecore::{LifeCoreList, LifeCore, NodeBodyExt, Node, Edge};
+    /// # use lifecore::{LifeCoreList, LifeCore, Body, Node, Edge};
     /// let mut lc = LifeCoreList::default();
-    /// let a0 = lc.add("A", NodeBodyExt::default(), None).unwrap();
-    /// let b0 = lc.add("B", NodeBodyExt::default(), None).unwrap();
-    /// let _ = lc.connect(a0.e, "X", b0.e).unwrap();
-    /// let b1 = lc.add("B", NodeBodyExt::default(), Some(b0.e)).unwrap();
-    /// let _ = lc.connect(a0.e, "X", b1.e).unwrap();
+    /// let a0 = lc.add_mock("A", Body::default(), None).unwrap();
+    /// let b0 = lc.add_mock("B", Body::default(), None).unwrap();
+    /// let _ = lc.connect_mock(a0.e, "X", b0.e).unwrap();
+    /// let b1 = lc.add_mock("B", Body::default(), Some(b0.e)).unwrap();
+    /// let _ = lc.connect_mock(a0.e, "X", b1.e).unwrap();
     /// assert_eq!(lc.fresh_edges_of(b0.e).count(), 0);
     /// ```
     fn fresh_edges_of(&self, n: EntryContext) -> impl Iterator<Item = Edge> {

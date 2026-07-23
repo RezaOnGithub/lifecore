@@ -8,7 +8,7 @@ impl FromStr for ValueType {
     type Err = LifeCoreError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // VALUE_TYPE := PRIMITIVE
+        // VALUE_TYPE := PRIMITIVE | TEXT_LITERAL | NUMBER_LITERAL
         //             | ('Sequence' | 'OrderedSet') '(' VALUE_TYPE ')'
         //             | ('Tuple' | 'OneOf') '(' (VALUE_TYPE (',' VALUE_TYPE)*)? ')'
 
@@ -71,8 +71,50 @@ impl FromStr for ValueType {
             }
         }
 
+        fn text_literal(s: &str, cursor: &mut usize) -> Result<ValueType, LifeCoreError> {
+            skip_whitespace(s, cursor);
+            expect(s, cursor, '"')?;
+            let start = *cursor;
+            while let Some(c) = s[*cursor..].chars().next() {
+                if c == '"' {
+                    let value = s[start..*cursor].to_string();
+                    *cursor += c.len_utf8();
+                    return Ok(ValueType::TextLiteral(value));
+                }
+                *cursor += c.len_utf8();
+            }
+            Err(error())
+        }
+
+        fn number_literal(s: &str, cursor: &mut usize) -> Result<ValueType, LifeCoreError> {
+            skip_whitespace(s, cursor);
+            let start = *cursor;
+            if s[*cursor..].starts_with('-') {
+                *cursor += '-'.len_utf8();
+            }
+            let digits_start = *cursor;
+            while let Some(c) = s[*cursor..].chars().next()
+                && c.is_ascii_digit()
+            {
+                *cursor += c.len_utf8();
+            }
+            if digits_start == *cursor {
+                return Err(error());
+            }
+            s[start..*cursor]
+                .parse::<i64>()
+                .map(ValueType::NumberLiteral)
+                .map_err(|_| error())
+        }
+
         fn value_type(s: &str, cursor: &mut usize) -> Result<ValueType, LifeCoreError> {
             use ValueType::*;
+            skip_whitespace(s, cursor);
+            match s[*cursor..].chars().next() {
+            Some('"') => return text_literal(s, cursor),
+            Some('-' | '0'..='9') => return number_literal(s, cursor),
+            _ => {}
+            }
             match keyword(s, cursor)? {
             "PreciseTime" | "precisetime" => Ok(PreciseTime),
             "Text" | "text" => Ok(Text),
@@ -112,6 +154,31 @@ impl FromStr for ValueType {
     }
 }
 
+impl FromStr for FieldStatus {
+    type Err = LifeCoreError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+        "Mandatory" | "mandatory" => Ok(Self::Mandatory),
+        "Encouraged" | "encouraged" => Ok(Self::Encouraged),
+        "Deprecated" | "deprecated" => Ok(Self::Deprecated),
+        "Optional" | "optional" => Ok(Self::Optional),
+        _ => Err(LifeCoreError::Bap),
+        }
+    }
+}
+
+impl fmt::Display for FieldStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+        Self::Mandatory => "Mandatory",
+        Self::Encouraged => "Encouraged",
+        Self::Deprecated => "Deprecated",
+        Self::Optional => "Optional",
+        })
+    }
+}
+
 impl fmt::Display for ValueType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn list(f: &mut fmt::Formatter<'_>, values: &[ValueType]) -> fmt::Result {
@@ -128,6 +195,8 @@ impl fmt::Display for ValueType {
         ValueType::PreciseTime => f.write_str("PreciseTime"),
         ValueType::Text => f.write_str("Text"),
         ValueType::Number => f.write_str("Number"),
+        ValueType::TextLiteral(s) => write!(f, "\"{}\"", s.as_str()),
+        ValueType::NumberLiteral(i) => write!(f, "{}", i),
         ValueType::Sequence(inner) => write!(f, "Sequence({inner})"),
         ValueType::Tuple(values) => {
             f.write_str("Tuple(")?;
@@ -201,7 +270,17 @@ impl FromStr for FieldDecl {
             skip_whitespace(s, cursor);
             let start = *cursor;
             let mut depth = 0usize;
+            let mut in_text_literal = false;
             while let Some(c) = s[*cursor..].chars().next() {
+                if c == '"' {
+                    in_text_literal = !in_text_literal;
+                    *cursor += c.len_utf8();
+                    continue;
+                }
+                if in_text_literal {
+                    *cursor += c.len_utf8();
+                    continue;
+                }
                 match c {
                 '(' => depth += 1,
                 ')' => {
@@ -212,7 +291,7 @@ impl FromStr for FieldDecl {
                 }
                 *cursor += c.len_utf8();
             }
-            if start == *cursor || depth != 0 {
+            if start == *cursor || depth != 0 || in_text_literal {
                 Err(error())
             } else {
                 Ok(s[start..*cursor].trim())
@@ -227,13 +306,7 @@ impl FromStr for FieldDecl {
             {
                 *cursor += c.len_utf8();
             }
-            match &s[start..*cursor] {
-            "Mandatory" | "mandatory" => Ok(FieldStatus::Mandatory),
-            "Encouraged" | "encouraged" => Ok(FieldStatus::Encouraged),
-            "Deprecated" | "deprecated" => Ok(FieldStatus::Deprecated),
-            "Optional" | "optional" => Ok(FieldStatus::Optional),
-            _ => Err(error()),
-            }
+            s[start..*cursor].parse().map_err(|_| error())
         }
 
         let mut cursor = 0;
@@ -254,12 +327,6 @@ impl FromStr for FieldDecl {
 
 impl fmt::Display for FieldDecl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let status = match self.status {
-        FieldStatus::Mandatory => "Mandatory",
-        FieldStatus::Encouraged => "Encouraged",
-        FieldStatus::Deprecated => "Deprecated",
-        FieldStatus::Optional => "Optional",
-        };
-        write!(f, "{} = {} : {status}", self.name, self.ty)
+        write!(f, "{} = {} : {}", self.name, self.ty, self.status)
     }
 }

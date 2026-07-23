@@ -21,7 +21,7 @@ use lifecore::{
     Body, Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, OrderedSet, Payload,
     PayloadKind, analysis::InnerMessageType,
 };
-use std::{collections::BTreeMap, fmt, marker::PhantomData, str::FromStr};
+use std::{collections::BTreeMap, marker::PhantomData};
 use strum::IntoDiscriminant;
 
 /// Describes whether a field is mandatory or not.
@@ -46,10 +46,16 @@ pub enum FieldStatus {
 #[derive(Clone, PartialEq, Eq, Hash, strum::EnumIs, strum::EnumTryAs)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum ValueType {
+    // Primitive
     PreciseTime,
     Text,
     Number,
 
+    // Literal
+    TextLiteral(String),
+    NumberLiteral(i64),
+
+    // Composite
     Sequence(Box<ValueType>),
     Tuple(Vec<ValueType>),
     OrderedSet(Box<ValueType>),
@@ -660,6 +666,8 @@ impl ValueType {
         (Self::PreciseTime, Payload::PreciseTime(_))
         | (Self::Text, Payload::Text(_))
         | (Self::Number, Payload::Number(_)) => Ok(()),
+        (Self::TextLiteral(expected), Payload::Text(actual)) if expected == actual => Ok(()),
+        (Self::NumberLiteral(expected), Payload::Number(actual)) if expected == actual => Ok(()),
         (Self::Sequence(expected), Payload::Sequence(actual)) => {
             actual.iter().try_for_each(|value| expected.check(value))
         }
@@ -686,5 +694,6 @@ impl ValueType {
 
 mod boilerplate;
 mod parse;
+mod serialize;
 #[cfg(test)]
 mod test;

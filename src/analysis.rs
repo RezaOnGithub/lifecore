@@ -200,7 +200,9 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
 impl Output {
     fn validate(&self) -> bool {
         // TODO what could we be validating here, just in case? And `assert!` or
-        // `debug_assert!`? self.0.iter().all(|x| match x {
+        // `debug_assert!`?
+
+        // self.0.iter().all(|x| match x {
         //     Message::Inconsistency(inconsistency) => todo!(),
         //     Message::Warning(warning) => todo!(),
         //     Message::Suggestion(suggestion) => todo!(),

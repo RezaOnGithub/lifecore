@@ -87,6 +87,15 @@ the central model is a typed, versioned graph.
   only between nodes, node parents only to nodes, and stale-edge prevention.
 - Type checking is implemented as an analyzer in `lifecore-typecheck`, not as
   part of core validation. It interprets active `Node_Type` nodes in context.
+- `ValueType` includes exact text and signed-integer literals for simple
+  enumeration-like fields. Type syntax writes text literals in double quotes
+  without escaping and writes integer literals as decimal numbers; literal
+  checks require exact payload equality.
+- A `FieldDecl` is stored as a three-element `Payload::Sequence` containing its
+  name, `ValueType` syntax, and status as text values. Its separate text parser
+  uses `name = type : status` syntax. Field statuses accept canonical title
+  case or lowercase spellings and describe those spellings with literal
+  `OneOf` alternatives.
 - TypeCheck reports semantic inconsistencies and warnings for missing types,
   duplicate active type definitions, field policy violations, edge endpoint
   permissions, and unresolved override targets.

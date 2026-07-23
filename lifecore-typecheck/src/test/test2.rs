@@ -228,6 +228,41 @@ fn value_type_check_validates_primitive_payloads() {
 }
 
 #[test]
+fn value_type_check_validates_literal_payloads() {
+    let status = ValueType::OneOf(vec![
+        ValueType::TextLiteral("open".to_string()),
+        ValueType::TextLiteral("closed".to_string()),
+    ]);
+    let status_sequence = ValueType::Sequence(Box::new(status));
+
+    assert!(
+        ValueType::TextLiteral("hello".to_string())
+            .check(&Payload::text("hello"))
+            .is_ok()
+    );
+    assert_bap(ValueType::TextLiteral("hello".to_string()).check(&Payload::text("Hello")));
+    assert_bap(ValueType::TextLiteral("42".to_string()).check(&Payload::Number(42)));
+
+    assert!(
+        ValueType::NumberLiteral(-42)
+            .check(&Payload::Number(-42))
+            .is_ok()
+    );
+    assert_bap(ValueType::NumberLiteral(-42).check(&Payload::Number(42)));
+    assert_bap(ValueType::NumberLiteral(42).check(&Payload::text("42")));
+
+    assert!(
+        status_sequence
+            .check(&Payload::Sequence(vec![
+                Payload::text("open"),
+                Payload::text("closed"),
+            ]))
+            .is_ok()
+    );
+    assert_bap(status_sequence.check(&Payload::Sequence(vec![Payload::text("pending")])));
+}
+
+#[test]
 fn value_type_check_recurses_through_homogeneous_collections() {
     let text_sequence = ValueType::Sequence(Box::new(ValueType::Text));
     assert!(
@@ -343,9 +378,14 @@ fn value_type_check_handles_deeply_nested_values() {
 fn value_type_parser_and_display_round_trip_recursive_types() {
     let values = [
         ValueType::PreciseTime,
+        ValueType::TextLiteral(String::new()),
+        ValueType::TextLiteral(" text with spaces: (), ".to_string()),
+        ValueType::NumberLiteral(i64::MIN),
+        ValueType::NumberLiteral(i64::MAX),
         ValueType::Sequence(Box::new(ValueType::OneOf(vec![
-            ValueType::Text,
-            ValueType::Number,
+            ValueType::TextLiteral("draft".to_string()),
+            ValueType::TextLiteral("published".to_string()),
+            ValueType::NumberLiteral(7),
         ]))),
         ValueType::Tuple(vec![
             ValueType::OrderedSet(Box::new(ValueType::Text)),
@@ -360,6 +400,18 @@ fn value_type_parser_and_display_round_trip_recursive_types() {
         let displayed = value.to_string();
         assert_eq!(displayed.parse::<ValueType>().unwrap(), value);
     }
+}
+
+#[test]
+fn value_type_parser_preserves_simple_text_literals_verbatim() {
+    assert_eq!(
+        r#""  whitespace, commas: and (parentheses)  ""#.parse::<ValueType>().unwrap(),
+        ValueType::TextLiteral("  whitespace, commas: and (parentheses)  ".to_string())
+    );
+    assert_eq!(
+        "-42".parse::<ValueType>().unwrap(),
+        ValueType::NumberLiteral(-42)
+    );
 }
 
 #[test]
@@ -383,22 +435,23 @@ fn value_type_parser_accepts_lowercase_or_canonical_keywords() {
 
 #[test]
 fn field_decl_parser_and_display_round_trip() {
-    let parsed = " tags = sequence(oneof(text, Number)) : mandatory "
+    let parsed = r#" status = oneof("ready: now", "waiting, (later)", -1) : mandatory "#
         .parse::<FieldDecl>()
         .unwrap();
 
-    assert_eq!(parsed.name, "tags");
+    assert_eq!(parsed.name, "status");
     assert_eq!(parsed.status, FieldStatus::Mandatory);
     assert_eq!(
         parsed.ty,
-        ValueType::Sequence(Box::new(ValueType::OneOf(vec![
-            ValueType::Text,
-            ValueType::Number,
-        ])))
+        ValueType::OneOf(vec![
+            ValueType::TextLiteral("ready: now".to_string()),
+            ValueType::TextLiteral("waiting, (later)".to_string()),
+            ValueType::NumberLiteral(-1),
+        ])
     );
     assert_eq!(
         parsed.to_string(),
-        "tags = Sequence(OneOf(Text, Number)) : Mandatory"
+        r#"status = OneOf("ready: now", "waiting, (later)", -1) : Mandatory"#
     );
     assert_eq!(parsed.to_string().parse::<FieldDecl>().unwrap(), parsed);
 }
@@ -415,23 +468,113 @@ fn field_decl_parser_accepts_each_status_spelling() {
             .parse::<FieldDecl>()
             .unwrap();
         assert_eq!(parsed.status, expected);
+        assert_eq!(keyword.parse::<FieldStatus>().unwrap(), expected);
     }
 }
 
 #[test]
-fn field_decl_payload_round_trip_uses_its_text_grammar() {
-    let field = "tags = Sequence(OneOf(Text, Number)) : Encouraged"
+fn field_status_payload_and_schema_use_literal_alternatives() {
+    let expected_schema = ValueType::OneOf(vec![
+        ValueType::TextLiteral("Mandatory".to_string()),
+        ValueType::TextLiteral("mandatory".to_string()),
+        ValueType::TextLiteral("Encouraged".to_string()),
+        ValueType::TextLiteral("encouraged".to_string()),
+        ValueType::TextLiteral("Deprecated".to_string()),
+        ValueType::TextLiteral("deprecated".to_string()),
+        ValueType::TextLiteral("Optional".to_string()),
+        ValueType::TextLiteral("optional".to_string()),
+    ]);
+
+    assert_eq!(FieldStatus::describe_self(), expected_schema);
+    for (spelling, expected, canonical) in [
+        ("Mandatory", FieldStatus::Mandatory, "Mandatory"),
+        ("mandatory", FieldStatus::Mandatory, "Mandatory"),
+        ("Encouraged", FieldStatus::Encouraged, "Encouraged"),
+        ("encouraged", FieldStatus::Encouraged, "Encouraged"),
+        ("Deprecated", FieldStatus::Deprecated, "Deprecated"),
+        ("deprecated", FieldStatus::Deprecated, "Deprecated"),
+        ("Optional", FieldStatus::Optional, "Optional"),
+        ("optional", FieldStatus::Optional, "Optional"),
+    ] {
+        let payload = Payload::text(spelling);
+        assert_eq!(FieldStatus::try_from(&payload).unwrap(), expected);
+        assert!(FieldStatus::describe_self().check(&payload).is_ok());
+        assert_eq!(Into::<Payload>::into(expected), Payload::text(canonical));
+    }
+
+    assert!("MANDATORY".parse::<FieldStatus>().is_err());
+    assert!(FieldStatus::try_from(&Payload::text("MANDATORY")).is_err());
+    assert!(FieldStatus::try_from(&Payload::Number(1)).is_err());
+}
+
+#[test]
+fn field_decl_payload_round_trip_uses_three_text_tuple() {
+    let field = r#"status = OneOf("ready", "done", -1) : Encouraged"#
         .parse::<FieldDecl>()
         .unwrap();
     let payload: Payload = field.clone().into();
 
     assert_eq!(
         payload,
-        Payload::text("tags = Sequence(OneOf(Text, Number)) : Encouraged")
+        Payload::Sequence(vec![
+            Payload::text("status"),
+            Payload::text(r#"OneOf("ready", "done", -1)"#),
+            Payload::text("Encouraged"),
+        ])
     );
     assert_eq!(FieldDecl::try_from(&payload).unwrap(), field);
-    assert_eq!(FieldDecl::describe_self(), ValueType::Text);
+    assert_eq!(
+        FieldDecl::describe_self(),
+        ValueType::Tuple(vec![
+            ValueType::Text,
+            ValueType::Text,
+            FieldStatus::describe_self(),
+        ])
+    );
+    assert!(FieldDecl::describe_self().check(&payload).is_ok());
+}
+
+#[test]
+fn field_decl_payload_rejects_legacy_text_and_malformed_tuples() {
+    assert!(
+        FieldDecl::try_from(&Payload::text(
+            "tags = Sequence(OneOf(Text, Number)) : Encouraged"
+        ))
+        .is_err()
+    );
     assert!(FieldDecl::try_from(&Payload::Number(1)).is_err());
+    assert!(FieldDecl::try_from(&Payload::Sequence(vec![])).is_err());
+    assert!(
+        FieldDecl::try_from(&Payload::Sequence(vec![
+            Payload::text("name"),
+            Payload::text("Text"),
+        ]))
+        .is_err()
+    );
+    assert!(
+        FieldDecl::try_from(&Payload::Sequence(vec![
+            Payload::Number(1),
+            Payload::text("Text"),
+            Payload::text("Mandatory"),
+        ]))
+        .is_err()
+    );
+    assert!(
+        FieldDecl::try_from(&Payload::Sequence(vec![
+            Payload::text("name"),
+            Payload::text("NotAType"),
+            Payload::text("Mandatory"),
+        ]))
+        .is_err()
+    );
+    assert!(
+        FieldDecl::try_from(&Payload::Sequence(vec![
+            Payload::text("name"),
+            Payload::text("Text"),
+            Payload::text("MANDATORY"),
+        ]))
+        .is_err()
+    );
 }
 
 #[test]
@@ -440,6 +583,16 @@ fn type_body_round_trip_preserves_declaration_order() {
         "Task",
         &[
             ("title", (ValueType::Text, FieldStatus::Mandatory)),
+            (
+                "status",
+                (
+                    ValueType::OneOf(vec![
+                        ValueType::TextLiteral("open".to_string()),
+                        ValueType::TextLiteral("closed".to_string()),
+                    ]),
+                    FieldStatus::Mandatory,
+                ),
+            ),
             (
                 "tags",
                 (
@@ -506,6 +659,14 @@ fn type_declaration_parsers_reject_bad_names_keywords_and_grammar() {
     for input in [
         "TEXT",
         "tExT",
+        "\"unterminated",
+        r#""nested "quotes"""#,
+        r#""escaped \"quote"""#,
+        "-",
+        "+1",
+        "1.0",
+        "9223372036854775808",
+        "-9223372036854775809",
         "Sequence(Text, Number)",
         "OneOf(Text,)",
         "Tuple(Text Number)",
