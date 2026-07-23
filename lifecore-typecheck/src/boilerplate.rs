@@ -1,10 +1,8 @@
 use itertools::Itertools;
-use lifecore::{Body, LifeCoreError, Payload};
+use lifecore::{Body, LifeCore, LifeCoreError, Payload};
 
 use crate::{
-    FieldDecl,
-    FieldStatus::{self, Mandatory},
-    NodeField, NodeType, Type, TypeCheckMessage, TypeCheckOutput, ValueType,
+    FieldDecl, FieldStatus::{self, Mandatory}, NodeField, NodeType, Type, TypeCheckFactory, TypeCheckMessage, TypeCheckOutput, ValueType,
 };
 
 impl Type {

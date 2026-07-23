@@ -204,7 +204,138 @@
 //     }));
 // }
 
+use lifecore::{LifeCoreError, OrderedSet, Payload};
+
 use crate::{FieldDecl, FieldStatus, ValueType};
+
+fn assert_bap(result: Result<(), LifeCoreError>) {
+    assert!(matches!(result, Err(LifeCoreError::Bap)));
+}
+
+#[test]
+fn value_type_check_validates_primitive_payloads() {
+    let precise_time = Payload::PreciseTime("2026-07-23T00:00:00Z".parse().unwrap());
+
+    assert!(ValueType::PreciseTime.check(&precise_time).is_ok());
+    assert!(ValueType::Text.check(&Payload::text("hello")).is_ok());
+    assert!(ValueType::Number.check(&Payload::Number(42)).is_ok());
+
+    assert_bap(ValueType::PreciseTime.check(&Payload::text("not a timestamp")));
+    assert_bap(ValueType::Text.check(&Payload::Number(42)));
+    assert_bap(ValueType::Number.check(&precise_time));
+}
+
+#[test]
+fn value_type_check_recurses_through_homogeneous_collections() {
+    let text_sequence = ValueType::Sequence(Box::new(ValueType::Text));
+    assert!(
+        text_sequence
+            .check(&Payload::Sequence(vec![
+                Payload::text("one"),
+                Payload::text("two"),
+            ]))
+            .is_ok()
+    );
+    assert!(text_sequence.check(&Payload::Sequence(vec![])).is_ok());
+    assert_bap(text_sequence.check(&Payload::Sequence(vec![
+        Payload::text("one"),
+        Payload::Number(2),
+    ])));
+    assert_bap(text_sequence.check(&Payload::OrderedSet(
+        [Payload::text("one")].into_iter().collect(),
+    )));
+
+    let number_set = ValueType::OrderedSet(Box::new(ValueType::Number));
+    assert!(
+        number_set
+            .check(&Payload::OrderedSet(
+                [Payload::Number(1), Payload::Number(2)]
+                    .into_iter()
+                    .collect(),
+            ))
+            .is_ok()
+    );
+    assert!(
+        number_set
+            .check(&Payload::OrderedSet(OrderedSet::default()))
+            .is_ok()
+    );
+    assert_bap(
+        number_set.check(&Payload::OrderedSet(
+            [Payload::Number(1), Payload::text("two")]
+                .into_iter()
+                .collect(),
+        )),
+    );
+    assert_bap(number_set.check(&Payload::Sequence(vec![Payload::Number(1)])));
+}
+
+#[test]
+fn value_type_check_validates_tuple_arity_and_positions() {
+    let tuple = ValueType::Tuple(vec![ValueType::Text, ValueType::Number]);
+
+    assert!(
+        tuple
+            .check(&Payload::Sequence(vec![
+                Payload::text("one"),
+                Payload::Number(2),
+            ]))
+            .is_ok()
+    );
+    assert_bap(tuple.check(&Payload::Sequence(vec![Payload::text("one")])));
+    assert_bap(tuple.check(&Payload::Sequence(vec![
+        Payload::Number(1),
+        Payload::text("two"),
+    ])));
+    assert_bap(tuple.check(&Payload::OrderedSet(OrderedSet::default())));
+
+    let empty_tuple = ValueType::Tuple(vec![]);
+    assert!(empty_tuple.check(&Payload::Sequence(vec![])).is_ok());
+    assert_bap(empty_tuple.check(&Payload::Sequence(vec![Payload::text("extra")])));
+}
+
+#[test]
+fn value_type_check_accepts_any_matching_one_of_alternative() {
+    let one_of = ValueType::OneOf(vec![ValueType::Text, ValueType::Number]);
+
+    assert!(one_of.check(&Payload::text("first")).is_ok());
+    assert!(one_of.check(&Payload::Number(2)).is_ok());
+    assert_bap(one_of.check(&Payload::Sequence(vec![])));
+    assert_bap(ValueType::OneOf(vec![]).check(&Payload::text("no alternatives")));
+}
+
+#[test]
+fn value_type_check_handles_deeply_nested_values() {
+    let value_type = ValueType::Sequence(Box::new(ValueType::Tuple(vec![
+        ValueType::Text,
+        ValueType::OrderedSet(Box::new(ValueType::OneOf(vec![
+            ValueType::Number,
+            ValueType::PreciseTime,
+        ]))),
+    ])));
+    let valid = Payload::Sequence(vec![Payload::Sequence(vec![
+        Payload::text("measurements"),
+        Payload::OrderedSet(
+            [
+                Payload::Number(1),
+                Payload::PreciseTime("2026-07-23T00:00:00Z".parse().unwrap()),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    ])]);
+    let invalid = Payload::Sequence(vec![Payload::Sequence(vec![
+        Payload::text("measurements"),
+        Payload::OrderedSet(
+            [Payload::Number(1), Payload::text("not allowed")]
+                .into_iter()
+                .collect(),
+        ),
+    ])]);
+
+    assert!(value_type.check(&valid).is_ok());
+    assert_bap(value_type.check(&invalid));
+}
 
 #[test]
 fn value_type_parser_and_display_round_trip_recursive_types() {

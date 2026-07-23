@@ -651,8 +651,37 @@ impl<LC: LifeCore + 'static> lifecore::analysis::AnalyzerFactory<LC> for TypeChe
 }
 
 impl ValueType {
-    // TODO
-    pub fn check(&self, payload: &Payload) -> Result<(), LifeCoreError> {}
+    pub fn check(&self, payload: &Payload) -> Result<(), LifeCoreError> {
+        fn error(_expected: &ValueType, _actual: &Payload) -> LifeCoreError {
+            LifeCoreError::Bap
+        }
+
+        match (self, payload) {
+        (Self::PreciseTime, Payload::PreciseTime(_))
+        | (Self::Text, Payload::Text(_))
+        | (Self::Number, Payload::Number(_)) => Ok(()),
+        (Self::Sequence(expected), Payload::Sequence(actual)) => {
+            actual.iter().try_for_each(|value| expected.check(value))
+        }
+        (Self::Tuple(expected), Payload::Sequence(actual)) if expected.len() == actual.len() => {
+            expected
+                .iter()
+                .zip(actual)
+                .try_for_each(|(expected, actual)| expected.check(actual))
+        }
+        (Self::OrderedSet(expected), Payload::OrderedSet(actual)) => {
+            actual.iter().try_for_each(|value| expected.check(value))
+        }
+        (Self::OneOf(expected), actual)
+            if expected
+                .iter()
+                .any(|expected| expected.check(actual).is_ok()) =>
+        {
+            Ok(())
+        }
+        _ => Err(error(self, payload)),
+        }
+    }
 }
 
 mod boilerplate;
