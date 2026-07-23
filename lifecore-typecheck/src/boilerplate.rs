@@ -1,8 +1,9 @@
-use itertools::Itertools;
-use lifecore::{Body, LifeCore, LifeCoreError, Payload};
+use lifecore::{Body, LifeCore, LifeCoreError, OrderedSet, Payload};
 
 use crate::{
-    FieldDecl, FieldStatus::{self, Mandatory}, NodeField, NodeType, Type, TypeCheckFactory, TypeCheckMessage, TypeCheckOutput, ValueType,
+    FieldDecl,
+    FieldStatus::{self, Mandatory},
+    NodeField, NodeType, Type, TypeCheckFactory, TypeCheckMessage, TypeCheckOutput, ValueType,
 };
 
 impl Type {
@@ -69,115 +70,26 @@ impl<'a> TryFrom<&'a Payload> for ValueType {
     type Error = LifeCoreError;
 
     fn try_from(value: &'a Payload) -> Result<Self, Self::Error> {
-        use ValueType::*;
-        let mut stack = Vec::<ValueType>::new();
         let err = Err(LifeCoreError::NodeFieldDeserializationError {
             target_type: Some("ValueType".to_string()),
             field_name: None,
         });
-
-        if !value.is_sequence() {
+        let Payload::Text(s) = value else {
             return err;
-        }
-
-        for op in value.clone().try_as_sequence().unwrap().iter() {
-            match op {
-            Payload::Text(primitive) => match primitive.as_str() {
-            "PreciseTime" => stack.push(PreciseTime),
-            "Text" => stack.push(Text),
-            "Number" => stack.push(Number),
-            _ => return err,
-            },
-            Payload::Sequence(payloads) => {
-                if (payloads.len() != 2 && !payloads[0].is_text() && !payloads[1].is_number())
-                    || (stack.len() as i64) < payloads[1].clone().try_as_number().unwrap()
-                {
-                    return err;
-                }
-                match (
-                    payloads[0].clone().try_as_text().unwrap().as_str(),
-                    payloads[1].clone().try_as_number().unwrap(),
-                ) {
-                ("Sequence", 1) => {
-                    let arg = stack.pop().unwrap();
-                    stack.push(Sequence(Box::new(arg)));
-                }
-                ("Tuple", n) => {
-                    let args = (0..n).map_while(|_| stack.pop()).collect_vec();
-                    stack.push(Tuple(args));
-                }
-                ("OrderedSet", 1) => {
-                    let arg = stack.pop().unwrap();
-                    stack.push(OrderedSet(Box::new(arg)));
-                }
-                ("OneOf", n) => {
-                    let args = (0..n).map_while(|_| stack.pop()).collect_vec();
-                    stack.push(OneOf(args));
-                }
-                _ => return err,
-                }
-            }
-            _ => return err,
-            }
-        }
-
-        if stack.len() != 1 {
-            return err;
-        } else {
-            Ok(stack[0].clone())
-        }
+        };
+        s.parse()
     }
 }
 
 impl Into<Payload> for ValueType {
     fn into(self) -> Payload {
-        use Payload::*;
-        Sequence({
-            match self {
-            ValueType::PreciseTime => vec![Text("PreciseTime".to_string())],
-            ValueType::Text => vec![Text("Text".to_string())],
-            ValueType::Number => vec![Text("Number".to_string())],
-            ValueType::Sequence(value_type) => vec![
-                (*value_type).into(),
-                Sequence(vec![Text("Sequence".to_string()), Number(1)]),
-            ],
-            ValueType::Tuple(value_types) => [
-                value_types
-                    .clone()
-                    .into_iter()
-                    .map(|x| x.into())
-                    .collect_vec(),
-                vec![Sequence(vec![
-                    Text("Tuple".to_string()),
-                    Number(value_types.len() as i64),
-                ])],
-            ]
-            .concat(),
-            ValueType::OrderedSet(value_type) => vec![
-                (*value_type).into(),
-                Sequence(vec![Text("OrderedSet".to_string()), Number(1)]),
-            ],
-            ValueType::OneOf(value_types) => [
-                value_types
-                    .clone()
-                    .into_iter()
-                    .map(|x| x.into())
-                    .collect_vec(),
-                vec![Sequence(vec![
-                    Text("OneOf".to_string()),
-                    Number(value_types.len() as i64),
-                ])],
-            ]
-            .concat(),
-            }
-        })
+        Payload::Text(self.to_string())
     }
 }
 
 impl<'a> NodeField<'a> for ValueType {
     fn describe_self() -> ValueType {
-        use ValueType::*;
-        Sequence(Box::new(OneOf(vec![Text, Tuple(vec![Text, Number])])))
+        ValueType::Text
     }
 }
 
@@ -185,24 +97,25 @@ impl<'a> TryFrom<&'a Payload> for FieldDecl {
     type Error = LifeCoreError;
 
     fn try_from(value: &'a Payload) -> Result<Self, Self::Error> {
-        todo!()
+        let Payload::Text(value) = value else {
+            return Err(LifeCoreError::NodeFieldDeserializationError {
+                target_type: Some("FieldDecl".to_string()),
+                field_name: None,
+            });
+        };
+        value.parse()
     }
 }
 
 impl Into<Payload> for FieldDecl {
     fn into(self) -> Payload {
-        todo!()
+        Payload::Text(self.to_string())
     }
 }
 
 impl<'a> NodeField<'a> for FieldDecl {
     fn describe_self() -> ValueType {
-        use ValueType::*;
-        OrderedSet(Box::new(Tuple(vec![
-            Text,
-            ValueType::describe_self(),
-            FieldStatus::describe_self(),
-        ])))
+        ValueType::Text
     }
 }
 
@@ -210,13 +123,89 @@ impl<'a> TryFrom<&'a Body> for Type {
     type Error = LifeCoreError;
 
     fn try_from(value: &'a Body) -> Result<Self, Self::Error> {
-        todo!()
+        fn ordered_set<T>(
+            body: &Body,
+            field_name: &str,
+            convert: impl Fn(&Payload) -> Result<T, LifeCoreError>,
+        ) -> Result<OrderedSet<T>, LifeCoreError>
+        where
+            T: Eq + std::hash::Hash,
+        {
+            let Some(value) = body.0.get(field_name) else {
+                return Ok(OrderedSet::default());
+            };
+            let Payload::OrderedSet(values) = value else {
+                return Err(LifeCoreError::FieldContainsUnexpectedType {
+                    field_name: field_name.to_string(),
+                });
+            };
+
+            values
+                .iter()
+                .map(convert)
+                .collect::<Result<_, _>>()
+                .map_err(|_| LifeCoreError::FieldDeserializationFailed {
+                    field_name: field_name.to_string(),
+                })
+        }
+
+        fn text(value: &Payload) -> Result<String, LifeCoreError> {
+            let Payload::Text(value) = value else {
+                return Err(LifeCoreError::Bap);
+            };
+            Ok(value.clone())
+        }
+
+        let name = match value.0.get("name") {
+        Some(Payload::Text(name)) => name.clone(),
+        Some(_) => {
+            return Err(LifeCoreError::FieldContainsUnexpectedType {
+                field_name: "name".to_string(),
+            });
+        }
+        None => {
+            return Err(LifeCoreError::FieldNotFound {
+                field_name: "name".to_string(),
+            });
+        }
+        };
+
+        Ok(Self {
+            name,
+            body: ordered_set(value, "body", |value| FieldDecl::try_from(value))?,
+            outgoing: ordered_set(value, "outgoing", text)?,
+            incoming: ordered_set(value, "incoming", text)?,
+            additional_override: ordered_set(value, "additional_override", text)?,
+        })
     }
 }
 
 impl Into<Body> for Type {
     fn into(self) -> Body {
-        todo!()
+        let body = self.body.iter().cloned().map(Into::into).collect();
+        let outgoing = self.outgoing.iter().cloned().map(Payload::Text).collect();
+        let incoming = self.incoming.iter().cloned().map(Payload::Text).collect();
+        let additional_override = self
+            .additional_override
+            .iter()
+            .cloned()
+            .map(Payload::Text)
+            .collect();
+
+        Body(
+            [
+                ("name".to_string(), Payload::Text(self.name)),
+                ("body".to_string(), Payload::OrderedSet(body)),
+                ("outgoing".to_string(), Payload::OrderedSet(outgoing)),
+                ("incoming".to_string(), Payload::OrderedSet(incoming)),
+                (
+                    "additional_override".to_string(),
+                    Payload::OrderedSet(additional_override),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        )
     }
 }
 
@@ -233,22 +222,22 @@ impl<'a> NodeType<'a> for Type {
                 FieldDecl {
                     name: "body".to_string(),
                     ty: ValueType::OrderedSet(Box::new(FieldDecl::describe_self())),
-                    status: Mandatory,
+                    status: FieldStatus::Optional,
                 },
                 FieldDecl {
                     name: "outgoing".to_string(),
                     ty: ValueType::OrderedSet(Box::new(ValueType::Text)),
-                    status: Mandatory,
+                    status: FieldStatus::Optional,
                 },
                 FieldDecl {
                     name: "incoming".to_string(),
                     ty: ValueType::OrderedSet(Box::new(ValueType::Text)),
-                    status: Mandatory,
+                    status: FieldStatus::Optional,
                 },
                 FieldDecl {
                     name: "additional_override".to_string(),
                     ty: ValueType::OrderedSet(Box::new(ValueType::Text)),
-                    status: Mandatory,
+                    status: FieldStatus::Optional,
                 },
             ]
             .into_iter()

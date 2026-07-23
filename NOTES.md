@@ -70,6 +70,7 @@
 - Old "running validation on a copy of the database" -> no need to copy paste
   code. if borrowing self as `&mut` you can do `*self = copy;` to write the
   changes to self.
+- `try_for_each`
 
 # Wishlist
 

@@ -1,31 +1,4 @@
-use lifecore::Payload;
-
-use crate::ValueType;
-
 mod test2;
-
-#[test]
-fn field_decl_roundtrip() {
-    use Payload as P;
-    use ValueType as V;
-    let x: &[(ValueType, Payload)] = &[(
-        V::Sequence(Box::new(V::OneOf(vec![V::Text, V::Number]))),
-        P::sequence(&[
-            P::text("Number"),
-            P::text("Text"),
-            P::sequence(&[P::text("OneOf"), (2 as i64).into()]),
-            P::sequence(&[P::text("Sequence"), (1 as i64).into()]),
-        ]),
-    )];
-
-    for case in x {
-        assert!(case.0 == (&case.1).try_into().unwrap());
-        assert!(
-            case.0
-                == TryFrom::<&Payload>::try_from(&Into::<Payload>::into(case.0.clone())).unwrap()
-        );
-    }
-}
 
 // use crate::TypeCheck;
 // use lifecore::{

@@ -204,9 +204,11 @@
 //     }));
 // }
 
-use lifecore::{LifeCoreError, OrderedSet, Payload};
+use std::collections::BTreeMap;
 
-use crate::{FieldDecl, FieldStatus, ValueType};
+use lifecore::{Body, LifeCoreError, OrderedSet, Payload};
+
+use crate::{FieldDecl, FieldStatus, NodeField, Type, ValueType};
 
 fn assert_bap(result: Result<(), LifeCoreError>) {
     assert!(matches!(result, Err(LifeCoreError::Bap)));
@@ -414,6 +416,89 @@ fn field_decl_parser_accepts_each_status_spelling() {
             .unwrap();
         assert_eq!(parsed.status, expected);
     }
+}
+
+#[test]
+fn field_decl_payload_round_trip_uses_its_text_grammar() {
+    let field = "tags = Sequence(OneOf(Text, Number)) : Encouraged"
+        .parse::<FieldDecl>()
+        .unwrap();
+    let payload: Payload = field.clone().into();
+
+    assert_eq!(
+        payload,
+        Payload::text("tags = Sequence(OneOf(Text, Number)) : Encouraged")
+    );
+    assert_eq!(FieldDecl::try_from(&payload).unwrap(), field);
+    assert_eq!(FieldDecl::describe_self(), ValueType::Text);
+    assert!(FieldDecl::try_from(&Payload::Number(1)).is_err());
+}
+
+#[test]
+fn type_body_round_trip_preserves_declaration_order() {
+    let ty = Type::new(
+        "Task",
+        &[
+            ("title", (ValueType::Text, FieldStatus::Mandatory)),
+            (
+                "tags",
+                (
+                    ValueType::OrderedSet(Box::new(ValueType::Text)),
+                    FieldStatus::Optional,
+                ),
+            ),
+        ],
+        &["blocks", "relates_to"],
+        &["contains"],
+        &["ArchivedTask"],
+    );
+    let body: Body = ty.clone().into();
+
+    assert_eq!(Type::try_from(&body).unwrap(), ty);
+}
+
+#[test]
+fn type_body_defaults_absent_optional_collections_to_empty() {
+    let body = Body(BTreeMap::from([(
+        "name".to_string(),
+        Payload::text("Empty"),
+    )]));
+
+    assert_eq!(
+        Type::try_from(&body).unwrap(),
+        Type::new("Empty", &[], &[], &[], &[])
+    );
+}
+
+#[test]
+fn type_body_rejects_missing_or_malformed_fields() {
+    assert!(matches!(
+        Type::try_from(&Body::default()),
+        Err(LifeCoreError::FieldNotFound { field_name }) if field_name == "name"
+    ));
+
+    let wrong_collection_kind = Body(BTreeMap::from([
+        ("name".to_string(), Payload::text("Bad")),
+        ("outgoing".to_string(), Payload::Sequence(vec![])),
+    ]));
+    assert!(matches!(
+        Type::try_from(&wrong_collection_kind),
+        Err(LifeCoreError::FieldContainsUnexpectedType { field_name })
+            if field_name == "outgoing"
+    ));
+
+    let malformed_member = Body(BTreeMap::from([
+        ("name".to_string(), Payload::text("Bad")),
+        (
+            "body".to_string(),
+            Payload::OrderedSet([Payload::Number(1)].into_iter().collect()),
+        ),
+    ]));
+    assert!(matches!(
+        Type::try_from(&malformed_member),
+        Err(LifeCoreError::FieldDeserializationFailed { field_name })
+            if field_name == "body"
+    ));
 }
 
 #[test]
