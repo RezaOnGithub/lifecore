@@ -17,6 +17,7 @@
 //! approach but correctness for now. NOTDO PERF
 
 use itertools::Itertools;
+use lifecore::typing::{FieldStatus, ValueType};
 use lifecore::{
     Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, PayloadKind,
     analysis::InnerMessageType, serialize::NodeBody, typing::Type,
@@ -73,7 +74,7 @@ pub enum TypeCheckMessage {
         offending_event: EntryContext,
         ty_name: String,
         field_name: String,
-        expected_type: PayloadKind,
+        expected_type: ValueType,
         present_type: PayloadKind,
     },
     ExtraneousField {
@@ -429,7 +430,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             .filter(|e| !lc.is_stale(*e).unwrap() && lc.get(*e).is_some_and(|x| x.is_node()))
         {
             let node = lc.node(pointed_context).unwrap();
-            let Some((_type_event, _node_type)) = type_table.get(node.ty_name.as_str()) else {
+            let Some((_, node_type)) = type_table.get(node.ty_name.as_str()) else {
                 r.push(NodeTypeNonexistant {
                     offending_event: pointed_context,
                     ty_name: node.ty_name.to_string(),
@@ -437,7 +438,76 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
                 continue;
             };
 
-            // TODO: Check fields against the resolved type's FieldDecl values.
+            for field in node_type.body.iter() {
+                let field_name = field.name();
+                let field_payload = node.field.0.get(field_name);
+                let is_empty_collection = matches!(
+                    (field.value_type(), field_payload),
+                    (
+                        ValueType::Sequence(_),
+                        Some(lifecore::Payload::Sequence(values))
+                    ) if values.is_empty()
+                ) || matches!(
+                    (field.value_type(), field_payload),
+                    (
+                        ValueType::OrderedSet(_),
+                        Some(lifecore::Payload::OrderedSet(values))
+                    ) if values.is_empty()
+                );
+
+                match field.status() {
+                FieldStatus::Mandatory if field_payload.is_none() || is_empty_collection => {
+                    r.push(ElidedMandatoryField {
+                        offending_event: pointed_context,
+                        ty_name: node_type.name.to_string(),
+                        field_name: field_name.to_string(),
+                    });
+                }
+                FieldStatus::Encouraged if field_payload.is_none() || is_empty_collection => {
+                    r.push(ElidedEncouragedField {
+                        offending_event: pointed_context,
+                        ty_name: node_type.name.to_string(),
+                        field_name: field_name.to_string(),
+                    });
+                }
+                FieldStatus::Deprecated if field_payload.is_some() => {
+                    r.push(DeprecatedField {
+                        offending_event: pointed_context,
+                        ty_name: node_type.name.to_string(),
+                        field_name: field_name.to_string(),
+                    });
+                }
+                FieldStatus::Mandatory
+                | FieldStatus::Encouraged
+                | FieldStatus::Deprecated
+                | FieldStatus::Optional => {}
+                }
+
+                if let Some(field_payload) = field_payload
+                    && field.value_type().check(field_payload).is_err()
+                {
+                    r.push(FieldTypeMismatch {
+                        offending_event: pointed_context,
+                        ty_name: node_type.name.to_string(),
+                        field_name: field_name.to_string(),
+                        expected_type: field.value_type().clone(),
+                        present_type: field_payload.discriminant(),
+                    });
+                }
+            }
+
+            for extra_field in node
+                .field
+                .0
+                .keys()
+                .filter(|body_field| !node_type.body.iter().any(|x| x.name() == *body_field))
+            {
+                r.push(ExtraneousField {
+                    offending_event: pointed_context,
+                    ty_name: node_type.name.to_string(),
+                    field_name: extra_field.to_string(),
+                });
+            }
         }
 
         // Check edges ends so that they allow for that edge
