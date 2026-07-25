@@ -59,6 +59,28 @@ the central model is a typed, versioned graph.
   list candidates and select them by a one-based `--select`; changing sort order
   silently changes the meaning of a repeated command.
 
+## Agent-Authored Development Conventions
+
+- Add new tests only in a module matching `*::test::test2`: either the root
+  `test::test2` module or a `test::test2` module nested under an internal
+  module. Do not add implementation-adjacent tests unless the user explicitly
+  requests another placement.
+- Do not add Rust doc comments (`///`, `//!`) or doctests unless the user
+  explicitly requests it.
+- Let the reader of the code breathe: separate logical blocks with empty lines.
+  Add a short comment explaining what a non-obvious block does and why.
+- Every new code comment written by an agent must be a single-line comment
+  prefixed exactly with `//A`. Keep comments concise and self-descriptive.
+- Agent comments may use these annotation forms:
+  - `//A HACK: ...` for a rare, narrowly scoped workaround and its reason.
+  - `//A TODO: ...` for concrete deferred work, including what remains and why
+    it was deferred. Do not introduce other annotation labels, such as `FIXME`
+    or `NOTE`.
+- If an agent adds a `//A TODO:`, its final handoff must explicitly state the
+  impact and recommended next step.
+- Do not rewrite or relabel pre-existing comments merely to conform to these
+  conventions.
+
 ## Interface Terms
 
 - `EventContext` describes a history window from the beginning of graph history
@@ -93,9 +115,9 @@ the central model is a typed, versioned graph.
   checks require exact payload equality.
 - A `FieldDecl` is stored as a three-element `Payload::Sequence` containing its
   name, `ValueType` syntax, and status as text values. Its separate text parser
-  uses `name = type : status` syntax. Field statuses accept canonical title
-  case or lowercase spellings and describe those spellings with literal
-  `OneOf` alternatives.
+  uses `name = type : status` syntax. Field statuses accept canonical title case
+  or lowercase spellings and describe those spellings with literal `OneOf`
+  alternatives.
 - TypeCheck reports semantic inconsistencies and warnings for missing types,
   duplicate active type definitions, field policy violations, edge endpoint
   permissions, and unresolved override targets.
