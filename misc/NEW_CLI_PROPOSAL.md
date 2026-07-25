@@ -95,11 +95,23 @@ this local state identifier.
 
 An attached sidecar is still an external addendum, not saved graph content. On
 ordinary invocation the CLI reads canonical state and builds the sidecar suffix
-in memory. Read operations see that **effective graph**. An attachment therefore
-still forbids ordinary appends, analyzer changes, aliases, dismissals, and
-suggestion application; `sidecar commit` and `sidecar detach` remain the two
-escape routes. Detach must only remove attachment metadata; it must not parse or
-read the sidecar.
+in memory. A successfully prepared suffix makes the **effective graph**: the
+canonical graph followed by the provisional sidecar entries. Read-only graph
+operations use that effective graph, including `query`, `entry show`, `check`,
+`message show`, `type list`, `type show`, `graphviz`, `sidecar dump`, `alias
+list`, `analyzer list`, and interactive browsing. A query can therefore return
+sidecar-added nodes, and its edge predicates can inspect sidecar-added edges.
+These operations never apply or save the suffix.
+
+An attachment forbids state-mutating operations that could otherwise save an
+unrelated change alongside the suffix: `add`, `connect`, `type create`, `type
+override`, `message apply`, `analyzer add`, `alias set`, `alias remove`,
+`message dismiss`, and `message restore`. `sidecar commit` and `sidecar detach`
+are the two exceptions. `graphviz` may write its user-requested output file,
+but is still read-only with respect to CLI and graph state. A new `sidecar
+attach` is accepted only when no sidecar is already attached; replacement
+requires detach followed by attach. Detach must only remove attachment metadata;
+it must not parse or read the sidecar.
 
 Aliases remain optional conveniences for nodes. They store a durable locator
 (the index and full, untruncated digest), not an implicit historical context or
@@ -182,20 +194,27 @@ For an attached sidecar, every invocation has a view-construction state machine:
 ```text
 Loaded canonical -- no attachment --> EffectiveReady (= Loaded view)
        |
-       +-- attachment --> build provisional sidecar suffix
-                          | validation or analysis failure
-                          v
-                      SidecarUnavailable
+       +-- attachment --> parse, stage, and basic-validate sidecar suffix
                           |\
-                          | \-- other commands fail
-                          +---- sidecar detach --> Saved canonical
+                          | +-- parse or basic-validation failure --> SidecarUnavailable
+                          |                                      sidecar detach --> Saved canonical
+                          +---- analyze valid suffix
+                                  |\
+                                  | +-- Inconsistency --> SidecarDiagnosable
+                                  |                        |\
+                                  |                        | +-- check --> render full diagnostics
+                                  |                        +---- sidecar detach --> Saved canonical
+                                  +---- no Inconsistency --> EffectiveReady (provisional, read-only)
 
-build provisional sidecar suffix -- valid --> EffectiveReady (provisional, read-only)
 EffectiveReady -- sidecar commit --> Applied -> Saved, attachment cleared
 ```
 
-The `sidecar detach` edge is deliberately available from **SidecarUnavailable**.
-It is the recovery path for a deleted or invalid sidecar.
+`SidecarUnavailable` permits only `sidecar detach`. `SidecarDiagnosable` keeps
+the fully staged, basically valid suffix long enough for `check` to run the
+suite over every valid prefix through its final entry and render the resulting
+messages; queries and other browsing commands remain unavailable. The
+`sidecar detach` edge is deliberately available from both states. It is the
+recovery path for a deleted, invalid, or inconsistent sidecar.
 
 ## Entry locators and safe selection
 
@@ -258,8 +277,28 @@ refuse ambiguous prefixes.
 All new-node and new-edge output includes its locator. `entry show LOCATOR`
 accepts either kind and prints kind, index, fingerprint, stored type name,
 fields or endpoints, circumstance, and freshness in the requested view.
-Node-only positions such as `add --parent`, `connect --from`, and `connect --to`
-reject an edge locator rather than guessing.
+
+### Aliases and node references
+
+Aliases are ASCII, case-sensitive C-style identifiers. They and locators have
+disjoint grammars:
+
+```text
+ALIAS    = [A-Za-z_][A-Za-z0-9_]*
+NODE-REF = ALIAS | ENTRY-LOCATOR
+```
+
+An input containing `:` is never an alias. A syntactically valid locator with a
+bad fingerprint is an error, not an alias lookup; `foo:bar` and `42` are
+invalid as both a locator and an alias. This makes a `NODE-REF` unambiguous.
+When it is an alias, the CLI resolves its stored full locator and then applies
+the same node-kind and view checks it would apply to an explicit locator.
+
+Node-reference positions such as `add --parent`, `connect --from`, and
+`connect --to` accept `NODE-REF` and reject an edge locator. Identity-sensitive
+positions always require an `ENTRY-LOCATOR`: `--select`, `--explain`, `--at`,
+`entry show`, and `--expect-head`. Scripts should normally use locators; aliases
+are an intentionally rebindable convenience.
 
 ### Query-attested selection
 
@@ -291,7 +330,7 @@ whose title matches the query:
 ```console
 $ lifecore query nodes all --where fresh --where 'type Note' \
     --where 'field title matches milk' \
-    --select 42:6b1f0e4c8a7d54b2 -- alias set buy-milk
+    --select 42:6b1f0e4c8a7d54b2 -- alias set buy_milk
 ```
 
 The CLI errors distinctly for an invalid locator, an entry outside the view, an
@@ -300,8 +339,8 @@ return. A selection action does not persist a result set; it is an atomic
 query-and-membership guard.
 
 Commands needing two independently selected endpoints, such as `connect`, take
-two normal locators. They are fingerprint-checked but are not pretended to be
-results of one node query:
+two `NODE-REF` values. Explicit locators are fingerprint-checked, but endpoints
+are not pretended to be results of one node query:
 
 ```console
 $ lifecore connect --from 42:6b1f0e4c8a7d54b2 --type Relates_To \
@@ -402,6 +441,30 @@ $ lifecore query nodes all --where fresh --where 'type Task' \
 The core query implementation must honor these identities—especially empty
 `all`/`none` queries—before this command is exposed. The CLI must not hide an
 incorrect core result with a special empty-table case.
+
+## Alias
+
+Aliases are persisted CLI-state conveniences for nodes, not graph entries or
+implicit moving pointers. They store the full durable locator of their target,
+and remain bound to that exact entry until explicitly rebound. Multiple aliases
+may refer to one node. CLI output always includes the locator even when it also
+prints aliases.
+
+```text
+lifecore alias list [--at ENTRY-LOCATOR]
+lifecore alias set NAME ENTRY-LOCATOR
+lifecore alias remove NAME
+lifecore query nodes ... --select ENTRY-LOCATOR -- alias set NAME
+```
+
+`alias set` creates a new binding or deliberately replaces an existing binding.
+It requires an explicit node locator, never an alias, so there is no alias
+indirection or cycle. The query-attested form binds the selected node only if it
+is still a member of that query result. `alias list` shows each target's locator
+and current/stale status in the chosen view. A stale target is not automatically
+advanced to a successor; the user queries for the intended successor and
+rebinds explicitly. With an attached ready sidecar, `alias list` also shows its
+temporary aliases, clearly labelled as not yet persisted.
 
 ## `type`: declarations and overrides
 
@@ -540,14 +603,14 @@ The basic commands remain small and explicit:
 
 ```text
 lifecore add TYPE [--field 'FIELD-ASSIGNMENT']...
-  [--parent ENTRY-LOCATOR]
+  [--parent NODE-REF]
   [--commit [--expect-head ENTRY-LOCATOR]]
 
-lifecore connect --from ENTRY-LOCATOR --type EDGE-TYPE --to ENTRY-LOCATOR
+lifecore connect --from NODE-REF --type EDGE-TYPE --to NODE-REF
   [--commit [--expect-head ENTRY-LOCATOR]]
 ```
 
-`add --parent` and both `connect` ends require node locators visible in the
+`add --parent` and both `connect` ends require node references visible in the
 current effective graph. A child normally has its parent’s node type; a
 different type is allowed only when the active parent declaration’s
 `additional_override` permits it. TypeCheck, not the CLI, owns that semantic
@@ -590,26 +653,98 @@ $ lifecore add Note \
     --commit
 ```
 
-A sidecar uses the identical converter:
+A sidecar uses this identical converter; its entry and reference syntax is
+specified below. Parsing produces payload values only; TypeCheck remains
+responsible for determining whether those values match the active declaration.
+
+## Sidecars
+
+A sidecar is an attached TOML addendum whose `[[entry]]` tables run in source
+order. Each entry appends one node, then its `connect_to` edges, then its
+`connect_back_from` edges. All references are `NODE-REF` strings, so they may
+be durable locators or aliases.
+
+```text
+lifecore sidecar attach PATH
+lifecore sidecar detach
+lifecore sidecar dump
+lifecore sidecar commit [--expect-head ENTRY-LOCATOR]
+```
 
 ```toml
 [[entry]]
-alias = "BuyMilk"
+alias = "BuyMilk" # optional temporary alias for this new node
 ty = "Note"
+parent = "11:6b1f0e4c8a7d54b2" # optional NODE-REF
 
 [entry.body]
 tags = { ordered_set = ["home", "errand"] }
 brand_preference = { sequence = [
     { sequence = ["BrandA", "Humane", "Local"] },
     { sequence = ["BrandB", "Unknown", "Local"] },
-    { sequence = ["BrandC", "Humane", "Big Dairy"] },
 ] }
+
+[entry.connect]
+connect_to = [{ target = "AtWork", ty = "Related" }]
+connect_back_from = [{ target = "DairyContrib", ty = "Accumulate" }]
 ```
 
-Sidecar entries still run in file order. Each entry appends its node, then its
-`connect_to` edges, then its `connect_back_from` edges. Parsing produces payload
-values only; TypeCheck remains responsible for determining whether those values
-match the active declaration.
+`ty` is mandatory. `alias`, `parent`, `body`, and `connect` are optional.
+`connect_to` places the new node at the edge head; `connect_back_from` places it
+at the tail. The body uses the shared recursive TOML payload grammar. A
+sidecar-defined alias is temporary: later entries may use it, but it is not
+saved until a successful `sidecar commit`. It may not shadow a persisted alias
+or an alias introduced by an earlier entry.
+
+`sidecar attach` resolves `PATH` to an absolute existing path and persists only
+that metadata; it deliberately does not parse the file. `sidecar detach` removes
+only that metadata and never reads the sidecar. `sidecar commit` rebuilds the
+suffix from canonical state, validates and analyzes it, applies it, saves the
+new persistent aliases together with the graph, and clears the attachment. The
+source TOML file is never deleted.
+
+`sidecar dump` is a read-only preview of the prepared provisional suffix, not a
+dump of TOML source. It prints only sidecar-appended nodes and edges in append
+order, with their predicted locators, parent/body or endpoints, and temporary
+aliases. It requires `EffectiveReady`; it reports an error rather than an empty
+list when no sidecar is attached. Because locators exclude circumstance,
+locators shown by `dump` remain valid after `commit`.
+
+## Analyzer configuration
+
+The configured analysis suite remains inspectable and extendable without
+creating a node or edge:
+
+```text
+lifecore analyzer list
+lifecore analyzer add NAME CONFIG [--commit [--expect-head ENTRY-LOCATOR]]
+```
+
+`analyzer list` displays configured name/configuration pairs in their stored
+order. `analyzer add` stages a cloned suite, then runs the complete candidate
+suite before it may save. A missing registered factory therefore rejects the
+candidate during analysis rather than creating unusable persisted configuration.
+It follows the same dry-run, atomic-save, and `--expect-head` rules as other
+committing operations, but is a suite configuration change rather than an
+append-log entry.
+
+## GraphViz
+
+```text
+lifecore graphviz TARGET [--at ENTRY-LOCATOR] [--full] [--fields] [--dot]
+```
+
+GraphViz renders the selected effective-graph view and does not modify CLI or
+graph state. By default it renders fresh nodes and edges. `--full` instead
+renders all nodes and edges visible in the view, organizes node families into
+clusters, and draws parent-child relationships as dashed special edges.
+
+Nodes use GraphViz `mrecord` labels containing their locator, stored type name,
+visible aliases, and, with `--fields`, their field dump. `--dot` writes the DOT
+definition directly to `TARGET` and does not invoke GraphViz. Otherwise the CLI
+streams the generated DOT to `dot -Tsvg` on standard input and writes the SVG to
+`TARGET`, without creating a temporary DOT file. A requested visualization file
+is an output artifact, not a state mutation.
 
 ## Messages and dismissal
 
@@ -705,6 +840,16 @@ computed presentation state, not a persisted dismissal. A context-only message,
 or one without entry relevance, is not silently declared resolved.
 `--include-resolved` exposes the computed history.
 
+## Built-in `Interactive` analyzer
+
+`init` registers the built-in `Interactive` analyzer alongside `Type_Check`.
+When an analyzed window ends in a child node, `Interactive` considers the
+child's parent connections and may suggest recreating eligible incoming or
+outgoing connections for the child. It suppresses a suggestion when the
+opposite endpoint is stale or when a fresh successor already has the equivalent
+connection. These are ordinary Suggestions: they are visible through `check`
+and are applied only through `message apply`.
+
 ## Interactive mode (`-i`)
 
 `lifecore -i` starts a TTY-only session. It loads and analyzes the same
@@ -758,15 +903,18 @@ attached sidecar, the session is read-only and does not offer mutation menus.
 
 ## Output, errors, and determinism
 
-`--format auto|table|lines|json` applies to entries, queries, types, messages,
-and transaction results. `auto` chooses a table only for a TTY. JSON includes
-full locator and message digests, display prefixes, view boundaries, message
-visibility state, and transaction state.
+`--format auto|table|lines|json` applies to entries, queries, types, aliases,
+analyzer configuration, sidecar dumps, messages, and transaction results.
+`auto` chooses a table only for a TTY. JSON includes full locator and message
+digests, display prefixes, view boundaries, message visibility state, and
+transaction state. GraphViz has its own DOT or SVG target-file output.
 
 Presentation order is never incidental hash-map order:
 
 - query results sort by entry index ascending;
 - type listings sort by declaration name then entry index;
+- aliases sort by name;
+- analyzer configuration retains stored order;
 - fields and permissions retain declaration insertion order;
 - messages use the order specified above; and
 - sidecar entries retain TOML source order.
@@ -866,6 +1014,7 @@ A practical module split is:
   rendering, and selection;
 - `type_command`: `FieldDecl` parsing, `Type` construction and patching;
 - `payload_input`: shared TOML assignment and recursive payload conversion;
+- `analyzer_command`: configured-suite listing and cloned-suite staging;
 - `messages`: canonical IDs, emission universe, dismissal registry, visibility,
   `check`, and suggestion apply;
 - `interactive`: the `-i` state machine over the same command services; and
@@ -874,13 +1023,19 @@ A practical module split is:
 The proposal is ready to claim implementation only when tests cover: dry-run
 append leaves state-file bytes unchanged; committed state has no `Mock`; basic
 validation and analyzer failures roll back the whole candidate; a correct index
-with wrong digest is rejected; `--select` rejects a locator absent from its
-query result; `--explain` reports non-membership without selecting it; direct
-type override resolves the declaration by name and view, uses it as parent, and
-preserves its name unless `--as` is supplied; malformed or duplicate TOML field
-assignments never append; nested sequences and ordered sets round-trip through
-sidecars; an Inconsistency cannot be dismissed; a dismissal survives reload;
-message-prefix ambiguity is detected across visible, dismissed, and resolved
-messages; `--expect-head` mismatch saves nothing; interactive cancellation saves
-nothing; and an invalid attached sidecar can still be detached without being
-read.
+with wrong digest is rejected; aliases and locators are lexically disjoint and a
+bad locator fingerprint never falls back to alias lookup; `--select` rejects a
+locator absent from its query result; `--explain` reports non-membership without
+selecting it; direct type override resolves the declaration by name and view,
+uses it as parent, and preserves its name unless `--as` is supplied; malformed
+or duplicate TOML field assignments never append; nested sequences and ordered
+sets round-trip through sidecars; a valid attached sidecar is visible to query,
+entry inspection, type inspection, GraphViz, and `check`; `check` renders an
+inconsistent but basically valid sidecar through its final entry while ordinary
+browsing remains unavailable; `sidecar dump` preserves append order and its
+predicted locators remain valid after commit; an Inconsistency cannot be
+dismissed; a dismissal survives reload; message-prefix ambiguity is detected
+across visible, dismissed, and resolved messages; an unknown analyzer factory
+does not persist configuration; `--expect-head` mismatch saves nothing;
+interactive cancellation saves nothing; and an invalid attached sidecar can
+still be detached without being read.
