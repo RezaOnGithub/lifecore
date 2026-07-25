@@ -493,8 +493,8 @@ impl LifeCore for LifeCoreList {
         &self,
         e: crate::EntryContext,
     ) -> Option<(crate::Entry, Circumstance)> {
-        self.get(e)
-            .map(|entry| (entry, self[CircumstanceIndex(e.thing)].clone()))
+        let circumstance = *self.circumstance.get(e.thing)?;
+        self.get(e).map(|entry| (entry, self[circumstance].clone()))
     }
 
     fn window<I>(&self, i: I) -> impl Iterator<Item = crate::Entry>

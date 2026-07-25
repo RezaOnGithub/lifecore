@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    Body, Edge, EntryContext, LifeCore, LifeCoreList, Node,
+    Body, Circumstance, Edge, EntryContext, LifeCore, LifeCoreList, Node,
     analysis::{Suggestion, Warning},
 };
 
@@ -26,6 +26,22 @@ fn hash<T: Hash>(value: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()
+}
+
+#[test]
+fn get_with_circumstance_follows_the_per_entry_mapping() {
+    let mut lc = LifeCoreList::default();
+    let first = lc.add_mock("First", Body::default(), None).unwrap();
+    let second = lc.add_mock("Second", Body::default(), None).unwrap();
+
+    assert!(matches!(
+        lc.get_with_circumstance(first.e).unwrap().1,
+        Circumstance::Mock
+    ));
+    assert!(matches!(
+        lc.get_with_circumstance(second.e).unwrap().1,
+        Circumstance::Mock
+    ));
 }
 
 #[test]

@@ -22,17 +22,29 @@ The command name in examples is `lifecore`. Examples assume the default
 - `Query` means the core `NodeQuery` concept: it selects nodes in one view. It
   is not yet a general graph language and does not return edges as candidates.
 - An entry locator is `INDEX:FINGERPRINT`, for example `42:6b1f0e4c8a7d54b2`.
-  The index says which append-log record is intended; the fingerprint detects a
-  wrong database, stale copied output, or mistyped index.
+  The index says which append-log record is intended; the fingerprint is a short
+  state-and-index checksum that catches ordinary transcription mistakes and
+  locators copied from an independently initialized state.
 - A query may be followed by `--select LOCATOR`. The CLI recomputes the query
   and rejects the command unless that locator is in its result. It never trusts
   a row number from an earlier terminal listing.
+- A query may instead use `--explain LOCATOR` to show how each predicate
+  evaluated for one node, including why that node was not returned.
 - A stored type declaration is a node whose node type is `Type`, matching
   `Type::TYPE_NAME` in the refactored core. CLI text no longer calls it
   `Node_Type`.
+- `type override NAME` resolves the unique active declaration with that name in
+  a selected view. Query-attested override remains available when additional
+  predicates are useful as guards.
+- Ordinary `add` fields and sidecar bodies use one recursive TOML payload syntax
+  for text, signed integers, sequences, and ordered sets.
 - Warnings and suggestions are **messages**. A persisted **dismissal** hides a
   non-fatal message; `barklist` and `bark` are retired terms. An inconsistency
   can never be dismissed.
+- `check` renders messages. Dismissal and history-resolution filters affect
+  presentation only; message-ID prefixes are resolved before those filters.
+- Committing graph mutations may use the optional `--expect-head` guard. Help
+  encourages scripts to supply it, but it is never mandatory.
 - `-i` starts a small interactive mode for browsing, selection, type editing,
   suggestion application, and message dismissal. It is not a second command
   language or an interactive version of every batch feature.
@@ -66,13 +78,20 @@ The state file remains pretty JSON with two top-level values:
 
 ```text
 lifecore  canonical LifeCoreList
-cli       aliases, dismissals, optional attached-sidecar path, and CLI metadata
+cli       state UUID, fingerprint versions, aliases, dismissals,
+          optional attached-sidecar path, and CLI metadata
 ```
 
 `LIFECORE_STATE_FILE_PATH`, when present, is authoritative. A failure to read or
 write that path must not fall back to `./LifeCoreState.json`. `init` is the only
 operation that creates a state file and fails if the resolved path already
 exists. Persisted graph data must contain no `Mock` circumstance.
+
+`init` generates an immutable UUIDv7 for the state. Moving or copying the state
+file preserves the UUID; independently initialized states have different UUIDs.
+Ordinary saves, sidecar commits, and format migrations must not silently replace
+it. UUIDv7 exposes an approximate initialization time, which is acceptable for
+this local state identifier.
 
 An attached sidecar is still an external addendum, not saved graph content. On
 ordinary invocation the CLI reads canonical state and builds the sidecar suffix
@@ -133,6 +152,14 @@ The transitions are:
 5. **Saved** is reached only after an atomic write through a temporary file in
    the destination directory. A save failure leaves the old state file intact.
 
+All committing graph mutations accept an optional `--expect-head ENTRY-LOCATOR`.
+Immediately before saving, the CLI rereads the canonical state and verifies that
+its head still matches that locator, or an explicit empty-state token when
+appropriate. A mismatch aborts without changing the state file. This
+compare-before-save guard is useful for scripts and long-running interactive
+sessions, but it is not file locking and is not mandatory. Command help should
+recommend it for automation.
+
 `init` follows the same logical route with an empty graph. The bootstrap
 Suggestion emitted by TypeCheck is non-fatal. The initial state registers
 `Type_Check` and `Interactive` analyzers, but neither name changes the
@@ -179,27 +206,40 @@ An entry locator has this grammar:
 ```text
 ENTRY-LOCATOR = INDEX ":" FINGERPRINT
 INDEX         = one or more ASCII decimal digits
-FINGERPRINT   = 12 to 128 lowercase hexadecimal digits
+FINGERPRINT   = 5 to 128 lowercase hexadecimal digits
 ```
 
 The CLI displays the first 16 hexadecimal digits by default and accepts a prefix
-of at least 12. For example:
+of at least 5. For example:
 
 ```text
 42:6b1f0e4c8a7d54b2
 ```
 
-The digest is SHA3-512 over a versioned canonical **entry witness**. The witness
-contains entry kind; node type and parent or edge type and endpoints; and
-node-body keys and payloads in canonical recursive order. It does not contain
-the circumstance, so applying a dry-run suffix does not rename its graph entries
-merely by changing `Mock` to a session circumstance. Lengths and variant tags
-are encoded, so strings and payload variants cannot collide by concatenation.
-The state format records the witness version.
+The digest is SHA3-512 over a small, versioned checksum input containing:
 
-The index makes the pair unique in one append-only database; the fingerprint is
-an integrity and intent check, not a replacement for the index. Locator
-resolution is exact:
+- a domain and fingerprint-format version;
+- the immutable state UUID;
+- the entry index;
+- an entry-kind tag;
+- the stored node or edge type name; and
+- for a node, the number of top-level body fields.
+
+The encoding uses fixed-width or length-prefixed components so concatenated
+values are unambiguous. An edge and a zero-field node have distinct kind tags;
+an edge does not pretend to have zero fields. Circumstance, node field values,
+node parents, and edge endpoints are deliberately excluded, so applying a
+dry-run suffix does not rename its entries merely by replacing `Mock` with a
+session circumstance. The state format records the fingerprint version.
+
+The fingerprint is an ergonomic state-and-index checksum, not a content hash,
+tamper-evidence mechanism, or replacement for query and freshness checks. It
+does not detect changed field values, parents, or endpoints when the other
+inputs remain equal. Copies of one state file intentionally retain compatible
+locators; independently initialized states normally reject each other's locators
+because their UUIDs differ.
+
+Locator resolution is exact:
 
 1. Parse the index without accepting signs, whitespace, or integer overflow.
 2. Load the entry at that index in the current effective graph; reject a missing
@@ -210,9 +250,10 @@ resolution is exact:
 5. If an operation uses a view, require that the index lies inside that view.
 
 A prefix mismatch is an error even though an index alone can technically locate
-an entry. A 12-digit digest collision does not weaken identity because the index
-is still checked. Message IDs, which lack an index component, refuse ambiguous
-prefixes.
+an entry. Five hexadecimal digits provide only a short human-oriented check; the
+CLI displays a longer prefix by default. Message IDs, which lack an index
+component, resolve prefixes against their complete unfiltered universe and
+refuse ambiguous prefixes.
 
 All new-node and new-edge output includes its locator. `entry show LOCATOR`
 accepts either kind and prints kind, index, fingerprint, stored type name,
@@ -279,7 +320,7 @@ lifecore query nodes <all|any|none>
   [--at ENTRY-LOCATOR]
   [--where PREDICATE]...
   [--format auto|table|lines|json]
-  [--select ENTRY-LOCATOR [-- ACTION...]]
+  [--select ENTRY-LOCATOR [-- ACTION...] | --explain ENTRY-LOCATOR]
 ```
 
 `--at` means “view through and including this entry”; it is valid for a node or
@@ -287,6 +328,14 @@ edge locator. Without it, the view ends at the latest entry in the effective
 graph. Output states the view end, for example
 `view: through 49:23aa6e91cddf11a0`, because freshness can change in a later
 view.
+
+`--explain` resolves a node inside the selected view and reports the result of
+every predicate plus the final combinator result. Unlike `--select`, the
+explained node need not be returned by the query: explaining non-membership is
+its primary use. The explanation includes the view used for freshness and edge
+predicates. `--select` and `--explain` are mutually exclusive. Core should
+expose structured predicate explanations so the CLI does not duplicate predicate
+evaluation.
 
 | Combinator | A candidate is returned when   | Empty predicate list   |
 | ---------- | ------------------------------ | ---------------------- |
@@ -343,6 +392,11 @@ $ lifecore query nodes all --where fresh --where 'type Note' \
 
 # Reproduce results just after entry 42.
 $ lifecore query nodes all --at 42:6b1f0e4c8a7d54b2 --where fresh
+
+# Explain why one Task was not returned.
+$ lifecore query nodes all --where fresh --where 'type Task' \
+    --where 'field title matches (?i)invoice' \
+    --explain 42:6b1f0e4c8a7d54b2
 ```
 
 The core query implementation must honor these identities—especially empty
@@ -365,8 +419,12 @@ append.
 ```text
 lifecore type list [--at ENTRY-LOCATOR]
 lifecore type show ENTRY-LOCATOR
-lifecore type create NAME [TYPE OPTIONS] [--commit]
-lifecore query nodes ... --select ENTRY-LOCATOR -- type override [PATCH OPTIONS] [--commit]
+lifecore type create NAME [TYPE OPTIONS]
+  [--commit [--expect-head ENTRY-LOCATOR]]
+lifecore type override NAME [--at ENTRY-LOCATOR] [--as NEW-NAME]
+  [PATCH OPTIONS] [--commit [--expect-head ENTRY-LOCATOR]]
+lifecore query nodes ... --select ENTRY-LOCATOR -- type override
+  [--as NEW-NAME] [PATCH OPTIONS] [--commit [--expect-head ENTRY-LOCATOR]]
 ```
 
 `type list` displays current, well-formed stored declarations in name order and
@@ -374,6 +432,17 @@ then their locators. `type show` requires a locator for a `Type` node,
 deserializes it with `Type::try_from_body`, and prints a copy-pasteable
 declaration. `type create` starts with an empty declaration named `NAME`; a
 duplicate active name is rejected by analysis.
+
+`type override NAME` resolves the unique active, well-formed declaration named
+`NAME` in the view selected by `--at`, or in the latest view when `--at` is
+absent. TypeCheck-valid views contain at most one active well-formed declaration
+with a given name. A name does not identify every historical declaration with
+that name, so the view remains part of resolution.
+
+The source need only be fresh in the selected historical view. It may already be
+stale in the latest view, which permits another branch from an older
+declaration. Query-attested override remains available for advanced workflows
+that want predicates beyond declaration name and view.
 
 `TYPE OPTIONS` are repeatable:
 
@@ -411,12 +480,18 @@ $ lifecore type create Task \
 
 ### Overrides are patch-based
 
-The selected node for `type override` must be a current, well-formed `Type`
-declaration returned by the supplied query. The command copies that stored
-`Type`, preserves its `name`, applies the patch, and appends it as a child of
-the selected declaration. The user never has to retype a whole schema to add a
-field. Changing the declaration name is intentionally impossible: an override is
-the next version of the same declared type.
+The declaration resolved by `type override` must be current in the chosen view,
+well-formed, and stored in a node whose type is `Type`. The command copies that
+stored `Type`, applies the patch, and appends it as a child of the resolved
+declaration. The user never has to retype a whole schema to add a field.
+
+The declaration name is preserved by default. `--as NEW-NAME` instead writes the
+child with a different declared name. This supports branching and migration from
+an older declaration, including one that is stale in the latest view. If a
+differently named child supersedes a declaration that has no same-name active
+successor, the old name may disappear from the active type table. TypeCheck then
+decides whether existing nodes, duplicate names, and override permissions make
+the candidate valid; the CLI does not guess or silently create a second branch.
 
 ```text
 --field 'FIELD-DECL'              replace/add the named field
@@ -436,13 +511,21 @@ and permissions append in option order. A no-op patch is rejected so history is
 not cluttered by identical type versions.
 
 ```console
-# Find the active Task declaration, then verify the selected entry remains
-# part of that exact query before appending its successor.
+# Resolve the latest active Task declaration by name and append its successor.
+$ lifecore type override Task \
+    --field 'priority = Number : Optional' \
+    --allow-outgoing Relates_To --commit
+
+# The query-attested form remains available when extra membership guards matter.
 $ lifecore query nodes all --where fresh --where 'type Type' \
     --where 'field name equals-text Task' \
     --select 12:45a8e2d41f7c9b0e -- type override \
     --field 'priority = Number : Optional' \
     --allow-outgoing Relates_To --commit
+
+# Branch from the declaration that was active in a historical view.
+$ lifecore type override Task --at 12:45a8e2d41f7c9b0e \
+    --as FocusedTask --drop-field legacy_scope --commit
 ```
 
 This append enters **Staged**, so all existing fresh `Task` nodes are checked
@@ -456,11 +539,12 @@ unsafe.
 The basic commands remain small and explicit:
 
 ```text
-lifecore add TYPE [--text NAME=VALUE]... [--number NAME=INTEGER]...
-  [--parent ENTRY-LOCATOR] [--commit]
+lifecore add TYPE [--field 'FIELD-ASSIGNMENT']...
+  [--parent ENTRY-LOCATOR]
+  [--commit [--expect-head ENTRY-LOCATOR]]
 
 lifecore connect --from ENTRY-LOCATOR --type EDGE-TYPE --to ENTRY-LOCATOR
-  [--commit]
+  [--commit [--expect-head ENTRY-LOCATOR]]
 ```
 
 `add --parent` and both `connect` ends require node locators visible in the
@@ -470,18 +554,78 @@ different type is allowed only when the active parent declaration’s
 decision. Both commands print all candidate diagnostics and mark output as
 `dry run` or `committed`.
 
-The MVP still accepts only text and signed integer bodies through `add`. Complex
-payload construction belongs in a later value-input proposal. Type declarations
-are the narrow exception because their implemented parsers already provide a
-safe, readable input language.
+### Shared TOML payload input
+
+`add --field` and sidecar entry bodies use the same recursive TOML-to-`Payload`
+conversion. The supported grammar is:
+
+```text
+PAYLOAD = TOML-STRING
+        | TOML-SIGNED-INTEGER
+        | { sequence = [PAYLOAD, ...] }
+        | { ordered_set = [PAYLOAD, ...] }
+```
+
+`sequence` maps to `Payload::Sequence`, including payloads checked against a
+declared `Tuple(...)` value type. There is no `tuple` payload constructor.
+`ordered_set` maps to `Payload::OrderedSet` and communicates that insertion
+order is retained. Duplicate ordered-set elements are rejected rather than
+silently discarded.
+
+Booleans, floats, bare arrays, arbitrary inline tables, TOML date-time values,
+and unknown constructor keys are errors. User-authored precise-time, civil-time,
+and duration values are deferred to the date/time RFC below.
+
+Each `FIELD-ASSIGNMENT` is parsed as a TOML document with exactly one root key
+whose value is one supported `PAYLOAD`. Repeating the same field name in one
+command is an error rather than a last-value-wins rule.
+
+```console
+$ lifecore add Note \
+    --field 'tags = { ordered_set = ["home", "errand"] }' \
+    --field 'brand_preference = { sequence = [
+      { sequence = ["BrandA", "Humane", "Local"] },
+      { sequence = ["BrandB", "Unknown", "Local"] }
+    ] }' \
+    --commit
+```
+
+A sidecar uses the identical converter:
+
+```toml
+[[entry]]
+alias = "BuyMilk"
+ty = "Note"
+
+[entry.body]
+tags = { ordered_set = ["home", "errand"] }
+brand_preference = { sequence = [
+    { sequence = ["BrandA", "Humane", "Local"] },
+    { sequence = ["BrandB", "Unknown", "Local"] },
+    { sequence = ["BrandC", "Humane", "Big Dairy"] },
+] }
+```
+
+Sidecar entries still run in file order. Each entry appends its node, then its
+`connect_to` edges, then its `connect_back_from` edges. Parsing produces payload
+values only; TypeCheck remains responsible for determining whether those values
+match the active declaration.
 
 ## Messages and dismissal
 
-Analysis produces Messages for every valid historical prefix. The CLI renders
-them deterministically by offending location (context end, then entry index),
-severity, analyzer name/configuration, text, and canonical message ID. Output
-includes analyzer, severity, location, relevance, text, action summary for
-Suggestions, and a short handle:
+An analyzer **emits** a Message when the complete analysis run over the current
+effective graph produces it for any analyzed historical prefix. Emission is
+computed anew on each invocation; messages are not journaled.
+
+The **message universe** is the set of distinct full message IDs emitted by that
+analysis run before dismissal and resolved-by-history presentation filters are
+applied. It therefore includes Inconsistencies, visible and dismissed Warnings
+and Suggestions, and messages computed as resolved by history.
+
+The CLI renders messages deterministically by offending location (context end,
+then entry index), severity, analyzer name/configuration, text, and canonical
+message ID. Output includes analyzer, severity, location, relevance, text,
+action summary for Suggestions, and a short handle:
 
 ```text
 m:77ef2c15985edb1a  Warning  Type_Check  entry 42:6b1f0e4c8a7d54b2  ...
@@ -494,33 +638,65 @@ action order remains significant. The persisted dismissal registry contains the
 full digest and ID-format version, never a display prefix or rendered text.
 
 ```text
-lifecore message list [--include-dismissed] [--include-resolved]
+lifecore check [--include-dismissed | --only-dismissed] [--include-resolved]
+lifecore check --dismissal-ids
 lifecore message show MESSAGE-ID
 lifecore message dismiss MESSAGE-ID
 lifecore message restore MESSAGE-ID
-lifecore message apply MESSAGE-ID [--commit] [--keep-message]
+lifecore message apply MESSAGE-ID [--commit [--expect-head ENTRY-LOCATOR]]
+  [--keep-message]
 ```
 
-`MESSAGE-ID` is `m:` followed by at least 12 hexadecimal digits. `show`,
-`dismiss`, and `apply` resolve it against the current message set and require
-exactly one match. `restore` also resolves registered dismissals, so an old
-dismissal may be removed even if its message is not emitted today.
+`message list` is replaced by `check`. By default, `check` shows emitted,
+active, non-dismissed messages plus every Inconsistency. `--include-dismissed`
+also shows emitted dismissed messages, while `--only-dismissed` restricts output
+to emitted dismissed messages. Those two flags are mutually exclusive.
+`--include-resolved` is orthogonal and admits emitted messages whose relevance
+has been resolved by later history.
 
-The message state machine is separate from graph correctness:
+`check --dismissal-ids` reads the persisted registry instead of rendering the
+message universe. It lists every dismissed full ID and whether that ID matches a
+message emitted today. This includes orphaned dismissals whose original message
+is no longer emitted and whose old rendered body is therefore unavailable. It is
+a standalone mode and does not combine with the presentation filters above.
+
+`MESSAGE-ID` is `m:` followed by 5 to 128 lowercase hexadecimal digits. `show`,
+`dismiss`, and `apply` resolve a prefix against the entire message universe,
+before any presentation filtering, and require exactly one distinct full digest.
+A visible message and a dismissed or resolved message can therefore make the
+same short prefix ambiguous. `restore` resolves against the union of the message
+universe and the persisted dismissal registry so an orphaned dismissal can still
+be removed.
+
+“Entire message universe” means every message reproducible by the current
+analyzer run, not every message ever observed. A no-longer-emitted message is
+known only by its full persisted dismissal ID when it was previously dismissed.
+
+Emission, resolution, and dismissal are separate axes rather than one linear
+message state machine:
 
 ```text
-Visible Warning/Suggestion -- dismiss --> Dismissed (full ID saved)
-Dismissed -- restore --> Visible if emitted and otherwise eligible
-Visible/Dismissed Suggestion -- apply dry-run --> candidate Analyzed
-candidate Analyzed -- apply --commit --> graph Saved; suggestion dismissed
-candidate failure --> original graph and dismissal registry unchanged
+Computed analyzer/presentation state:
+
+Not emitted <----> Emitted and active <----> Emitted and resolved by history
+
+Persisted dismissal state for a Warning or Suggestion:
+
+Not dismissed -------- message dismiss --------> Dismissed (full ID saved)
+Not dismissed <-------- message restore -------- Dismissed
+
+Suggestion application:
+
+Emitted Suggestion -- apply --> candidate Staged and Analyzed
+candidate dry run or failure --> graph and dismissal registry unchanged
+candidate --commit --> graph Saved; full ID dismissed unless --keep-message
 ```
 
 `message dismiss` is a CLI-state-only save. It rejects Inconsistencies and never
 modifies the graph. `message apply` follows the full graph lifecycle. On a
 successful commit it dismisses the applied Suggestion unless `--keep-message`
-was supplied; a dry run never creates a dismissal. `--include-dismissed`
-replaces the old `--no-bark` spelling.
+was supplied; an already registered dismissal is not implicitly restored. A dry
+run never creates a dismissal.
 
 Inconsistencies are always visible and always block graph commit. A Warning or
 Suggestion can additionally become **resolved by history** when its specific
@@ -611,30 +787,58 @@ failure may panic or save partial state.
 
 These are not prerequisites for the first implementation.
 
-### Expected-head guard
-
-Add `--expect-head ENTRY-LOCATOR` to committing graph mutations. Immediately
-before atomic save, verify the newly read canonical state still ends at that
-locator (or an explicit empty-state token). It is a compare-before-save guard,
-not file locking, and belongs between **Applied** and **Saved**. It gives
-scripts and interactive sessions a clear failure when another writer advanced
-the log since their query.
-
-### Query explanation
-
-Add `query nodes ... --explain ENTRY-LOCATOR` after basic selection is stable.
-It should show every predicate’s result for one candidate and the view used for
-freshness. It slots beside `--select`: selection enforces membership, while
-explanation explains non-membership. Core should eventually expose structured
-explanations rather than make the CLI duplicate predicate evaluation.
-
-### Type-impact preview
+### Type-impact and health summaries RFC
 
 Extend interactive `Review` and non-interactive `type override --summary` to
 report nodes and edges whose TypeCheck outcome changes under the proposed
 declaration. It belongs after **Analyzed**, because only the real provisional
 graph and analyzer output can determine impact. It is a presentation summary
 over existing diagnostics, not a second schema checker.
+
+`check --summary` could group current health by severity, analyzer name and
+configuration, stored node or edge type, and count, with an explicit
+`unattributed` bucket for context-level diagnostics. Both summary forms remain
+RFCs because generic Messages do not yet carry structured logical-type subjects.
+Inferring a type from diagnostic prose is unacceptable.
+
+Basic validation currently returns one failure rather than a diagnostic
+collection. A health summary may report that failure and skip analyzers that
+require a valid graph, but reporting every validation failure would require a
+separate core API change.
+
+### Date, civil-time, and duration input RFC
+
+The first shared TOML payload grammar deliberately has no constructor for
+`PreciseTime` and does not interpret TOML date-time values. Existing stored
+`PreciseTime` payloads still need deterministic display and internal
+fingerprinting, but the CLI and sidecars do not author new ones yet.
+
+An RFC should design core vocabulary and CLI validation together. It must
+distinguish absolute instants from civil dates, civil times, civil date-times,
+and zoned date-times; distinguish fixed durations from calendar spans; define
+timezone and daylight-saving ambiguity policies; and specify storage,
+round-trippable display, equality, ordering, query predicates, and migration
+from the existing `PreciseTime` variant. Unsupported time input should produce a
+deliberate error rather than silently becoming text.
+
+### Circumstance provenance display RFC
+
+`Circumstance::Session` currently stores an hour-rounded zoned time, hostname,
+and username. These values are unverified and equal circumstances are
+deduplicated, so they are coarse provenance rather than an author identity,
+exact creation time, transaction boundary, or security audit record.
+
+`entry show` already includes the circumstance in its detailed output. A later
+`--show-provenance` option could add a compact `recorded hour` and
+`username@hostname` column to query and entry listings. JSON should use
+structured fields and label the data unverified. Staged entries display
+`provisional; circumstance assigned on commit` instead of presenting `Mock` as
+persisted provenance.
+
+Circumstance remains outside entry fingerprints and has no effect on graph
+semantics. Circumstance query predicates, privacy controls, exact instants, and
+a unique commit/session identifier require a separate design before they are
+exposed.
 
 ### Saved named queries
 
@@ -644,19 +848,26 @@ time and require a locator for mutation. This belongs in CLI metadata beside
 aliases, never as an implicit mutable result set; `--select` remains the
 membership guard.
 
-## Implementation boundaries and acceptance criteria
+## Deferred implementation boundaries and acceptance criteria
+
+The exact module boundaries remain an RFC for the implementation phase. The
+following split records likely responsibilities without making them part of the
+accepted command interface.
 
 Command handlers should share orchestration rather than stage their own graphs.
 A practical module split is:
 
 - `state`: state-file resolution, persisted state, `Mock` rejection, atomic
-  save;
+  save, immutable state UUID, and format versions;
 - `transaction`: lifecycle state machine and append/analyze/apply helpers;
-- `locator`: canonical entry-witness encoding, SHA3-512 parsing, view-aware
-  resolution;
-- `query`: predicate parsing, `NodeQuery` construction, rendering, selection;
+- `locator`: versioned state-and-index checksum encoding, SHA3-512 prefix
+  parsing, and view-aware resolution;
+- `query`: predicate parsing, `NodeQuery` construction, structured explanation,
+  rendering, and selection;
 - `type_command`: `FieldDecl` parsing, `Type` construction and patching;
-- `messages`: canonical IDs, dismissal registry, visibility, suggestion apply;
+- `payload_input`: shared TOML assignment and recursive payload conversion;
+- `messages`: canonical IDs, emission universe, dismissal registry, visibility,
+  `check`, and suggestion apply;
 - `interactive`: the `-i` state machine over the same command services; and
 - existing `sidecar` and `graphviz` modules adapted to locators and views.
 
@@ -664,8 +875,12 @@ The proposal is ready to claim implementation only when tests cover: dry-run
 append leaves state-file bytes unchanged; committed state has no `Mock`; basic
 validation and analyzer failures roll back the whole candidate; a correct index
 with wrong digest is rejected; `--select` rejects a locator absent from its
-query result; a type override uses the selected declaration as parent and
-preserves its name; malformed field syntax never appends; an Inconsistency
-cannot be dismissed; a dismissal survives reload; interactive cancellation saves
+query result; `--explain` reports non-membership without selecting it; direct
+type override resolves the declaration by name and view, uses it as parent, and
+preserves its name unless `--as` is supplied; malformed or duplicate TOML field
+assignments never append; nested sequences and ordered sets round-trip through
+sidecars; an Inconsistency cannot be dismissed; a dismissal survives reload;
+message-prefix ambiguity is detected across visible, dismissed, and resolved
+messages; `--expect-head` mismatch saves nothing; interactive cancellation saves
 nothing; and an invalid attached sidecar can still be detached without being
 read.
