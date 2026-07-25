@@ -30,6 +30,8 @@ The command name in examples is `lifecore`. Examples assume the default
   a row number from an earlier terminal listing.
 - A query may instead use `--explain LOCATOR` to show how each predicate
   evaluated for one node, including why that node was not returned.
+- `HEAD` is a reserved dynamic node reference: the highest-index node in the
+  effective graph, never an alias stored in CLI state and never the latest edge.
 - A stored type declaration is a node whose node type is `Type`, matching
   `Type::TYPE_NAME` in the refactored core. CLI text no longer calls it
   `Node_Type`.
@@ -56,6 +58,7 @@ The command name in examples is `lifecore`. Examples assume the default
 | entry     | One append-log record: a node or an edge.                                |
 | index     | The zero-based `EntryIndex` of an entry; it is visible to users.         |
 | locator   | An index plus a verified truncated fingerprint, used to name one entry.  |
+| `HEAD`    | Reserved reference to the highest-index node in the effective graph.     |
 | view      | A `Context`: history from index zero through an exclusive end.           |
 | current   | Fresh in the view being discussed; never an eternal property.            |
 | supersede | Append a child node whose parent is an older node.                       |
@@ -98,20 +101,20 @@ ordinary invocation the CLI reads canonical state and builds the sidecar suffix
 in memory. A successfully prepared suffix makes the **effective graph**: the
 canonical graph followed by the provisional sidecar entries. Read-only graph
 operations use that effective graph, including `query`, `entry show`, `check`,
-`message show`, `type list`, `type show`, `graphviz`, `sidecar dump`, `alias
-list`, `analyzer list`, and interactive browsing. A query can therefore return
-sidecar-added nodes, and its edge predicates can inspect sidecar-added edges.
-These operations never apply or save the suffix.
+`message show`, `type list`, `type show`, `graphviz`, `sidecar dump`,
+`alias list`, `analyzer list`, and interactive browsing. A query can therefore
+return sidecar-added nodes, and its edge predicates can inspect sidecar-added
+edges. These operations never apply or save the suffix.
 
 An attachment forbids state-mutating operations that could otherwise save an
-unrelated change alongside the suffix: `add`, `connect`, `type create`, `type
-override`, `message apply`, `analyzer add`, `alias set`, `alias remove`,
+unrelated change alongside the suffix: `add`, `connect`, `type create`,
+`type override`, `message apply`, `analyzer add`, `alias set`, `alias remove`,
 `message dismiss`, and `message restore`. `sidecar commit` and `sidecar detach`
-are the two exceptions. `graphviz` may write its user-requested output file,
-but is still read-only with respect to CLI and graph state. A new `sidecar
-attach` is accepted only when no sidecar is already attached; replacement
-requires detach followed by attach. Detach must only remove attachment metadata;
-it must not parse or read the sidecar.
+are the two exceptions. `graphviz` may write its user-requested output file, but
+is still read-only with respect to CLI and graph state. A new `sidecar attach`
+is accepted only when no sidecar is already attached; replacement requires
+detach followed by attach. Detach must only remove attachment metadata; it must
+not parse or read the sidecar.
 
 Aliases remain optional conveniences for nodes. They store a durable locator
 (the index and full, untruncated digest), not an implicit historical context or
@@ -170,7 +173,8 @@ its head still matches that locator, or an explicit empty-state token when
 appropriate. A mismatch aborts without changing the state file. This
 compare-before-save guard is useful for scripts and long-running interactive
 sessions, but it is not file locking and is not mandatory. Command help should
-recommend it for automation.
+recommend it for automation. `HEAD` is not accepted here: the guard needs the
+stable locator of the actual latest entry, which may be an edge.
 
 `init` follows the same logical route with an empty graph. The bootstrap
 Suggestion emitted by TypeCheck is non-fatal. The initial state registers
@@ -285,14 +289,23 @@ disjoint grammars:
 
 ```text
 ALIAS    = [A-Za-z_][A-Za-z0-9_]*
-NODE-REF = ALIAS | ENTRY-LOCATOR
+NODE-REF = "HEAD" | ALIAS | ENTRY-LOCATOR
 ```
 
+`HEAD` is reserved exactly in uppercase; `head` remains an ordinary alias name.
 An input containing `:` is never an alias. A syntactically valid locator with a
-bad fingerprint is an error, not an alias lookup; `foo:bar` and `42` are
-invalid as both a locator and an alias. This makes a `NODE-REF` unambiguous.
-When it is an alias, the CLI resolves its stored full locator and then applies
-the same node-kind and view checks it would apply to an explicit locator.
+bad fingerprint is an error, not an alias lookup; `foo:bar` and `42` are invalid
+as both a locator and an alias. This makes a `NODE-REF` unambiguous. When it is
+an alias, the CLI resolves its stored full locator and then applies the same
+node-kind and view checks it would apply to an explicit locator.
+
+Outside sidecar processing, `HEAD` resolves once against the effective graph
+loaded for the operation, to the visible node with the greatest entry index. It
+errors when that graph has no nodes. It is necessarily current in that view,
+because a newer child node would itself be a later node. The resolved locator is
+always included in command output. `HEAD` is a convenience for node-reference
+positions only; it never means the latest append-log entry, and it is not
+accepted where stable entry identity is required.
 
 Node-reference positions such as `add --parent`, `connect --from`, and
 `connect --to` accept `NODE-REF` and reject an edge locator. Identity-sensitive
@@ -462,9 +475,12 @@ It requires an explicit node locator, never an alias, so there is no alias
 indirection or cycle. The query-attested form binds the selected node only if it
 is still a member of that query result. `alias list` shows each target's locator
 and current/stale status in the chosen view. A stale target is not automatically
-advanced to a successor; the user queries for the intended successor and
-rebinds explicitly. With an attached ready sidecar, `alias list` also shows its
-temporary aliases, clearly labelled as not yet persisted.
+advanced to a successor; the user queries for the intended successor and rebinds
+explicitly. With an attached ready sidecar, `alias list` also shows its
+temporary aliases, clearly labelled as not yet persisted. `HEAD` is not shown in
+that list and cannot be created, removed, rebound, or shadowed by an alias. Any
+state-format migration that encounters a persisted alias named `HEAD` must fail
+clearly rather than silently rename or reinterpret its binding.
 
 ## `type`: declarations and overrides
 
@@ -661,8 +677,8 @@ responsible for determining whether those values match the active declaration.
 
 A sidecar is an attached TOML addendum whose `[[entry]]` tables run in source
 order. Each entry appends one node, then its `connect_to` edges, then its
-`connect_back_from` edges. All references are `NODE-REF` strings, so they may
-be durable locators or aliases.
+`connect_back_from` edges. All references are `NODE-REF` strings, so they may be
+durable locators, aliases, or `HEAD`.
 
 ```text
 lifecore sidecar attach PATH
@@ -694,7 +710,17 @@ connect_back_from = [{ target = "DairyContrib", ty = "Accumulate" }]
 at the tail. The body uses the shared recursive TOML payload grammar. A
 sidecar-defined alias is temporary: later entries may use it, but it is not
 saved until a successful `sidecar commit`. It may not shadow a persisted alias
-or an alias introduced by an earlier entry.
+or an alias introduced by an earlier entry, and it may not be named `HEAD`.
+
+At the start of each sidecar entry, the CLI captures that entry's `HEAD` from
+the graph snapshot immediately before its node is appended. Thus `HEAD` in the
+first entry means the latest canonical node, while `HEAD` in a later entry may
+mean a node added by an earlier entry. The captured value does not change after
+the new node is appended, so a connection target of `HEAD` does not unexpectedly
+become that entry's own new node. Other references retain their natural staging
+time: the parent resolves before the new node, and connection targets resolve
+after its optional temporary alias is introduced. This preserves intentional
+self-connections written through that alias.
 
 `sidecar attach` resolves `PATH` to an absolute existing path and persists only
 that metadata; it deliberately does not parse the file. `sidecar detach` removes
@@ -845,10 +871,10 @@ or one without entry relevance, is not silently declared resolved.
 `init` registers the built-in `Interactive` analyzer alongside `Type_Check`.
 When an analyzed window ends in a child node, `Interactive` considers the
 child's parent connections and may suggest recreating eligible incoming or
-outgoing connections for the child. It suppresses a suggestion when the
-opposite endpoint is stale or when a fresh successor already has the equivalent
-connection. These are ordinary Suggestions: they are visible through `check`
-and are applied only through `message apply`.
+outgoing connections for the child. It suppresses a suggestion when the opposite
+endpoint is stale or when a fresh successor already has the equivalent
+connection. These are ordinary Suggestions: they are visible through `check` and
+are applied only through `message apply`.
 
 ## Interactive mode (`-i`)
 
@@ -904,10 +930,10 @@ attached sidecar, the session is read-only and does not offer mutation menus.
 ## Output, errors, and determinism
 
 `--format auto|table|lines|json` applies to entries, queries, types, aliases,
-analyzer configuration, sidecar dumps, messages, and transaction results.
-`auto` chooses a table only for a TTY. JSON includes full locator and message
-digests, display prefixes, view boundaries, message visibility state, and
-transaction state. GraphViz has its own DOT or SVG target-file output.
+analyzer configuration, sidecar dumps, messages, and transaction results. `auto`
+chooses a table only for a TTY. JSON includes full locator and message digests,
+display prefixes, view boundaries, message visibility state, and transaction
+state. GraphViz has its own DOT or SVG target-file output.
 
 Presentation order is never incidental hash-map order:
 
@@ -1036,6 +1062,8 @@ browsing remains unavailable; `sidecar dump` preserves append order and its
 predicted locators remain valid after commit; an Inconsistency cannot be
 dismissed; a dismissal survives reload; message-prefix ambiguity is detected
 across visible, dismissed, and resolved messages; an unknown analyzer factory
-does not persist configuration; `--expect-head` mismatch saves nothing;
-interactive cancellation saves nothing; and an invalid attached sidecar can
-still be detached without being read.
+does not persist configuration; `HEAD` resolves only to the latest node, is
+rejected when no node exists or stable entry identity is required, and resolves
+against the pre-node snapshot of each sidecar entry; `--expect-head` mismatch
+saves nothing; interactive cancellation saves nothing; and an invalid attached
+sidecar can still be detached without being read.
