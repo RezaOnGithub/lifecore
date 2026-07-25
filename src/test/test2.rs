@@ -458,3 +458,92 @@ fn typed_mock_extension_works_without_expanding_the_lifecore_trait() {
         "Write tests"
     );
 }
+
+#[test]
+fn node_query_empty_combinators_have_explicit_identities() {
+    use crate::{NodeQuery, NodeQueryExpression};
+
+    let mut lifecore = LifeCoreList::default();
+    lifecore
+        .add_mock("One", Body::from([("value", Payload::Number(1))]), None)
+        .unwrap();
+    lifecore
+        .add_mock("Two", Body::from([("value", Payload::Number(2))]), None)
+        .unwrap();
+    let context = lifecore.last().unwrap().window();
+
+    assert_eq!(
+        lifecore
+            .query(NodeQuery {
+                context,
+                expression: NodeQueryExpression::All(Vec::new()),
+            })
+            .len(),
+        2
+    );
+    assert!(
+        lifecore
+            .query(NodeQuery {
+                context,
+                expression: NodeQueryExpression::Any(Vec::new()),
+            })
+            .is_empty()
+    );
+    assert_eq!(
+        lifecore
+            .query(NodeQuery {
+                context,
+                expression: NodeQueryExpression::None(Vec::new()),
+            })
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn node_query_explains_non_membership_without_reimplementing_predicates() {
+    use crate::{NodeQuery, NodeQueryExpression, NodeQueryPredicate};
+
+    let mut lifecore = LifeCoreList::default();
+    let node = lifecore
+        .add_mock("Thing", Body::from([("value", Payload::Number(1))]), None)
+        .unwrap();
+    let query = NodeQuery {
+        context: node.e.window(),
+        expression: NodeQueryExpression::All(vec![
+            NodeQueryPredicate::Fresh,
+            NodeQueryPredicate::NodeType("Other".to_string()),
+        ]),
+    };
+
+    let explanation = lifecore.explain_query(&query, node.e).unwrap();
+
+    assert_eq!(explanation.predicate_matches, vec![true, false]);
+    assert!(!explanation.matches);
+}
+
+#[test]
+fn field_traversal_out_of_range_and_wrong_kind_return_no_values() {
+    let payload = Payload::Sequence(vec![Payload::Text("only".to_string())]);
+    let out_of_range = "field[9]".parse::<FieldQuery>().unwrap();
+    let nested_scalar = "field[0][0]".parse::<FieldQuery>().unwrap();
+
+    assert!(payload.get(&out_of_range.path).is_empty());
+    assert!(payload.get(&nested_scalar.path).is_empty());
+}
+
+#[test]
+fn apply_replaces_mock_after_computing_the_session_circumstance() {
+    let mut lifecore = LifeCoreList::default();
+    let node = lifecore
+        .add_mock("Thing", Body::from([("value", Payload::Number(1))]), None)
+        .unwrap();
+
+    lifecore.apply().unwrap();
+
+    assert!(!lifecore.is_mock());
+    assert!(matches!(
+        lifecore.get_with_circumstance(node.e).unwrap().1,
+        Circumstance::Session { .. }
+    ));
+}

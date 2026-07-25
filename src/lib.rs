@@ -261,12 +261,19 @@ pub enum LifeCoreFamily {
     Parent(EntryContext, Vec<LifeCoreFamily>),
 }
 
+#[derive(Clone)]
 pub struct NodeQuery {
     pub context: Context,
     pub expression: NodeQueryExpression,
 }
 
-#[derive(strum::EnumDiscriminants)]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct NodeQueryExplanation {
+    pub predicate_matches: Vec<bool>,
+    pub matches: bool,
+}
+
+#[derive(Clone, strum::EnumDiscriminants)]
 #[strum_discriminants(name(NodeQueryCombinator))]
 pub enum NodeQueryExpression {
     All(Vec<NodeQueryPredicate>),
@@ -280,10 +287,6 @@ pub enum NodeQueryExpression {
 /// This is an ambitious feature that is now part of the core functionality due
 /// to user demand. Queries are deliberately divorced from higher-level concepts
 /// such as types to keep it simple.
-///
-/// *Note:* When [`QueryFieldPathComponent::Any`] is present in the field path,
-/// the results are combined according to [`NodeQueryCombinator`]; that is,
-/// minterms is `All`; maxterms if `Any`; minterms of logical inverse otherwise.
 #[derive(EnumIs, EnumTryAs, Clone)]
 pub enum NodeQueryPredicate {
     // Field-related Query Primitives. All imply that such field path exists
@@ -414,6 +417,12 @@ pub trait LifeCore: Send + Sync {
 
     /// Find all Entries that pass **all** [`Query`] predicates
     fn query(&self, query: NodeQuery) -> Vec<Node>;
+
+    fn explain_query(
+        &self,
+        query: &NodeQuery,
+        candidate: EntryContext,
+    ) -> Option<NodeQueryExplanation>;
 
     /// Get node at the specified index and context, `None` if is not a node or
     /// is out-of-bounds. See also: [`LifeCore::get`]

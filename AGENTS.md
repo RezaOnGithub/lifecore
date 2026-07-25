@@ -15,14 +15,15 @@ the central model is a typed, versioned graph.
 - `lifecore`: core graph model, validation, contexts, node typing support,
   analyzer traits, and the `LifeCoreList` implementation.
 - `lifecore-typecheck`: analyzer that checks graph contents against active
-  `Node_Type` declarations.
+  `Type` declarations.
 - `lifecore-test`: integration tests for runner-based analysis behavior.
-- `lifecore-cli`: functional CLI and reusable support modules for JSON state
-  persistence, analysis-gated mutations, aliases, barklisting, TOML sidecars,
-  queries, suggestions, and GraphViz output. It also contains the built-in
-  `Interactive` analyzer.
-- `lifecore-derive`: placeholder procedural macro crate for future typed-body
-  derive helpers.
+- `lifecore-cli`: functional CLI and reusable support modules for versioned
+  JSON state, durable entry locators, analysis-gated transactions, aliases,
+  queries and explanations, type editing, messages and dismissals, recursive
+  TOML sidecars, GraphViz output, and menu-driven interactive mode. It also
+  contains the built-in `Interactive` analyzer.
+- `lifecore-proc-macro`: placeholder procedural macro crate for future
+  typed-body derive helpers.
 - `lifecore-kman`, `lifecore-prod`: placeholder downstream analyzer/domain
   crates.
 - `NOTES.md`: project conventions, known pitfalls, TODOs, and design notes.
@@ -55,9 +56,9 @@ the central model is a typed, versioned graph.
   refactors should wait until the model and analyzer interface are clearer.
 - Preserve existing working-tree changes. Proposal documents and core APIs are
   often edited together while designs are being explored.
-- Prefer deterministic iteration and presentation. Interactive CLI operations
-  list candidates and select them by a one-based `--select`; changing sort order
-  silently changes the meaning of a repeated command.
+- Prefer deterministic iteration and presentation. Query-attested selection
+  always uses a fingerprint-checked entry locator and rechecks query membership;
+  table row numbers are never identities.
 
 ## Agent-Authored Development Conventions
 
@@ -83,24 +84,26 @@ the central model is a typed, versioned graph.
 
 ## Interface Terms
 
-- `EventContext` describes a history window from the beginning of graph history
-  to an exclusive end.
-- `PointedEventContext` couples that window with a mandatory `thing` identifying
-  the specific node or edge being inspected. Methods that require a concrete
+- `Context` describes a history window from the beginning of graph history to
+  an exclusive end.
+- `EntryContext` couples that window with a mandatory `thing` identifying the
+  specific node or edge being inspected. Methods requiring a concrete
   append-log record accept this pointed type.
-- `PointedEventContext::new(index)` creates the smallest valid context that
-  includes an event. Use a current bounded window when inspecting an event, and
-  use `.absolute()` only when comparing event identity across windows.
+- `EntryIndex::before_and_including()` creates the smallest valid pointed
+  context containing an entry. Use a current bounded window for inspection and
+  `.absolute()` only when comparing entry identity across windows.
 - A stale node is a node that has been superseded by a newer child within the
   chosen context. A stale edge is an edge whose endpoint has become stale.
 - Fresh means non-stale in the chosen context. Freshness can change when the
   context window changes.
-- `NodeExt.e`, `NodeExt.parent`, and the contexts stored by `EdgeExt` are
-  pointed. `NodeExt.ty_name` is the stored type name. `NodeExt.ty` is a resolved
-  `NodeType` for the current context and may be absent or historically shifted.
-- Avoid exposing raw context indices in user interfaces. The CLI resolves
-  user-facing aliases to pointed contexts and serializes contexts through their
-  serde representation where an index is unavoidable.
+- `Node.e` and `Edge.e` are pointed contexts. `Node.parent` and edge endpoints
+  are absolute `EntryIndex` identities; inspect them through the intended
+  bounded `Context`.
+- `Node.ty_name` is the stored type name. Resolve a stored declaration as
+  `typing::Type` in the inspection window instead of attaching an eternally
+  correct resolved type to the node.
+- The CLI exposes zero-based indices only inside verified entry locators. It
+  does not accept raw serialized context pairs.
 
 ## Validation And TypeCheck
 
@@ -108,7 +111,8 @@ the central model is a typed, versioned graph.
   alignment, duplicate node/edge rules, references only to prior records, edges
   only between nodes, node parents only to nodes, and stale-edge prevention.
 - Type checking is implemented as an analyzer in `lifecore-typecheck`, not as
-  part of core validation. It interprets active `Node_Type` nodes in context.
+  part of core validation. It interprets active nodes whose stored type is
+  `Type`, matching `Type::TYPE_NAME`, in context.
 - `ValueType` includes exact text and signed-integer literals for simple
   enumeration-like fields. Type syntax writes text literals in double quotes
   without escaping and writes integer literals as decimal numbers; literal
@@ -126,6 +130,11 @@ the central model is a typed, versioned graph.
 - `add_mock` and `connect_mock` append a validated provisional suffix under one
   `Mock` circumstance. `apply` replaces that suffix with a canonical session
   circumstance. A failed core mutation leaves the receiver unchanged.
+- `NodeQuery` evaluates nodes in one bounded view. `all`, `any`, and `none`
+  have explicit empty-predicate identities, and
+  `LifeCore::explain_query` returns predicate-aligned structured results.
+  Missing, wrong-kind, and out-of-range field paths are non-matches rather than
+  crashes.
 - `AnalysisRunner` reads analyzer name/config pairs from
   `LifeCore::current_analysis_suite`, constructs them from separately registered
   factories, runs analyzer initialization, and analyzes every valid historical
@@ -143,8 +152,12 @@ the central model is a typed, versioned graph.
 ## CLI State And Transactions
 
 - The state file is pretty JSON with exactly two top-level values: `lifecore`
-  contains `LifeCoreList`, and `cli` contains aliases, barklist entries, and the
-  optional sidecar path.
+  contains `LifeCoreList`, and `cli` contains version 1 metadata: an immutable
+  UUIDv7, state/entry-fingerprint/message-ID versions, aliases, dismissals,
+  optional sidecar path, and reserved metadata.
+- There is no migration path from older CLI state formats. Missing or
+  unsupported version/UUID fields are load errors and must not trigger an
+  automatic rewrite.
 - The default path is `./LifeCoreState.json`. If `LIFECORE_STATE_FILE_PATH` is
   defined, that path is authoritative; failures must never fall back to the
   current-directory file.
@@ -153,34 +166,65 @@ the central model is a typed, versioned graph.
   an existing file. TypeCheck's bootstrap Suggestion on an empty graph is
   expected and is non-fatal.
 - Persisted state must never contain `Mock`. Loading aborts if it does, and
-  saving checks again before an atomic same-directory temporary-file rename.
-  There is intentionally no file locking yet.
+  saving checks again before atomic same-directory replacement. `init` uses a
+  no-clobber atomic creation path. There is intentionally no file locking.
 - Database mutations follow loaded -> staged clone -> analyzed -> applied ->
-  atomically saved. `add`, `connect`, `analyzer add`, and `suggestion apply` are
-  dry runs unless `--commit` is present. Analyzer configuration is not a graph
-  event, but the CLI still stages it on a clone and analyzes before saving.
-- CLI-state-only operations such as alias/barklist changes and sidecar
+  atomically saved. `add`, `connect`, `type create`, `type override`,
+  `analyzer add`, and `message apply` are dry runs unless `--commit` is present.
+  Analyzer configuration is not a graph entry, but is still staged and analyzed.
+- `--expect-head` accepts a stable entry locator or `EMPTY`; it requires
+  `--commit`. It compares against the latest canonical entry, including an
+  edge. Dynamic node reference `HEAD` is deliberately rejected here.
+- CLI-state-only operations such as alias/dismissal changes and sidecar
   attach/detach persist immediately. They must not accidentally persist a
   provisional database assembled from a sidecar.
 - Output modes are `auto`, `table`, `lines`, and `json`; `auto` selects tables
-  only for a TTY. `--no-bark` disables Warning/Suggestion filtering and also
-  prevents automatic barklisting when a Suggestion is committed.
-- Diagnostics are deterministically sorted and Warning/Suggestion hashes use a
-  canonical SHA3-512 representation. Relevance is sorted for hashing, while
-  SuggestedAction order remains significant. Never filter an Inconsistency.
+  only for a TTY. JSON listings include a view and items; transaction output
+  includes its state, entries, and messages.
+- Analyzer diagnostics are user-facing messages. Warning and Suggestion
+  dismissals persist full versioned SHA3-512 IDs; relevance is sorted for
+  identity while SuggestedAction order remains significant. Inconsistencies
+  cannot be dismissed or presentation-filtered. Applying a Suggestion commits
+  through the normal transaction path and dismisses it unless `--keep-message`.
 - Logging uses `log` and `env_logger`, defaults to `trace`, and writes to
   stderr. Set `RUST_LOG` when quieter or more selective output is needed.
+
+## CLI References, Queries, And Types
+
+- An entry locator is `INDEX:FINGERPRINT`. The CLI displays 16 lowercase hex
+  digits and accepts prefixes of 5–128 digits. Resolution verifies index,
+  fingerprint, entry kind, and selected-view membership in that order.
+- Aliases are case-sensitive C-style identifiers storing a full durable node
+  locator. They never track a fresh successor automatically. An input
+  containing `:` never falls back to alias lookup.
+- `HEAD` is a reserved node reference resolving to the highest-index node in
+  the effective graph, not the latest entry. It is accepted by node-reference
+  positions such as `add --parent` and connection endpoints, but not stable
+  identity positions such as `--at`, `--select`, or `--expect-head`.
+- `query nodes all|any|none` constructs a core `NodeQuery`. Results are sorted
+  by ascending entry index. `--select LOCATOR` rechecks membership in the same
+  invocation; `--explain LOCATOR` may explain a non-member.
+- `type create` and patch-based `type override` append ordinary `Type` nodes.
+  Direct override resolves the unique active declaration by name and view;
+  query-attested override is available for additional guards.
+- Ordinary `add --field` and sidecar bodies share recursive TOML payload input:
+  strings, signed integers, `{ sequence = [...] }`, and
+  `{ ordered_set = [...] }`. Duplicate ordered-set members and unsupported TOML
+  kinds are errors.
 
 ## Sidecars
 
 - A sidecar is a TOML `[[entry]]` list. Entries are processed in file order;
   each creates one node followed by `connect_to` edges and then
-  `connect_back_from` edges. String and integer body values map to
-  `PayloadExt::Text` and `PayloadExt::Number`; other TOML payload conversions
-  are intentionally deferred.
+  `connect_back_from` edges. Bodies use the same recursive text, signed-integer,
+  sequence, and ordered-set converter as ordinary `add --field`.
 - Sidecar aliases are temporary until commit. They may reference persisted
   aliases or aliases from earlier entries, and become persisted only after a
   successful `sidecar commit`.
+- At the beginning of each entry, sidecar `HEAD` is captured from the graph
+  before its node append. The capture remains fixed for that entry's parent and
+  connection references. Other connection references resolve after the
+  optional temporary alias is installed, allowing intentional self-links.
 - `sidecar attach` checks only that the path exists and stores an absolute path;
   it deliberately does not parse the file. Later ordinary invocations rebuild
   and analyze the provisional suffix in memory.
@@ -188,22 +232,29 @@ the central model is a typed, versioned graph.
   for deleted, unreadable, or invalid sidecars, and attach followed by detach
   with no other saved change should restore identical state-file bytes.
 - While attached, singular mutations, analyzer additions, suggestion
-  application, alias mutation, and barklist mutation are forbidden. Read-only
+  application, alias mutation, and dismissal mutation are forbidden. Read-only
   commands operate on the analyzed provisional graph. Only `sidecar commit` may
   apply and save that suffix; the TOML file itself is never deleted.
+- A basically valid but analysis-inconsistent sidecar remains available to
+  `check` and detach, but not browsing. A sidecar that cannot be parsed,
+  basically validated, or supplied with analyzer factories permits only detach.
 
 ## CLI Code Map
 
 - `lifecore-cli/src/lib.rs`: clap interface, dispatch, transaction
-  orchestration, queries, aliases, barklist and selection workflows.
+  orchestration, queries, aliases, types, messages, sidecar preparation,
+  GraphViz generation, output, and interactive workflows.
 - `state.rs`: serialized state envelope, path resolution, Mock rejection, and
   atomic persistence.
-- `diagnostics.rs`: deterministic ordering, canonical hashes, bark filtering,
-  and table/line/JSON rendering.
-- `sidecar.rs`: TOML schema and payload conversion.
+- `locator.rs`: entry-fingerprint encoding, strict locator/reference parsing,
+  and view-aware resolution.
+- `messages.rs`: canonical message IDs, universe deduplication, visibility,
+  resolution, and dismissal records.
+- `query.rs`: textual predicate grammar for core `NodeQuery`.
+- `payload_input.rs`: shared recursive TOML-to-`Payload` conversion.
+- `sidecar.rs`: sidecar TOML schema; staging uses the shared converter and
+  transaction services in `lib.rs`.
 - `interactive_analyzer.rs`: reusable `Interactive` analyzer and factory.
-- `graphviz.rs`: reusable DOT generation plus optional `dot -Tsvg` execution.
-- `util.rs`: context/index helpers necessitated by private context fields.
 
 Keep validation and analysis in the shared staging helpers. Duplicating mutation
 logic in a command handler is likely to omit rollback, analyzer execution, Mock
@@ -212,17 +263,18 @@ handling, or diagnostic presentation.
 ## Current Risks
 
 - Some `LifeCore` methods still panic when passed invalid, out-of-range, or
-  wrong-kind pointed contexts. Tests document some of these crash paths.
-- `NodeExt` eagerly includes a resolved `NodeType`, but that type can shift over
-  time. This is convenient for callers yet easy to misuse.
+  wrong-kind pointed contexts. CLI resolution must validate before constructing
+  contexts. Field-query traversal itself is now panic-free for missing and
+  out-of-range paths.
+- Type meaning can shift across history. Do not cache a resolved `Type` without
+  also retaining the inspection view.
 - Validation and TypeCheck are currently correctness-first and repeatedly scan
   graph history.
 - The analyzer API is still thin. Downstream analyzer crates may need richer
   graph-query helpers so they can avoid rebuilding common traversals.
-- The CLI MVP accepts only text and integer fields for singular additions and
-  sidecars. General `Node_Type` declarations contain serialized fields and
-  therefore cannot yet be authored completely through these input paths. The
-  built-in TypeCheck bootstrap Suggestion remains the supported way to create
-  the initial `Node_Type` node from a fresh CLI state.
+- User-authored time payloads remain deferred. The shared TOML grammar rejects
+  booleans, floats, bare arrays, arbitrary tables, and TOML date-time values.
+- The built-in TypeCheck bootstrap Suggestion remains the supported way to
+  create the initial `Type` declaration from a fresh CLI state.
 - SVG generation requires the external `dot` executable. `graphviz --dot` writes
   DOT directly and has no GraphViz runtime dependency.

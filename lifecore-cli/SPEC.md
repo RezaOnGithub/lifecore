@@ -8,7 +8,9 @@ keeps the existing safety boundary—validated provisional appends followed by
 explicit persistence—but changes how the user names, finds, selects, and
 dismisses things.
 
-The command name in examples is `lifecore`. Examples assume the default
+The command name in examples is `lifecore`, as shorthand for an installed
+binary. This workspace continues to publish the interface through the
+`lifecore-cli` executable and package. Examples assume the default
 `./LifeCoreState.json` state file.
 
 ## Decisions in brief
@@ -81,9 +83,16 @@ The state file remains pretty JSON with two top-level values:
 
 ```text
 lifecore  canonical LifeCoreList
-cli       state UUID, fingerprint versions, aliases, dismissals,
-          optional attached-sidecar path, and CLI metadata
+cli       state-format version, immutable state UUID, entry-fingerprint
+          version, message-ID version, aliases, dismissals, optional
+          attached-sidecar path, and reserved CLI metadata
 ```
+
+The first supported CLI state format is version 1. It has no migration or import
+path from state files written by an earlier CLI: a missing UUID or version, or
+an unsupported version, is a clear load error and never causes an automatic
+rewrite. `HEAD` in a persisted alias registry is invalid version-1 state rather
+than a name that a migration may reinterpret.
 
 `LIFECORE_STATE_FILE_PATH`, when present, is authoritative. A failure to read or
 write that path must not fall back to `./LifeCoreState.json`. `init` is the only
@@ -167,7 +176,8 @@ The transitions are:
 5. **Saved** is reached only after an atomic write through a temporary file in
    the destination directory. A save failure leaves the old state file intact.
 
-All committing graph mutations accept an optional `--expect-head ENTRY-LOCATOR`.
+All committing graph mutations accept an optional
+`--expect-head ENTRY-LOCATOR|EMPTY`.
 Immediately before saving, the CLI rereads the canonical state and verifies that
 its head still matches that locator, or an explicit empty-state token when
 appropriate. A mismatch aborts without changing the state file. This
@@ -175,6 +185,11 @@ compare-before-save guard is useful for scripts and long-running interactive
 sessions, but it is not file locking and is not mandatory. Command help should
 recommend it for automation. `HEAD` is not accepted here: the guard needs the
 stable locator of the actual latest entry, which may be an edge.
+
+`EMPTY` matches only a canonical graph with no entries. Supplying
+`--expect-head` without `--commit` is an error. Interactive review always records
+the canonical head at staging time and uses that locator, or `EMPTY`, as a
+mandatory guard when the user commits.
 
 `init` follows the same logical route with an empty graph. The bootstrap
 Suggestion emitted by TypeCheck is non-fatal. The initial state registers
@@ -219,6 +234,10 @@ suite over every valid prefix through its final entry and render the resulting
 messages; queries and other browsing commands remain unavailable. The
 `sidecar detach` edge is deliberately available from both states. It is the
 recovery path for a deleted, invalid, or inconsistent sidecar.
+
+Failure to construct the configured analyzer suite, including a missing
+factory, is `SidecarUnavailable`: it is an execution failure rather than an
+emitted Inconsistency and therefore cannot be rendered as a diagnosable message.
 
 ## Entry locators and safe selection
 
@@ -335,7 +354,11 @@ Initial selection actions are:
 - `entry inspect`;
 - `alias set NAME`;
 - `type override`;
-- `add --parent-selected`.
+- `add-child TYPE [ADD OPTIONS]`.
+
+`entry inspect` uses the same detailed renderer as standalone `entry show`.
+`add-child` accepts ordinary `add` field, commit, and expectation options except
+for `--parent`; the selected node is unconditionally its parent.
 
 For example, this rebinds an alias only if entry 42 is still a current `Note`
 whose title matches the query:
@@ -385,9 +408,9 @@ view.
 every predicate plus the final combinator result. Unlike `--select`, the
 explained node need not be returned by the query: explaining non-membership is
 its primary use. The explanation includes the view used for freshness and edge
-predicates. `--select` and `--explain` are mutually exclusive. Core should
-expose structured predicate explanations so the CLI does not duplicate predicate
-evaluation.
+predicates. `--select` and `--explain` are mutually exclusive. Core exposes a
+structured explanation containing one Boolean in predicate order and the final
+combinator result, so the CLI does not duplicate predicate evaluation.
 
 | Combinator | A candidate is returned when   | Empty predicate list   |
 | ---------- | ------------------------------ | ---------------------- |
@@ -453,7 +476,9 @@ $ lifecore query nodes all --where fresh --where 'type Task' \
 
 The core query implementation must honor these identities—especially empty
 `all`/`none` queries—before this command is exposed. The CLI must not hide an
-incorrect core result with a special empty-table case.
+incorrect core result with a special empty-table case. Missing paths,
+wrong-kind payloads, and out-of-range selectors produce no values and ordinary
+non-matches; query evaluation must not panic.
 
 ## Alias
 
@@ -478,9 +503,13 @@ and current/stale status in the chosen view. A stale target is not automatically
 advanced to a successor; the user queries for the intended successor and rebinds
 explicitly. With an attached ready sidecar, `alias list` also shows its
 temporary aliases, clearly labelled as not yet persisted. `HEAD` is not shown in
-that list and cannot be created, removed, rebound, or shadowed by an alias. Any
-state-format migration that encounters a persisted alias named `HEAD` must fail
-clearly rather than silently rename or reinterpret its binding.
+that list and cannot be created, removed, rebound, or shadowed by an alias.
+Version-1 state containing a persisted alias named `HEAD` fails clearly.
+
+CLI alias metadata is not historical. `alias list --at` therefore lists every
+stored alias; a target appended after the selected view has status
+`outside-view` rather than current or stale. Such a target does not hide other
+aliases or fail the listing.
 
 ## `type`: declarations and overrides
 
@@ -783,6 +812,10 @@ analysis run before dismissal and resolved-by-history presentation filters are
 applied. It therefore includes Inconsistencies, visible and dismissed Warnings
 and Suggestions, and messages computed as resolved by history.
 
+Messages producing the same complete ID are collapsed before prefix resolution
+or presentation. Message-ID version 1 uses a tagged, length-prefixed canonical
+binary encoding with explicit collection lengths and recursive payload tags.
+
 The CLI renders messages deterministically by offending location (context end,
 then entry index), severity, analyzer name/configuration, text, and canonical
 message ID. Output includes analyzer, severity, location, relevance, text,
@@ -820,6 +853,11 @@ message universe. It lists every dismissed full ID and whether that ID matches a
 message emitted today. This includes orphaned dismissals whose original message
 is no longer emitted and whose old rendered body is therefore unavailable. It is
 a standalone mode and does not combine with the presentation filters above.
+
+Because an Inconsistency is never presentation-filtered,
+`check --only-dismissed` still includes every emitted Inconsistency alongside
+emitted dismissed non-fatal messages. Registry-only `check --dismissal-ids` is
+the sole exception because it does not render the message universe.
 
 `MESSAGE-ID` is `m:` followed by 5 to 128 lowercase hexadecimal digits. `show`,
 `dismiss`, and `apply` resolve a prefix against the entire message universe,
@@ -859,6 +897,10 @@ successful commit it dismisses the applied Suggestion unless `--keep-message`
 was supplied; an already registered dismissal is not implicitly restored. A dry
 run never creates a dismissal.
 
+Dismissing an already-dismissed Warning or Suggestion is idempotent. Restoring
+requires a matching persisted dismissal; a currently emitted but non-dismissed
+message is not sufficient.
+
 Inconsistencies are always visible and always block graph commit. A Warning or
 Suggestion can additionally become **resolved by history** when its specific
 offending entry and every relevant entry are stale in the latest view. That is a
@@ -883,6 +925,12 @@ effective graph as ordinary commands, holds no lock, and persists no hidden
 session. JSON output and `-i` are mutually exclusive. Non-interactive commands
 remain complete for automation; `-i` replaces repeated copying of locators and
 message handles while a human explores one state.
+
+The session is a numbered, menu-driven interface, not another textual command
+language, and requires interactive standard input and output. An unavailable or
+analysis-inconsistent sidecar prevents startup and directs the user to batch
+`check` where available and `sidecar detach`. An effective-ready sidecar permits
+read-only browsing and hides mutation choices.
 
 The first interactive subset is deliberately bounded:
 
@@ -934,6 +982,11 @@ analyzer configuration, sidecar dumps, messages, and transaction results. `auto`
 chooses a table only for a TTY. JSON includes full locator and message digests,
 display prefixes, view boundaries, message visibility state, and transaction
 state. GraphViz has its own DOT or SVG target-file output.
+
+JSON listings use the envelope `{ "view": ..., "items": [...] }`. Transaction
+JSON contains the applicable view, transaction state, predicted or committed
+entries, and messages. Transaction diagnostics use ordinary message visibility
+rules, with every Inconsistency retained.
 
 Presentation order is never incidental hash-map order:
 

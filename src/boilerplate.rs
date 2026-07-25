@@ -472,7 +472,15 @@ impl NodeQueryCombinator {
         match self {
         NodeQueryCombinator::All => a && b,
         NodeQueryCombinator::Any => a || b,
-        NodeQueryCombinator::None => (!a) && (!b),
+        NodeQueryCombinator::None => !a && !b,
+        }
+    }
+
+    pub fn combine(&self, values: impl IntoIterator<Item = bool>) -> bool {
+        match self {
+        NodeQueryCombinator::All => values.into_iter().all(|value| value),
+        NodeQueryCombinator::Any => values.into_iter().any(|value| value),
+        NodeQueryCombinator::None => values.into_iter().all(|value| !value),
         }
     }
 }
@@ -491,7 +499,7 @@ impl Payload {
         if path.is_empty() {
             vec![self.clone()]
         } else {
-            if !self.is_sequence() || !self.is_ordered_set() {
+            if !self.is_sequence() && !self.is_ordered_set() {
                 return vec![];
             }
             let lower_path = path[1..].iter().cloned().collect_vec();
@@ -511,17 +519,19 @@ impl Payload {
                 }
             };
             match path[0] {
-            FieldQueryPathComponent::Last => {
-                inner_items.last().map(|x| x.get(&lower_path)).unwrap()
-            }
+            FieldQueryPathComponent::Last => inner_items
+                .last()
+                .map(|x| x.get(&lower_path))
+                .unwrap_or_default(),
             FieldQueryPathComponent::Wildcard => inner_items
                 .iter()
                 .map(|x| x.get(&lower_path))
                 .flatten()
                 .collect(),
-            FieldQueryPathComponent::Index(index) => {
-                inner_items.get(index).map(|x| x.get(&lower_path)).unwrap()
-            }
+            FieldQueryPathComponent::Index(index) => inner_items
+                .get(index)
+                .map(|x| x.get(&lower_path))
+                .unwrap_or_default(),
             }
         }
     }

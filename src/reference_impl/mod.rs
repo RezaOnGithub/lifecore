@@ -13,7 +13,7 @@
 use crate::{
     BasicValidationFailure, BasicValidationFailureScenario::*, Circumstance, Context, EntryContext,
     EntryIndex, FamilyInsert, LifeCore, LifeCoreError, LifeCoreFamily, NodeQuery,
-    NodeQueryCombinator, NodeQueryPredicate, OrderedSet, Payload, Timestamp, analysis,
+    NodeQueryPredicate, OrderedSet, Payload, Timestamp, analysis,
 };
 use indexmap::IndexSet;
 use itertools::Itertools;
@@ -431,8 +431,6 @@ impl LifeCore for LifeCoreList {
 
         let mut candidate = self.clone();
         candidate.basic_validation()?;
-        let current_circumstance_index =
-            candidate.get_or_insert_circumstance(&Circumstance::current_session()?);
         let mock_index = CircumstanceIndex(
             candidate
                 .circumstance_table
@@ -452,6 +450,8 @@ impl LifeCore for LifeCoreList {
             "The final circumstance must be Mock"
         );
 
+        let current_circumstance_index =
+            candidate.get_or_insert_circumstance(&Circumstance::current_session()?);
         if current_circumstance_index != mock_index {
             for circumstance in candidate.circumstance.iter_mut() {
                 if *circumstance == mock_index {
@@ -646,29 +646,45 @@ impl LifeCore for LifeCoreList {
         self.raw_nodes(query.context)
             .filter(|(ctx, _)| {
                 let combinator = query.expression.discriminant();
-
-                // SUS `.is_some_and` when we explicitly have a query combinator!
-                query
-                    .expression
-                    .predicates()
-                    .iter()
-                    .map(|pred| pred.test(self, ctx.entry(), ctx.window(), combinator))
-                    .reduce(|x, y| combinator.reduce(x, y))
-                    .is_some_and(|x| x)
+                combinator.combine(
+                    query
+                        .expression
+                        .predicates()
+                        .iter()
+                        .map(|pred| pred.test(self, ctx.entry(), ctx.window())),
+                )
             })
             .map(|(ctx, _)| self.node(ctx).unwrap())
             .collect()
     }
+
+    fn explain_query(
+        &self,
+        query: &NodeQuery,
+        candidate: EntryContext,
+    ) -> Option<crate::NodeQueryExplanation> {
+        let candidate = self
+            .raw_nodes(query.context)
+            .find(|(context, _)| context.entry() == candidate.entry())?
+            .0;
+        let combinator = query.expression.discriminant();
+        let predicate_matches = query
+            .expression
+            .predicates()
+            .iter()
+            .map(|predicate| predicate.test(self, candidate.entry(), candidate.window()))
+            .collect::<Vec<_>>();
+        let matches = combinator.combine(predicate_matches.iter().copied());
+
+        Some(crate::NodeQueryExplanation {
+            predicate_matches,
+            matches,
+        })
+    }
 }
 
 impl NodeQueryPredicate {
-    fn test(
-        &self,
-        lc: &LifeCoreList,
-        candidate_index: EntryIndex,
-        query_context: Context,
-        query_combinator: NodeQueryCombinator,
-    ) -> bool {
+    fn test(&self, lc: &LifeCoreList, candidate_index: EntryIndex, query_context: Context) -> bool {
         let Some(_) = lc.raw(candidate_index).clone().try_as_node() else {
             eprintln!("Somehow, an edge index was passed to a node query");
             return false;
@@ -695,9 +711,7 @@ impl NodeQueryPredicate {
             field_content
                 .get(&query_field_path.path)
                 .iter()
-                .map(|x| x.discriminant() == *payload_kind)
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+                .any(|x| x.discriminant() == *payload_kind)
         }
 
         FieldEqual(query_field_path, payload) => {
@@ -708,9 +722,7 @@ impl NodeQueryPredicate {
             field_content
                 .get(&query_field_path.path)
                 .iter()
-                .map(|x| *x == *payload)
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+                .any(|x| *x == *payload)
         }
 
         FieldIsStringAndMatches(query_field_path, query_regex) => {
@@ -718,16 +730,11 @@ impl NodeQueryPredicate {
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            field_content
-                .get(&query_field_path.path)
-                .iter()
-                .map(|x| {
-                    x.clone()
-                        .try_as_text()
-                        .map_or(false, |text| query_regex.is_match(text.as_str()))
-                })
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+            field_content.get(&query_field_path.path).iter().any(|x| {
+                x.clone()
+                    .try_as_text()
+                    .is_some_and(|text| query_regex.is_match(text.as_str()))
+            })
         }
 
         FieldIsSequenceAndContains(query_field_path, payload) => {
@@ -735,16 +742,11 @@ impl NodeQueryPredicate {
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            field_content
-                .get(&query_field_path.path)
-                .iter()
-                .map(|x| {
-                    x.clone()
-                        .try_as_sequence()
-                        .map_or(false, |aggregate| aggregate.contains(payload))
-                })
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+            field_content.get(&query_field_path.path).iter().any(|x| {
+                x.clone()
+                    .try_as_sequence()
+                    .is_some_and(|aggregate| aggregate.contains(payload))
+            })
         }
 
         FieldIsSequenceAndElementCountIs(query_field_path, count) => {
@@ -752,16 +754,11 @@ impl NodeQueryPredicate {
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            field_content
-                .get(&query_field_path.path)
-                .iter()
-                .map(|x| {
-                    x.clone()
-                        .try_as_sequence()
-                        .map_or(false, |aggregate| aggregate.len() == *count)
-                })
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+            field_content.get(&query_field_path.path).iter().any(|x| {
+                x.clone()
+                    .try_as_sequence()
+                    .is_some_and(|aggregate| aggregate.len() == *count)
+            })
         }
 
         FieldIsOrderedSetAndContains(field_query, payload) => {
@@ -769,32 +766,22 @@ impl NodeQueryPredicate {
             let Some(field_content) = x.field.0.get(&field_query.field_name).cloned() else {
                 return false;
             };
-            field_content
-                .get(&field_query.path)
-                .iter()
-                .map(|x| {
-                    x.clone()
-                        .try_as_ordered_set()
-                        .map_or(false, |set| set.0.contains(payload))
-                })
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+            field_content.get(&field_query.path).iter().any(|x| {
+                x.clone()
+                    .try_as_ordered_set()
+                    .is_some_and(|set| set.0.contains(payload))
+            })
         }
         FieldIsOrderedSetAndElementCountIs(field_query, count) => {
             let x = lc.node(candidate_index.absolute()).unwrap();
             let Some(field_content) = x.field.0.get(&field_query.field_name).cloned() else {
                 return false;
             };
-            field_content
-                .get(&field_query.path)
-                .iter()
-                .map(|x| {
-                    x.clone()
-                        .try_as_ordered_set()
-                        .map_or(false, |set| set.0.len() == *count)
-                })
-                .reduce(|x, y| query_combinator.reduce(x, y))
-                .is_some_and(|x| x)
+            field_content.get(&field_query.path).iter().any(|x| {
+                x.clone()
+                    .try_as_ordered_set()
+                    .is_some_and(|set| set.0.len() == *count)
+            })
         }
 
         FieldQueryResultCount(field_query, count) => {
@@ -860,9 +847,7 @@ impl NodeQueryPredicate {
                             .unwrap()
                 })
             }),
-        Not(node_query_predicate) => {
-            !node_query_predicate.test(lc, candidate_index, query_context, query_combinator)
-        }
+        Not(node_query_predicate) => !node_query_predicate.test(lc, candidate_index, query_context),
         }
     }
 }
