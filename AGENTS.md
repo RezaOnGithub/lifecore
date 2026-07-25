@@ -17,11 +17,11 @@ the central model is a typed, versioned graph.
 - `lifecore-typecheck`: analyzer that checks graph contents against active
   `Type` declarations.
 - `lifecore-test`: integration tests for runner-based analysis behavior.
-- `lifecore-cli`: functional CLI and reusable support modules for versioned
-  JSON state, durable entry locators, analysis-gated transactions, aliases,
-  queries and explanations, type editing, messages and dismissals, recursive
-  TOML sidecars, GraphViz output, and menu-driven interactive mode. It also
-  contains the built-in `Interactive` analyzer.
+- `lifecore-cli`: functional CLI and reusable support modules for versioned JSON
+  state, durable entry locators, analysis-gated transactions, aliases, queries
+  and explanations, type editing, messages and dismissals, recursive TOML
+  sidecars, GraphViz output, and menu-driven interactive mode. It also contains
+  the built-in `Interactive` analyzer.
 - `lifecore-proc-macro`: placeholder procedural macro crate for future
   typed-body derive helpers.
 - `lifecore-kman`, `lifecore-prod`: placeholder downstream analyzer/domain
@@ -69,9 +69,15 @@ the central model is a typed, versioned graph.
 - Do not add Rust doc comments (`///`, `//!`) or doctests unless the user
   explicitly requests it.
 - Let the reader of the code breathe: separate logical blocks with empty lines.
-  Add a short comment explaining what a non-obvious block does and why.
-- Every new code comment written by an agent must be a single-line comment
-  prefixed exactly with `//A`. Keep comments concise and self-descriptive.
+  It is good practice to add comments that help the reader understand why a
+  non-obvious block exists, which invariant it protects, or why its ordering
+  matters.
+- Programmers and agents should prefer Rust's single-line comment syntax (`//`)
+  over obsolete C-style multiline comments (`/* ... */`). A longer comment may
+  use multiple consecutive `//` lines.
+- `//A` is the ordinary stylistic prefix for an agent-authored comment, in the
+  same way that `//!` and `///` identify other comment styles. An agent-authored
+  explanation may span multiple consecutive `//A` lines.
 - Agent comments may use these annotation forms:
   - `//A HACK: ...` for a rare, narrowly scoped workaround and its reason.
   - `//A TODO: ...` for concrete deferred work, including what remains and why
@@ -84,11 +90,11 @@ the central model is a typed, versioned graph.
 
 ## Interface Terms
 
-- `Context` describes a history window from the beginning of graph history to
-  an exclusive end.
+- `Context` describes a history window from the beginning of graph history to an
+  exclusive end.
 - `EntryContext` couples that window with a mandatory `thing` identifying the
-  specific node or edge being inspected. Methods requiring a concrete
-  append-log record accept this pointed type.
+  specific node or edge being inspected. Methods requiring a concrete append-log
+  record accept this pointed type.
 - `EntryIndex::before_and_including()` creates the smallest valid pointed
   context containing an entry. Use a current bounded window for inspection and
   `.absolute()` only when comparing entry identity across windows.
@@ -130,11 +136,10 @@ the central model is a typed, versioned graph.
 - `add_mock` and `connect_mock` append a validated provisional suffix under one
   `Mock` circumstance. `apply` replaces that suffix with a canonical session
   circumstance. A failed core mutation leaves the receiver unchanged.
-- `NodeQuery` evaluates nodes in one bounded view. `all`, `any`, and `none`
-  have explicit empty-predicate identities, and
-  `LifeCore::explain_query` returns predicate-aligned structured results.
-  Missing, wrong-kind, and out-of-range field paths are non-matches rather than
-  crashes.
+- `NodeQuery` evaluates nodes in one bounded view. `all`, `any`, and `none` have
+  explicit empty-predicate identities, and `LifeCore::explain_query` returns
+  predicate-aligned structured results. Missing, wrong-kind, and out-of-range
+  field paths are non-matches rather than crashes.
 - `AnalysisRunner` reads analyzer name/config pairs from
   `LifeCore::current_analysis_suite`, constructs them from separately registered
   factories, runs analyzer initialization, and analyzes every valid historical
@@ -173,8 +178,8 @@ the central model is a typed, versioned graph.
   `analyzer add`, and `message apply` are dry runs unless `--commit` is present.
   Analyzer configuration is not a graph entry, but is still staged and analyzed.
 - `--expect-head` accepts a stable entry locator or `EMPTY`; it requires
-  `--commit`. It compares against the latest canonical entry, including an
-  edge. Dynamic node reference `HEAD` is deliberately rejected here.
+  `--commit`. It compares against the latest canonical entry, including an edge.
+  Dynamic node reference `HEAD` is deliberately rejected here.
 - CLI-state-only operations such as alias/dismissal changes and sidecar
   attach/detach persist immediately. They must not accidentally persist a
   provisional database assembled from a sidecar.
@@ -188,6 +193,10 @@ the central model is a typed, versioned graph.
   through the normal transaction path and dismisses it unless `--keep-message`.
 - Logging uses `log` and `env_logger`, defaults to `trace`, and writes to
   stderr. Set `RUST_LOG` when quieter or more selective output is needed.
+- As a style suggestion, add `trace!` logs around significant state transitions,
+  such as entering a new phase, preparing to save a file, or encountering a
+  recoverable error. Use `debug!`, `info!`, `warn!`, and `error!` as appropriate
+  when those levels communicate the event more clearly.
 
 ## CLI References, Queries, And Types
 
@@ -195,10 +204,10 @@ the central model is a typed, versioned graph.
   digits and accepts prefixes of 5–128 digits. Resolution verifies index,
   fingerprint, entry kind, and selected-view membership in that order.
 - Aliases are case-sensitive C-style identifiers storing a full durable node
-  locator. They never track a fresh successor automatically. An input
-  containing `:` never falls back to alias lookup.
-- `HEAD` is a reserved node reference resolving to the highest-index node in
-  the effective graph, not the latest entry. It is accepted by node-reference
+  locator. They never track a fresh successor automatically. An input containing
+  `:` never falls back to alias lookup.
+- `HEAD` is a reserved node reference resolving to the highest-index node in the
+  effective graph, not the latest entry. It is accepted by node-reference
   positions such as `add --parent` and connection endpoints, but not stable
   identity positions such as `--at`, `--select`, or `--expect-head`.
 - `query nodes all|any|none` constructs a core `NodeQuery`. Results are sorted
@@ -223,8 +232,8 @@ the central model is a typed, versioned graph.
   successful `sidecar commit`.
 - At the beginning of each entry, sidecar `HEAD` is captured from the graph
   before its node append. The capture remains fixed for that entry's parent and
-  connection references. Other connection references resolve after the
-  optional temporary alias is installed, allowing intentional self-links.
+  connection references. Other connection references resolve after the optional
+  temporary alias is installed, allowing intentional self-links.
 - `sidecar attach` checks only that the path exists and stores an absolute path;
   it deliberately does not parse the file. Later ordinary invocations rebuild
   and analyze the provisional suffix in memory.
