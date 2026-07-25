@@ -25,8 +25,7 @@ pub struct Inconsistency {
     pub message: String,
 }
 
-#[derive(PartialEq, Eq, Clone)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Warning {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
@@ -35,8 +34,7 @@ pub struct Warning {
     pub message: String,
 }
 
-#[derive(PartialEq, Eq, Clone)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Suggestion {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
@@ -46,8 +44,7 @@ pub struct Suggestion {
     pub action: Vec<SuggestedAction>,
 }
 
-#[derive(PartialEq, Eq, Clone, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum SuggestedAction {
     AddNode {
         ty_name: String,

@@ -13,8 +13,7 @@ use strum::{EnumIs, EnumTryAs};
 /// *Note:* In the past, we tried really hard to hide the actual number
 /// representing the index. It is public now because someone realized they could
 /// dig it out from the serialized value.
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
 pub struct EntryIndex(pub usize);
 
 /// Most methods in LifeCore need to resolve a context for an event.
@@ -68,12 +67,10 @@ pub use jiff::Zoned;
 
 /// A set of other Payload values with ordered elements. Based on
 /// [`indexmap::IndexSet`]
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct OrderedSet<T: Eq + Hash>(indexmap::IndexSet<T>);
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default, Hash)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default, Hash, Debug)]
 pub struct Body(pub BTreeMap<String, Payload>);
 
 /// "Circumstance" is currently a simple method of logging entry dates and
@@ -200,12 +197,12 @@ pub enum BasicValidationFailureScenario {
     PartialEq,
     Eq,
     Hash,
+    Debug,
     strum::EnumIs,
     strum::EnumTryAs,
     strum::EnumDiscriminants,
     strum::VariantNames,
 )]
-#[cfg_attr(debug_assertions, derive(Debug))]
 #[strum_discriminants(name(PayloadKind))]
 #[strum_discriminants(vis(pub))]
 #[strum_discriminants(derive(Serialize, Deserialize, Hash, Display))]
