@@ -30,7 +30,7 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 
 use crate::{
     app::CommandOutcome,
-    cli::Cli,
+    cli::{Cli, Command},
     error::AppError,
     output::{render_error, render_outcome},
 };
@@ -41,7 +41,6 @@ mod test;
 pub struct Io<'a> {
     pub stdout: &'a mut dyn Write,
     pub stderr: &'a mut dyn Write,
-    pub stdin_is_terminal: bool,
     pub stdout_is_terminal: bool,
 }
 
@@ -49,13 +48,11 @@ impl<'a> Io<'a> {
     pub fn new(
         stdout: &'a mut dyn Write,
         stderr: &'a mut dyn Write,
-        stdin_is_terminal: bool,
         stdout_is_terminal: bool,
     ) -> Self {
         Self {
             stdout,
             stderr,
-            stdin_is_terminal,
             stdout_is_terminal,
         }
     }
@@ -90,14 +87,28 @@ impl InvocationContext {
     }
 }
 
+enum ParsedInvocation {
+    Immediate(CommandOutcome),
+    Command(Command),
+}
+
 pub fn run_from<I, T>(args: I, io: &Io<'_>) -> Result<CommandOutcome, AppError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let invocation = InvocationContext::from_process()?;
+    //A Complete clap parsing and validation before process-context lookup so
+    //A help, version, and rejected grammar cannot reach filesystem-backed state.
+    let parsed = parse_invocation(args)?;
 
-    run_from_in(args, io, &invocation)
+    match parsed {
+    ParsedInvocation::Immediate(outcome) => Ok(outcome),
+    ParsedInvocation::Command(command) => {
+        let invocation = InvocationContext::from_process()?;
+
+        dispatch_command(command, io, &invocation)
+    }
+    }
 }
 
 pub fn run_from_in<I, T>(
@@ -105,6 +116,17 @@ pub fn run_from_in<I, T>(
     io: &Io<'_>,
     invocation: &InvocationContext,
 ) -> Result<CommandOutcome, AppError>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    match parse_invocation(args)? {
+    ParsedInvocation::Immediate(outcome) => Ok(outcome),
+    ParsedInvocation::Command(command) => dispatch_command(command, io, invocation),
+    }
+}
+
+fn parse_invocation<I, T>(args: I) -> Result<ParsedInvocation, AppError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -117,7 +139,9 @@ where
             ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
         ) =>
     {
-        return Ok(CommandOutcome::text(error.to_string()));
+        return Ok(ParsedInvocation::Immediate(CommandOutcome::text(
+            error.to_string(),
+        )));
     }
     Err(error) => return Err(AppError::usage(error)),
     };
@@ -127,13 +151,18 @@ where
     let command = cli.command.ok_or_else(|| {
         AppError::usage(Cli::command().error(ErrorKind::MissingSubcommand, "a command is required"))
     })?;
+
+    Ok(ParsedInvocation::Command(command))
+}
+
+fn dispatch_command(
+    command: Command,
+    io: &Io<'_>,
+    invocation: &InvocationContext,
+) -> Result<CommandOutcome, AppError> {
     let format = command.output_format();
 
-    log::trace!(
-        "dispatching command (stdin_tty={}, stdout_tty={})",
-        io.stdin_is_terminal,
-        io.stdout_is_terminal
-    );
+    log::trace!("dispatching command (stdout_tty={})", io.stdout_is_terminal);
 
     commands::dispatch(command, invocation).map_err(|error| error.with_format(format))
 }

@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    fs, io,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, ffi::OsString, fs, io, path::PathBuf};
 
 use lifecore::{
     Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList, OrderedSet, Payload,
@@ -51,7 +45,7 @@ use crate::{
 };
 
 fn test_io<'a>(stdout: &'a mut Vec<u8>, stderr: &'a mut Vec<u8>) -> Io<'a> {
-    Io::new(stdout, stderr, false, false)
+    Io::new(stdout, stderr, false)
 }
 
 fn run(args: &[&str]) -> Result<CommandOutcome, AppError> {
@@ -72,15 +66,6 @@ fn run_in(
     run_from_in(args, &io, &invocation)
 }
 
-fn assert_unavailable(args: &[&str], expected_operation: &str) {
-    match run(args) {
-    Err(AppError::Unavailable { operation, .. }) => {
-        assert_eq!(operation, expected_operation);
-    }
-    result => panic!("expected unavailable operation, got {result:?}"),
-    }
-}
-
 fn assert_usage_error(args: &[&str], expected: &str) {
     match run(args) {
     Err(AppError::Usage { message, .. }) => {
@@ -97,7 +82,6 @@ fn assert_usage_error(args: &[&str], expected: &str) {
 fn help_and_version_are_successful_at_every_command_level() {
     let help_paths: &[&[&str]] = &[
         &["lifecore", "--help"],
-        &["lifecore", "interactive", "--help"],
         &["lifecore", "init", "--help"],
         &["lifecore", "entry", "--help"],
         &["lifecore", "entry", "show", "--help"],
@@ -147,7 +131,7 @@ fn help_and_version_are_successful_at_every_command_level() {
 
     match run(&["lifecore", "--help"]) {
     Ok(CommandOutcome::Text(text)) => {
-        assert!(text.contains("interactive  Start the menu-driven TTY interface"));
+        assert!(!text.contains("interactive"));
         assert!(!text.contains("-i,"));
         assert!(!text.contains("--interactive"));
     }
@@ -156,8 +140,25 @@ fn help_and_version_are_successful_at_every_command_level() {
 }
 
 #[test]
-fn complete_command_tree_dispatches_to_named_unavailable_operations() {
-    assert_unavailable(&["lifecore", "interactive"], "interactive");
+fn removed_interactive_forms_are_usage_errors() {
+    let cases: &[&[&str]] = &[
+        &["lifecore", "interactive"],
+        &["lifecore", "interactive", "--format", "table"],
+        &["lifecore", "interactive", "--format", "json"],
+    ];
+
+    for args in cases {
+        match run(args) {
+        Err(AppError::Usage { message, exit_code }) => {
+            assert_eq!(exit_code, 2, "args: {args:?}");
+            assert!(
+                message.contains("unrecognized subcommand 'interactive'"),
+                "args: {args:?}, message: {message:?}"
+            );
+        }
+        result => panic!("removed interactive form was accepted for {args:?}: {result:?}"),
+        }
+    }
 }
 
 #[test]
@@ -196,14 +197,6 @@ fn structural_conflicts_fail_before_dispatch() {
     let cases: &[(&[&str], &str)] = &[
         (&["lifecore"], "a command is required"),
         (&["lifecore", "-i"], "unexpected argument '-i'"),
-        (
-            &["lifecore", "interactive", "--format", "json"],
-            "invalid value 'json'",
-        ),
-        (
-            &["lifecore", "interactive", "check"],
-            "unexpected argument 'check'",
-        ),
         (
             &["lifecore", "add", "Note", "--expect-head", "EMPTY"],
             "--commit",
@@ -262,13 +255,6 @@ fn structural_conflicts_fail_before_dispatch() {
 
 #[test]
 fn format_is_available_only_on_output_commands() {
-    match run(&["lifecore", "interactive", "--format", "table"]) {
-    Err(AppError::Unavailable { format, .. }) => {
-        assert_eq!(format, crate::cli::OutputFormat::Table);
-    }
-    result => panic!("expected table unavailable error, got {result:?}"),
-    }
-
     assert_usage_error(
         &["lifecore", "--format", "json", "query", "nodes", "all"],
         "unexpected argument '--format'",
@@ -291,62 +277,65 @@ fn format_is_available_only_on_output_commands() {
 }
 
 #[test]
-fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "interactive"], &mut io);
+fn removed_interactive_forms_exit_two_on_stderr() {
+    let cases: &[&[&str]] = &[
+        &["lifecore", "interactive"],
+        &["lifecore", "interactive", "--format", "table"],
+        &["lifecore", "interactive", "--format", "json"],
+    ];
 
-    assert_eq!(exit, std::process::ExitCode::FAILURE);
-    assert!(stdout.is_empty());
-    assert_eq!(
-        String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'interactive' is unavailable in implementation stage 9\n"
-    );
+    for args in cases {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = test_io(&mut stdout, &mut stderr);
+        let exit = run_cli(args.iter().copied(), &mut io);
+        let stderr = String::from_utf8(stderr).expect("stderr is UTF-8");
 
-    let mut stderr = Vec::new();
-    let error = AppError::unavailable("interactive", crate::cli::OutputFormat::Json);
-    render_error(&error, &mut stderr).expect("JSON unavailable error renders");
-
-    let value: serde_json::Value =
-        serde_json::from_slice(&stderr).expect("stderr contains one JSON value");
-    assert_eq!(value["error"]["kind"], "unavailable");
-    assert_eq!(value["error"]["operation"], "interactive");
+        assert_eq!(exit, std::process::ExitCode::from(2), "args: {args:?}");
+        assert!(stdout.is_empty(), "args: {args:?}");
+        assert!(
+            stderr.contains("unrecognized subcommand 'interactive'"),
+            "args: {args:?}, stderr: {stderr:?}"
+        );
+    }
 }
 
 #[test]
-fn deferred_commands_do_not_create_or_modify_files() -> io::Result<()> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is after the Unix epoch")
-        .as_nanos();
-    let directory = std::env::temp_dir().join(format!(
-        "lifecore-cli-stage1-{}-{unique}",
-        std::process::id()
-    ));
-    fs::create_dir(&directory)?;
-
-    let sentinel = directory.join("sentinel");
+fn rejected_interactive_forms_do_not_create_or_modify_files() -> io::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let sentinel = directory.path().join("sentinel");
     fs::write(&sentinel, b"unchanged")?;
-    let before = directory_snapshot(&directory)?;
+    let cases: &[&[&str]] = &[
+        &["lifecore", "interactive"],
+        &["lifecore", "interactive", "--format", "table"],
+        &["lifecore", "interactive", "--format", "json"],
+    ];
+    let before = directory_snapshot(directory.path())?;
 
-    match run_in(&["lifecore", "check"], &directory, None) {
-    Err(AppError::StateIo { source, .. }) => {
-        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    for args in cases {
+        assert!(matches!(
+            run_in(args, directory.path(), None),
+            Err(AppError::Usage { exit_code: 2, .. })
+        ));
     }
-    result => panic!("expected missing canonical state, got {result:?}"),
-    }
 
-    assert!(matches!(
-        run_in(&["lifecore", "interactive"], &directory, None),
-        Err(AppError::Unavailable { .. })
-    ));
-
-    let after = directory_snapshot(&directory)?;
+    let after = directory_snapshot(directory.path())?;
     assert_eq!(after, before);
-    assert!(!directory.join("LifeCoreState.json").exists());
+    let state_path = directory.path().join("LifeCoreState.json");
+    assert!(!state_path.exists());
 
-    fs::remove_dir_all(directory)
+    fs::write(&state_path, b"existing state bytes")?;
+    let before = directory_snapshot(directory.path())?;
+    for args in cases {
+        assert!(matches!(
+            run_in(args, directory.path(), None),
+            Err(AppError::Usage { exit_code: 2, .. })
+        ));
+    }
+    let after = directory_snapshot(directory.path())?;
+
+    assert_eq!(after, before);
+    Ok(())
 }
 
 #[test]

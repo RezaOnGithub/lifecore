@@ -142,7 +142,6 @@ src/
     output.rs
     sidecar.rs
     graphviz.rs
-    interactive.rs
     interactive_analyzer.rs
     commands/
         mod.rs
@@ -158,7 +157,6 @@ src/
         check.rs
         message.rs
         graphviz.rs
-        interactive.rs
     test/
         mod.rs
         test2.rs
@@ -183,12 +181,29 @@ The following ownership rules are plan-level invariants:
 - Type correctness remains in TypeCheck; CLI type editing only constructs and
   patches stored declarations.
 - Ordinary commands return structured results and do not print directly.
-- Interactive mode consumes the same application services as batch commands.
 - GraphViz consumes immutable verified graph/view input and cannot save graph
   or CLI state; later effective graphs must enter through the same read
   boundary.
 - A command adapter may coordinate services but may not reproduce their
   lifecycle logic.
+
+## Plan amendment — TTY interactive mode deferred
+
+The original Stage 10 menu-driven interactive client is intentionally skipped
+because it is not needed for the current release-readiness target. Its section
+has been removed, and the former Stage 11 acceptance stage is renumbered as
+Stage 10. The TTY client remains a possible future extension outside this plan.
+
+The final stage removes the exposed-but-unimplemented `lifecore interactive`
+grammar and its generic implementation-stage unavailable scaffolding, then
+aligns `SPEC.md`, help, tests, and walkthroughs with the reduced command surface.
+Completed Stage 1 boxes remain historical evidence of the original shell
+review, but this amendment supersedes its interactive-specific grammar
+requirements.
+
+The built-in `Interactive` analyzer is a separate, implemented feature. It
+remains registered and continues to emit ordinary Suggestions through `check`
+and `message apply`.
 
 ## Stage map
 
@@ -203,8 +218,7 @@ The following ownership rules are plan-level invariants:
 | 7 | Bind exact aliases and consume guarded query selections | Durable conveniences over verified identity |
 | 8 | Inspect, create, and patch stored type declarations | Type-edit convenience without semantic duplication |
 | 9 | Attach, browse, diagnose, dump, and commit sidecars | Effective-graph preparation |
-| 10 | Browse and review selected operations in a TTY | Interactive client over shared services |
-| 11 | Demonstrate complete cross-feature correctness | Acceptance and release-readiness evidence |
+| 10 | Demonstrate complete cross-feature correctness and retire deferred scaffolding | Acceptance and release-readiness evidence |
 
 ## Stage 1 — Executable shell and complete command grammar
 
@@ -228,8 +242,7 @@ changes expensive.
 - A minimal `main.rs` that initializes logging, calls the library entry point,
   and maps its result to a process exit code.
 - A reusable library entry point for in-process CLI tests.
-- The full top-level and nested clap grammar from `SPEC.md`, including the
-  `interactive` subcommand.
+- The full top-level and nested clap grammar accepted at this stage.
 - Central application-error and command-outcome types.
 - Initial `auto`, `table`, `lines`, and `json` format parsing.
 - Explicit unavailable outcomes for every command that is not yet implemented.
@@ -243,7 +256,7 @@ changes expensive.
 - Analyzer construction and graph access.
 - All command effects and listings other than help/version.
 - Final table, line, and JSON schemas.
-- Interactive terminal behavior.
+- TTY interactive behavior, later deferred outside this plan.
 
 Every parsed but unimplemented command exits unsuccessfully, names the
 unavailable operation, and performs no filesystem mutation.
@@ -264,7 +277,7 @@ unavailable operation, and performs no filesystem mutation.
 - `main.rs` contains no command-specific behavior.
 - clap parsing performs no state or graph access.
 - A command handler does not print directly.
-- `interactive --format json` is rejected.
+- `--format` is accepted only by output-producing commands and is not global.
 - Invalid argument combinations fail before any command service is called.
 - Every unavailable mutation has a nonzero outcome and no filesystem effects.
 - Help text describes accepted semantics rather than current implementation
@@ -295,7 +308,7 @@ business logic back into `main.rs` or clap types.
 - [x] Define the complete root and nested clap command tree from `SPEC.md`.
 - [x] Split top-level command adapters into `commands`.
 - [x] Add explicit unavailable handlers for deferred commands.
-- [x] Implement output format and interactive-subcommand option validation.
+- [x] Implement output-format and command-option validation.
 - [x] Add test stream/TTY injection or an equivalent test seam.
 - [x] Add focused grammar, help, conflict, and unavailable-command tests under
       `test::test2`.
@@ -855,7 +868,7 @@ through the same staging, analysis, application, expectation, and save path.
 - Sidecar multi-entry planning.
 - Actual connection-recreation suggestions from `Interactive`; it remains an
   internal no-op analyzer.
-- Interactive review UI.
+- TTY review UI, later deferred outside this plan.
 
 ### Types
 
@@ -998,7 +1011,7 @@ that parent/edge workflows exist to demonstrate it.
 - Persisted alias mutation and query-attested mutation.
 - Type convenience commands.
 - Sidecar file parsing, though it will later call `payload_input`.
-- Generic add/connect in interactive mode.
+- A TTY/menu client for generic add/connect, deferred outside this plan.
 
 ### Types
 
@@ -1326,8 +1339,8 @@ Every candidate remains subject to the normal transaction and TypeCheck gates.
 ## Stage 9 — Attached sidecars and effective-graph preparation
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 10 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): final Stage 10 may begin**
 
 ### Description
 
@@ -1357,7 +1370,8 @@ read or parse the attached file.
 
 ### Deferred behavior
 
-- Interactive read-only browsing of an attached ready sidecar until Stage 10.
+- Menu-driven browsing of an attached ready sidecar; the existing batch read
+  commands remain available, while the TTY client is deferred outside this plan.
 - Any sidecar source rewriting or deletion.
 - Replacement attachment without detach.
 - User-authored time payloads.
@@ -1477,147 +1491,13 @@ Commands may not independently read an attached sidecar or append its entries.
 
 - [x] **Implementation gate (implementor only):** sidecar/effective-state behavior, recovery,
       tests, checks, and walkthrough are complete.
-- [ ] **Review gate (reviewer only):** sidecar feedback is incorporated or explicitly deferred
+- [X] **Review gate (reviewer only):** sidecar feedback is incorporated or explicitly deferred
       by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
-      checked in this file, and no unchecked Stage 9 item blocks interactive
-      mode.
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
+      checked in this file, and no unchecked Stage 9 item blocks final
+      acceptance.
 
-## Stage 10 — Menu-driven interactive review
-
-- [ ] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 11 may begin**
-
-### Description
-
-Implement the bounded, TTY-only interactive client after its underlying query,
-message, alias, type, and transaction services have been independently reviewed.
-The `interactive` subcommand runs a menu state machine over those services, not
-another textual command language and not a second mutation implementation.
-
-### Included scope
-
-- `lifecore interactive` dispatch, TTY validation, and session start/reload
-  behavior.
-- Browse, query results, locator-backed selection, entry inspection, aliases,
-  selected add-child, type creation/override, message
-  list/focus/dismiss/restore/apply, and staged review.
-- Explicit commit/cancel with mandatory expected canonical head.
-- Selection invalidation after commit or cancellation.
-- Read-only browsing when a valid sidecar is attached.
-- Clear startup rejection for unavailable or inconsistent sidecars.
-
-### Deferred behavior
-
-- Interactive sidecar attach/detach/commit.
-- Analyzer configuration changes.
-- Free-form sidecar authoring.
-- Generic interactive `add` and `connect`.
-- Persistent command history or hidden session state.
-- JSON interactive output.
-
-### Types
-
-| Type | Responsibility | Ownership/lifetime |
-| ---- | -------------- | ------------------ |
-| `InteractiveSession` | Loaded application services, current view, and canonical head | `interactive`; one TTY session |
-| `Screen` | Explicit browse/query/selection/message/review state | `interactive`; changes within session |
-| `InteractiveSelection` | Query plus durable locator and view evidence | `interactive`/`query`; until invalidated |
-| `PlannedInteractiveAction` | Existing transaction or CLI-state request awaiting review | `interactive`; one review cycle |
-| `ReviewDecision` | Explicit commit or cancel with no affirmative default | `interactive`; one prompt |
-
-### Invariants
-
-- The `interactive` subcommand requires interactive stdin and stdout and rejects
-  JSON mode.
-- It stores no hidden session or command history.
-- It never invokes clap recursively.
-- Every query selection is locator-backed and revalidated before use.
-- Graph-changing commit/cancel invalidates all in-memory selections.
-- Every interactive graph commit uses the canonical head captured at staging as
-  a mandatory expectation.
-- Review shows exact planned entries, predicted locators, and unfiltered
-  Inconsistencies before offering commit.
-- Commit has no default affirmative response.
-- Cancel and EOF save nothing.
-- Attached ready sidecars hide mutation choices; unavailable/inconsistent
-  sidecars prevent startup with recovery guidance.
-- Interactive operations call the same query, reference, type, message,
-  transaction, state, and output-model services as batch commands.
-
-### Notable members
-
-| Member | Purpose |
-| ------ | ------- |
-| `InteractiveSession::start(app, tty)` | Load effective state and enter Browse |
-| `InteractiveSession::transition(input)` | Perform one explicit screen transition |
-| `InteractiveSelection::revalidate(...)` | Rerun query and membership before action |
-| `prepare_review(action)` | Use existing services to stage and analyze without saving |
-| `commit_review(review, expected_head)` | Execute shared transaction with mandatory guard |
-| `cancel_review(review)` | Discard the candidate and invalidate selections |
-| `reload_after_save()` | Rebuild canonical/effective application state |
-
-### Resulting architecture
-
-```text
-menu state -> existing request/service -> structured result -> menu renderer
-                                      |
-                                      +-> transaction review/commit
-```
-
-Interactive screens may select and sequence operations, but may not implement
-their graph, message, or persistence semantics.
-
-### Implementation checklist
-
-- [ ] Implement TTY capability checks and explicit screen state machine.
-- [ ] Implement browsing, query, selection, and inspection screens.
-- [ ] Implement alias and type-edit action flows using existing requests.
-- [ ] Implement message focus/dismiss/restore/apply flows.
-- [ ] Implement planned-action review, cancel, guarded commit, and reload.
-- [ ] Implement attached-sidecar read-only capability filtering.
-- [ ] Add focused transition tests with scripted I/O, including EOF, invalid
-      input, revalidation failure, concurrent-head mismatch, cancellation, and
-      sidecar states.
-
-### Verification
-
-#### Automated checks
-
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Run `cargo test --workspace`.
-
-#### Manual walkthrough
-
-- [ ] Run `lifecore interactive`, then browse, query, select, inspect, and bind
-      an alias in the TTY session.
-- [ ] Create and patch a type through staged review.
-- [ ] Dismiss, restore, dry-run, and commit a Suggestion.
-- [ ] Cancel a planned action and compare state bytes.
-- [ ] Cause a canonical-head mismatch before commit and confirm safe reload.
-- [ ] Browse a valid attached sidecar and confirm mutation choices are absent.
-- [ ] Attempt startup with unavailable and inconsistent sidecars.
-
-### Review questions
-
-- Does the menu remain small and navigable without becoming a second command
-  language?
-- Does Review provide enough information for a confident commit decision?
-- Are cancellation, stale selection, and concurrent-head recovery unsurprising?
-
-### Stage gates
-
-- [ ] **Implementation gate (implementor only):** interactive state machine, safety behavior,
-      tests, checks, and walkthrough are complete.
-- [ ] **Review gate (reviewer only):** interactive feedback is incorporated or explicitly
-      deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
-      checked in this file, and no unchecked Stage 10 item blocks final hardening.
-
-## Stage 11 — Cross-feature acceptance, determinism, and release readiness
+## Stage 10 — Cross-feature acceptance, determinism, and release readiness
 
 - [ ] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
@@ -1627,8 +1507,12 @@ their graph, message, or persistence semantics.
 
 Validate the assembled CLI as one product, close specification gaps discovered
 by integration, and demonstrate failure atomicity and deterministic output
-across feature boundaries. This stage should not introduce a new product
-surface; material new behavior requires a plan amendment.
+across feature boundaries. It also completes the approved TTY deferral by
+removing the exposed interactive grammar and generic unavailable path, then
+proving that the retained batch surface covers the underlying workflows.
+
+This stage should not introduce a new product surface; material new behavior
+requires a plan amendment.
 
 ### Included scope
 
@@ -1638,8 +1522,15 @@ surface; material new behavior requires a plan amendment.
 - Failure injection around parsing, analysis, apply, expectation, external
   process, and atomic save boundaries.
 - Help/error consistency and logging review.
-- Removal of obsolete scaffolding and unavailable handlers for completed
-  commands.
+- Removal of the `interactive` subcommand, its format/parser/dispatch types, and
+  its tests and help.
+- Removal of generic implementation-stage unavailable errors, rendering, and
+  fallback dispatch. Sidecar unavailable/diagnosable states remain domain
+  behavior.
+- Batch acceptance workflows for query/inspection/selection, alias and type
+  actions, messages, dry-run review, guarded commit, and sidecar browsing.
+- Contract reconciliation that removes the TTY mode from `SPEC.md` while
+  preserving the built-in `Interactive` analyzer.
 - Final user walkthrough from empty state through meaningful graph history.
 
 ### Deferred behavior
@@ -1648,7 +1539,8 @@ surface; material new behavior requires a plan amendment.
 - Date, civil-time, and duration input.
 - Circumstance provenance columns.
 - Saved named queries.
-- Broader interactive `add`, `connect`, sidecar, or analyzer editing.
+- A menu-driven TTY client, including interactive add/connect, sidecar, analyzer,
+  or persistent-history workflows.
 - Performance refactors that do not block correctness.
 
 ### Types
@@ -1667,6 +1559,12 @@ utility module.
 
 - Every `SPEC.md` acceptance criterion has automated evidence or a documented
   manual check with a reason automation is impractical.
+- Root help does not advertise `interactive`; an attempted invocation fails in
+  clap with exit code 2 before state resolution or filesystem access.
+- The generic `AppError::Unavailable` category and catch-all unavailable command
+  dispatch no longer exist; every accepted command reaches a real adapter.
+- The built-in `Interactive` analyzer remains registered and its Suggestions
+  remain available through ordinary message commands.
 - JSON listings use `{ "view": ..., "items": [...] }`.
 - Transaction JSON contains its applicable view, state, entries, and messages.
 - Full digests and display prefixes are present where specified.
@@ -1690,20 +1588,33 @@ utility module.
 
 ### Implementation checklist
 
+- [x] Amend `SPEC.md` to remove the TTY grammar, state machine, and
+      interactive-cancellation acceptance criterion while preserving the
+      built-in `Interactive` analyzer contract.
+- [x] Remove `Command::Interactive`, `InteractiveArgs`,
+      `InteractiveOutputFormat`, their dispatch/format branches, and their help
+      surface.
+- [x] Remove `AppError::Unavailable`, its constructor and renderer support, and
+      the catch-all unavailable dispatch; make command dispatch exhaustive.
+- [x] Replace interactive unavailable/help/format tests with grammar tests that
+      prove the command is absent and rejected before filesystem access.
+- [x] Complete the immediate deferral verification: package and workspace tests,
+      nightly format check, strict CLI clippy, diff/reference sweeps, and the
+      rebuilt-binary help and rejection walkthrough.
 - [ ] Turn every acceptance criterion at the end of `SPEC.md` into a traceable
       test or documented manual verification.
 - [ ] Add cross-feature scenarios for query-attested mutations, historical type
       editing, messages, aliases, sidecars, and GraphViz.
-- [ ] Add independent acceptance scenarios for interactive commits.
+- [ ] Add batch workflow scenarios covering the browsing, selection, review,
+      and commit needs formerly assigned to the TTY client.
 - [ ] Audit deterministic iteration and rendering paths.
 - [ ] Audit error variants for invariant-specific context and absence of panics.
 - [ ] Audit all filesystem writes and state-byte rollback guarantees.
 - [ ] Audit command adapters for duplicated shared-service logic.
-- [ ] Remove completed-command unavailable scaffolding and dead transitional
-      code.
 - [ ] Review trace/debug/info/warn/error levels and default stderr behavior.
-- [ ] Reconcile final help text, `SPEC.md`, and this plan; amend documentation
-      for any explicitly accepted deviation.
+- [ ] Reconcile final help text, `SPEC.md`, and this plan and confirm every
+      remaining `interactive` reference denotes the analyzer or an explicit
+      future deferral.
 
 ### Verification
 
@@ -1713,21 +1624,30 @@ utility module.
 - [ ] Run `cargo test --workspace`.
 - [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
 - [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [ ] Sweep root and nested help, confirm `interactive` is absent, and assert a
+      stable observed clap substring for rejected interactive invocations.
+- [ ] Prove rejected interactive invocations, including former format forms,
+      leave an empty working directory unchanged.
 - [ ] Repeat deterministic-output scenarios and compare byte-identical JSON/DOT
       where applicable.
 - [ ] Run the CLI test suite with selective `RUST_LOG` settings and confirm logs
       stay on stderr.
+- [ ] Run `git diff --check`.
 
 #### Manual walkthrough
 
+- [ ] Inspect root and nested help, reject `lifecore interactive` in an empty
+      directory, and confirm no state file is created.
 - [ ] Initialize a fresh state and apply the Type bootstrap Suggestion.
 - [ ] Create types, add nodes and edges, supersede nodes, and observe Interactive
       suggestions.
-- [ ] Query, explain, select, alias, inspect, and patch historical declarations.
+- [ ] Query, explain, select, alias, inspect, add a child, and patch historical
+      declarations using batch commands.
+- [ ] Review a dry-run candidate without saving, compare state bytes, then
+      repeat it with `--commit` and an explicit expected head.
 - [ ] Dismiss/restore/apply messages and verify reload behavior.
 - [ ] Attach, diagnose, dump, browse, commit, and recover from sidecars.
 - [ ] Produce DOT and SVG artifacts.
-- [ ] Repeat representative review/commit/cancel flows in interactive mode.
 - [ ] Exercise expectation mismatches and confirm all failed saves preserve the
       previous state.
 
@@ -1735,6 +1655,8 @@ utility module.
 
 - Does the complete CLI feel like one coherent tool rather than a collection of
   subcommand islands?
+- Do batch commands cover the useful workflows formerly assigned to the TTY
+  client without duplicating service logic?
 - Are state, view, identity, provisional work, and commit status consistently
   communicated across all output modes?
 - Are any accepted-spec behaviors still surprising enough to warrant a plan or

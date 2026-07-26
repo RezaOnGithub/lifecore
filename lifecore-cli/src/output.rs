@@ -416,9 +416,6 @@ pub fn render_error(error: &AppError, writer: &mut dyn Write) -> io::Result<()> 
             "message": error.to_string(),
         });
 
-        if let AppError::Unavailable { operation, .. } = error {
-            detail["operation"] = json!(operation);
-        }
         match error {
         AppError::SidecarUnavailable {
             operation,

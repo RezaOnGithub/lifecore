@@ -49,9 +49,6 @@ binary. This workspace continues to publish the interface through the
   presentation only; message-ID prefixes are resolved before those filters.
 - Committing graph mutations may use the optional `--expect-head` guard. Help
   encourages scripts to supply it, but it is never mandatory.
-- `interactive` starts a small interactive mode for browsing, selection, type
-  editing, suggestion application, and message dismissal. It is not a second
-  command language or an interactive version of every batch feature.
 
 ## Vocabulary
 
@@ -111,9 +108,9 @@ in memory. A successfully prepared suffix makes the **effective graph**: the
 canonical graph followed by the provisional sidecar entries. Read-only graph
 operations use that effective graph, including `query`, `entry show`, `check`,
 `message show`, `type list`, `type show`, `graphviz`, `sidecar dump`,
-`alias list`, `analyzer list`, and interactive browsing. A query can therefore
-return sidecar-added nodes, and its edge predicates can inspect sidecar-added
-edges. These operations never apply or save the suffix.
+`alias list`, and `analyzer list`. A query can therefore return sidecar-added
+nodes, and its edge predicates can inspect sidecar-added edges. These operations
+never apply or save the suffix.
 
 An attachment forbids state-mutating operations that could otherwise save an
 unrelated change alongside the suffix: `add`, `connect`, `type create`,
@@ -181,15 +178,13 @@ All committing graph mutations accept an optional
 Immediately before saving, the CLI rereads the canonical state and verifies that
 its head still matches that locator, or an explicit empty-state token when
 appropriate. A mismatch aborts without changing the state file. This
-compare-before-save guard is useful for scripts and long-running interactive
-sessions, but it is not file locking and is not mandatory. Command help should
+compare-before-save guard is useful for scripts and long-running clients, but it
+is not file locking and is not mandatory. Command help should
 recommend it for automation. `HEAD` is not accepted here: the guard needs the
 stable locator of the actual latest entry, which may be an edge.
 
 `EMPTY` matches only a canonical graph with no entries. Supplying
-`--expect-head` without `--commit` is an error. Interactive review always records
-the canonical head at staging time and uses that locator, or `EMPTY`, as a
-mandatory guard when the user commits.
+`--expect-head` without `--commit` is an error.
 
 `init` follows the same logical route with an empty graph. The bootstrap
 Suggestion emitted by TypeCheck is non-fatal. The initial state registers
@@ -918,68 +913,6 @@ endpoint is stale or when a fresh successor already has the equivalent
 connection. These are ordinary Suggestions: they are visible through `check` and
 are applied only through `message apply`.
 
-## Interactive mode (`interactive`)
-
-`lifecore interactive` starts a TTY-only session. It loads and analyzes the
-same effective graph as ordinary commands, holds no lock, and persists no
-hidden session. The `interactive` subcommand rejects JSON output.
-Non-interactive commands remain complete for automation; `interactive` replaces
-repeated copying of locators and message handles while a human explores one
-state.
-
-```text
-lifecore interactive [--format auto|table|lines]
-```
-
-The session is a numbered, menu-driven interface, not another textual command
-language, and requires interactive standard input and output. An unavailable or
-analysis-inconsistent sidecar prevents startup and directs the user to batch
-`check` where available and `sidecar detach`. An effective-ready sidecar permits
-read-only browsing and hides mutation choices.
-
-The first interactive subset is deliberately bounded:
-
-| Available in `interactive`                   | Deliberately not available there     |
-| -------------------------------------------- | ------------------------------------ |
-| query and entry inspection                   | sidecar attach, detach, or commit    |
-| select a query result                        | analyzer configuration changes       |
-| bind an alias to the selected node           | free-form sidecar authoring          |
-| create and patch a `Type` declaration        | generic batch scripting              |
-| list, show, dismiss, restore, apply messages | arbitrary persistent command history |
-| review and commit one staged action          | generic `add` and `connect`          |
-
-`add` and `connect` stay non-interactive initially because compound payloads and
-two endpoint forms need deliberate input design; a half-designed prompt would be
-less safe than explicit locators.
-
-```text
-SessionStart -> Browse
-Browse -- run query --> QueryResults
-QueryResults -- choose row --> SelectedNode
-QueryResults -- back ----------> Browse
-SelectedNode -- inspect --------> SelectedNode
-SelectedNode -- alias/type override/add child --> PlannedAppend
-PlannedAppend -- validate + analyze --> Review
-Review -- commit --> Browse (reload saved effective state)
-Review -- cancel --> Browse (discard clone)
-Browse -- messages --> MessageList
-MessageList -- focus one --> FocusedMessage
-FocusedMessage -- dismiss/restore --> MessageList (CLI state saved)
-FocusedMessage -- apply suggestion --> PlannedAppend
-any screen -- quit --> SessionEnd
-```
-
-Choosing a row makes the same locator-backed selection as `query --select`.
-Before an action consumes it, the client re-runs the query in the current view
-and verifies membership. A graph-changing operation invalidates all in-memory
-selections after commit or cancellation and returns to `Browse`. Old row numbers
-never become identities.
-
-At `Review`, the UI shows exact planned entries and their predicted locators,
-unfiltered Inconsistencies, visible Warnings/Suggestions, and whether the next
-action is a dry run or a commit. Commit has no implicit “yes” default. With an
-attached sidecar, the session is read-only and does not offer mutation menus.
-
 ## Output, errors, and determinism
 
 `--format auto|table|lines|json` applies to entries, queries, types, aliases,
@@ -1019,10 +952,18 @@ failure may panic or save partial state.
 
 These are not prerequisites for the first implementation.
 
+### TTY client RFC
+
+A future menu-driven TTY client requires a new specification amendment; it is
+not part of the accepted command surface. Such a client should reuse the batch
+services and transaction boundaries. It is unrelated to the built-in
+`Interactive` analyzer, whose name describes connection-recreation Suggestions
+and does not imply terminal behavior.
+
 ### Type-impact and health summaries RFC
 
-Extend interactive `Review` and non-interactive `type override --summary` to
-report nodes and edges whose TypeCheck outcome changes under the proposed
+Extend a future TTY client's review screen and batch `type override --summary`
+to report nodes and edges whose TypeCheck outcome changes under the proposed
 declaration. It belongs after **Analyzed**, because only the real provisional
 graph and analyzer output can determine impact. It is a presentation summary
 over existing diagnostics, not a second schema checker.
@@ -1101,8 +1042,6 @@ A practical module split is:
 - `analyzer_command`: configured-suite listing and cloned-suite staging;
 - `messages`: canonical IDs, emission universe, dismissal registry, visibility,
   `check`, and suggestion apply;
-- `interactive`: the `interactive` subcommand's state machine over the same
-  command services; and
 - existing `sidecar` and `graphviz` modules adapted to locators and views.
 
 The proposal is ready to claim implementation only when tests cover: dry-run
@@ -1124,5 +1063,5 @@ across visible, dismissed, and resolved messages; an unknown analyzer factory
 does not persist configuration; `HEAD` resolves only to the latest node, is
 rejected when no node exists or stable entry identity is required, and resolves
 against the pre-node snapshot of each sidecar entry; `--expect-head` mismatch
-saves nothing; interactive cancellation saves nothing; and an invalid attached
-sidecar can still be detached without being read.
+saves nothing; and an invalid attached sidecar can still be detached without
+being read.

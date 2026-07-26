@@ -68,7 +68,6 @@ pub fn dispatch(
     command: Command,
     invocation: &InvocationContext,
 ) -> Result<CommandOutcome, AppError> {
-    let operation = command.operation_name();
     let format = command.output_format();
 
     match command {
@@ -885,11 +884,6 @@ pub fn dispatch(
             artifact_kind: target.kind().name().to_string(),
             view: view.summary(),
         })
-    }
-    _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 9");
-
-        Err(AppError::unavailable(operation, format))
     }
     }
 }

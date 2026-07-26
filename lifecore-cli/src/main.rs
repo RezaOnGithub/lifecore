@@ -8,16 +8,10 @@ fn main() -> std::process::ExitCode {
         .target(Target::Stderr)
         .init();
 
-    let stdin_is_terminal = io::stdin().is_terminal();
     let stdout_is_terminal = io::stdout().is_terminal();
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
-    let mut io = Io::new(
-        &mut stdout,
-        &mut stderr,
-        stdin_is_terminal,
-        stdout_is_terminal,
-    );
+    let mut io = Io::new(&mut stdout, &mut stderr, stdout_is_terminal);
 
     run_cli(std::env::args_os(), &mut io)
 }

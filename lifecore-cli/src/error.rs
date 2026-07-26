@@ -20,12 +20,6 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 9")]
-    Unavailable {
-        operation: String,
-        format: OutputFormat,
-    },
-
     #[error("sidecar {action} failed at {path}: {source}")]
     SidecarIo {
         path: String,
@@ -327,13 +321,6 @@ impl AppError {
         Self::Usage {
             message: error.to_string(),
             exit_code,
-        }
-    }
-
-    pub fn unavailable(operation: impl Into<String>, format: OutputFormat) -> Self {
-        Self::Unavailable {
-            operation: operation.into(),
-            format,
         }
     }
 
@@ -705,8 +692,7 @@ impl AppError {
     pub fn with_format(mut self, selected: OutputFormat) -> Self {
         let format = match &mut self {
         Self::Usage { .. } | Self::Io(_) => return self,
-        Self::Unavailable { format, .. }
-        | Self::SidecarIo { format, .. }
+        Self::SidecarIo { format, .. }
         | Self::InvalidSidecar { format, .. }
         | Self::SidecarAlreadyAttached { format, .. }
         | Self::SidecarNotAttached { format }
@@ -759,8 +745,7 @@ impl AppError {
     pub fn exit_code(&self) -> u8 {
         match self {
         Self::Usage { exit_code, .. } => *exit_code,
-        Self::Unavailable { .. }
-        | Self::SidecarIo { .. }
+        Self::SidecarIo { .. }
         | Self::InvalidSidecar { .. }
         | Self::SidecarAlreadyAttached { .. }
         | Self::SidecarNotAttached { .. }
@@ -811,8 +796,7 @@ impl AppError {
     pub fn output_format(&self) -> OutputFormat {
         match self {
         Self::Usage { .. } => OutputFormat::Lines,
-        Self::Unavailable { format, .. }
-        | Self::SidecarIo { format, .. }
+        Self::SidecarIo { format, .. }
         | Self::InvalidSidecar { format, .. }
         | Self::SidecarAlreadyAttached { format, .. }
         | Self::SidecarNotAttached { format }
@@ -863,7 +847,6 @@ impl AppError {
     pub fn kind(&self) -> &'static str {
         match self {
         Self::Usage { .. } => "usage",
-        Self::Unavailable { .. } => "unavailable",
         Self::SidecarIo { .. } => "sidecar_io",
         Self::InvalidSidecar { .. } => "sidecar_invalid",
         Self::SidecarAlreadyAttached { .. } => "sidecar_already_attached",

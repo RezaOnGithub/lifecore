@@ -13,24 +13,6 @@ pub enum OutputFormat {
     Json,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum InteractiveOutputFormat {
-    #[default]
-    Auto,
-    Table,
-    Lines,
-}
-
-impl From<InteractiveOutputFormat> for OutputFormat {
-    fn from(format: InteractiveOutputFormat) -> Self {
-        match format {
-        InteractiveOutputFormat::Auto => Self::Auto,
-        InteractiveOutputFormat::Table => Self::Table,
-        InteractiveOutputFormat::Lines => Self::Lines,
-        }
-    }
-}
-
 #[derive(Args, Clone, Debug, Default)]
 pub struct FormatArgs {
     #[arg(
@@ -67,9 +49,6 @@ impl Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    #[command(about = "Start the menu-driven TTY interface")]
-    Interactive(InteractiveArgs),
-
     #[command(about = "Create a new canonical state file without replacing an existing file")]
     Init(InitArgs),
 
@@ -137,27 +116,8 @@ impl Command {
         Ok(())
     }
 
-    pub fn operation_name(&self) -> String {
-        match self {
-        Self::Interactive(_) => "interactive".into(),
-        Self::Init(_) => "init".into(),
-        Self::Entry { command } => command.operation_name().into(),
-        Self::Add(_) => "add".into(),
-        Self::Connect(_) => "connect".into(),
-        Self::Query { command } => command.operation_name(),
-        Self::Alias { command } => command.operation_name().into(),
-        Self::Type { command } => command.operation_name().into(),
-        Self::Sidecar { command } => command.operation_name().into(),
-        Self::Analyzer { command } => command.operation_name().into(),
-        Self::Graphviz(_) => "graphviz".into(),
-        Self::Check(_) => "check".into(),
-        Self::Message { command } => command.operation_name().into(),
-        }
-    }
-
     pub fn output_format(&self) -> OutputFormat {
         match self {
-        Self::Interactive(args) => args.format.into(),
         Self::Init(args) => args.format.format,
         Self::Entry { command } => command.output_format(),
         Self::Add(args) => args.format.format,
@@ -175,17 +135,6 @@ impl Command {
 }
 
 #[derive(Args, Debug)]
-pub struct InteractiveArgs {
-    #[arg(
-        long,
-        value_enum,
-        default_value_t,
-        help = "Select interactive terminal output"
-    )]
-    pub format: InteractiveOutputFormat,
-}
-
-#[derive(Args, Debug)]
 pub struct InitArgs {
     #[command(flatten)]
     pub format: FormatArgs,
@@ -198,12 +147,6 @@ pub enum EntryCommand {
 }
 
 impl EntryCommand {
-    fn operation_name(&self) -> &'static str {
-        match self {
-        Self::Show(_) => "entry show",
-        }
-    }
-
     fn output_format(&self) -> OutputFormat {
         match self {
         Self::Show(args) => args.format.format,
@@ -295,16 +238,6 @@ impl QueryCommand {
 
             Ok(())
         }
-        }
-    }
-
-    fn operation_name(&self) -> String {
-        match self {
-        Self::Nodes(args) => args
-            .selection_action()
-            .ok()
-            .flatten()
-            .map_or_else(|| "query nodes".into(), |action| action.operation_name()),
         }
     }
 
@@ -417,17 +350,6 @@ pub(crate) enum SelectionAction {
     AddChild(AddChildArgs),
 }
 
-impl SelectionAction {
-    fn operation_name(&self) -> String {
-        match self {
-        Self::Entry { .. } => "query nodes --select -- entry inspect".into(),
-        Self::Alias { .. } => "query nodes --select -- alias set".into(),
-        Self::Type { .. } => "query nodes --select -- type override".into(),
-        Self::AddChild(_) => "query nodes --select -- add-child".into(),
-        }
-    }
-}
-
 #[derive(Subcommand, Debug)]
 pub(crate) enum SelectionEntryCommand {
     #[command(about = "Render the selected entry in detail")]
@@ -470,14 +392,6 @@ pub enum AliasCommand {
 }
 
 impl AliasCommand {
-    fn operation_name(&self) -> &'static str {
-        match self {
-        Self::List(_) => "alias list",
-        Self::Set(_) => "alias set",
-        Self::Remove(_) => "alias remove",
-        }
-    }
-
     fn output_format(&self) -> OutputFormat {
         match self {
         Self::List(args) => args.format.format,
@@ -533,15 +447,6 @@ pub enum TypeCommand {
 }
 
 impl TypeCommand {
-    fn operation_name(&self) -> &'static str {
-        match self {
-        Self::List(_) => "type list",
-        Self::Show(_) => "type show",
-        Self::Create(_) => "type create",
-        Self::Override(_) => "type override",
-        }
-    }
-
     fn output_format(&self) -> OutputFormat {
         match self {
         Self::List(args) => args.format.format,
@@ -728,15 +633,6 @@ pub enum SidecarCommand {
 }
 
 impl SidecarCommand {
-    fn operation_name(&self) -> &'static str {
-        match self {
-        Self::Attach(_) => "sidecar attach",
-        Self::Detach => "sidecar detach",
-        Self::Dump(_) => "sidecar dump",
-        Self::Commit(_) => "sidecar commit",
-        }
-    }
-
     fn output_format(&self) -> OutputFormat {
         match self {
         Self::Dump(args) => args.format.format,
@@ -781,13 +677,6 @@ pub enum AnalyzerCommand {
 }
 
 impl AnalyzerCommand {
-    fn operation_name(&self) -> &'static str {
-        match self {
-        Self::List(_) => "analyzer list",
-        Self::Add(_) => "analyzer add",
-        }
-    }
-
     fn output_format(&self) -> OutputFormat {
         match self {
         Self::List(args) => args.format.format,
@@ -889,15 +778,6 @@ pub enum MessageCommand {
 }
 
 impl MessageCommand {
-    fn operation_name(&self) -> &'static str {
-        match self {
-        Self::Show(_) => "message show",
-        Self::Dismiss(_) => "message dismiss",
-        Self::Restore(_) => "message restore",
-        Self::Apply(_) => "message apply",
-        }
-    }
-
     fn output_format(&self) -> OutputFormat {
         match self {
         Self::Show(args) | Self::Dismiss(args) | Self::Restore(args) => args.format.format,
