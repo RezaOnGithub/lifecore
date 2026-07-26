@@ -260,19 +260,17 @@ impl StateStore {
 
     pub fn save(&self, state: &PersistedState) -> Result<(), AppError> {
         state.validate()?;
+        let temporary = self.write_temporary(state)?;
 
         #[cfg(test)]
         if self.fail_save {
             //A The transaction tests need a deterministic failure after every
-            //A graph gate but before replacement; filesystem permissions are
-            //A unreliable when the test process has elevated privileges.
+            //A graph gate and temporary write but before replacement.
             return Err(AppError::state_io(
                 self.path(),
                 std::io::Error::other("injected atomic-save failure"),
             ));
         }
-
-        let temporary = self.write_temporary(state)?;
 
         log::trace!("atomically replacing state at {}", self.path().display());
 

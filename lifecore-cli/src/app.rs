@@ -133,6 +133,7 @@ pub enum CommandOutcome {
     },
     Dismissals {
         format: OutputFormat,
+        view: ViewSummary,
         items: Vec<DismissalStatusRecord>,
     },
     DismissalChanged {

@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, ffi::OsString, fs, io, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use lifecore::{
     Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList, OrderedSet, Payload,
@@ -64,6 +69,187 @@ fn run_in(
     let invocation = InvocationContext::new(directory, state_path_environment);
 
     run_from_in(args, &io, &invocation)
+}
+
+struct AcceptanceHarness {
+    directory: tempfile::TempDir,
+}
+
+impl AcceptanceHarness {
+    fn new() -> Self {
+        Self {
+            directory: tempfile::tempdir().expect("temporary acceptance directory"),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
+
+    fn state_path(&self) -> PathBuf {
+        self.path().join("LifeCoreState.json")
+    }
+
+    fn invoke(&self, args: &[&str]) -> ExpectedOutput {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let io = test_io(&mut stdout, &mut stderr);
+        let invocation = InvocationContext::new(self.path(), None);
+
+        //A A new dispatch and store load are constructed for every invocation,
+        //A so the acceptance scenarios cannot accidentally reuse in-memory state.
+        let exit_code = match run_from_in(args, &io, &invocation) {
+        Ok(outcome) => {
+            render_outcome(&outcome, io.stdout, io.stdout_is_terminal)
+                .expect("acceptance outcome renders");
+            0
+        }
+        Err(error) => {
+            let exit_code = error.exit_code();
+            render_error(&error, io.stderr).expect("acceptance error renders");
+            exit_code
+        }
+        };
+
+        ExpectedOutput {
+            exit_code,
+            stdout: String::from_utf8(stdout).expect("acceptance stdout is UTF-8"),
+            stderr: String::from_utf8(stderr).expect("acceptance stderr is UTF-8"),
+        }
+    }
+
+    fn load(&self) -> PersistedState {
+        StateStore::new(
+            StatePath::resolve(None, self.path()).expect("acceptance state path resolves"),
+        )
+        .load()
+        .expect("acceptance state reloads")
+    }
+
+    fn snapshot(&self) -> StateSnapshot {
+        StateSnapshot::capture(&self.state_path())
+    }
+}
+
+#[derive(Debug)]
+struct StateSnapshot {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    entries: usize,
+    has_mock: bool,
+}
+
+impl StateSnapshot {
+    fn capture(path: &Path) -> Self {
+        let bytes = fs::read(path).expect("canonical state bytes are readable");
+        let state = StateStore::new(
+            StatePath::resolve(Some(path.as_os_str().to_owned()), Path::new("."))
+                .expect("snapshot state path resolves"),
+        )
+        .load()
+        .expect("snapshot state is valid");
+
+        Self {
+            path: path.to_path_buf(),
+            bytes,
+            entries: state
+                .lifecore
+                .last()
+                .map_or(0, |entry| entry.entry().0.saturating_add(1)),
+            has_mock: state.lifecore.is_mock(),
+        }
+    }
+
+    fn assert_unchanged(&self) {
+        let current = Self::capture(&self.path);
+        assert_eq!(current.bytes, self.bytes, "canonical bytes changed");
+        assert_eq!(current.entries, self.entries, "canonical history changed");
+        assert_eq!(
+            current.has_mock, self.has_mock,
+            "canonical Mock state changed"
+        );
+    }
+}
+
+#[derive(Debug)]
+struct ExpectedOutput {
+    exit_code: u8,
+    stdout: String,
+    stderr: String,
+}
+
+impl ExpectedOutput {
+    fn assert_success(&self) {
+        assert_eq!(self.exit_code, 0, "stderr: {}", self.stderr);
+        assert!(self.stderr.is_empty(), "unexpected stderr: {}", self.stderr);
+    }
+
+    fn assert_failure(&self) {
+        assert_ne!(self.exit_code, 0, "stdout: {}", self.stdout);
+        assert!(self.stdout.is_empty(), "unexpected stdout: {}", self.stdout);
+    }
+}
+
+fn assert_json_contract(output: &ExpectedOutput) -> serde_json::Value {
+    output.assert_success();
+    let value: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("acceptance output is JSON");
+    let view = value
+        .get("view")
+        .and_then(serde_json::Value::as_object)
+        .expect("JSON contract includes a view object");
+    assert!(view.contains_key("end"));
+    assert!(view.contains_key("canonical_end"));
+
+    value
+}
+
+fn assert_transaction_contract(output: &ExpectedOutput, expected_state: &str) -> serde_json::Value {
+    let value = assert_json_contract(output);
+    let transaction = value
+        .get("transaction")
+        .and_then(serde_json::Value::as_object)
+        .expect("JSON contract includes a transaction object");
+    assert_eq!(
+        transaction.get("state").and_then(serde_json::Value::as_str),
+        Some(expected_state)
+    );
+    for name in ["entries", "analyzers", "messages"] {
+        assert!(
+            transaction
+                .get(name)
+                .is_some_and(serde_json::Value::is_array),
+            "transaction contract includes {name}"
+        );
+    }
+    for entry in transaction["entries"]
+        .as_array()
+        .expect("transaction entries are an array")
+    {
+        let locator = entry["locator"]
+            .as_str()
+            .expect("transaction entry has a full locator");
+        let display = entry["display_locator"]
+            .as_str()
+            .expect("transaction entry has a display locator");
+        assert!(locator.len() > display.len());
+    }
+
+    value
+}
+
+fn transaction_entry_locator(value: &serde_json::Value, field: &str) -> String {
+    value["transaction"]["entries"][0][field]
+        .as_str()
+        .expect("transaction contains its first entry locator")
+        .to_string()
+}
+
+fn assert_no_mock(harness: &AcceptanceHarness) {
+    assert!(
+        !harness.load().lifecore.is_mock(),
+        "canonical state contains a Mock suffix"
+    );
 }
 
 fn assert_usage_error(args: &[&str], expected: &str) {
@@ -764,12 +950,22 @@ fn message_resolution_uses_the_diagnostic_window() {
 
 #[test]
 fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
-    let graph = LifeCoreList::default();
+    let mut graph = LifeCoreList::default();
+    let parent = graph
+        .add_mock("Test", Body::default(), None)
+        .expect("collision parent appends");
+    let child = graph
+        .add_mock("Test", Body::default(), Some(parent.e))
+        .expect("collision child appends");
     let mut messages = Vec::new();
 
     for index in 0..8_000 {
         messages.push(Message::Warning(Warning {
-            offending_event: DiagnosticLocation::Context(EntryIndex(0).before()),
+            offending_event: if index % 2 == 0 {
+                DiagnosticLocation::Entry(child.e.window().look_at(parent.e))
+            } else {
+                DiagnosticLocation::Context(child.e.window())
+            },
             system_name: "Collision_Test".to_string(),
             system_config: String::new(),
             relevance: Vec::new(),
@@ -782,14 +978,22 @@ fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
         messages,
     };
     let universe = MessageUniverse::from_analysis(&report, &graph, &[]).expect("messages encode");
-    let mut prefixes = std::collections::BTreeMap::<String, usize>::new();
+    let mut prefixes = std::collections::BTreeMap::<String, bool>::new();
     let ambiguous = universe.records().iter().find_map(|record| {
         let prefix = record.id[..5].to_string();
-        let count = prefixes.entry(prefix.clone()).or_default();
-        *count += 1;
-        (*count == 2).then_some(format!("m:{prefix}"))
+        match prefixes.entry(prefix.clone()) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(record.resolved);
+            None
+        }
+        std::collections::btree_map::Entry::Occupied(entry) if *entry.get() != record.resolved => {
+            Some(format!("m:{prefix}"))
+        }
+        std::collections::btree_map::Entry::Occupied(_) => None,
+        }
     });
-    let ambiguous = ambiguous.expect("8,000 deterministic IDs contain a five-digit collision");
+    let ambiguous =
+        ambiguous.expect("8,000 deterministic IDs contain a visible/resolved collision");
 
     match universe.resolve(&ambiguous) {
     Err(AppError::AmbiguousMessageId { .. }) => {}
@@ -804,23 +1008,22 @@ fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
     result => panic!("valid prefix should resolve or report absence, got {result:?}"),
     }
 
-    let record = &universe.records()[0];
-    let prefix = &record.id[..5];
-    let alternate = format!(
-        "{}{}",
-        prefix,
-        if record.id.as_bytes()[5] == b'a' {
-            "b".repeat(123)
-        } else {
-            "a".repeat(123)
-        }
+    let prefix = ambiguous
+        .strip_prefix("m:")
+        .expect("ambiguous prefix has the message marker");
+    let alternate = format!("{prefix}{}", "f".repeat(123));
+    assert!(
+        universe
+            .records()
+            .iter()
+            .all(|record| record.id != alternate)
     );
     let dismissal = crate::state::DismissalRecord {
         version: 1,
         digest: alternate,
     };
     assert!(matches!(
-        universe.resolve_with_dismissals(&format!("m:{prefix}"), &[dismissal]),
+        universe.resolve_with_dismissals(&ambiguous, &[dismissal]),
         Err(AppError::AmbiguousMessageId { .. })
     ));
 }
@@ -1254,6 +1457,18 @@ fn locator_resolution_is_strict_and_checks_in_the_required_order() {
 
 #[test]
 fn node_references_are_lexically_disjoint_and_head_skips_the_latest_edge() {
+    let empty = PersistedState::new(LifeCoreList::default());
+    let empty_view = GraphView::latest(&empty.lifecore, &empty.cli).expect("empty view constructs");
+    assert!(matches!(
+        resolve_node_reference(
+            &empty.lifecore,
+            &empty.cli,
+            &NodeReference::Head,
+            &empty_view,
+        ),
+        Err(AppError::InvalidNodeReference { .. })
+    ));
+
     let mut state = stage3_state();
     let view = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
     let expected = resolve_index(
@@ -3436,6 +3651,8 @@ fn stage5_transaction_composites_preserve_order_and_roll_back_every_failure() {
         committed_bytes
     );
 
+    let directory_before_save_failure =
+        directory_snapshot(directory.path()).expect("pre-save directory snapshots");
     let failing_store = store.failing_save_for_test();
     let failing_service = TransactionService::new(&failing_store, &registry);
     assert!(matches!(
@@ -3457,6 +3674,11 @@ fn stage5_transaction_composites_preserve_order_and_roll_back_every_failure() {
     assert_eq!(
         fs::read(store.path()).expect("state remains readable"),
         committed_bytes
+    );
+    assert_eq!(
+        directory_snapshot(directory.path()).expect("post-save directory snapshots"),
+        directory_before_save_failure,
+        "failed atomic save leaked a temporary file"
     );
 }
 
@@ -4904,6 +5126,625 @@ fn stage9_commit_rolls_back_stage_apply_expectation_and_save_failures() {
     let reloaded = store.load().expect("rollback state reloads");
     assert_eq!(reloaded.cli.sidecar_path, state.cli.sidecar_path);
     assert!(reloaded.cli.aliases.get("One").is_none());
+}
+
+#[test]
+fn stage10_acceptance_harness_spans_canonical_batch_workflows() {
+    let harness = AcceptanceHarness::new();
+    let initialized =
+        assert_json_contract(&harness.invoke(&["lifecore", "init", "--format", "json"]));
+    let bootstrap_message = initialized["transaction"]["messages"][0]["display_id"]
+        .as_str()
+        .expect("bootstrap message has a display ID")
+        .to_string();
+    let initialized_snapshot = harness.snapshot();
+
+    let dry_bootstrap = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "message",
+            "apply",
+            &bootstrap_message,
+            "--format",
+            "json",
+        ]),
+        "dry_run",
+    );
+    assert_eq!(
+        dry_bootstrap["transaction"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    initialized_snapshot.assert_unchanged();
+
+    let rejected = harness.invoke(&[
+        "lifecore",
+        "message",
+        "apply",
+        &bootstrap_message,
+        "--commit",
+        "--expect-head",
+        "0:abcde",
+        "--format",
+        "json",
+    ]);
+    rejected.assert_failure();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&rejected.stderr)
+            .expect("transaction failure is JSON")["error"]["kind"],
+        "transaction_aborted"
+    );
+    initialized_snapshot.assert_unchanged();
+
+    let bootstrapped = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "message",
+            "apply",
+            &bootstrap_message,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let bootstrap_locator = transaction_entry_locator(&bootstrapped, "display_locator");
+    assert_no_mock(&harness);
+
+    let note_created = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "type",
+            "create",
+            "Note",
+            "--field",
+            "title = Text : Optional",
+            "--field",
+            "history = Sequence(Text) : Optional",
+            "--field",
+            "tags = OrderedSet(Text) : Optional",
+            "--outgoing",
+            "Rel",
+            "--incoming",
+            "Rel",
+            "--allows-override",
+            "ArchivedNote",
+            "--commit",
+            "--expect-head",
+            &bootstrap_locator,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let original_type = transaction_entry_locator(&note_created, "display_locator");
+
+    let note_patched = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "type",
+            "override",
+            "Note",
+            "--field",
+            "priority = Number : Optional",
+            "--commit",
+            "--expect-head",
+            &original_type,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let patched_type = transaction_entry_locator(&note_patched, "display_locator");
+    assert_eq!(
+        note_patched["transaction"]["entries"][0]["parent"],
+        note_created["transaction"]["entries"][0]["locator"]
+    );
+
+    let historical_branch = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "type",
+            "override",
+            "Note",
+            "--at",
+            &original_type,
+            "--as",
+            "ArchivedNote",
+            "--field",
+            "archived = Text : Optional",
+            "--commit",
+            "--expect-head",
+            &patched_type,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let historical_type = transaction_entry_locator(&historical_branch, "display_locator");
+    assert_eq!(
+        historical_branch["transaction"]["entries"][0]["parent"],
+        note_created["transaction"]["entries"][0]["locator"]
+    );
+
+    let base = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "title = \"base\"",
+            "--field",
+            "history = { sequence = [\"draft\", \"reviewed\"] }",
+            "--field",
+            "tags = { ordered_set = [\"home\", \"urgent\"] }",
+            "--commit",
+            "--expect-head",
+            &historical_type,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let base_locator = transaction_entry_locator(&base, "display_locator");
+    let base_full_locator = transaction_entry_locator(&base, "locator");
+
+    let other = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "title = \"other\"",
+            "--commit",
+            "--expect-head",
+            &base_locator,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let other_locator = transaction_entry_locator(&other, "display_locator");
+
+    let connected = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "connect",
+            "--from",
+            &base_locator,
+            "--type",
+            "Rel",
+            "--to",
+            &other_locator,
+            "--commit",
+            "--expect-head",
+            &other_locator,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let edge_locator = transaction_entry_locator(&connected, "display_locator");
+
+    harness
+        .invoke(&[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--where",
+            "type Note",
+            "--select",
+            &base_locator,
+            "--format",
+            "json",
+            "--",
+            "alias",
+            "set",
+            "Base",
+        ])
+        .assert_success();
+
+    let before_selected_child = harness.snapshot();
+    let selected_child_dry_run = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--where",
+            "type Note",
+            "--select",
+            &base_locator,
+            "--format",
+            "json",
+            "--",
+            "add-child",
+            "Note",
+            "--field",
+            "title = \"successor\"",
+        ]),
+        "dry_run",
+    );
+    assert_eq!(
+        selected_child_dry_run["transaction"]["entries"][0]["parent"],
+        base_full_locator
+    );
+    before_selected_child.assert_unchanged();
+
+    let selected_child = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--where",
+            "type Note",
+            "--select",
+            &base_locator,
+            "--format",
+            "json",
+            "--",
+            "add-child",
+            "Note",
+            "--field",
+            "title = \"successor\"",
+            "--commit",
+            "--expect-head",
+            &edge_locator,
+        ]),
+        "committed",
+    );
+    let child_locator = transaction_entry_locator(&selected_child, "display_locator");
+    assert_no_mock(&harness);
+
+    let explained = assert_json_contract(&harness.invoke(&[
+        "lifecore",
+        "query",
+        "nodes",
+        "all",
+        "--where",
+        "fresh",
+        "--explain",
+        &base_locator,
+        "--format",
+        "json",
+    ]));
+    assert_eq!(explained["explanation"]["matches"], false);
+
+    let checked = assert_json_contract(&harness.invoke(&["lifecore", "check", "--format", "json"]));
+    let interactive = checked["items"]
+        .as_array()
+        .expect("check items are an array")
+        .iter()
+        .find(|message| message["analyzer"] == "Interactive")
+        .expect("Interactive suggestion is visible");
+    let interactive_id = interactive["display_id"]
+        .as_str()
+        .expect("Interactive suggestion has a display ID")
+        .to_string();
+
+    harness
+        .invoke(&["lifecore", "message", "dismiss", &interactive_id])
+        .assert_success();
+    let dismissal_listing = assert_json_contract(&harness.invoke(&[
+        "lifecore",
+        "check",
+        "--dismissal-ids",
+        "--format",
+        "json",
+    ]));
+    assert_eq!(dismissal_listing["items"][0]["emitted"], true);
+    let human_dismissals =
+        harness.invoke(&["lifecore", "check", "--dismissal-ids", "--format", "lines"]);
+    human_dismissals.assert_success();
+    assert!(human_dismissals.stdout.starts_with("View: through "));
+
+    harness
+        .invoke(&["lifecore", "message", "restore", &interactive_id])
+        .assert_success();
+    let before_message_apply = harness.snapshot();
+    assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "message",
+            "apply",
+            &interactive_id,
+            "--format",
+            "json",
+        ]),
+        "dry_run",
+    );
+    before_message_apply.assert_unchanged();
+
+    assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "message",
+            "apply",
+            &interactive_id,
+            "--commit",
+            "--expect-head",
+            &child_locator,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    assert_no_mock(&harness);
+
+    let before_graphviz = harness.snapshot();
+    harness
+        .invoke(&["lifecore", "graphviz", "first.dot", "--dot"])
+        .assert_success();
+    harness
+        .invoke(&["lifecore", "graphviz", "second.dot", "--dot"])
+        .assert_success();
+    assert_eq!(
+        fs::read(harness.path().join("first.dot")).expect("first DOT reads"),
+        fs::read(harness.path().join("second.dot")).expect("second DOT reads")
+    );
+    before_graphviz.assert_unchanged();
+}
+
+#[test]
+fn stage10_sidecar_round_trips_recursive_payloads_and_predicted_locators() {
+    let harness = AcceptanceHarness::new();
+    let initialized =
+        assert_json_contract(&harness.invoke(&["lifecore", "init", "--format", "json"]));
+    let bootstrap_message = initialized["transaction"]["messages"][0]["display_id"]
+        .as_str()
+        .expect("bootstrap message has a display ID")
+        .to_string();
+    let bootstrapped = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "message",
+            "apply",
+            &bootstrap_message,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let bootstrap_locator = transaction_entry_locator(&bootstrapped, "display_locator");
+
+    let journal_type = assert_transaction_contract(
+        &harness.invoke(&[
+            "lifecore",
+            "type",
+            "create",
+            "Journal",
+            "--field",
+            "history = Sequence(Text) : Optional",
+            "--field",
+            "tags = OrderedSet(Text) : Optional",
+            "--commit",
+            "--expect-head",
+            &bootstrap_locator,
+            "--format",
+            "json",
+        ]),
+        "committed",
+    );
+    let journal_type_locator = transaction_entry_locator(&journal_type, "display_locator");
+
+    let sidecar_path = harness.path().join("journal.toml");
+    let sidecar_source = br#"
+[[entry]]
+alias = "JournalEntry"
+ty = "Journal"
+
+[entry.body]
+history = { sequence = ["draft", "reviewed"] }
+tags = { ordered_set = ["home", "urgent"] }
+"#;
+    fs::write(&sidecar_path, sidecar_source).expect("recursive sidecar writes");
+    harness
+        .invoke(&[
+            "lifecore",
+            "sidecar",
+            "attach",
+            sidecar_path.to_str().expect("sidecar path is UTF-8"),
+        ])
+        .assert_success();
+    let attached_snapshot = harness.snapshot();
+
+    let first_dump = harness.invoke(&["lifecore", "sidecar", "dump", "--format", "json"]);
+    let first_dump_json = assert_json_contract(&first_dump);
+    let second_dump = harness.invoke(&["lifecore", "sidecar", "dump", "--format", "json"]);
+    assert_eq!(first_dump.stdout, second_dump.stdout);
+    let predicted_locator = first_dump_json["items"][0]["display_locator"]
+        .as_str()
+        .expect("sidecar dump predicts a locator")
+        .to_string();
+    attached_snapshot.assert_unchanged();
+
+    let committed = assert_json_contract(&harness.invoke(&[
+        "lifecore",
+        "sidecar",
+        "commit",
+        "--expect-head",
+        &journal_type_locator,
+        "--format",
+        "json",
+    ]));
+    assert_eq!(committed["transaction"]["state"], "committed");
+    assert_eq!(
+        committed["transaction"]["entries"][0]["display_locator"],
+        predicted_locator
+    );
+    assert_eq!(
+        fs::read(&sidecar_path).expect("sidecar source remains readable"),
+        sidecar_source
+    );
+    assert_no_mock(&harness);
+    assert!(harness.load().cli.sidecar_path.is_none());
+
+    let shown = assert_json_contract(&harness.invoke(&[
+        "lifecore",
+        "entry",
+        "show",
+        &predicted_locator,
+        "--format",
+        "json",
+    ]));
+    assert_eq!(
+        shown["items"][0]["fields"]["history"]["Sequence"],
+        serde_json::json!([
+            {"Text": "draft"},
+            {"Text": "reviewed"}
+        ])
+    );
+    assert_eq!(
+        shown["items"][0]["fields"]["tags"]["OrderedSet"],
+        serde_json::json!([
+            {"Text": "home"},
+            {"Text": "urgent"}
+        ])
+    );
+}
+
+#[test]
+fn stage10_malformed_state_indexes_return_typed_errors_without_writing() {
+    let directory = tempfile::tempdir().expect("temporary malformed-state directory");
+    initialize_stage8_state(directory.path());
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let base_bytes = fs::read(store.path()).expect("valid state bytes read");
+    let base: serde_json::Value =
+        serde_json::from_slice(&base_bytes).expect("valid state JSON decodes");
+    let mut cases = Vec::new();
+
+    let mut invalid_type = base.clone();
+    invalid_type["lifecore"]["entry"][0]["Node"]["ty"] = serde_json::json!(999);
+    cases.push(("node type string", invalid_type));
+
+    let mut invalid_body_name = base.clone();
+    let body = invalid_body_name["lifecore"]["entry"][0]["Node"]["body"]
+        .as_object_mut()
+        .expect("node body is an object");
+    let (name, value) = body
+        .iter()
+        .next()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .expect("bootstrap node body is nonempty");
+    body.remove(&name);
+    body.insert("999".to_string(), value);
+    cases.push(("field-name string", invalid_body_name));
+
+    let mut invalid_body_value = base.clone();
+    *invalid_body_value["lifecore"]["entry"][0]["Node"]["body"]
+        .as_object_mut()
+        .expect("node body is an object")
+        .values_mut()
+        .next()
+        .expect("bootstrap node body is nonempty") = serde_json::json!(999);
+    cases.push(("field value", invalid_body_value));
+
+    let mut invalid_circumstance = base.clone();
+    invalid_circumstance["lifecore"]["circumstance"][0] = serde_json::json!(999);
+    cases.push(("circumstance", invalid_circumstance));
+
+    let mut invalid_text = base.clone();
+    *invalid_text["lifecore"]["value_table"]
+        .as_array_mut()
+        .expect("value table is an array")
+        .iter_mut()
+        .find_map(|value| value.get_mut("Text"))
+        .expect("bootstrap state contains text") = serde_json::json!(999);
+    cases.push(("text string", invalid_text));
+
+    let mut invalid_sequence = base.clone();
+    *invalid_sequence["lifecore"]["value_table"]
+        .as_array_mut()
+        .expect("value table is an array")
+        .iter_mut()
+        .find_map(|value| value.get_mut("Sequence"))
+        .expect("bootstrap state contains a sequence") = serde_json::json!(999);
+    cases.push(("sequence table", invalid_sequence));
+
+    let mut invalid_member = base.clone();
+    invalid_member["lifecore"]["sequence_table"][0][0] = serde_json::json!(999);
+    cases.push(("sequence member", invalid_member));
+
+    let mut cyclic_aggregate = base.clone();
+    let (aggregate_index, sequence_index) = cyclic_aggregate["lifecore"]["value_table"]
+        .as_array()
+        .expect("value table is an array")
+        .iter()
+        .enumerate()
+        .find_map(|(index, value)| {
+            value["Sequence"]
+                .as_u64()
+                .map(|sequence| (index, sequence as usize))
+        })
+        .expect("bootstrap state contains a sequence value");
+    cyclic_aggregate["lifecore"]["sequence_table"][sequence_index][0] =
+        serde_json::json!(aggregate_index);
+    cases.push(("aggregate cycle", cyclic_aggregate));
+
+    let mut unused_mock = base;
+    unused_mock["lifecore"]["circumstance_table"]
+        .as_array_mut()
+        .expect("circumstance table is an array")
+        .push(serde_json::json!("Mock"));
+    cases.push(("unused Mock", unused_mock));
+
+    for (name, value) in cases {
+        let mut corrupted = serde_json::to_vec_pretty(&value).expect("corrupted state encodes");
+        corrupted.push(b'\n');
+        fs::write(store.path(), &corrupted).expect("corrupted state writes");
+
+        //A Load must diagnose hostile serialized indexes before any resolver
+        //A can index or recurse through the private storage tables.
+        let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.load()));
+        assert!(loaded.is_ok(), "{name} panicked during load");
+        assert!(
+            matches!(loaded.unwrap(), Err(AppError::InvalidState { .. })),
+            "{name} was not rejected as invalid canonical state"
+        );
+        assert_eq!(
+            fs::read(store.path()).expect("corrupted bytes remain readable"),
+            corrupted,
+            "{name} changed the source bytes"
+        );
+    }
+}
+
+#[test]
+fn stage10_malformed_fields_and_graphviz_state_targets_are_byte_safe() {
+    let harness = AcceptanceHarness::new();
+    harness.invoke(&["lifecore", "init"]).assert_success();
+    let snapshot = harness.snapshot();
+
+    let malformed = harness.invoke(&["lifecore", "add", "Note", "--field", "not-an-assignment"]);
+    malformed.assert_failure();
+    assert!(malformed.stderr.contains("invalid field assignment"));
+    snapshot.assert_unchanged();
+
+    for args in [
+        ["lifecore", "graphviz", "LifeCoreState.json", "--dot"].as_slice(),
+        ["lifecore", "graphviz", "LifeCoreState.json"].as_slice(),
+    ] {
+        let rejected = harness.invoke(args);
+        rejected.assert_failure();
+        assert!(rejected.stderr.contains("canonical state path"));
+        snapshot.assert_unchanged();
+    }
 }
 
 fn directory_snapshot(directory: &std::path::Path) -> io::Result<Vec<(PathBuf, Vec<u8>)>> {

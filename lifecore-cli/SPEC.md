@@ -523,11 +523,11 @@ append.
 lifecore type list [--at ENTRY-LOCATOR]
 lifecore type show ENTRY-LOCATOR
 lifecore type create NAME [TYPE OPTIONS]
-  [--commit [--expect-head ENTRY-LOCATOR]]
+  [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
 lifecore type override NAME [--at ENTRY-LOCATOR] [--as NEW-NAME]
-  [PATCH OPTIONS] [--commit [--expect-head ENTRY-LOCATOR]]
+  [PATCH OPTIONS] [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
 lifecore query nodes ... --select ENTRY-LOCATOR -- type override
-  [--as NEW-NAME] [PATCH OPTIONS] [--commit [--expect-head ENTRY-LOCATOR]]
+  [--as NEW-NAME] [PATCH OPTIONS] [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
 ```
 
 `type list` displays current, well-formed stored declarations in name order and
@@ -644,10 +644,10 @@ The basic commands remain small and explicit:
 ```text
 lifecore add TYPE [--field 'FIELD-ASSIGNMENT']...
   [--parent NODE-REF]
-  [--commit [--expect-head ENTRY-LOCATOR]]
+  [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
 
 lifecore connect --from NODE-REF --type EDGE-TYPE --to NODE-REF
-  [--commit [--expect-head ENTRY-LOCATOR]]
+  [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
 ```
 
 `add --parent` and both `connect` ends require node references visible in the
@@ -708,7 +708,7 @@ durable locators, aliases, or `HEAD`.
 lifecore sidecar attach PATH
 lifecore sidecar detach
 lifecore sidecar dump
-lifecore sidecar commit [--expect-head ENTRY-LOCATOR]
+lifecore sidecar commit [--expect-head ENTRY-LOCATOR|EMPTY]
 ```
 
 ```toml
@@ -767,7 +767,7 @@ creating a node or edge:
 
 ```text
 lifecore analyzer list
-lifecore analyzer add NAME CONFIG [--commit [--expect-head ENTRY-LOCATOR]]
+lifecore analyzer add NAME CONFIG [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
 ```
 
 `analyzer list` displays configured name/configuration pairs in their stored
@@ -832,7 +832,7 @@ lifecore check --dismissal-ids
 lifecore message show MESSAGE-ID
 lifecore message dismiss MESSAGE-ID
 lifecore message restore MESSAGE-ID
-lifecore message apply MESSAGE-ID [--commit [--expect-head ENTRY-LOCATOR]]
+lifecore message apply MESSAGE-ID [--commit [--expect-head ENTRY-LOCATOR|EMPTY]]
   [--keep-message]
 ```
 

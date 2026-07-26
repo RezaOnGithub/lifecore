@@ -284,6 +284,28 @@ impl<'a> TransactionService<'a> {
             messages.clone()
         };
 
+        messages = committed_messages;
+        //A Result assembly remains before the replacement boundary because
+        //A locator or rendering preparation must not fail after a successful save.
+        let result = match build_result(
+            &candidate,
+            original_end,
+            original_analyzer_count,
+            messages.clone(),
+            TransactionState::Committed,
+        ) {
+        Ok(result) => result,
+        Err(error) => {
+            return Err(self.abort(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                error.to_string(),
+                messages,
+            ));
+        }
+        };
+
         if let Some(expectation) = request.expected_head.as_ref() {
             log::trace!("verifying canonical head expectation before save");
             if let Err(error) = verify_expected_head(self.store, expectation) {
@@ -308,15 +330,7 @@ impl<'a> TransactionService<'a> {
             ));
         }
 
-        messages = committed_messages;
-
-        build_result(
-            &candidate,
-            original_end,
-            original_analyzer_count,
-            messages,
-            TransactionState::Committed,
-        )
+        Ok(result)
     }
 
     fn apply_candidate(&self, candidate: &mut PersistedState) -> Result<(), String> {

@@ -1499,7 +1499,7 @@ Commands may not independently read an attached sidecar or append its entries.
 
 ## Stage 10 — Cross-feature acceptance, determinism, and release readiness
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): the planned CLI implementation may be declared complete**
 
@@ -1601,18 +1601,18 @@ utility module.
 - [x] Complete the immediate deferral verification: package and workspace tests,
       nightly format check, strict CLI clippy, diff/reference sweeps, and the
       rebuilt-binary help and rejection walkthrough.
-- [ ] Turn every acceptance criterion at the end of `SPEC.md` into a traceable
+- [x] Turn every acceptance criterion at the end of `SPEC.md` into a traceable
       test or documented manual verification.
-- [ ] Add cross-feature scenarios for query-attested mutations, historical type
+- [x] Add cross-feature scenarios for query-attested mutations, historical type
       editing, messages, aliases, sidecars, and GraphViz.
-- [ ] Add batch workflow scenarios covering the browsing, selection, review,
+- [x] Add batch workflow scenarios covering the browsing, selection, review,
       and commit needs formerly assigned to the TTY client.
-- [ ] Audit deterministic iteration and rendering paths.
-- [ ] Audit error variants for invariant-specific context and absence of panics.
-- [ ] Audit all filesystem writes and state-byte rollback guarantees.
-- [ ] Audit command adapters for duplicated shared-service logic.
-- [ ] Review trace/debug/info/warn/error levels and default stderr behavior.
-- [ ] Reconcile final help text, `SPEC.md`, and this plan and confirm every
+- [x] Audit deterministic iteration and rendering paths.
+- [x] Audit error variants for invariant-specific context and absence of panics.
+- [x] Audit all filesystem writes and state-byte rollback guarantees.
+- [x] Audit command adapters for duplicated shared-service logic.
+- [x] Review trace/debug/info/warn/error levels and default stderr behavior.
+- [x] Reconcile final help text, `SPEC.md`, and this plan and confirm every
       remaining `interactive` reference denotes the analyzer or an explicit
       future deferral.
 
@@ -1620,35 +1620,35 @@ utility module.
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo test --workspace`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Sweep root and nested help, confirm `interactive` is absent, and assert a
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run `cargo test --workspace`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Sweep root and nested help, confirm `interactive` is absent, and assert a
       stable observed clap substring for rejected interactive invocations.
-- [ ] Prove rejected interactive invocations, including former format forms,
+- [x] Prove rejected interactive invocations, including former format forms,
       leave an empty working directory unchanged.
-- [ ] Repeat deterministic-output scenarios and compare byte-identical JSON/DOT
+- [x] Repeat deterministic-output scenarios and compare byte-identical JSON/DOT
       where applicable.
-- [ ] Run the CLI test suite with selective `RUST_LOG` settings and confirm logs
+- [x] Run the CLI test suite with selective `RUST_LOG` settings and confirm logs
       stay on stderr.
-- [ ] Run `git diff --check`.
+- [x] Run `git diff --check`.
 
 #### Manual walkthrough
 
-- [ ] Inspect root and nested help, reject `lifecore interactive` in an empty
+- [x] Inspect root and nested help, reject `lifecore interactive` in an empty
       directory, and confirm no state file is created.
-- [ ] Initialize a fresh state and apply the Type bootstrap Suggestion.
-- [ ] Create types, add nodes and edges, supersede nodes, and observe Interactive
+- [x] Initialize a fresh state and apply the Type bootstrap Suggestion.
+- [x] Create types, add nodes and edges, supersede nodes, and observe Interactive
       suggestions.
-- [ ] Query, explain, select, alias, inspect, add a child, and patch historical
+- [x] Query, explain, select, alias, inspect, add a child, and patch historical
       declarations using batch commands.
-- [ ] Review a dry-run candidate without saving, compare state bytes, then
+- [x] Review a dry-run candidate without saving, compare state bytes, then
       repeat it with `--commit` and an explicit expected head.
-- [ ] Dismiss/restore/apply messages and verify reload behavior.
-- [ ] Attach, diagnose, dump, browse, commit, and recover from sidecars.
-- [ ] Produce DOT and SVG artifacts.
-- [ ] Exercise expectation mismatches and confirm all failed saves preserve the
+- [x] Dismiss/restore/apply messages and verify reload behavior.
+- [x] Attach, diagnose, dump, browse, commit, and recover from sidecars.
+- [x] Produce DOT and SVG artifacts.
+- [x] Exercise expectation mismatches and confirm all failed saves preserve the
       previous state.
 
 ### Review questions
@@ -1664,7 +1664,7 @@ utility module.
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** every accepted behavior and acceptance criterion
+- [x] **Implementation gate (implementor only):** every accepted behavior and acceptance criterion
       has evidence, all checks pass, and the final walkthrough is complete.
 - [ ] **Review gate (reviewer only):** final human feedback is incorporated or explicitly
       deferred by agreement.

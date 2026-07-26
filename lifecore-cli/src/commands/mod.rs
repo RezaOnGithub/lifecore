@@ -498,6 +498,7 @@ pub fn dispatch(
         if args.dismissal_ids {
             Ok(CommandOutcome::Dismissals {
                 format,
+                view: view.summary(),
                 items: universe.dismissal_statuses(&effective_state.cli.dismissals),
             })
         } else {
@@ -790,9 +791,11 @@ pub fn dispatch(
             Some(SelectionAction::Type {
                 command: SelectionTypeCommand::Override(override_args),
             }) => {
-                let (patch, expected_head) = prepared_type_override
-                    .take()
-                    .expect("selected type override was prepared before state access");
+                let (patch, expected_head) = prepared_type_override.take().ok_or_else(|| {
+                    AppError::invalid_type_patch(
+                        "selected type override was not prepared before state access",
+                    )
+                })?;
                 let source = resolve_selected_type(&effective_state.lifecore, &view, resolved)?;
                 let parent = EntryIndex(source.entry.index());
                 let declaration = patch.apply(&source.declaration)?;
@@ -872,6 +875,7 @@ pub fn dispatch(
             GraphvizKind::Svg
         };
         let target = GraphvizTarget::resolve(args.target, invocation.current_directory(), kind)?;
+        target.reject_protected_path(store.path())?;
         let exporter = GraphvizExporter::default();
 
         match kind {

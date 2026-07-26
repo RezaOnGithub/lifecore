@@ -84,6 +84,133 @@ pub struct LifeCoreList {
 }
 
 impl LifeCoreList {
+    fn structural_validation(&self) -> Result<(), BasicValidationFailure> {
+        let failure = |message: String| BasicValidationFailure {
+            offending_event: Context::universe().into(),
+            reason: InternalError { message },
+        };
+
+        for (index, circumstance) in self.circumstance.iter().enumerate() {
+            if circumstance.0 >= self.circumstance_table.len() {
+                return Err(failure(format!(
+                    "circumstance index {} for entry {index} is out of range",
+                    circumstance.0
+                )));
+            }
+        }
+
+        for (index, entry) in self.entry.iter().enumerate() {
+            let (ty, body) = match entry {
+            XEntry::Node(node) => (node.ty, Some(&node.body)),
+            XEntry::Edge(edge) => (edge.ty, None),
+            };
+            if ty.0 >= self.string_table.len() {
+                return Err(failure(format!(
+                    "type-name string index {} for entry {index} is out of range",
+                    ty.0
+                )));
+            }
+
+            if let Some(body) = body {
+                for (name, value) in body {
+                    if name.0 >= self.string_table.len() {
+                        return Err(failure(format!(
+                            "field-name string index {} for entry {index} is out of range",
+                            name.0
+                        )));
+                    }
+                    if value.0 >= self.value_table.len() {
+                        return Err(failure(format!(
+                            "field value index {} for entry {index} is out of range",
+                            value.0
+                        )));
+                    }
+                }
+            }
+        }
+
+        for (index, value) in self.value_table.iter().enumerate() {
+            match value {
+            Value::Text(string) if string.0 >= self.string_table.len() => {
+                return Err(failure(format!(
+                    "text string index {} for value {index} is out of range",
+                    string.0
+                )));
+            }
+            Value::Sequence(sequence) if sequence.0 >= self.sequence_table.len() => {
+                return Err(failure(format!(
+                    "sequence index {} for value {index} is out of range",
+                    sequence.0
+                )));
+            }
+            Value::OrderedSet(set) if set.0 >= self.ordered_set_table.len() => {
+                return Err(failure(format!(
+                    "ordered-set index {} for value {index} is out of range",
+                    set.0
+                )));
+            }
+            _ => {}
+            }
+        }
+
+        for (index, sequence) in self.sequence_table.iter().enumerate() {
+            for value in sequence {
+                if value.0 >= self.value_table.len() {
+                    return Err(failure(format!(
+                        "value index {} in sequence {index} is out of range",
+                        value.0
+                    )));
+                }
+            }
+        }
+        for (index, set) in self.ordered_set_table.iter().enumerate() {
+            for value in set {
+                if value.0 >= self.value_table.len() {
+                    return Err(failure(format!(
+                        "value index {} in ordered set {index} is out of range",
+                        value.0
+                    )));
+                }
+            }
+        }
+
+        //A Payload insertion stores aggregate members before their container.
+        //A Enforcing that canonical order also rejects cycles without recursive
+        //A validation that an adversarial state could use to exhaust the stack.
+        for (index, value) in self.value_table.iter().enumerate() {
+            let members = match value {
+            Value::Sequence(sequence) => self[*sequence].iter().collect_vec(),
+            Value::OrderedSet(set) => self[*set].iter().collect_vec(),
+            _ => continue,
+            };
+            if let Some(member) = members.into_iter().find(|member| member.0 >= index) {
+                return Err(failure(format!(
+                    "aggregate value {index} refers to non-prior value {}",
+                    member.0
+                )));
+            }
+        }
+
+        if let Some(mock_index) = self.circumstance_table.get_index_of(&Circumstance::Mock) {
+            if !matches!(self.circumstance_table.last(), Some(Circumstance::Mock)) {
+                return Err(failure(
+                    "Mock must be the final circumstance-table entry".to_string(),
+                ));
+            }
+            if !self
+                .circumstance
+                .iter()
+                .any(|circumstance| circumstance.0 == mock_index)
+            {
+                return Err(failure(
+                    "Mock circumstance-table entry is not used by any graph entry".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     fn raw_window<I>(&self, i: I) -> impl Iterator<Item = XEntry>
     where
         I: IntoIterator<Item = EntryContext>,
@@ -178,6 +305,8 @@ impl LifeCore for LifeCoreList {
     }
 
     fn basic_validation(&self) -> Result<(), crate::BasicValidationFailure> {
+        self.structural_validation()?;
+
         let ctx = || Context::universe();
 
         // Non-Rules. Have little to do with the meaning of the graph, but more related
@@ -223,7 +352,12 @@ impl LifeCore for LifeCoreList {
                     let mock_index = self
                         .circumstance_table
                         .get_index_of(&Circumstance::Mock)
-                        .unwrap();
+                        .ok_or_else(|| BasicValidationFailure {
+                            offending_event: ctx().into(),
+                            reason: InternalError {
+                                message: "Mock circumstance could not be located".to_string(),
+                            },
+                        })?;
                     let mock_event_index = self
                         .circumstance
                         .iter()
@@ -231,7 +365,6 @@ impl LifeCore for LifeCoreList {
                         .filter(|(_, CircumstanceIndex(i))| *i == mock_index)
                         .map(|(index, _)| index)
                         .collect_vec();
-                    assert!(!mock_event_index.is_empty());
                     if !mock_event_index
                         .iter()
                         .copied()
@@ -272,7 +405,7 @@ impl LifeCore for LifeCoreList {
 
             for dupe in dupe_class {
                 for pair in dupe.iter().combinations(2) {
-                    let ((older_index, _older_node), (newer_index, newer_node)) = {
+                    let ((older_index, _older_node), (newer_index, _newer_node)) = {
                         if pair[0].0.thing < pair[1].0.thing {
                             (pair[0], pair[1])
                         } else {
@@ -280,9 +413,8 @@ impl LifeCore for LifeCoreList {
                         }
                     };
 
-                    if self
-                        .is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index))
-                        .unwrap()
+                    if self.is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index))
+                        == Some(true)
                     {
                         // TODO move this Warning into its own analyzer
                         // warn!(
@@ -294,19 +426,6 @@ impl LifeCore for LifeCoreList {
                         //     newer_index
                         // );
                     } else {
-                        assert!({
-                            // The check above should pass if an identical node overrides the parent
-                            // What is the application of overriding a node with an exact copy?
-                            // (Maybe counters, or means of correcting edges or getting rid of stale
-                            // edges)
-                            if let Some(idx) = newer_node.parent
-                                && idx == older_index.entry()
-                            {
-                                false
-                            } else {
-                                true
-                            }
-                        });
                         return Err(BasicValidationFailure {
                             offending_event: (*newer_index).into(),
                             reason: DuplicateNode,
@@ -373,20 +492,12 @@ impl LifeCore for LifeCoreList {
             // Throw away the loop context. Now we are looking at 0..edge_index
             // (inclusive or exclusive doesn't matter in this particular case)
             let ctx = edge_context.shrink_to_exclusive_left();
-            assert!(edge_context.entry() > edge.from && edge_context.entry() > edge.to.into());
-            if self
-                .is_stale(ctx.look_at(edge.from.before_and_including()))
-                .unwrap()
-                || self
-                    .is_stale(ctx.look_at(edge.to.before_and_including()))
-                    .unwrap()
+            if self.is_stale(ctx.look_at(edge.from.before_and_including())) == Some(true)
+                || self.is_stale(ctx.look_at(edge.to.before_and_including())) == Some(true)
             {
+                // SUS context
                 return Err(BasicValidationFailure {
-                    offending_event: edge_context
-                        .shrink_to_inclusive_left()
-                        .last()
-                        .unwrap()
-                        .into(),
+                    offending_event: edge_context.into(),
                     reason: StaleRuleViolation,
                 });
             }
@@ -431,24 +542,27 @@ impl LifeCore for LifeCoreList {
 
         let mut candidate = self.clone();
         candidate.basic_validation()?;
+        let validation_failure = |message: &str| BasicValidationFailure {
+            offending_event: Context::universe().into(),
+            reason: InternalError {
+                message: message.to_string(),
+            },
+        };
         let mock_index = CircumstanceIndex(
             candidate
                 .circumstance_table
                 .get_index_of(&Circumstance::Mock)
-                .unwrap(),
+                .ok_or_else(|| validation_failure("Mock circumstance could not be located"))?,
         );
-
-        assert!(
-            matches!(
-                candidate.circumstance_table.last(),
-                Some(Circumstance::Mock)
-            ),
-            "Mock must be the final circumstance"
-        );
-        assert!(
-            matches!(candidate.circumstance_table.pop(), Some(Circumstance::Mock)),
-            "The final circumstance must be Mock"
-        );
+        if !matches!(
+            candidate.circumstance_table.last(),
+            Some(Circumstance::Mock)
+        ) {
+            return Err(validation_failure("Mock must be the final circumstance").into());
+        }
+        if !matches!(candidate.circumstance_table.pop(), Some(Circumstance::Mock)) {
+            return Err(validation_failure("The final circumstance must be Mock").into());
+        }
 
         let current_circumstance_index =
             candidate.get_or_insert_circumstance(&Circumstance::current_session()?);

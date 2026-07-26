@@ -249,7 +249,10 @@ pub fn resolve_active_type(
     match matches.len() {
     0 => Err(AppError::type_declaration_not_found(name)),
     1 => {
-        let listing = matches.into_iter().next().expect("one match exists");
+        let listing = matches
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::type_declaration_not_found(name))?;
         Ok(ResolvedTypeDeclaration {
             entry: listing.entry,
             declaration: listing.declaration,

@@ -252,7 +252,11 @@ impl MessageUniverse {
 
         match matches.len() {
         0 => Err(AppError::unknown_message_id(prefix)),
-        1 => Ok(matches.into_iter().next().expect("one match").to_string()),
+        1 => matches
+            .into_iter()
+            .next()
+            .map(str::to_string)
+            .ok_or_else(|| AppError::unknown_message_id(prefix)),
         _ => Err(AppError::ambiguous_message_id(prefix)),
         }
     }
@@ -517,7 +521,9 @@ impl CanonicalMessage {
         }
 
         let MessageLocation::Entry { context_end, .. } = self.location else {
-            unreachable!("pointed diagnostics normalize to entry locations");
+            return Err(AppError::analysis(
+                "pointed analyzer diagnostic normalized to a context-only location",
+            ));
         };
 
         for entry in &self.relevance {

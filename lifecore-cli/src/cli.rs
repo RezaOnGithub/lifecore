@@ -175,7 +175,7 @@ pub struct TransactionArgs {
         long,
         value_name = "ENTRY-LOCATOR|EMPTY",
         requires = "commit",
-        help = "Commit only if the canonical head still matches this stable identity"
+        help = "For automation, commit only if the canonical head still matches this stable identity"
     )]
     pub expect_head: Option<String>,
 }
@@ -658,8 +658,8 @@ pub struct SidecarDumpArgs {
 pub struct SidecarCommitArgs {
     #[arg(
         long,
-        value_name = "ENTRY-LOCATOR",
-        help = "Commit only if the canonical head still matches this locator"
+        value_name = "ENTRY-LOCATOR|EMPTY",
+        help = "For automation, commit only if the canonical head still matches this stable identity"
     )]
     pub expect_head: Option<String>,
 

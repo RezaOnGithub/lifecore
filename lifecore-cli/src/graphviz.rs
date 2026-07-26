@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
-    fs::File,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -85,6 +84,41 @@ impl GraphvizTarget {
     pub fn kind(&self) -> GraphvizKind {
         self.kind
     }
+
+    pub(crate) fn reject_protected_path(&self, protected: &Path) -> Result<(), AppError> {
+        let protected = std::fs::canonicalize(protected).map_err(|error| {
+            AppError::graphviz_target_io(protected, "resolve canonical state path", error)
+        })?;
+        let resolved_target = match std::fs::canonicalize(&self.path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = self.path.parent().ok_or_else(|| {
+                AppError::graphviz_target("artifact path does not have a parent directory")
+            })?;
+            let file_name = self.path.file_name().ok_or_else(|| {
+                AppError::graphviz_target("artifact path does not have a file name")
+            })?;
+            std::fs::canonicalize(parent)
+                .map(|parent| parent.join(file_name))
+                .unwrap_or_else(|_| self.path.clone())
+        }
+        Err(error) => {
+            return Err(AppError::graphviz_target_io(
+                &self.path,
+                "resolve artifact path",
+                error,
+            ));
+        }
+        };
+
+        if resolved_target == protected {
+            return Err(AppError::graphviz_target(
+                "artifact target resolves to the canonical state path",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 pub struct GraphvizInput<'a> {
@@ -112,10 +146,23 @@ impl GraphvizExporter {
         target: &GraphvizTarget,
         document: &DotDocument,
     ) -> Result<(), AppError> {
-        let mut file = File::create(target.path())
-            .map_err(|error| AppError::graphviz_target_io(target.path(), "open", error))?;
-        file.write_all(document.as_bytes())
-            .map_err(|error| AppError::graphviz_target_io(target.path(), "write", error))
+        let parent = target.path().parent().ok_or_else(|| {
+            AppError::graphviz_target("artifact path does not have a parent directory")
+        })?;
+        let mut artifact = NamedTempFile::new_in(parent).map_err(|error| {
+            AppError::graphviz_target_io(target.path(), "create temporary DOT", error)
+        })?;
+        artifact
+            .write_all(document.as_bytes())
+            .map_err(|error| AppError::graphviz_target_io(target.path(), "write DOT", error))?;
+        artifact
+            .flush()
+            .map_err(|error| AppError::graphviz_target_io(target.path(), "flush DOT", error))?;
+        artifact.persist(target.path()).map_err(|error| {
+            AppError::graphviz_target_io(target.path(), "persist DOT", error.error)
+        })?;
+
+        Ok(())
     }
 
     pub fn write_svg(

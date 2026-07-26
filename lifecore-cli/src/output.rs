@@ -64,18 +64,32 @@ pub fn render_outcome(
             serde_json::to_writer(&mut *writer, &value)?;
             writeln!(writer)
         } else if *detail {
-            render_message_detail(&items[0], view, writer)
+            let item = items
+                .first()
+                .ok_or_else(|| io::Error::other("message detail outcome contains no item"))?;
+            render_message_detail(item, view, writer)
         } else {
             render_human_messages(items, view, format, writer)
         }
     }
-    CommandOutcome::Dismissals { format, items } => {
+    CommandOutcome::Dismissals {
+        format,
+        view,
+        items,
+    } => {
         let format = resolve_format(*format, stdout_is_terminal);
 
         if format == OutputFormat::Json {
-            serde_json::to_writer(&mut *writer, &json!({ "items": items }))?;
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "items": items,
+                }),
+            )?;
             writeln!(writer)
         } else {
+            render_view(view, writer)?;
             if items.is_empty() {
                 return writeln!(writer, "No dismissed message IDs.");
             }
@@ -247,7 +261,10 @@ pub fn render_outcome(
             writeln!(writer)
         } else if *detail {
             render_view(view, writer)?;
-            render_type_detail(&items[0], writer)
+            let item = items
+                .first()
+                .ok_or_else(|| io::Error::other("type detail outcome contains no item"))?;
+            render_type_detail(item, writer)
         } else {
             render_view(view, writer)?;
             render_types(items, format, writer)
@@ -297,7 +314,10 @@ pub fn render_outcome(
             writeln!(writer)
         } else if *detail {
             render_view(view, writer)?;
-            render_entry_detail(&items[0], writer)
+            let item = items
+                .first()
+                .ok_or_else(|| io::Error::other("entry detail outcome contains no item"))?;
+            render_entry_detail(item, writer)
         } else {
             render_view(view, writer)?;
             render_entry_listing(items, format, writer)
@@ -693,11 +713,8 @@ fn render_entry_detail(entry: &EntryRecord, writer: &mut dyn Write) -> io::Resul
         writeln!(writer, "Parent: {parent}")?;
     }
     if let Some(fields) = &entry.fields {
-        writeln!(
-            writer,
-            "Fields: {}",
-            serde_json::to_string(fields).expect("serializable entry fields")
-        )?;
+        let fields = serde_json::to_string(fields).map_err(io::Error::other)?;
+        writeln!(writer, "Fields: {fields}")?;
     }
     if let Some(from) = &entry.from {
         writeln!(writer, "From: {from}")?;
