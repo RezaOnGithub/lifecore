@@ -202,11 +202,17 @@ impl StatePath {
 #[derive(Clone, Debug)]
 pub struct StateStore {
     path: StatePath,
+    #[cfg(test)]
+    fail_save: bool,
 }
 
 impl StateStore {
     pub fn new(path: StatePath) -> Self {
-        Self { path }
+        Self {
+            path,
+            #[cfg(test)]
+            fail_save: false,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -228,18 +234,51 @@ impl StateStore {
 
     pub fn initialize(&self, state: &PersistedState) -> Result<(), AppError> {
         state.validate()?;
-
-        let parent = self
-            .path()
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
+        let temporary = self.write_temporary(state)?;
 
         log::trace!(
             "preparing no-clobber state initialization at {}",
             self.path().display()
         );
 
+        temporary
+            .persist_noclobber(self.path())
+            .map_err(|error| AppError::state_io(self.path(), error.error))?;
+
+        Ok(())
+    }
+
+    pub fn save(&self, state: &PersistedState) -> Result<(), AppError> {
+        state.validate()?;
+
+        #[cfg(test)]
+        if self.fail_save {
+            //A The transaction tests need a deterministic failure after every
+            //A graph gate but before replacement; filesystem permissions are
+            //A unreliable when the test process has elevated privileges.
+            return Err(AppError::state_io(
+                self.path(),
+                std::io::Error::other("injected atomic-save failure"),
+            ));
+        }
+
+        let temporary = self.write_temporary(state)?;
+
+        log::trace!("atomically replacing state at {}", self.path().display());
+
+        temporary
+            .persist(self.path())
+            .map_err(|error| AppError::state_io(self.path(), error.error))?;
+
+        Ok(())
+    }
+
+    fn write_temporary(&self, state: &PersistedState) -> Result<NamedTempFile, AppError> {
+        let parent = self
+            .path()
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let mut temporary =
             NamedTempFile::new_in(parent).map_err(|error| AppError::state_io(parent, error))?;
 
@@ -260,11 +299,15 @@ impl StateStore {
             .sync_all()
             .map_err(|error| AppError::state_io(self.path(), error))?;
 
-        temporary
-            .persist_noclobber(self.path())
-            .map_err(|error| AppError::state_io(self.path(), error.error))?;
+        Ok(temporary)
+    }
 
-        Ok(())
+    #[cfg(test)]
+    pub(crate) fn failing_save_for_test(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            fail_save: true,
+        }
     }
 }
 

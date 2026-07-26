@@ -695,7 +695,7 @@ Later commands must consume `GraphView`, `EntryLocator`, or resolved
 ## Stage 4 — Read-only GraphViz generation and export
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
+- [X] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 5 may begin**
 
 ### Description
@@ -811,7 +811,7 @@ move loading, sidecar preparation, or persistence into `graphviz`.
 
 - [x] **Implementation gate (implementor only):** canonical DOT/SVG generation,
       tests, checks, and walkthrough are complete.
-- [ ] **Review gate (reviewer only):** visualization and interface feedback is
+- [X] **Review gate (reviewer only):** visualization and interface feedback is
       incorporated or explicitly deferred by agreement.
 - [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 4 item blocks transaction
@@ -819,7 +819,7 @@ move loading, sidecar preparation, or persistence into `graphviz`.
 
 ## Stage 5 — Shared transaction engine and complete message workflow
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 6 may begin**
 
@@ -918,16 +918,16 @@ No later mutation command may call `add_mock`, `connect_mock`, `apply`,
 
 ### Implementation checklist
 
-- [ ] Define plans, transaction requests/states/results, and expectation types.
-- [ ] Implement staging, analysis gating, dry-run, apply, reread, and atomic
+- [x] Define plans, transaction requests/states/results, and expectation types.
+- [x] Implement staging, analysis gating, dry-run, apply, reread, and atomic
       save transitions.
-- [ ] Implement full message visibility, history-resolution, and registry-only
+- [x] Implement full message visibility, history-resolution, and registry-only
       listing behavior.
-- [ ] Implement dismiss/restore as CLI-state-only saves.
-- [ ] Implement suggestion planning and atomic apply.
-- [ ] Implement automatic dismissal and `--keep-message`.
-- [ ] Extend human and JSON transaction output.
-- [ ] Add focused tests for each rollback point, Mock exclusion, dry-run byte
+- [x] Implement dismiss/restore as CLI-state-only saves.
+- [x] Implement suggestion planning and atomic apply.
+- [x] Implement automatic dismissal and `--keep-message`.
+- [x] Extend human and JSON transaction output.
+- [x] Add focused tests for each rollback point, Mock exclusion, dry-run byte
       identity, expectation mismatch, edge heads, dismissal persistence,
       inconsistency rejection, prefix universes, orphan restoration, action
       ordering, and post-commit dismissal.
@@ -936,19 +936,19 @@ No later mutation command may call `add_mock`, `connect_mock`, `apply`,
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Run `cargo test --workspace`.
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test --workspace`.
 
 #### Manual walkthrough
 
-- [ ] Dry-run the bootstrap Suggestion and confirm state bytes are unchanged.
-- [ ] Commit it with `--expect-head EMPTY` and inspect its locator.
-- [ ] Repeat with a mismatched expectation and confirm nothing is saved.
-- [ ] Dismiss and restore a Warning or Suggestion, including an orphaned full
+- [x] Dry-run the bootstrap Suggestion and confirm state bytes are unchanged.
+- [x] Commit it with `--expect-head EMPTY` and inspect its locator.
+- [x] Repeat with a mismatched expectation and confirm nothing is saved.
+- [x] Dismiss and restore a Warning or Suggestion, including an orphaned full
       dismissal ID fixture.
-- [ ] Try to dismiss an Inconsistency and confirm it remains visible.
+- [x] Try to dismiss an Inconsistency and confirm it remains visible.
 
 ### Review questions
 
@@ -959,7 +959,7 @@ No later mutation command may call `add_mock`, `connect_mock`, `apply`,
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** transaction and message workflows, rollback
+- [x] **Implementation gate (implementor only):** transaction and message workflows, rollback
       evidence, tests, checks, and walkthrough are complete.
 - [ ] **Review gate (reviewer only):** transaction/message feedback is incorporated or
       explicitly deferred by agreement.

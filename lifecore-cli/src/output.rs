@@ -66,6 +66,77 @@ pub fn render_outcome(
             render_human_messages(items, view, format, writer)
         }
     }
+    CommandOutcome::Dismissals { format, items } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(&mut *writer, &json!({ "items": items }))?;
+            writeln!(writer)
+        } else {
+            if items.is_empty() {
+                return writeln!(writer, "No dismissed message IDs.");
+            }
+            if format == OutputFormat::Table {
+                writeln!(writer, "ID\tEMITTED")?;
+            }
+            for item in items {
+                if format == OutputFormat::Table {
+                    writeln!(writer, "{}\t{}", item.display_id, item.emitted)?;
+                } else {
+                    writeln!(writer, "{}  emitted={}", item.id, item.emitted)?;
+                }
+            }
+
+            Ok(())
+        }
+    }
+    CommandOutcome::DismissalChanged {
+        format,
+        action,
+        id,
+        emitted,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "dismissal": {
+                        "action": action,
+                        "id": id,
+                        "emitted": emitted,
+                    }
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            writeln!(writer, "{} dismissal {} (emitted={emitted})", action, id)
+        }
+    }
+    CommandOutcome::Transaction { format, result } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": result.view,
+                    "transaction": {
+                        "state": result.state,
+                        "entries": result.entries,
+                        "messages": result.messages,
+                    }
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            writeln!(writer, "Transaction: {}", result.state.label())?;
+            render_view(&result.view, writer)?;
+            render_entry_listing(&result.entries, format, writer)?;
+            render_human_messages(&result.messages, &result.view, format, writer)
+        }
+    }
     CommandOutcome::Entries {
         format,
         view,
@@ -133,12 +204,31 @@ pub fn render_error(error: &AppError, writer: &mut dyn Write) -> io::Result<()> 
         if let AppError::Unavailable { operation, .. } = error {
             detail["operation"] = json!(operation);
         }
+        if let AppError::TransactionAborted {
+            detail: transaction_detail,
+            ..
+        } = error
+        {
+            detail["view"] = json!(transaction_detail.view);
+            detail["transaction"] = json!({
+                "state": "aborted",
+                "entries": transaction_detail.entries,
+                "messages": transaction_detail.messages,
+            });
+        }
 
         serde_json::to_writer(&mut *writer, &json!({ "error": detail }))?;
         writeln!(writer)
     } else {
         match error {
         AppError::Usage { message, .. } => writer.write_all(message.as_bytes()),
+        AppError::TransactionAborted { detail, .. } => {
+            writeln!(writer, "error: {error}")?;
+            writeln!(writer, "Transaction: aborted")?;
+            render_view(&detail.view, writer)?;
+            render_entry_listing(&detail.entries, OutputFormat::Lines, writer)?;
+            render_human_messages(&detail.messages, &detail.view, OutputFormat::Lines, writer)
+        }
         _ => writeln!(writer, "error: {error}"),
         }
     }
@@ -163,20 +253,32 @@ fn render_human_messages(
     }
 
     if format == OutputFormat::Table {
-        writeln!(writer, "ID\tSEVERITY\tANALYZER\tLOCATION\tMESSAGE\tACTION")?;
+        writeln!(
+            writer,
+            "ID\tSEVERITY\tANALYZER\tLOCATION\tSTATE\tRELEVANCE\tMESSAGE\tACTION"
+        )?;
     }
 
     for message in messages {
         let action = message.action_summary();
+        let state = message_presentation_state(message);
+        let relevance = message
+            .relevance
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
 
         if format == OutputFormat::Table {
             writeln!(
                 writer,
-                "{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 message.display_id,
                 message.severity.label(),
                 message.analyzer,
                 message.location.display(),
+                state,
+                relevance,
                 message.text,
                 action
             )?;
@@ -188,8 +290,12 @@ fn render_human_messages(
                 message.severity.label(),
                 message.analyzer,
                 message.location.display(),
-                message.text
+                message.text,
             )?;
+            write!(writer, "  state={state}")?;
+            if !relevance.is_empty() {
+                write!(writer, "  relevance={relevance}")?;
+            }
 
             if !action.is_empty() {
                 write!(writer, "  action: {action}")?;
@@ -220,6 +326,16 @@ fn render_message_detail(
     writeln!(writer, "Dismissed: {}", message.dismissed)?;
     writeln!(writer, "Resolved: {}", message.resolved)?;
     writeln!(writer, "Visible: {}", message.visible)?;
+    writeln!(
+        writer,
+        "Relevance: {}",
+        message
+            .relevance
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )?;
     writeln!(writer, "Message: {}", message.text)?;
 
     for (index, action) in message.actions.iter().enumerate() {
@@ -227,6 +343,15 @@ fn render_message_detail(
     }
 
     Ok(())
+}
+
+fn message_presentation_state(message: &MessageRecord) -> &'static str {
+    match (message.dismissed, message.resolved) {
+    (false, false) => "active",
+    (true, false) => "dismissed",
+    (false, true) => "resolved",
+    (true, true) => "dismissed,resolved",
+    }
 }
 
 fn render_view(view: &ViewSummary, writer: &mut dyn Write) -> io::Result<()> {

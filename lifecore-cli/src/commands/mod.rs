@@ -11,9 +11,10 @@ use crate::{
         GraphvizExporter, GraphvizInput, GraphvizKind, GraphvizOptions, GraphvizTarget, generate,
     },
     locator::{EntryExpectation, EntryLocator, resolve_entry, resolve_index},
-    messages::{MessageUniverse, Severity},
+    messages::{MessageFilter, MessageUniverse, Severity, plan_suggestion},
     query::{execute_query, explain_query, parse_query},
-    state::{PersistedState, StatePath, StateStore},
+    state::{DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StatePath, StateStore},
+    transaction::{ExpectedHead, TransactionRequest, TransactionService},
     view::{GraphView, ViewSpec},
 };
 
@@ -59,12 +60,7 @@ pub fn dispatch(
             messages: universe.visible(),
         })
     }
-    Command::Check(args)
-        if !args.include_dismissed
-            && !args.only_dismissed
-            && !args.include_resolved
-            && !args.dismissal_ids =>
-    {
+    Command::Check(args) => {
         let store = state_store(invocation)?;
         let state = store.load()?;
         reject_attached_sidecar(&state, "check")?;
@@ -73,16 +69,27 @@ pub fn dispatch(
         let universe =
             MessageUniverse::from_analysis(&report, &state.lifecore, &state.cli.dismissals)?;
 
-        Ok(CommandOutcome::Messages {
-            format,
-            view: ViewSummary {
-                end: view_end(&state.lifecore),
-                through: None,
-                display_through: None,
-            },
-            items: universe.visible(),
-            detail: false,
-        })
+        if args.dismissal_ids {
+            Ok(CommandOutcome::Dismissals {
+                format,
+                items: universe.dismissal_statuses(&state.cli.dismissals),
+            })
+        } else {
+            Ok(CommandOutcome::Messages {
+                format,
+                view: ViewSummary {
+                    end: view_end(&state.lifecore),
+                    through: None,
+                    display_through: None,
+                },
+                items: universe.filtered(MessageFilter {
+                    include_dismissed: args.include_dismissed,
+                    only_dismissed: args.only_dismissed,
+                    include_resolved: args.include_resolved,
+                }),
+                detail: false,
+            })
+        }
     }
     Command::Message {
         command: MessageCommand::Show(args),
@@ -106,6 +113,96 @@ pub fn dispatch(
             items: vec![message],
             detail: true,
         })
+    }
+    Command::Message {
+        command: MessageCommand::Dismiss(args),
+    } => {
+        let store = state_store(invocation)?;
+        let mut state = store.load()?;
+        reject_attached_sidecar(&state, "message dismiss")?;
+
+        let report = run_analysis(&state.lifecore, &AnalyzerRegistry::built_in())?;
+        let universe =
+            MessageUniverse::from_analysis(&report, &state.lifecore, &state.cli.dismissals)?;
+        let message = universe.resolve(&args.message_id)?;
+        if message.severity == Severity::Inconsistency {
+            return Err(AppError::wrong_message_severity(
+                message.display_id,
+                message.severity.label(),
+                "Warning or Suggestion",
+            ));
+        }
+
+        insert_dismissal(&mut state.cli.dismissals, message.id.clone());
+        store.save(&state)?;
+
+        Ok(CommandOutcome::DismissalChanged {
+            format,
+            action: "saved".to_string(),
+            id: format!("m:{}", message.id),
+            emitted: true,
+        })
+    }
+    Command::Message {
+        command: MessageCommand::Restore(args),
+    } => {
+        let store = state_store(invocation)?;
+        let mut state = store.load()?;
+        reject_attached_sidecar(&state, "message restore")?;
+
+        let report = run_analysis(&state.lifecore, &AnalyzerRegistry::built_in())?;
+        let universe =
+            MessageUniverse::from_analysis(&report, &state.lifecore, &state.cli.dismissals)?;
+        let digest = universe.resolve_with_dismissals(&args.message_id, &state.cli.dismissals)?;
+        let emitted = universe
+            .records()
+            .iter()
+            .any(|message| message.id == digest);
+        let Ok(index) = state
+            .cli
+            .dismissals
+            .binary_search_by(|record| record.digest.cmp(&digest))
+        else {
+            return Err(AppError::dismissal_not_found(args.message_id));
+        };
+        state.cli.dismissals.remove(index);
+        store.save(&state)?;
+
+        Ok(CommandOutcome::DismissalChanged {
+            format,
+            action: "removed".to_string(),
+            id: format!("m:{digest}"),
+            emitted,
+        })
+    }
+    Command::Message {
+        command: MessageCommand::Apply(args),
+    } => {
+        let expectation = args
+            .transaction
+            .expect_head
+            .as_deref()
+            .map(str::parse::<ExpectedHead>)
+            .transpose()?;
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "message apply")?;
+
+        let registry = AnalyzerRegistry::built_in();
+        let report = run_analysis(&state.lifecore, &registry)?;
+        let universe =
+            MessageUniverse::from_analysis(&report, &state.lifecore, &state.cli.dismissals)?;
+        let message = universe.resolve(&args.message_id)?;
+        let change = plan_suggestion(&message)?;
+        let request = TransactionRequest {
+            change,
+            commit: args.transaction.commit,
+            expected_head: expectation,
+            dismiss_after_commit: (!args.keep_message).then_some(message.id),
+        };
+        let result = TransactionService::new(&store, &registry).execute(&state, request)?;
+
+        Ok(CommandOutcome::Transaction { format, result })
     }
     Command::Entry {
         command: EntryCommand::Show(args),
@@ -277,7 +374,7 @@ pub fn dispatch(
         })
     }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 4");
+        log::trace!("operation '{operation}' is unavailable in stage 5");
 
         Err(AppError::unavailable(operation, format))
     }
@@ -316,4 +413,17 @@ fn reject_attached_sidecar(state: &PersistedState, operation: &str) -> Result<()
     }
 
     Ok(())
+}
+
+fn insert_dismissal(dismissals: &mut Vec<DismissalRecord>, digest: String) {
+    match dismissals.binary_search_by(|record| record.digest.cmp(&digest)) {
+    Ok(_) => {}
+    Err(index) => dismissals.insert(
+        index,
+        DismissalRecord {
+            version: MESSAGE_ID_VERSION,
+            digest,
+        },
+    ),
+    }
 }

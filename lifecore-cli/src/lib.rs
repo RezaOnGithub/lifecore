@@ -12,6 +12,7 @@ pub mod output;
 pub mod query;
 pub mod reference;
 pub mod state;
+pub mod transaction;
 pub mod view;
 
 use std::{

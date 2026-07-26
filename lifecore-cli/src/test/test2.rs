@@ -17,7 +17,7 @@ use crate::{
     analysis::{
         AnalysisReport, AnalyzerRegistry, configured_analyzers, initial_graph, run_analysis,
     },
-    app::CommandOutcome,
+    app::{CircumstanceRecord, CommandOutcome},
     entry::entry_record,
     error::AppError,
     graphviz::{
@@ -28,12 +28,18 @@ use crate::{
         EntryExpectation, EntryFingerprint, EntryLocator, entry_fingerprint_identity_bytes,
         resolve_entry, resolve_index,
     },
-    messages::{MessageUniverse, Severity, encode_lower_hex, message_identity_bytes},
-    output::render_outcome,
+    messages::{
+        MessageFilter, MessageUniverse, Severity, encode_lower_hex, message_identity_bytes,
+    },
+    output::{render_error, render_outcome},
     query::{execute_query, parse_predicate, parse_query},
     reference::{NodeReference, resolve_node_reference},
     run_cli, run_from_in,
     state::{PersistedState, StatePath, StateStore, StoredEntryLocatorV1},
+    transaction::{
+        ExpectedHead, PlannedChange, TransactionRequest, TransactionService, TransactionState,
+        verify_expected_head,
+    },
     view::{GraphView, ViewSpec},
 };
 
@@ -256,37 +262,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
             ],
             "analyzer add",
         ),
-        (
-            &[
-                "lifecore",
-                "check",
-                "--include-dismissed",
-                "--include-resolved",
-            ],
-            "check",
-        ),
-        (&["lifecore", "check", "--dismissal-ids"], "check"),
-        (
-            &["lifecore", "message", "dismiss", "m:abcde"],
-            "message dismiss",
-        ),
-        (
-            &["lifecore", "message", "restore", "m:abcde"],
-            "message restore",
-        ),
-        (
-            &[
-                "lifecore",
-                "message",
-                "apply",
-                "m:abcde",
-                "--commit",
-                "--expect-head",
-                "EMPTY",
-                "--keep-message",
-            ],
-            "message apply",
-        ),
     ];
 
     for (args, operation) in cases {
@@ -408,6 +383,19 @@ fn structural_conflicts_fail_before_dispatch() {
     for (args, expected) in cases {
         assert_usage_error(args, expected);
     }
+
+    assert!(matches!(
+        run(&[
+            "lifecore",
+            "message",
+            "apply",
+            "m:abcde",
+            "--commit",
+            "--expect-head",
+            "HEAD",
+        ]),
+        Err(AppError::InvalidExpectedHead { .. })
+    ));
 }
 
 #[test]
@@ -451,7 +439,7 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'add' is unavailable in implementation stage 4\n"
+        "error: operation 'add' is unavailable in implementation stage 5\n"
     );
 
     let mut stdout = Vec::new();
@@ -735,7 +723,10 @@ fn stage2_outcomes_render_deterministically_in_json_table_lines_and_auto() {
     let mut table_output = Vec::new();
     render_outcome(&table, &mut table_output, false).expect("table rendering succeeds");
     let table_output = String::from_utf8(table_output).expect("table output is UTF-8");
-    assert!(table_output.starts_with("ID\tSEVERITY\tANALYZER\tLOCATION\tMESSAGE\tACTION\n"));
+    assert!(
+        table_output
+            .starts_with("ID\tSEVERITY\tANALYZER\tLOCATION\tSTATE\tRELEVANCE\tMESSAGE\tACTION\n")
+    );
 
     let lines = run_in(
         &["lifecore", "check", "--format", "lines"],
@@ -965,6 +956,26 @@ fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
     Err(AppError::UnknownMessageId { .. }) | Err(AppError::AmbiguousMessageId { .. }) => {}
     result => panic!("valid prefix should resolve or report absence, got {result:?}"),
     }
+
+    let record = &universe.records()[0];
+    let prefix = &record.id[..5];
+    let alternate = format!(
+        "{}{}",
+        prefix,
+        if record.id.as_bytes()[5] == b'a' {
+            "b".repeat(123)
+        } else {
+            "a".repeat(123)
+        }
+    );
+    let dismissal = crate::state::DismissalRecord {
+        version: 1,
+        digest: alternate,
+    };
+    assert!(matches!(
+        universe.resolve_with_dismissals(&format!("m:{prefix}"), &[dismissal]),
+        Err(AppError::AmbiguousMessageId { .. })
+    ));
 }
 
 #[test]
@@ -1685,6 +1696,578 @@ fn graphviz_cli_writes_dot_and_preserves_canonical_state_on_every_path() {
         fs::read(state_path).expect("state remains readable"),
         before,
         "GraphViz success and failure must preserve exact state bytes"
+    );
+}
+
+#[test]
+fn stage5_bootstrap_suggestion_dry_run_commit_and_orphan_restore_are_atomic() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let path = directory.path().join("LifeCoreState.json");
+    let initialized = run_in(
+        &["lifecore", "init", "--format", "json"],
+        directory.path(),
+        None,
+    )
+    .expect("initialization succeeds");
+    let suggestion = match initialized {
+    CommandOutcome::Initialized { messages, .. } => {
+        assert_eq!(messages.len(), 1);
+        messages[0].clone()
+    }
+    outcome => panic!("expected initialization outcome, got {outcome:?}"),
+    };
+    let before = fs::read(&path).expect("initialized bytes are readable");
+
+    let dry_run = run_in(
+        &[
+            "lifecore",
+            "message",
+            "apply",
+            &suggestion.display_id,
+            "--format",
+            "json",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("bootstrap dry run succeeds");
+    let mut rendered = Vec::new();
+    render_outcome(&dry_run, &mut rendered, false).expect("dry-run JSON renders");
+    let rendered: serde_json::Value =
+        serde_json::from_slice(&rendered).expect("dry-run output is JSON");
+    assert_eq!(rendered["transaction"]["state"], "dry_run");
+    match dry_run {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].circumstance, CircumstanceRecord::Mock);
+    }
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    }
+    assert_eq!(fs::read(&path).expect("state is readable"), before);
+
+    let mismatch = run_in(
+        &[
+            "lifecore",
+            "message",
+            "apply",
+            &suggestion.display_id,
+            "--commit",
+            "--expect-head",
+            "0:abcde",
+            "--format",
+            "json",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect_err("mismatched expectation must abort");
+    match &mismatch {
+    AppError::TransactionAborted { message, .. } => {
+        assert!(message.contains("expected canonical head"));
+    }
+    result => panic!("expected transaction abort, got {result:?}"),
+    }
+    let mut rendered = Vec::new();
+    render_error(&mismatch, &mut rendered).expect("aborted JSON renders");
+    let rendered: serde_json::Value =
+        serde_json::from_slice(&rendered).expect("aborted output is JSON");
+    assert_eq!(rendered["error"]["transaction"]["state"], "aborted");
+    assert_eq!(fs::read(&path).expect("state is readable"), before);
+
+    let committed = run_in(
+        &[
+            "lifecore",
+            "message",
+            "apply",
+            &suggestion.display_id,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("guarded bootstrap commit succeeds");
+    let mut rendered = Vec::new();
+    render_outcome(&committed, &mut rendered, false).expect("commit output renders");
+    assert!(
+        String::from_utf8(rendered)
+            .expect("commit output is UTF-8")
+            .contains("Transaction: committed")
+    );
+    match committed {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::Committed);
+        assert_eq!(result.entries.len(), 1);
+        assert!(!matches!(
+            result.entries[0].circumstance,
+            CircumstanceRecord::Mock
+        ));
+    }
+    outcome => panic!("expected committed transaction, got {outcome:?}"),
+    }
+
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let committed = store.load().expect("committed state loads");
+    assert!(!committed.lifecore.is_mock());
+    assert_eq!(committed.cli.dismissals.len(), 1);
+    assert_eq!(committed.cli.dismissals[0].digest, suggestion.id);
+
+    let dismissal_ids = run_in(
+        &["lifecore", "check", "--dismissal-ids"],
+        directory.path(),
+        None,
+    )
+    .expect("dismissal registry listing succeeds");
+    match dismissal_ids {
+    CommandOutcome::Dismissals { items, .. } => {
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].emitted);
+    }
+    outcome => panic!("expected dismissal listing, got {outcome:?}"),
+    }
+
+    let full_id = format!("m:{}", suggestion.id);
+    run_in(
+        &["lifecore", "message", "restore", &full_id],
+        directory.path(),
+        None,
+    )
+    .expect("orphaned full dismissal ID restores");
+    assert!(
+        store
+            .load()
+            .expect("restored state loads")
+            .cli
+            .dismissals
+            .is_empty()
+    );
+}
+
+#[test]
+fn stage5_dismissal_filters_are_independent_and_keep_message_skips_registration() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let initialized =
+        run_in(&["lifecore", "init"], directory.path(), None).expect("initialization succeeds");
+    let suggestion = match initialized {
+    CommandOutcome::Initialized { messages, .. } => messages[0].clone(),
+    outcome => panic!("expected initialization outcome, got {outcome:?}"),
+    };
+
+    for _ in 0..2 {
+        run_in(
+            &["lifecore", "message", "dismiss", &suggestion.display_id],
+            directory.path(),
+            None,
+        )
+        .expect("dismissal is idempotent");
+    }
+
+    let visible = run_in(&["lifecore", "check"], directory.path(), None)
+        .expect("default message listing succeeds");
+    assert!(matches!(
+        visible,
+        CommandOutcome::Messages { items, .. } if items.is_empty()
+    ));
+    let dismissed = run_in(
+        &["lifecore", "check", "--only-dismissed"],
+        directory.path(),
+        None,
+    )
+    .expect("dismissed listing succeeds");
+    assert!(matches!(
+        &dismissed,
+        CommandOutcome::Messages { items, .. }
+            if items.len() == 1 && items[0].dismissed
+    ));
+    let mut rendered = Vec::new();
+    render_outcome(&dismissed, &mut rendered, false).expect("dismissed message renders");
+    assert!(
+        String::from_utf8(rendered)
+            .expect("dismissed output is UTF-8")
+            .contains("state=dismissed")
+    );
+
+    run_in(
+        &["lifecore", "message", "restore", &suggestion.display_id],
+        directory.path(),
+        None,
+    )
+    .expect("emitted dismissal restores");
+    run_in(
+        &[
+            "lifecore",
+            "message",
+            "apply",
+            &suggestion.display_id,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+            "--keep-message",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("keep-message commit succeeds");
+
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    assert!(
+        store
+            .load()
+            .expect("committed state loads")
+            .cli
+            .dismissals
+            .is_empty()
+    );
+}
+
+#[test]
+fn stage5_inconsistencies_block_transactions_and_cannot_be_dismissed() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let initialized =
+        run_in(&["lifecore", "init"], directory.path(), None).expect("initialization succeeds");
+    let suggestion = match initialized {
+    CommandOutcome::Initialized { messages, .. } => messages[0].clone(),
+    outcome => panic!("expected initialization outcome, got {outcome:?}"),
+    };
+    run_in(
+        &[
+            "lifecore",
+            "message",
+            "apply",
+            &suggestion.display_id,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("bootstrap commit succeeds");
+
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let loaded = store.load().expect("bootstrapped state loads");
+    let before = fs::read(store.path()).expect("bootstrapped bytes are readable");
+    let registry = AnalyzerRegistry::built_in();
+    let service = TransactionService::new(&store, &registry);
+    let change = PlannedChange::AddNode {
+        type_name: "No_Such_Type".to_string(),
+        body: Body::default(),
+        parent: None,
+    };
+    let aborted = service.execute(
+        &loaded,
+        TransactionRequest {
+            change: change.clone(),
+            commit: true,
+            expected_head: None,
+            dismiss_after_commit: None,
+        },
+    );
+    match aborted {
+    Err(AppError::TransactionAborted {
+        detail, message, ..
+    }) => {
+        assert!(message.contains("Inconsistency"));
+        assert!(
+            detail
+                .messages
+                .iter()
+                .any(|message| message.severity == Severity::Inconsistency)
+        );
+    }
+    result => panic!("inconsistent candidate must abort, got {result:?}"),
+    }
+    assert_eq!(
+        fs::read(store.path()).expect("state remains readable"),
+        before
+    );
+
+    //A Persisting an intentionally inconsistent but basically valid fixture
+    //A lets the command boundary prove that presentation never turns an
+    //A Inconsistency into dismissible CLI state.
+    let mut inconsistent = loaded;
+    inconsistent
+        .lifecore
+        .add_mock("No_Such_Type", Body::default(), None)
+        .expect("fixture node is basically valid");
+    inconsistent
+        .lifecore
+        .apply()
+        .expect("fixture suffix applies");
+    store
+        .save(&inconsistent)
+        .expect("inconsistent fixture persists");
+    let checked = run_in(&["lifecore", "check"], directory.path(), None).expect("check succeeds");
+    let inconsistency = match checked {
+    CommandOutcome::Messages { items, .. } => items
+        .into_iter()
+        .find(|message| message.severity == Severity::Inconsistency)
+        .expect("inconsistency is visible"),
+    outcome => panic!("expected message listing, got {outcome:?}"),
+    };
+    let before_dismiss = fs::read(store.path()).expect("fixture bytes are readable");
+    assert!(matches!(
+        run_in(
+            &["lifecore", "message", "dismiss", &inconsistency.display_id,],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::WrongMessageSeverity { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("fixture remains readable"),
+        before_dismiss
+    );
+}
+
+#[test]
+fn stage5_message_filter_keeps_inconsistencies_and_separates_resolution() {
+    let mut graph = LifeCoreList::default();
+    let parent = graph
+        .add_mock("Parent", Body::default(), None)
+        .expect("parent appends");
+    graph
+        .add_mock("Child", Body::default(), Some(parent.e))
+        .expect("child appends");
+    let report = AnalysisReport {
+        suite: Default::default(),
+        messages: vec![
+            Message::Inconsistency(Inconsistency {
+                offending_event: DiagnosticLocation::Context(EntryIndex(2).before()),
+                system_name: "Test".to_string(),
+                system_config: String::new(),
+                message: "broken".to_string(),
+            }),
+            Message::Warning(Warning {
+                offending_event: DiagnosticLocation::Entry(
+                    EntryIndex(1).before_and_including().look_at(parent.e),
+                ),
+                system_name: "Test".to_string(),
+                system_config: String::new(),
+                relevance: Vec::new(),
+                message: "historical".to_string(),
+            }),
+            Message::Suggestion(Suggestion {
+                offending_event: DiagnosticLocation::Context(EntryIndex(2).before()),
+                system_name: "Test".to_string(),
+                system_config: String::new(),
+                relevance: Vec::new(),
+                message: "active".to_string(),
+                action: Vec::new(),
+            }),
+        ],
+    };
+    let first = MessageUniverse::from_analysis(&report, &graph, &[]).expect("universe constructs");
+    let warning = first
+        .records()
+        .iter()
+        .find(|message| message.severity == Severity::Warning)
+        .expect("warning exists");
+    assert!(warning.resolved);
+    let dismissal = crate::state::DismissalRecord {
+        version: 1,
+        digest: warning.id.clone(),
+    };
+    let universe = MessageUniverse::from_analysis(&report, &graph, &[dismissal])
+        .expect("dismissed universe constructs");
+
+    assert_eq!(universe.visible().len(), 2);
+    let only_dismissed = universe.filtered(MessageFilter {
+        only_dismissed: true,
+        include_resolved: true,
+        ..MessageFilter::default()
+    });
+    assert_eq!(only_dismissed.len(), 2);
+    assert!(
+        only_dismissed
+            .iter()
+            .any(|message| message.severity == Severity::Inconsistency)
+    );
+    assert!(
+        only_dismissed
+            .iter()
+            .any(|message| message.severity == Severity::Warning)
+    );
+}
+
+#[test]
+fn stage5_transaction_composites_preserve_order_and_roll_back_every_failure() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let initial = PersistedState::new(LifeCoreList::default());
+    store.initialize(&initial).expect("empty state initializes");
+    let before = fs::read(store.path()).expect("initial bytes are readable");
+    let registry = AnalyzerRegistry::empty();
+    let service = TransactionService::new(&store, &registry);
+    let composite = PlannedChange::Composite(vec![
+        PlannedChange::AddNode {
+            type_name: "A".to_string(),
+            body: Body::default(),
+            parent: None,
+        },
+        PlannedChange::AddNode {
+            type_name: "B".to_string(),
+            body: Body::default(),
+            parent: None,
+        },
+        PlannedChange::AddEdge {
+            from: EntryIndex(0),
+            type_name: "Link".to_string(),
+            to: EntryIndex(1),
+        },
+    ]);
+
+    let dry_run = service
+        .execute(
+            &initial,
+            TransactionRequest {
+                change: composite.clone(),
+                commit: false,
+                expected_head: None,
+                dismiss_after_commit: None,
+            },
+        )
+        .expect("composite dry run succeeds");
+    assert_eq!(dry_run.state, TransactionState::DryRun);
+    assert_eq!(
+        dry_run
+            .entries
+            .iter()
+            .map(|entry| entry.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["node", "node", "edge"]
+    );
+    assert_eq!(fs::read(store.path()).expect("state is readable"), before);
+
+    let committed = service
+        .execute(
+            &initial,
+            TransactionRequest {
+                change: composite,
+                commit: true,
+                expected_head: Some(ExpectedHead::Empty),
+                dismiss_after_commit: None,
+            },
+        )
+        .expect("composite commit succeeds");
+    assert_eq!(committed.state, TransactionState::Committed);
+    let loaded = store.load().expect("committed state loads");
+    assert!(!loaded.lifecore.is_mock());
+    let committed_bytes = fs::read(store.path()).expect("committed bytes are readable");
+    let edge_head = resolve_index(
+        &loaded.lifecore,
+        &loaded.cli,
+        2,
+        EntryExpectation::Any,
+        None,
+    )
+    .expect("edge head resolves");
+    verify_expected_head(
+        &store,
+        &ExpectedHead::Entry(
+            EntryLocator::parse(&edge_head.full_locator()).expect("edge locator parses"),
+        ),
+    )
+    .expect("latest edge is a valid expected head");
+
+    let duplicate_edges = PlannedChange::Composite(vec![
+        PlannedChange::AddEdge {
+            from: EntryIndex(0),
+            type_name: "Duplicate".to_string(),
+            to: EntryIndex(1),
+        },
+        PlannedChange::AddEdge {
+            from: EntryIndex(0),
+            type_name: "Duplicate".to_string(),
+            to: EntryIndex(1),
+        },
+    ]);
+    assert!(matches!(
+        service.execute(
+            &loaded,
+            TransactionRequest {
+                change: duplicate_edges,
+                commit: true,
+                expected_head: None,
+                dismiss_after_commit: None,
+            }
+        ),
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("state remains readable"),
+        committed_bytes
+    );
+
+    assert!(matches!(
+        service.execute(
+            &loaded,
+            TransactionRequest {
+                change: PlannedChange::AddAnalyzer {
+                    name: "Missing".to_string(),
+                    config: String::new(),
+                },
+                commit: true,
+                expected_head: None,
+                dismiss_after_commit: None,
+            }
+        ),
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("state remains readable"),
+        committed_bytes
+    );
+
+    let failing_apply_service = TransactionService::failing_apply_for_test(&store, &registry);
+    assert!(matches!(
+        failing_apply_service.execute(
+            &loaded,
+            TransactionRequest {
+                change: PlannedChange::AddNode {
+                    type_name: "Unapplied".to_string(),
+                    body: Body::default(),
+                    parent: None,
+                },
+                commit: true,
+                expected_head: None,
+                dismiss_after_commit: None,
+            }
+        ),
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("state remains readable"),
+        committed_bytes
+    );
+
+    let failing_store = store.failing_save_for_test();
+    let failing_service = TransactionService::new(&failing_store, &registry);
+    assert!(matches!(
+        failing_service.execute(
+            &loaded,
+            TransactionRequest {
+                change: PlannedChange::AddNode {
+                    type_name: "Unsaved".to_string(),
+                    body: Body::default(),
+                    parent: None,
+                },
+                commit: true,
+                expected_head: None,
+                dismiss_after_commit: None,
+            }
+        ),
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("state remains readable"),
+        committed_bytes
     );
 }
 

@@ -1,14 +1,25 @@
 use clap::error::ErrorKind;
 use std::{ffi::OsStr, io, path::Path, process::ExitStatus};
 
-use crate::cli::OutputFormat;
+use crate::{
+    app::{EntryRecord, ViewSummary},
+    cli::OutputFormat,
+    messages::MessageRecord,
+};
+
+#[derive(Debug)]
+pub struct TransactionAbortDetail {
+    pub entries: Vec<EntryRecord>,
+    pub messages: Vec<MessageRecord>,
+    pub view: ViewSummary,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 4")]
+    #[error("operation '{operation}' is unavailable in implementation stage 5")]
     Unavailable {
         operation: String,
         format: OutputFormat,
@@ -71,6 +82,46 @@ pub enum AppError {
     #[error("message ID {prefix:?} is ambiguous")]
     AmbiguousMessageId {
         prefix: String,
+        format: OutputFormat,
+    },
+
+    #[error("message {message_id} has severity {actual}; expected {expected}")]
+    WrongMessageSeverity {
+        message_id: String,
+        actual: String,
+        expected: &'static str,
+        format: OutputFormat,
+    },
+
+    #[error("message ID {prefix:?} is not present in the dismissal registry")]
+    DismissalNotFound {
+        prefix: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid expected head: {message}")]
+    InvalidExpectedHead {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("expected canonical head {supplied}, but found {actual}")]
+    ExpectedHeadMismatch {
+        supplied: String,
+        actual: String,
+        format: OutputFormat,
+    },
+
+    #[error("transaction staging failed: {message}")]
+    TransactionStage {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("transaction aborted: {message}")]
+    TransactionAborted {
+        message: String,
+        detail: Box<TransactionAbortDetail>,
         format: OutputFormat,
     },
 
@@ -265,6 +316,65 @@ impl AppError {
         }
     }
 
+    pub fn wrong_message_severity(
+        message_id: impl Into<String>,
+        actual: impl Into<String>,
+        expected: &'static str,
+    ) -> Self {
+        Self::WrongMessageSeverity {
+            message_id: message_id.into(),
+            actual: actual.into(),
+            expected,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn dismissal_not_found(prefix: impl Into<String>) -> Self {
+        Self::DismissalNotFound {
+            prefix: prefix.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_expected_head(message: impl Into<String>) -> Self {
+        Self::InvalidExpectedHead {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn expected_head_mismatch(supplied: impl Into<String>, actual: impl Into<String>) -> Self {
+        Self::ExpectedHeadMismatch {
+            supplied: supplied.into(),
+            actual: actual.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn transaction_stage(message: impl Into<String>) -> Self {
+        Self::TransactionStage {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn transaction_aborted(
+        message: impl Into<String>,
+        entries: Vec<EntryRecord>,
+        messages: Vec<MessageRecord>,
+        view: ViewSummary,
+    ) -> Self {
+        Self::TransactionAborted {
+            message: message.into(),
+            detail: Box::new(TransactionAbortDetail {
+                entries,
+                messages,
+                view,
+            }),
+            format: OutputFormat::Lines,
+        }
+    }
+
     pub fn invalid_entry_locator(message: impl Into<String>) -> Self {
         Self::InvalidEntryLocator {
             message: message.into(),
@@ -410,6 +520,12 @@ impl AppError {
         | Self::InvalidMessageId { format, .. }
         | Self::UnknownMessageId { format, .. }
         | Self::AmbiguousMessageId { format, .. }
+        | Self::WrongMessageSeverity { format, .. }
+        | Self::DismissalNotFound { format, .. }
+        | Self::InvalidExpectedHead { format, .. }
+        | Self::ExpectedHeadMismatch { format, .. }
+        | Self::TransactionStage { format, .. }
+        | Self::TransactionAborted { format, .. }
         | Self::InvalidEntryLocator { format, .. }
         | Self::UnknownEntryIndex { format, .. }
         | Self::EntryFingerprintMismatch { format, .. }
@@ -444,6 +560,12 @@ impl AppError {
         | Self::InvalidMessageId { .. }
         | Self::UnknownMessageId { .. }
         | Self::AmbiguousMessageId { .. }
+        | Self::WrongMessageSeverity { .. }
+        | Self::DismissalNotFound { .. }
+        | Self::InvalidExpectedHead { .. }
+        | Self::ExpectedHeadMismatch { .. }
+        | Self::TransactionStage { .. }
+        | Self::TransactionAborted { .. }
         | Self::InvalidEntryLocator { .. }
         | Self::UnknownEntryIndex { .. }
         | Self::EntryFingerprintMismatch { .. }
@@ -476,6 +598,12 @@ impl AppError {
         | Self::InvalidMessageId { format, .. }
         | Self::UnknownMessageId { format, .. }
         | Self::AmbiguousMessageId { format, .. }
+        | Self::WrongMessageSeverity { format, .. }
+        | Self::DismissalNotFound { format, .. }
+        | Self::InvalidExpectedHead { format, .. }
+        | Self::ExpectedHeadMismatch { format, .. }
+        | Self::TransactionStage { format, .. }
+        | Self::TransactionAborted { format, .. }
         | Self::InvalidEntryLocator { format, .. }
         | Self::UnknownEntryIndex { format, .. }
         | Self::EntryFingerprintMismatch { format, .. }
@@ -508,6 +636,12 @@ impl AppError {
         Self::InvalidMessageId { .. } => "message_id_syntax",
         Self::UnknownMessageId { .. } => "message_id_unknown",
         Self::AmbiguousMessageId { .. } => "message_id_ambiguous",
+        Self::WrongMessageSeverity { .. } => "message_severity",
+        Self::DismissalNotFound { .. } => "dismissal_not_found",
+        Self::InvalidExpectedHead { .. } => "expected_head_syntax",
+        Self::ExpectedHeadMismatch { .. } => "expected_head_mismatch",
+        Self::TransactionStage { .. } => "transaction_stage",
+        Self::TransactionAborted { .. } => "transaction_aborted",
         Self::InvalidEntryLocator { .. } => "entry_locator_syntax",
         Self::UnknownEntryIndex { .. } => "entry_index_unknown",
         Self::EntryFingerprintMismatch { .. } => "entry_fingerprint_mismatch",

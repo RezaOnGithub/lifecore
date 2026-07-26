@@ -11,6 +11,7 @@ use crate::{
     analysis::AnalysisReport,
     error::AppError,
     state::{DismissalRecord, MESSAGE_ID_VERSION},
+    transaction::PlannedChange,
 };
 
 pub const MESSAGE_DISPLAY_DIGITS: usize = 16;
@@ -114,6 +115,21 @@ pub struct MessageRecord {
     pub visible: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MessageFilter {
+    pub include_dismissed: bool,
+    pub only_dismissed: bool,
+    pub include_resolved: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DismissalStatusRecord {
+    pub id_version: u32,
+    pub id: String,
+    pub display_id: String,
+    pub emitted: bool,
+}
+
 impl MessageRecord {
     pub fn action_summary(&self) -> String {
         self.actions
@@ -179,9 +195,28 @@ impl MessageUniverse {
     }
 
     pub fn visible(&self) -> Vec<MessageRecord> {
+        self.filtered(MessageFilter::default())
+    }
+
+    pub fn filtered(&self, filter: MessageFilter) -> Vec<MessageRecord> {
         self.records
             .iter()
-            .filter(|record| record.visible)
+            .filter(|record| {
+                if record.severity == Severity::Inconsistency {
+                    return true;
+                }
+                if record.resolved && !filter.include_resolved {
+                    return false;
+                }
+                if filter.only_dismissed {
+                    return record.dismissed;
+                }
+                if record.dismissed && !filter.include_dismissed {
+                    return false;
+                }
+
+                true
+            })
             .cloned()
             .collect()
     }
@@ -200,6 +235,98 @@ impl MessageUniverse {
         _ => Err(AppError::ambiguous_message_id(prefix)),
         }
     }
+
+    pub fn resolve_with_dismissals(
+        &self,
+        prefix: &str,
+        dismissals: &[DismissalRecord],
+    ) -> Result<String, AppError> {
+        let digest_prefix = parse_message_prefix(prefix)?;
+        let matches = self
+            .records
+            .iter()
+            .map(|record| record.id.as_str())
+            .chain(dismissals.iter().map(|record| record.digest.as_str()))
+            .filter(|digest| digest.starts_with(digest_prefix))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        match matches.len() {
+        0 => Err(AppError::unknown_message_id(prefix)),
+        1 => Ok(matches.into_iter().next().expect("one match").to_string()),
+        _ => Err(AppError::ambiguous_message_id(prefix)),
+        }
+    }
+
+    pub fn dismissal_statuses(&self, dismissals: &[DismissalRecord]) -> Vec<DismissalStatusRecord> {
+        let emitted = self
+            .records
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        dismissals
+            .iter()
+            .map(|dismissal| DismissalStatusRecord {
+                id_version: dismissal.version,
+                id: format!("{MESSAGE_PREFIX}{}", dismissal.digest),
+                display_id: format!(
+                    "{MESSAGE_PREFIX}{}",
+                    &dismissal.digest[..MESSAGE_DISPLAY_DIGITS]
+                ),
+                emitted: emitted.contains(dismissal.digest.as_str()),
+            })
+            .collect()
+    }
+}
+
+pub fn plan_suggestion(message: &MessageRecord) -> Result<PlannedChange, AppError> {
+    if message.severity != Severity::Suggestion {
+        return Err(AppError::wrong_message_severity(
+            &message.display_id,
+            message.severity.label(),
+            "Suggestion",
+        ));
+    }
+
+    let changes = message
+        .actions
+        .iter()
+        .map(|action| -> Result<PlannedChange, AppError> {
+            match action {
+            ActionRecord::AddNode {
+                r#type,
+                body,
+                parent,
+            } => Ok(PlannedChange::AddNode {
+                type_name: r#type.clone(),
+                body: body.clone(),
+                parent: parent
+                    .map(|index| {
+                        usize::try_from(index).map(EntryIndex).map_err(|_| {
+                            AppError::analysis("suggested parent index does not fit this platform")
+                        })
+                    })
+                    .transpose()?,
+            }),
+            ActionRecord::AddEdge { from, r#type, to } => {
+                let from = usize::try_from(*from).map(EntryIndex).map_err(|_| {
+                    AppError::analysis("suggested edge endpoint does not fit this platform")
+                })?;
+                let to = usize::try_from(*to).map(EntryIndex).map_err(|_| {
+                    AppError::analysis("suggested edge endpoint does not fit this platform")
+                })?;
+
+                Ok(PlannedChange::AddEdge {
+                    from,
+                    type_name: r#type.clone(),
+                    to,
+                })
+            }
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PlannedChange::Composite(changes))
 }
 
 fn compare_records(left: &MessageRecord, right: &MessageRecord) -> Ordering {

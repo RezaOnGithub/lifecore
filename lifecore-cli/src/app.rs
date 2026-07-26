@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use lifecore::Body;
 use serde::Serialize;
 
-use crate::{cli::OutputFormat, messages::MessageRecord};
+use crate::{
+    cli::OutputFormat,
+    messages::{DismissalStatusRecord, MessageRecord},
+    transaction::TransactionResult,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ViewSummary {
@@ -85,6 +89,20 @@ pub enum CommandOutcome {
         items: Vec<MessageRecord>,
         detail: bool,
     },
+    Dismissals {
+        format: OutputFormat,
+        items: Vec<DismissalStatusRecord>,
+    },
+    DismissalChanged {
+        format: OutputFormat,
+        action: String,
+        id: String,
+        emitted: bool,
+    },
+    Transaction {
+        format: OutputFormat,
+        result: TransactionResult,
+    },
     Entries {
         format: OutputFormat,
         view: ViewSummary,
@@ -113,6 +131,9 @@ impl CommandOutcome {
         Self::Text(_) => OutputFormat::Lines,
         Self::Initialized { format, .. }
         | Self::Messages { format, .. }
+        | Self::Dismissals { format, .. }
+        | Self::DismissalChanged { format, .. }
+        | Self::Transaction { format, .. }
         | Self::Entries { format, .. }
         | Self::QueryExplanation { format, .. } => *format,
         Self::GraphvizArtifact { .. } => OutputFormat::Lines,
