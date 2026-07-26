@@ -91,6 +91,7 @@ pub struct GraphvizInput<'a> {
     pub graph: &'a LifeCoreList,
     pub state: &'a CliStateV1,
     pub view: &'a GraphView,
+    pub aliases: &'a BTreeMap<usize, Vec<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -230,29 +231,13 @@ pub fn generate(
                         "family references unavailable node {index}"
                     ))
                 })?;
-                write_node(
-                    &mut dot,
-                    input.graph,
-                    input.state,
-                    input.view,
-                    node,
-                    options,
-                    4,
-                )?;
+                write_node(&mut dot, &input, node, options, 4)?;
             }
             dot.push_str("  }\n");
         }
     } else {
         for node in selected_nodes.values() {
-            write_node(
-                &mut dot,
-                input.graph,
-                input.state,
-                input.view,
-                node,
-                options,
-                2,
-            )?;
+            write_node(&mut dot, &input, node, options, 2)?;
         }
     }
 
@@ -306,25 +291,29 @@ pub fn generate(
 
 fn write_node(
     dot: &mut String,
-    graph: &LifeCoreList,
-    state: &CliStateV1,
-    view: &GraphView,
+    input: &GraphvizInput<'_>,
     node: &Node,
     options: GraphvizOptions,
     indentation: usize,
 ) -> Result<(), AppError> {
     let locator = resolve_index(
-        graph,
-        state,
+        input.graph,
+        input.state,
         node.e.entry().0,
         EntryExpectation::Node,
-        Some(view.end_exclusive()),
+        Some(input.view.end_exclusive()),
     )?;
-    let header = format!(
-        "{{{}|{}}}",
+    let mut header_parts = vec![
         escape_record_component(&graphviz_locator(&locator)),
-        escape_record_component(&node.ty_name)
-    );
+        escape_record_component(&node.ty_name),
+    ];
+    if let Some(names) = input.aliases.get(&node.e.entry().0) {
+        header_parts.push(escape_record_component(&format!(
+            "aliases: {}",
+            names.join(", ")
+        )));
+    }
+    let header = format!("{{{}}}", header_parts.join("|"));
     let label = if options.fields {
         let mut rows = vec![header];
         for (key, value) in &node.field.0 {

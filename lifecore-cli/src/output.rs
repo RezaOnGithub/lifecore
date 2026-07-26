@@ -4,8 +4,8 @@ use serde_json::json;
 
 use crate::{
     app::{
-        AnalyzerRecord, CircumstanceRecord, CommandOutcome, EntryRecord, QueryExplanationRecord,
-        ViewSummary,
+        AliasRecord, AnalyzerRecord, CircumstanceRecord, CommandOutcome, EntryRecord,
+        QueryExplanationRecord, ViewSummary,
     },
     cli::OutputFormat,
     error::AppError,
@@ -138,6 +138,39 @@ pub fn render_outcome(
             render_analyzers(items, format, writer)
         }
     }
+    CommandOutcome::Aliases {
+        format,
+        view,
+        items,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "items": items,
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            render_view(view, writer)?;
+            render_aliases(items, format, writer)
+        }
+    }
+    CommandOutcome::AliasChanged { format, alias } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(&mut *writer, &json!({ "alias": alias }))?;
+            writeln!(writer)
+        } else if let Some(locator) = alias.locator.as_deref() {
+            writeln!(writer, "{} alias {} -> {locator}", alias.action, alias.name)
+        } else {
+            writeln!(writer, "{} alias {}", alias.action, alias.name)
+        }
+    }
     CommandOutcome::Transaction { format, result } => {
         let format = resolve_format(*format, stdout_is_terminal);
 
@@ -218,6 +251,40 @@ pub fn render_outcome(
         render_view(view, writer)
     }
     }
+}
+
+fn render_aliases(
+    aliases: &[AliasRecord],
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> io::Result<()> {
+    if aliases.is_empty() {
+        return writeln!(writer, "No aliases.");
+    }
+    if format == OutputFormat::Table {
+        writeln!(writer, "NAME\tLOCATOR\tSTATUS")?;
+    }
+    for alias in aliases {
+        if format == OutputFormat::Table {
+            writeln!(
+                writer,
+                "{}\t{}\t{}",
+                alias.name,
+                alias.display_locator,
+                alias.status.label()
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "{}  {}  status={}",
+                alias.name,
+                alias.locator,
+                alias.status.label()
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn render_error(error: &AppError, writer: &mut dyn Write) -> io::Result<()> {

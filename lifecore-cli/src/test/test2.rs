@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     ffi::OsString,
     fs, io,
     path::PathBuf,
@@ -34,7 +35,7 @@ use crate::{
     output::{render_error, render_outcome},
     payload_input::{parse_field_assignment, parse_field_assignments},
     query::{execute_query, parse_predicate, parse_query},
-    reference::{NodeReference, resolve_node_reference},
+    reference::{AliasStatus, NodeReference, resolve_node_reference},
     run_cli, run_from_in,
     state::{PersistedState, StatePath, StateStore, StoredEntryLocatorV1},
     transaction::{
@@ -154,15 +155,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
     let cases: &[(&[&str], &str)] = &[
         (&["lifecore", "interactive"], "interactive"),
         (
-            &["lifecore", "alias", "list", "--at", "4:abcde"],
-            "alias list",
-        ),
-        (
-            &["lifecore", "alias", "set", "chosen", "4:abcde"],
-            "alias set",
-        ),
-        (&["lifecore", "alias", "remove", "chosen"], "alias remove"),
-        (
             &["lifecore", "type", "list", "--at", "4:abcde"],
             "type list",
         ),
@@ -231,54 +223,25 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
 
 #[test]
 fn query_selection_actions_have_typed_nested_grammar() {
-    let cases: &[(&[&str], &str)] = &[
-        (
-            &[
-                "lifecore", "query", "nodes", "all", "--select", "4:abcde", "--", "alias", "set",
-                "chosen",
-            ],
-            "query nodes --select -- alias set",
-        ),
-        (
-            &[
-                "lifecore",
-                "query",
-                "nodes",
-                "all",
-                "--select",
-                "4:abcde",
-                "--",
-                "type",
-                "override",
-                "--as",
-                "FocusedTask",
-                "--field",
-                "priority = Number : Optional",
-                "--commit",
-            ],
-            "query nodes --select -- type override",
-        ),
-        (
-            &[
-                "lifecore",
-                "query",
-                "nodes",
-                "none",
-                "--select",
-                "4:abcde",
-                "--",
-                "add-child",
-                "Task",
-                "--field",
-                "title = \"child\"",
-            ],
-            "query nodes --select -- add-child",
-        ),
-    ];
-
-    for (args, operation) in cases {
-        assert_unavailable(args, operation);
-    }
+    assert_unavailable(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--select",
+            "4:abcde",
+            "--",
+            "type",
+            "override",
+            "--as",
+            "FocusedTask",
+            "--field",
+            "priority = Number : Optional",
+            "--commit",
+        ],
+        "query nodes --select -- type override",
+    );
 
     assert_usage_error(
         &[
@@ -399,7 +362,7 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'type list' is unavailable in implementation stage 6\n"
+        "error: operation 'type list' is unavailable in implementation stage 7\n"
     );
 
     let mut stdout = Vec::new();
@@ -439,14 +402,10 @@ fn deferred_commands_do_not_create_or_modify_files() -> io::Result<()> {
     result => panic!("expected missing canonical state, got {result:?}"),
     }
 
-    match run_in(
-        &["lifecore", "alias", "set", "chosen", "0:abcde"],
-        &directory,
-        None,
-    ) {
-    Err(AppError::Unavailable { operation, .. }) => assert_eq!(operation, "alias set"),
-    result => panic!("expected unavailable alias mutation, got {result:?}"),
-    }
+    assert!(matches!(
+        run_in(&["lifecore", "type", "list"], &directory, None),
+        Err(AppError::Unavailable { .. })
+    ));
 
     let after = directory_snapshot(&directory)?;
     assert_eq!(after, before);
@@ -1049,6 +1008,34 @@ fn initialize_stage3_state(directory: &std::path::Path) -> PersistedState {
     state
 }
 
+fn stage7_state() -> PersistedState {
+    let mut graph = LifeCoreList::default();
+    let original = graph
+        .add_mock("Note", Body::default(), None)
+        .expect("original Stage 7 node is valid");
+    let task = graph
+        .add_mock("Task", Body::default(), None)
+        .expect("Stage 7 task is valid");
+    let revised = graph
+        .add_mock("Note", Body::default(), Some(original.e))
+        .expect("revised Stage 7 node is valid");
+    graph
+        .connect_mock(revised.e, "Relates_To", task.e)
+        .expect("Stage 7 edge is valid");
+    graph.apply().expect("Stage 7 fixture applies");
+
+    PersistedState::new(graph)
+}
+
+fn initialize_stage7_state(directory: &std::path::Path) -> PersistedState {
+    let state = stage7_state();
+    let store = StateStore::new(
+        StatePath::resolve(None, directory).expect("default Stage 7 state path resolves"),
+    );
+    store.initialize(&state).expect("Stage 7 state initializes");
+    state
+}
+
 #[test]
 fn entry_fingerprint_wire_and_digest_are_stable() {
     let state = stage3_state();
@@ -1202,13 +1189,23 @@ fn node_references_are_lexically_disjoint_and_head_skips_the_latest_edge() {
     ));
     assert_eq!(
         NodeReference::parse("head").expect("lowercase head is an alias"),
-        NodeReference::Alias("head".to_string())
+        NodeReference::Alias(crate::reference::AliasName::parse("head").expect("alias parses"))
     );
 
     let durable = state.cli.aliases["chosen"].clone();
     state.cli.aliases.insert("bad-name".to_string(), durable);
     assert!(matches!(
         state.validate(),
+        Err(AppError::InvalidState { .. })
+    ));
+
+    let mut reserved = stage3_state();
+    reserved
+        .cli
+        .aliases
+        .insert("HEAD".to_string(), expected.durable_locator());
+    assert!(matches!(
+        reserved.validate(),
         Err(AppError::InvalidState { .. })
     ));
 }
@@ -1461,6 +1458,430 @@ fn stage3_cli_lists_selects_inspects_and_explains_without_writing_state() {
     );
 }
 
+#[test]
+fn stage7_aliases_are_exact_rebindable_view_aware_and_byte_safe() {
+    let directory = tempfile::tempdir().expect("temporary Stage 7 alias directory");
+    let state = initialize_stage7_state(directory.path());
+    let path = directory.path().join("LifeCoreState.json");
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let original = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("original node resolves");
+    let boundary = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        1,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("historical boundary resolves");
+    let revised = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        2,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("revised node resolves");
+    let edge = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        3,
+        EntryExpectation::Any,
+        Some(latest.end_exclusive()),
+    )
+    .expect("edge resolves");
+    let original_locator = original.display_locator();
+    let revised_locator = revised.display_locator();
+    let revised_full = revised.full_locator();
+    let before = fs::read(&path).expect("initial state bytes are readable");
+
+    assert!(matches!(
+        run_in(
+            &["lifecore", "alias", "set", "HEAD", &revised_locator],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::Usage { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &["lifecore", "alias", "set", "chosen", "another_alias"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::Usage { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "alias",
+                "set",
+                "chosen",
+                &edge.display_locator()
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::EntryNotNode { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &["lifecore", "alias", "set", "chosen", "2:00000"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::EntryFingerprintMismatch { .. })
+    ));
+    assert_eq!(
+        fs::read(&path).expect("failed aliases preserve state"),
+        before
+    );
+
+    for (name, locator) in [
+        ("zeta", revised_locator.as_str()),
+        ("alpha", original_locator.as_str()),
+        ("second", revised_locator.as_str()),
+    ] {
+        let outcome = run_in(
+            &["lifecore", "alias", "set", name, locator],
+            directory.path(),
+            None,
+        )
+        .expect("alias binding succeeds");
+        assert!(matches!(outcome, CommandOutcome::AliasChanged { .. }));
+    }
+
+    let listed = run_in(&["lifecore", "alias", "list"], directory.path(), None)
+        .expect("latest alias listing succeeds");
+    let mut table = Vec::new();
+    render_outcome(&listed, &mut table, true).expect("alias table renders");
+    let table = String::from_utf8(table).expect("alias table is UTF-8");
+    assert!(table.contains("NAME\tLOCATOR\tSTATUS"));
+    assert!(table.contains("alpha\t0:"));
+
+    let mut lines = Vec::new();
+    render_outcome(&listed, &mut lines, false).expect("alias lines render");
+    let lines = String::from_utf8(lines).expect("alias lines are UTF-8");
+    assert!(lines.contains(&original.full_locator()));
+    assert!(lines.contains("status=stale"));
+
+    match listed {
+    CommandOutcome::Aliases { items, .. } => {
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "second", "zeta"]
+        );
+        assert_eq!(items[0].status, AliasStatus::Stale);
+        assert_eq!(items[1].status, AliasStatus::Current);
+        assert_eq!(items[2].status, AliasStatus::Current);
+        assert!(
+            items
+                .iter()
+                .all(|item| item.locator.len() > item.display_locator.len())
+        );
+    }
+    outcome => panic!("expected alias listing, got {outcome:?}"),
+    }
+
+    let historical = run_in(
+        &[
+            "lifecore",
+            "alias",
+            "list",
+            "--at",
+            &boundary.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("historical alias listing succeeds");
+    match historical {
+    CommandOutcome::Aliases { items, .. } => {
+        assert_eq!(items[0].status, AliasStatus::Current);
+        assert_eq!(items[1].status, AliasStatus::OutsideView);
+        assert_eq!(items[2].status, AliasStatus::OutsideView);
+    }
+    outcome => panic!("expected historical alias listing, got {outcome:?}"),
+    }
+
+    let child = run_in(
+        &["lifecore", "add", "Note", "--parent", "zeta"],
+        directory.path(),
+        None,
+    )
+    .expect("ordinary node reference accepts an alias");
+    match child {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(revised_full.as_str())
+        );
+    }
+    outcome => panic!("expected alias-parent transaction, got {outcome:?}"),
+    }
+
+    run_in(
+        &["lifecore", "alias", "set", "alpha", &revised_locator],
+        directory.path(),
+        None,
+    )
+    .expect("explicit alias rebind succeeds");
+    let rebound =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"))
+            .load()
+            .expect("rebound state loads");
+    assert_eq!(
+        rebound.cli.aliases["alpha"].digest,
+        revised.fingerprint.as_str()
+    );
+
+    let dot_path = directory.path().join("aliases.dot");
+    run_in(
+        &[
+            "lifecore",
+            "graphviz",
+            dot_path.to_str().expect("DOT path is UTF-8"),
+            "--dot",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("GraphViz with aliases succeeds");
+    let dot = fs::read_to_string(dot_path).expect("alias DOT is readable");
+    assert!(dot.contains("aliases: alpha, second, zeta"));
+
+    run_in(
+        &["lifecore", "alias", "remove", "zeta"],
+        directory.path(),
+        None,
+    )
+    .expect("alias removal succeeds");
+    let stable = fs::read(&path).expect("post-removal state bytes are readable");
+    assert!(matches!(
+        run_in(
+            &["lifecore", "alias", "remove", "zeta"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::InvalidNodeReference { .. })
+    ));
+    assert_eq!(
+        fs::read(&path).expect("unknown removal preserves state"),
+        stable
+    );
+}
+
+#[test]
+fn stage7_query_actions_attest_membership_and_fix_the_selected_parent() {
+    let directory = tempfile::tempdir().expect("temporary Stage 7 selection directory");
+    let state = initialize_stage7_state(directory.path());
+    let path = directory.path().join("LifeCoreState.json");
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let original = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("original node resolves");
+    let task = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        1,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("task node resolves");
+    let revised = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        2,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("revised node resolves");
+    let edge = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        3,
+        EntryExpectation::Any,
+        Some(latest.end_exclusive()),
+    )
+    .expect("head edge resolves");
+
+    let selected_alias = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--select",
+            &revised.display_locator(),
+            "--",
+            "alias",
+            "set",
+            "guarded",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("query-attested alias binding succeeds");
+    assert!(matches!(
+        selected_alias,
+        CommandOutcome::AliasChanged { .. }
+    ));
+
+    let stable = fs::read(&path).expect("aliased state bytes are readable");
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "query",
+                "nodes",
+                "all",
+                "--where",
+                "fresh",
+                "--select",
+                &original.display_locator(),
+                "--",
+                "alias",
+                "set",
+                "rejected",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::QuerySelection { .. })
+    ));
+    assert_eq!(
+        fs::read(&path).expect("non-member action preserves state"),
+        stable
+    );
+
+    let dry_run = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--select",
+            &task.display_locator(),
+            "--",
+            "add-child",
+            "Task",
+            "--field",
+            "title = \"child\"",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("selected child dry run succeeds");
+    match dry_run {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(task.full_locator().as_str())
+        );
+    }
+    outcome => panic!("expected selected-child dry run, got {outcome:?}"),
+    }
+    assert_eq!(fs::read(&path).expect("dry run preserves state"), stable);
+
+    assert_usage_error(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--select",
+            &task.display_locator(),
+            "--",
+            "add-child",
+            "Task",
+            "--parent",
+            &revised.display_locator(),
+        ],
+        "unexpected argument '--parent'",
+    );
+
+    let committed = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--select",
+            &task.display_locator(),
+            "--",
+            "add-child",
+            "Task",
+            "--field",
+            "title = \"child\"",
+            "--commit",
+            "--expect-head",
+            &edge.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("selected child commit succeeds");
+    match committed {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::Committed);
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(task.full_locator().as_str())
+        );
+    }
+    outcome => panic!("expected selected-child commit, got {outcome:?}"),
+    }
+
+    let after_commit = fs::read(&path).expect("committed state bytes are readable");
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "query",
+                "nodes",
+                "all",
+                "--where",
+                "fresh",
+                "--select",
+                &task.display_locator(),
+                "--",
+                "alias",
+                "set",
+                "too_late",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::QuerySelection { .. })
+    ));
+    assert_eq!(
+        fs::read(&path).expect("changed membership preserves state"),
+        after_commit
+    );
+}
+
 fn graphviz_state() -> PersistedState {
     let mut state = stage3_state();
     state
@@ -1506,6 +1927,7 @@ fn graphviz_generation_is_deterministic_view_aware_and_safely_escaped() {
                 graph: &state.lifecore,
                 state: &state.cli,
                 view: &latest,
+                aliases: &BTreeMap::new(),
             },
             options,
         )
@@ -1572,6 +1994,7 @@ fn graphviz_generation_is_deterministic_view_aware_and_safely_escaped() {
             graph: &state.lifecore,
             state: &state.cli,
             view: &historical,
+            aliases: &BTreeMap::new(),
         },
         default_options,
     )
@@ -2259,6 +2682,7 @@ fn graphviz_svg_export_streams_input_and_reports_process_failures() {
             graph: &state.lifecore,
             state: &state.cli,
             view: &view,
+            aliases: &BTreeMap::new(),
         },
         GraphvizOptions {
             full: true,

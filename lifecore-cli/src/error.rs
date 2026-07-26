@@ -20,7 +20,7 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 6")]
+    #[error("operation '{operation}' is unavailable in implementation stage 7")]
     Unavailable {
         operation: String,
         format: OutputFormat,

@@ -12,7 +12,7 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 use uuid::{Uuid, Version};
 
-use crate::error::AppError;
+use crate::{error::AppError, reference::AliasRegistry};
 
 pub const STATE_FORMAT_VERSION: u32 = 1;
 pub const ENTRY_FINGERPRINT_VERSION: u32 = 1;
@@ -42,7 +42,7 @@ pub struct CliStateV1 {
     pub uuid: Uuid,
     pub entry_fingerprint_version: u32,
     pub message_id_version: u32,
-    pub aliases: BTreeMap<String, StoredEntryLocatorV1>,
+    pub aliases: AliasRegistry,
     pub dismissals: Vec<DismissalRecord>,
     pub sidecar_path: Option<PathBuf>,
     pub reserved: BTreeMap<String, Value>,
@@ -55,7 +55,7 @@ impl CliStateV1 {
             uuid: Uuid::now_v7(),
             entry_fingerprint_version: ENTRY_FINGERPRINT_VERSION,
             message_id_version: MESSAGE_ID_VERSION,
-            aliases: BTreeMap::new(),
+            aliases: AliasRegistry::default(),
             dismissals: Vec::new(),
             sidecar_path: None,
             reserved: BTreeMap::new(),
@@ -88,7 +88,7 @@ impl CliStateV1 {
             )));
         }
 
-        for (name, locator) in &self.aliases {
+        for (name, locator) in self.aliases.iter() {
             crate::reference::validate_alias(name).map_err(|error| {
                 AppError::invalid_state(format!("invalid alias {name:?}: {error}"))
             })?;

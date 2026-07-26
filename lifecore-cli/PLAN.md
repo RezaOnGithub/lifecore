@@ -970,8 +970,8 @@ No later mutation command may call `add_mock`, `connect_mock`, `apply`,
 ## Stage 6 — Ordinary appends, analyzer configuration, and shared payload input
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 7 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): Stage 7 may begin**
 
 ### Description
 
@@ -1086,15 +1086,15 @@ that parent/edge workflows exist to demonstrate it.
 - [x] **Implementation gate (implementor only):** ordinary appends, payload input, analyzer
       configuration, Interactive behavior, tests, checks, and walkthrough are
       complete.
-- [ ] **Review gate (reviewer only):** append/analyzer feedback is incorporated or explicitly
+- [X] **Review gate (reviewer only):** append/analyzer feedback is incorporated or explicitly
       deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 6 item blocks alias and guarded
       selection workflows.
 
 ## Stage 7 — Durable aliases and query-attested actions
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 8 may begin**
 
@@ -1161,14 +1161,14 @@ trusting row numbers.
 
 ### Implementation checklist
 
-- [ ] Implement validated alias names and persisted registry operations.
-- [ ] Integrate aliases into node-reference resolution.
-- [ ] Implement alias listing across latest and historical views.
-- [ ] Implement CLI-state-only set/remove saves and query-attested binding.
-- [ ] Implement selected entry inspection and `add-child`.
-- [ ] Add resolved alias decoration to GraphViz without moving alias lookup into
+- [x] Implement validated alias names and persisted registry operations.
+- [x] Integrate aliases into node-reference resolution.
+- [x] Implement alias listing across latest and historical views.
+- [x] Implement CLI-state-only set/remove saves and query-attested binding.
+- [x] Implement selected entry inspection and `add-child`.
+- [x] Add resolved alias decoration to GraphViz without moving alias lookup into
       the renderer.
-- [ ] Add focused tests for reserved names, bad-locator non-fallback, edge
+- [x] Add focused tests for reserved names, bad-locator non-fallback, edge
       rejection, rebind behavior, outside-view status, deterministic listing,
       byte-safe failures, membership changes, and selected-parent enforcement.
 
@@ -1176,19 +1176,19 @@ trusting row numbers.
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
 
 #### Manual walkthrough
 
-- [ ] Bind two aliases to one node and use each in an ordinary node-reference
+- [x] Bind two aliases to one node and use each in an ordinary node-reference
       position.
-- [ ] Supersede a target and confirm the alias remains on the stale entry.
-- [ ] List aliases in a historical view containing and excluding their targets.
-- [ ] Bind through a query-attested selection and reject a non-member.
-- [ ] Add a selected child and inspect the fixed parent locator.
-- [ ] Render the graph and confirm visible aliases decorate the expected nodes.
+- [x] Supersede a target and confirm the alias remains on the stale entry.
+- [x] List aliases in a historical view containing and excluding their targets.
+- [x] Bind through a query-attested selection and reject a non-member.
+- [x] Add a selected child and inspect the fixed parent locator.
+- [x] Render the graph and confirm visible aliases decorate the expected nodes.
 
 ### Review questions
 
@@ -1198,7 +1198,7 @@ trusting row numbers.
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** aliases and selection actions, tests, checks, and
+- [x] **Implementation gate (implementor only):** aliases and selection actions, tests, checks, and
       walkthrough are complete.
 - [ ] **Review gate (reviewer only):** alias/selection feedback is incorporated or explicitly
       deferred by agreement.

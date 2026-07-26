@@ -3,21 +3,24 @@ use lifecore::{Body, EntryIndex, LifeCore, LifeCoreList};
 use crate::{
     InvocationContext,
     analysis::{AnalyzerRegistry, initial_graph, run_analysis},
-    app::{AnalyzerRecord, CommandOutcome, PredicateResult, QueryExplanationRecord, ViewSummary},
+    app::{
+        AliasChangeRecord, AliasRecord, AnalyzerRecord, CommandOutcome, PredicateResult,
+        QueryExplanationRecord, ViewSummary,
+    },
     cli::{
-        AnalyzerCommand, Command, EntryCommand, MessageCommand, QueryCommand, SelectionActionKind,
-        TransactionArgs,
+        AliasCommand, AnalyzerCommand, Command, EntryCommand, MessageCommand, QueryCommand,
+        SelectionAction, SelectionAliasCommand, SelectionEntryCommand, TransactionArgs,
     },
     entry::entry_record,
     error::AppError,
     graphviz::{
         GraphvizExporter, GraphvizInput, GraphvizKind, GraphvizOptions, GraphvizTarget, generate,
     },
-    locator::{EntryExpectation, EntryLocator, resolve_entry, resolve_index},
+    locator::{EntryExpectation, EntryLocator, ResolvedEntry, resolve_entry, resolve_index},
     messages::{MessageFilter, MessageUniverse, Severity, plan_suggestion},
     payload_input::parse_field_assignments,
     query::{execute_query, explain_query, parse_query},
-    reference::{NodeReference, resolve_node_reference},
+    reference::{AliasName, NodeReference, alias_status, resolve_node_reference, visible_aliases},
     state::{DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StatePath, StateStore},
     transaction::{ExpectedHead, TransactionRequest, TransactionService},
     view::{GraphView, ViewSpec},
@@ -186,6 +189,78 @@ pub fn dispatch(
             format,
             view: view.summary(),
             items,
+        })
+    }
+    Command::Alias {
+        command: AliasCommand::List(args),
+    } => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "alias list")?;
+        let view_spec = args
+            .at
+            .as_deref()
+            .map(EntryLocator::parse)
+            .transpose()?
+            .map_or(ViewSpec::Latest, ViewSpec::Through);
+        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let items = state
+            .cli
+            .aliases
+            .iter()
+            .map(|(name, target)| {
+                let (resolved, status) = alias_status(&state.lifecore, &state.cli, target, &view)?;
+
+                Ok(AliasRecord {
+                    name: name.clone(),
+                    locator: resolved.full_locator(),
+                    display_locator: resolved.display_locator(),
+                    status,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+
+        Ok(CommandOutcome::Aliases {
+            format,
+            view: view.summary(),
+            items,
+        })
+    }
+    Command::Alias {
+        command: AliasCommand::Set(args),
+    } => {
+        let store = state_store(invocation)?;
+        let mut state = store.load()?;
+        reject_attached_sidecar(&state, "alias set")?;
+        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let target = resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &args.locator,
+            EntryExpectation::Node,
+            Some(view.end_exclusive()),
+        )?;
+        bind_alias(&store, &mut state, args.name, &target, format)
+    }
+    Command::Alias {
+        command: AliasCommand::Remove(args),
+    } => {
+        let store = state_store(invocation)?;
+        let mut state = store.load()?;
+        reject_attached_sidecar(&state, "alias remove")?;
+        let target = state.cli.aliases.remove_name(&args.name).ok_or_else(|| {
+            AppError::invalid_node_reference(format!("unknown alias {:?}", args.name.as_str()))
+        })?;
+        let locator = format!("{}:{}", target.index, target.digest);
+        store.save(&state)?;
+
+        Ok(CommandOutcome::AliasChanged {
+            format,
+            alias: AliasChangeRecord {
+                action: "removed".to_string(),
+                name: args.name.to_string(),
+                locator: Some(locator),
+            },
         })
     }
     Command::Analyzer {
@@ -381,14 +456,17 @@ pub fn dispatch(
     Command::Query {
         command: QueryCommand::Nodes(args),
     } => {
-        if args.selection_action_kind().map_err(AppError::usage)?
-            == Some(SelectionActionKind::Mutation)
-        {
+        let action = args.selection_action().map_err(AppError::usage)?;
+        if matches!(action, Some(SelectionAction::Type { .. })) {
             return Err(AppError::unavailable(operation, format));
+        }
+        if let Some(SelectionAction::AddChild(child)) = action.as_ref() {
+            parse_field_assignments(&child.fields)?;
+            parse_expected_head(&child.transaction)?;
         }
 
         let store = state_store(invocation)?;
-        let state = store.load()?;
+        let mut state = store.load()?;
         reject_attached_sidecar(&state, "query nodes")?;
         let view_spec = args
             .at
@@ -450,14 +528,47 @@ pub fn dispatch(
                 return Err(AppError::query_selection(locator_text));
             }
 
-            let item = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+            match action {
+            None
+            | Some(SelectionAction::Entry {
+                command: SelectionEntryCommand::Inspect,
+            }) => {
+                let item = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
 
-            return Ok(CommandOutcome::Entries {
-                format,
-                view: view.summary(),
-                items: vec![item],
-                detail: true,
-            });
+                return Ok(CommandOutcome::Entries {
+                    format,
+                    view: view.summary(),
+                    items: vec![item],
+                    detail: true,
+                });
+            }
+            Some(SelectionAction::Alias {
+                command: SelectionAliasCommand::Set { name },
+            }) => {
+                return bind_alias(&store, &mut state, name, &resolved, format);
+            }
+            Some(SelectionAction::AddChild(child)) => {
+                let body = parse_field_assignments(&child.fields)?;
+                let expected_head = parse_expected_head(&child.transaction)?;
+                let request = AddRequest {
+                    type_name: child.r#type,
+                    body,
+                    parent: Some(EntryIndex(resolved.index())),
+                };
+
+                return execute_transaction(
+                    &store,
+                    &state,
+                    request.into_plan(),
+                    &child.transaction,
+                    expected_head,
+                    format,
+                );
+            }
+            Some(SelectionAction::Type { .. }) => {
+                unreachable!("deferred type selection action was rejected before state access")
+            }
+            }
         }
 
         let items = results
@@ -496,11 +607,13 @@ pub fn dispatch(
             full: args.full,
             fields: args.fields,
         };
+        let aliases = visible_aliases(&state.lifecore, &state.cli, &view)?;
         let document = generate(
             GraphvizInput {
                 graph: &state.lifecore,
                 state: &state.cli,
                 view: &view,
+                aliases: &aliases,
             },
             options,
         )?;
@@ -524,7 +637,7 @@ pub fn dispatch(
         })
     }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 6");
+        log::trace!("operation '{operation}' is unavailable in stage 7");
 
         Err(AppError::unavailable(operation, format))
     }
@@ -536,6 +649,28 @@ fn parse_expected_head(args: &TransactionArgs) -> Result<Option<ExpectedHead>, A
         .as_deref()
         .map(str::parse::<ExpectedHead>)
         .transpose()
+}
+
+fn bind_alias(
+    store: &StateStore,
+    state: &mut PersistedState,
+    name: AliasName,
+    target: &ResolvedEntry,
+    format: crate::cli::OutputFormat,
+) -> Result<CommandOutcome, AppError> {
+    let locator = target.full_locator();
+    let display_name = name.to_string();
+    state.cli.aliases.bind(name, target.durable_locator());
+    store.save(state)?;
+
+    Ok(CommandOutcome::AliasChanged {
+        format,
+        alias: AliasChangeRecord {
+            action: "set".to_string(),
+            name: display_name,
+            locator: Some(locator),
+        },
+    })
 }
 
 fn execute_transaction(

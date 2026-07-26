@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::{
     cli::OutputFormat,
     messages::{DismissalStatusRecord, MessageRecord},
+    reference::AliasStatus,
     transaction::TransactionResult,
 };
 
@@ -79,6 +80,22 @@ pub struct AnalyzerRecord {
     pub config: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AliasRecord {
+    pub name: String,
+    pub locator: String,
+    pub display_locator: String,
+    pub status: AliasStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AliasChangeRecord {
+    pub action: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locator: Option<String>,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandOutcome {
     Text(String),
@@ -109,6 +126,15 @@ pub enum CommandOutcome {
         format: OutputFormat,
         view: ViewSummary,
         items: Vec<AnalyzerRecord>,
+    },
+    Aliases {
+        format: OutputFormat,
+        view: ViewSummary,
+        items: Vec<AliasRecord>,
+    },
+    AliasChanged {
+        format: OutputFormat,
+        alias: AliasChangeRecord,
     },
     Transaction {
         format: OutputFormat,
@@ -145,6 +171,8 @@ impl CommandOutcome {
         | Self::Dismissals { format, .. }
         | Self::DismissalChanged { format, .. }
         | Self::Analyzers { format, .. }
+        | Self::Aliases { format, .. }
+        | Self::AliasChanged { format, .. }
         | Self::Transaction { format, .. }
         | Self::Entries { format, .. }
         | Self::QueryExplanation { format, .. } => *format,

@@ -2,6 +2,8 @@ use std::{ffi::OsString, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::{locator::EntryLocator, reference::AliasName};
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     #[default]
@@ -368,7 +370,7 @@ pub struct QueryNodesArgs {
 }
 
 impl QueryNodesArgs {
-    fn selection_action(&self) -> Result<Option<SelectionAction>, clap::Error> {
+    pub(crate) fn selection_action(&self) -> Result<Option<SelectionAction>, clap::Error> {
         if self.action.is_empty() {
             return Ok(None);
         }
@@ -378,23 +380,6 @@ impl QueryNodesArgs {
 
         SelectionCli::try_parse_from(args).map(|cli| Some(cli.action))
     }
-
-    pub(crate) fn selection_action_kind(&self) -> Result<Option<SelectionActionKind>, clap::Error> {
-        self.selection_action().map(|action| {
-            action.map(|action| match action {
-            SelectionAction::Entry { .. } => SelectionActionKind::EntryInspect,
-            SelectionAction::Alias { .. }
-            | SelectionAction::Type { .. }
-            | SelectionAction::AddChild(_) => SelectionActionKind::Mutation,
-            })
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SelectionActionKind {
-    EntryInspect,
-    Mutation,
 }
 
 #[derive(Parser, Debug)]
@@ -409,7 +394,7 @@ struct SelectionCli {
 }
 
 #[derive(Subcommand, Debug)]
-enum SelectionAction {
+pub(crate) enum SelectionAction {
     #[command(about = "Inspect the selected entry")]
     Entry {
         #[command(subcommand)]
@@ -444,32 +429,32 @@ impl SelectionAction {
 }
 
 #[derive(Subcommand, Debug)]
-enum SelectionEntryCommand {
+pub(crate) enum SelectionEntryCommand {
     #[command(about = "Render the selected entry in detail")]
     Inspect,
 }
 
 #[derive(Subcommand, Debug)]
-enum SelectionAliasCommand {
+pub(crate) enum SelectionAliasCommand {
     #[command(about = "Create or replace an exact alias binding")]
-    Set { name: String },
+    Set { name: AliasName },
 }
 
 #[derive(Subcommand, Debug)]
-enum SelectionTypeCommand {
+pub(crate) enum SelectionTypeCommand {
     #[command(about = "Patch and append a child type declaration")]
     Override(SelectedTypeOverrideArgs),
 }
 
 #[derive(Args, Debug)]
-struct AddChildArgs {
-    r#type: String,
+pub(crate) struct AddChildArgs {
+    pub r#type: String,
 
     #[arg(long = "field", value_name = "FIELD-ASSIGNMENT")]
-    fields: Vec<String>,
+    pub fields: Vec<String>,
 
     #[command(flatten)]
-    transaction: TransactionArgs,
+    pub transaction: TransactionArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -514,10 +499,10 @@ pub struct AliasListArgs {
 #[derive(Args, Debug)]
 pub struct AliasSetArgs {
     #[arg(help = "Case-sensitive C-style alias name")]
-    pub name: String,
+    pub name: AliasName,
 
     #[arg(help = "Exact node locator to bind")]
-    pub locator: String,
+    pub locator: EntryLocator,
 
     #[command(flatten)]
     pub format: FormatArgs,
@@ -526,7 +511,7 @@ pub struct AliasSetArgs {
 #[derive(Args, Debug)]
 pub struct AliasRemoveArgs {
     #[arg(help = "Alias name to remove")]
-    pub name: String,
+    pub name: AliasName,
 
     #[command(flatten)]
     pub format: FormatArgs,
@@ -712,7 +697,7 @@ pub struct TypeOverrideArgs {
 }
 
 #[derive(Args, Debug)]
-struct SelectedTypeOverrideArgs {
+pub(crate) struct SelectedTypeOverrideArgs {
     #[arg(
         long = "as",
         value_name = "NEW-NAME",

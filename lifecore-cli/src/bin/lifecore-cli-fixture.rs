@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf, process::ExitCode};
 
 use clap::{Args, Parser, Subcommand};
-use lifecore::{Body, LifeCore, OrderedSet, Payload};
+use lifecore::{Body, LifeCore, LifeCoreList, OrderedSet, Payload};
 use lifecore_cli::{
     analysis::initial_graph,
     locator::{EntryExpectation, resolve_index},
@@ -21,11 +21,18 @@ struct FixtureCli {
 #[derive(Subcommand)]
 enum FixtureCommand {
     Stage3(Stage3Args),
+    Stage7(Stage7Args),
 }
 
 #[derive(Args)]
 struct Stage3Args {
     #[arg(long, default_value = "Stage3LifeCoreState.json")]
+    path: PathBuf,
+}
+
+#[derive(Args)]
+struct Stage7Args {
+    #[arg(long, default_value = "Stage7LifeCoreState.json")]
     path: PathBuf,
 }
 
@@ -42,7 +49,73 @@ fn main() -> ExitCode {
 fn run(cli: FixtureCli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
     FixtureCommand::Stage3(args) => build_stage3(args),
+    FixtureCommand::Stage7(args) => build_stage7(args),
     }
+}
+
+fn build_stage7(args: Stage7Args) -> Result<(), Box<dyn std::error::Error>> {
+    let current_directory = env::current_dir()?;
+    let path = StatePath::resolve(Some(args.path.into_os_string()), &current_directory)?;
+    let store = StateStore::new(path);
+    //A Stage 7 walkthroughs need successful child transactions without also
+    //A taking ownership of the deferred type-editor bootstrap workflow.
+    let mut graph = LifeCoreList::default();
+    let original = graph.add_mock("Note", Body::default(), None)?;
+    let task = graph.add_mock("Task", Body::default(), None)?;
+    let revised = graph.add_mock("Note", Body::default(), Some(original.e))?;
+    let edge = graph.connect_mock(revised.e, "Relates_To", task.e)?;
+
+    graph.apply()?;
+    let state = PersistedState::new(graph);
+    store.initialize(&state)?;
+
+    let view = GraphView::latest(&state.lifecore, &state.cli)?;
+    let original = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        original.e.entry().0,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )?;
+    let task = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        task.e.entry().0,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )?;
+    let revised = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        revised.e.entry().0,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )?;
+    let edge = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        edge.e.entry().0,
+        EntryExpectation::Any,
+        Some(view.end_exclusive()),
+    )?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "scenario": "stage7",
+            "state_path": store.path(),
+            "view": view.summary(),
+            "locators": {
+                "original_note": original.full_locator(),
+                "task": task.full_locator(),
+                "revised_note": revised.full_locator(),
+                "final_edge": edge.full_locator(),
+                "historical_boundary": task.full_locator(),
+            }
+        }))?
+    );
+
+    Ok(())
 }
 
 fn build_stage3(args: Stage3Args) -> Result<(), Box<dyn std::error::Error>> {
