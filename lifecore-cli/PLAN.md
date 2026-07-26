@@ -820,8 +820,8 @@ move loading, sidecar preparation, or persistence into `graphviz`.
 ## Stage 5 — Shared transaction engine and complete message workflow
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 6 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): Stage 6 may begin**
 
 ### Description
 
@@ -961,15 +961,15 @@ No later mutation command may call `add_mock`, `connect_mock`, `apply`,
 
 - [x] **Implementation gate (implementor only):** transaction and message workflows, rollback
       evidence, tests, checks, and walkthrough are complete.
-- [ ] **Review gate (reviewer only):** transaction/message feedback is incorporated or
+- [X] **Review gate (reviewer only):** transaction/message feedback is incorporated or
       explicitly deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 5 item blocks ordinary mutation
       commands.
 
 ## Stage 6 — Ordinary appends, analyzer configuration, and shared payload input
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 7 may begin**
 
@@ -1043,14 +1043,14 @@ that parent/edge workflows exist to demonstrate it.
 
 ### Implementation checklist
 
-- [ ] Implement the shared TOML field/payload parser and focused error types.
-- [ ] Implement `add` through verified references and transaction plans.
-- [ ] Implement `connect` through verified references and transaction plans.
-- [ ] Implement analyzer listing and candidate-suite addition.
-- [ ] Implement the actual built-in Interactive analyzer and factory.
-- [ ] Add trace/debug logs around staging, analysis, apply, expectation, and
+- [x] Implement the shared TOML field/payload parser and focused error types.
+- [x] Implement `add` through verified references and transaction plans.
+- [x] Implement `connect` through verified references and transaction plans.
+- [x] Implement analyzer listing and candidate-suite addition.
+- [x] Implement the actual built-in Interactive analyzer and factory.
+- [x] Add trace/debug logs around staging, analysis, apply, expectation, and
       save transitions without leaking payload data unnecessarily.
-- [ ] Add focused tests for payload recursion/rejection, node/edge rollback,
+- [x] Add focused tests for payload recursion/rejection, node/edge rollback,
       `HEAD`, parent and endpoint views, missing analyzer factories, suite
       ordering, and every Interactive suppression rule.
 
@@ -1058,21 +1058,21 @@ that parent/edge workflows exist to demonstrate it.
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Run `cargo test --workspace`.
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test --workspace`.
 
 #### Manual walkthrough
 
-- [ ] Dry-run and commit a nested-payload node.
-- [ ] Add a child with `HEAD` and verify the resolved locator is printed.
-- [ ] Connect two explicit node locators and confirm latest-entry expectation
+- [x] Dry-run and commit a nested-payload node.
+- [x] Add a child with `HEAD` and verify the resolved locator is printed.
+- [x] Connect two explicit node locators and confirm latest-entry expectation
       treats the resulting edge as head.
-- [ ] Attempt invalid/duplicate TOML fields and confirm no append occurs.
-- [ ] Attempt to add an unknown analyzer and confirm its configuration is not
+- [x] Attempt invalid/duplicate TOML fields and confirm no append occurs.
+- [x] Attempt to add an unknown analyzer and confirm its configuration is not
       persisted.
-- [ ] Produce and inspect an Interactive connection Suggestion.
+- [x] Produce and inspect an Interactive connection Suggestion.
 
 ### Review questions
 
@@ -1083,7 +1083,7 @@ that parent/edge workflows exist to demonstrate it.
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** ordinary appends, payload input, analyzer
+- [x] **Implementation gate (implementor only):** ordinary appends, payload input, analyzer
       configuration, Interactive behavior, tests, checks, and walkthrough are
       complete.
 - [ ] **Review gate (reviewer only):** append/analyzer feedback is incorporated or explicitly

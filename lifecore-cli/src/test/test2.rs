@@ -32,6 +32,7 @@ use crate::{
         MessageFilter, MessageUniverse, Severity, encode_lower_hex, message_identity_bytes,
     },
     output::{render_error, render_outcome},
+    payload_input::{parse_field_assignment, parse_field_assignments},
     query::{execute_query, parse_predicate, parse_query},
     reference::{NodeReference, resolve_node_reference},
     run_cli, run_from_in,
@@ -153,35 +154,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
     let cases: &[(&[&str], &str)] = &[
         (&["lifecore", "interactive"], "interactive"),
         (
-            &[
-                "lifecore",
-                "add",
-                "Note",
-                "--field",
-                "title = \"hello\"",
-                "--parent",
-                "HEAD",
-                "--commit",
-                "--expect-head",
-                "EMPTY",
-            ],
-            "add",
-        ),
-        (
-            &[
-                "lifecore",
-                "connect",
-                "--from",
-                "HEAD",
-                "--type",
-                "Relates_To",
-                "--to",
-                "other",
-                "--commit",
-            ],
-            "connect",
-        ),
-        (
             &["lifecore", "alias", "list", "--at", "4:abcde"],
             "alias list",
         ),
@@ -249,18 +221,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
         (
             &["lifecore", "sidecar", "commit", "--expect-head", "4:abcde"],
             "sidecar commit",
-        ),
-        (&["lifecore", "analyzer", "list"], "analyzer list"),
-        (
-            &[
-                "lifecore",
-                "analyzer",
-                "add",
-                "Type_Check",
-                "{}",
-                "--commit",
-            ],
-            "analyzer add",
         ),
     ];
 
@@ -433,19 +393,19 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "add", "Note"], &mut io);
+    let exit = run_cli(["lifecore", "type", "list"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'add' is unavailable in implementation stage 5\n"
+        "error: operation 'type list' is unavailable in implementation stage 6\n"
     );
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "add", "Note", "--format", "json"], &mut io);
+    let exit = run_cli(["lifecore", "type", "list", "--format", "json"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
@@ -453,7 +413,7 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let value: serde_json::Value =
         serde_json::from_slice(&stderr).expect("stderr contains one JSON value");
     assert_eq!(value["error"]["kind"], "unavailable");
-    assert_eq!(value["error"]["operation"], "add");
+    assert_eq!(value["error"]["operation"], "type list");
 }
 
 #[test]
@@ -479,9 +439,13 @@ fn deferred_commands_do_not_create_or_modify_files() -> io::Result<()> {
     result => panic!("expected missing canonical state, got {result:?}"),
     }
 
-    match run_in(&["lifecore", "add", "Note", "--commit"], &directory, None) {
-    Err(AppError::Unavailable { operation, .. }) => assert_eq!(operation, "add"),
-    result => panic!("expected unavailable add, got {result:?}"),
+    match run_in(
+        &["lifecore", "alias", "set", "chosen", "0:abcde"],
+        &directory,
+        None,
+    ) {
+    Err(AppError::Unavailable { operation, .. }) => assert_eq!(operation, "alias set"),
+    result => panic!("expected unavailable alias mutation, got {result:?}"),
     }
 
     let after = directory_snapshot(&directory)?;
@@ -2359,6 +2323,481 @@ fn graphviz_svg_export_streams_input_and_reports_process_failures() {
         fs::read(dot_target.path()).expect("direct DOT artifact is readable"),
         document.as_bytes()
     );
+}
+
+#[test]
+fn stage6_payload_input_converts_recursive_values_and_rejects_every_unsupported_shape() {
+    let fields = vec![
+        "title = \"Errands\"".to_string(),
+        "score = -3".to_string(),
+        "history = { sequence = [\"draft\", 2, { sequence = [\"done\"] }] }".to_string(),
+        "tags = { ordered_set = [\"home\", \"urgent\"] }".to_string(),
+    ];
+    let body = parse_field_assignments(&fields).expect("recursive fields parse");
+
+    assert_eq!(body.get("title"), Some(&Payload::Text("Errands".into())));
+    assert_eq!(body.get("score"), Some(&Payload::Number(-3)));
+    assert_eq!(
+        body.get("history"),
+        Some(&Payload::Sequence(vec![
+            Payload::Text("draft".into()),
+            Payload::Number(2),
+            Payload::Sequence(vec![Payload::Text("done".into())]),
+        ]))
+    );
+    assert_eq!(
+        body.get("tags"),
+        Some(&Payload::OrderedSet(OrderedSet::from([
+            Payload::Text("home".into()),
+            Payload::Text("urgent".into()),
+        ])))
+    );
+
+    for (assignment, expected) in [
+        ("value = [1, 2]", "bare TOML arrays"),
+        ("value = true", "booleans"),
+        ("value = 1.5", "floats"),
+        ("value = 1979-05-27T07:32:00Z", "date-time"),
+        ("value = { tuple = [1, 2] }", "unknown payload constructor"),
+        (
+            "value = { sequence = [1], ordered_set = [2] }",
+            "exactly one key",
+        ),
+        ("value = { sequence = 1 }", "requires an array"),
+        (
+            "value = { ordered_set = [\"same\", \"same\"] }",
+            "duplicate element",
+        ),
+    ] {
+        match parse_field_assignment(assignment) {
+        Err(AppError::InvalidPayload { message, .. }) => {
+            assert!(
+                message.contains(expected),
+                "expected {expected:?} in {message:?}"
+            );
+        }
+        result => panic!("expected invalid payload for {assignment:?}, got {result:?}"),
+        }
+    }
+
+    assert!(matches!(
+        parse_field_assignment("first = 1\nsecond = 2"),
+        Err(AppError::InvalidFieldAssignment { .. })
+    ));
+    assert!(matches!(
+        parse_field_assignments(&["same = 1".into(), "same = 2".into()]),
+        Err(AppError::InvalidFieldAssignment { .. })
+    ));
+}
+
+#[test]
+fn stage6_add_connect_head_and_edge_expectations_use_atomic_transactions() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    store
+        .initialize(&PersistedState::new(LifeCoreList::default()))
+        .expect("empty canonical state initializes");
+    let path = directory.path().join("LifeCoreState.json");
+
+    let before = fs::read(&path).expect("empty state bytes are readable");
+    let dry_run = run_in(
+        &[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "meta = { sequence = [\"draft\", { ordered_set = [1, 2] }] }",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("nested node dry run succeeds");
+    match dry_run {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert_eq!(result.entries.len(), 1);
+        assert!(result.analyzers.is_empty());
+        assert_eq!(result.entries[0].index, 0);
+        assert_eq!(result.entries[0].kind, "node");
+        assert!(result.entries[0].locator.starts_with("0:"));
+    }
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    }
+    assert_eq!(fs::read(&path).expect("state remains readable"), before);
+
+    let first = run_in(
+        &[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "title = \"first\"",
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("first node commits");
+    let first_locator = match first {
+    CommandOutcome::Transaction { result, .. } => result.entries[0].locator.clone(),
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    };
+
+    let second = run_in(
+        &[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "title = \"second\"",
+            "--commit",
+            "--expect-head",
+            &first_locator,
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("second node commits");
+    let second_locator = match second {
+    CommandOutcome::Transaction { result, .. } => result.entries[0].locator.clone(),
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    };
+
+    let edge = run_in(
+        &[
+            "lifecore",
+            "connect",
+            "--from",
+            &first_locator,
+            "--type",
+            "Related",
+            "--to",
+            &second_locator,
+            "--commit",
+            "--expect-head",
+            &second_locator,
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("edge commits");
+    let edge_locator = match edge {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].kind, "edge");
+        assert_eq!(
+            result.entries[0].from.as_deref(),
+            Some(first_locator.as_str())
+        );
+        assert_eq!(
+            result.entries[0].to.as_deref(),
+            Some(second_locator.as_str())
+        );
+        result.entries[0].locator.clone()
+    }
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    };
+
+    let child = run_in(
+        &[
+            "lifecore",
+            "add",
+            "Note",
+            "--parent",
+            "HEAD",
+            "--commit",
+            "--expect-head",
+            &edge_locator,
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("HEAD skips the edge while the edge remains the expected canonical head");
+    match child {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(second_locator.as_str())
+        );
+        assert_eq!(result.entries[0].index, 3);
+    }
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    }
+
+    let stable = fs::read(&path).expect("committed bytes are readable");
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore", "add", "Note", "--field", "same = 1", "--field", "same = 2",
+                "--commit",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::InvalidFieldAssignment { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "connect",
+                "--from",
+                &edge_locator,
+                "--type",
+                "Invalid",
+                "--to",
+                &first_locator,
+                "--commit",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::EntryNotNode { .. })
+    ));
+    assert_eq!(fs::read(&path).expect("state remains readable"), stable);
+}
+
+#[test]
+fn stage6_analyzer_list_and_add_preserve_order_and_reject_missing_factories() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    run_in(&["lifecore", "init"], directory.path(), None).expect("initialization succeeds");
+    let path = directory.path().join("LifeCoreState.json");
+
+    let listed = run_in(
+        &["lifecore", "analyzer", "list", "--format", "json"],
+        directory.path(),
+        None,
+    )
+    .expect("analyzers list");
+    let mut rendered = Vec::new();
+    render_outcome(&listed, &mut rendered, false).expect("analyzer listing renders");
+    let rendered: serde_json::Value =
+        serde_json::from_slice(&rendered).expect("analyzer listing is JSON");
+    assert_eq!(rendered["items"][0]["name"], "Type_Check");
+    assert_eq!(rendered["items"][1]["name"], "Interactive");
+    match listed {
+    CommandOutcome::Analyzers { items, .. } => {
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Type_Check", "Interactive"]
+        );
+    }
+    outcome => panic!("expected analyzer listing, got {outcome:?}"),
+    }
+
+    let before = fs::read(&path).expect("initialized bytes are readable");
+    let dry_run = run_in(
+        &[
+            "lifecore",
+            "analyzer",
+            "add",
+            "Interactive",
+            "review-config",
+            "--format",
+            "json",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("registered analyzer dry run succeeds");
+    let mut rendered = Vec::new();
+    render_outcome(&dry_run, &mut rendered, false).expect("analyzer transaction renders");
+    let rendered: serde_json::Value =
+        serde_json::from_slice(&rendered).expect("analyzer transaction is JSON");
+    assert_eq!(
+        rendered["transaction"]["analyzers"][0]["name"],
+        "Interactive"
+    );
+    assert!(
+        rendered["transaction"]["entries"]
+            .as_array()
+            .expect("entries is an array")
+            .is_empty()
+    );
+    match dry_run {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert!(result.entries.is_empty());
+        assert_eq!(result.analyzers.len(), 1);
+        assert_eq!(result.analyzers[0].name, "Interactive");
+        assert_eq!(result.analyzers[0].config, "review-config");
+    }
+    outcome => panic!("expected transaction outcome, got {outcome:?}"),
+    }
+    assert_eq!(fs::read(&path).expect("state remains readable"), before);
+
+    run_in(
+        &[
+            "lifecore",
+            "analyzer",
+            "add",
+            "Interactive",
+            "review-config",
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("registered analyzer commits");
+    let listed = run_in(
+        &["lifecore", "analyzer", "list", "--format", "json"],
+        directory.path(),
+        None,
+    )
+    .expect("updated analyzers list");
+    match listed {
+    CommandOutcome::Analyzers { items, .. } => {
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[2].name, "Interactive");
+        assert_eq!(items[2].config, "review-config");
+    }
+    outcome => panic!("expected analyzer listing, got {outcome:?}"),
+    }
+
+    let before_unknown = fs::read(&path).expect("committed bytes are readable");
+    match run_in(
+        &[
+            "lifecore",
+            "analyzer",
+            "add",
+            "MissingFactory",
+            "opaque",
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory.path(),
+        None,
+    ) {
+    Err(AppError::TransactionAborted { detail, .. }) => {
+        assert_eq!(detail.analyzers.len(), 1);
+        assert_eq!(detail.analyzers[0].name, "MissingFactory");
+    }
+    result => panic!("expected missing factory transaction abort, got {result:?}"),
+    }
+    assert_eq!(
+        fs::read(&path).expect("state remains readable"),
+        before_unknown
+    );
+}
+
+#[test]
+fn stage6_interactive_analyzer_preserves_direction_and_suppresses_ineligible_connections() {
+    let suggestions_at = |graph: &LifeCoreList, index: usize| {
+        run_analysis(graph, &AnalyzerRegistry::built_in())
+            .expect("Interactive analysis succeeds")
+            .messages
+            .into_iter()
+            .filter_map(|message| match message {
+            Message::Suggestion(suggestion)
+                if matches!(
+                    suggestion.offending_event,
+                    DiagnosticLocation::Entry(entry) if entry.entry().0 == index
+                ) =>
+            {
+                Some(suggestion)
+            }
+            _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut graph = LifeCoreList::default();
+    graph.add_analyzer("Interactive", "configured");
+    let parent = graph
+        .add_mock("Parent", Body::default(), None)
+        .expect("parent appends");
+    let outgoing_other = graph
+        .add_mock("OutgoingEndpoint", Body::default(), None)
+        .expect("outgoing endpoint appends");
+    let incoming_other = graph
+        .add_mock("IncomingEndpoint", Body::default(), None)
+        .expect("incoming endpoint appends");
+    let outgoing = graph
+        .connect_mock(parent.e, "Outgoing", outgoing_other.e)
+        .expect("outgoing edge appends");
+    let incoming = graph
+        .connect_mock(incoming_other.e, "Incoming", parent.e)
+        .expect("incoming edge appends");
+    let child = graph
+        .add_mock("Child", Body::default(), Some(parent.e))
+        .expect("child appends");
+    let suggestions = suggestions_at(&graph, child.e.entry().0);
+
+    assert_eq!(suggestions.len(), 2);
+    assert!(suggestions.iter().all(|suggestion| {
+        suggestion.system_name == "Interactive"
+            && suggestion.system_config == "configured"
+            && suggestion.relevance.contains(&parent.e.entry())
+            && suggestion.relevance.contains(&child.e.entry())
+    }));
+    assert!(suggestions.iter().any(|suggestion| {
+        suggestion.relevance.contains(&outgoing.e.entry())
+            && suggestion.action
+                == vec![SuggestedAction::AddEdge {
+                    from: child.e.entry(),
+                    ty_name: "Outgoing".into(),
+                    to: outgoing_other.e.entry(),
+                }]
+    }));
+    assert!(suggestions.iter().any(|suggestion| {
+        suggestion.relevance.contains(&incoming.e.entry())
+            && suggestion.action
+                == vec![SuggestedAction::AddEdge {
+                    from: incoming_other.e.entry(),
+                    ty_name: "Incoming".into(),
+                    to: child.e.entry(),
+                }]
+    }));
+
+    let mut stale_graph = LifeCoreList::default();
+    stale_graph.add_analyzer("Interactive", "");
+    let stale_parent = stale_graph
+        .add_mock("Parent", Body::default(), None)
+        .expect("parent appends");
+    let stale_other = stale_graph
+        .add_mock("Opposite", Body::default(), None)
+        .expect("opposite appends");
+    stale_graph
+        .connect_mock(stale_parent.e, "Related", stale_other.e)
+        .expect("edge appends");
+    stale_graph
+        .add_mock("OppositeChild", Body::default(), Some(stale_other.e))
+        .expect("opposite successor appends");
+    let stale_child = stale_graph
+        .add_mock("ParentChild", Body::default(), Some(stale_parent.e))
+        .expect("child appends");
+    assert!(suggestions_at(&stale_graph, stale_child.e.entry().0).is_empty());
+
+    let mut recreated_graph = LifeCoreList::default();
+    recreated_graph.add_analyzer("Interactive", "");
+    let recreated_parent = recreated_graph
+        .add_mock("Parent", Body::default(), None)
+        .expect("parent appends");
+    let recreated_other = recreated_graph
+        .add_mock("Opposite", Body::default(), None)
+        .expect("opposite appends");
+    recreated_graph
+        .connect_mock(recreated_parent.e, "Related", recreated_other.e)
+        .expect("parent edge appends");
+    let first_successor = recreated_graph
+        .add_mock("FirstChild", Body::default(), Some(recreated_parent.e))
+        .expect("first successor appends");
+    recreated_graph
+        .connect_mock(first_successor.e, "Related", recreated_other.e)
+        .expect("successor edge appends");
+    let second_successor = recreated_graph
+        .add_mock("SecondChild", Body::default(), Some(recreated_parent.e))
+        .expect("second successor appends");
+    assert!(suggestions_at(&recreated_graph, second_successor.e.entry().0).is_empty());
 }
 
 fn directory_snapshot(directory: &std::path::Path) -> io::Result<Vec<(PathBuf, Vec<u8>)>> {

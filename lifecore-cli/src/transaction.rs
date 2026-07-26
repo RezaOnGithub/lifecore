@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::{
     analysis::{AnalyzerRegistry, run_analysis},
-    app::{EntryRecord, ViewSummary},
+    app::{AnalyzerRecord, EntryRecord, ViewSummary},
     entry::entry_record,
     error::AppError,
     locator::{EntryExpectation, EntryLocator, resolve_index},
@@ -83,6 +83,7 @@ impl TransactionState {
 pub struct TransactionResult {
     pub state: TransactionState,
     pub entries: Vec<EntryRecord>,
+    pub analyzers: Vec<AnalyzerRecord>,
     pub messages: Vec<MessageRecord>,
     pub view: ViewSummary,
 }
@@ -116,16 +117,31 @@ impl<'a> TransactionService<'a> {
         }
 
         let original_end = graph_end(loaded);
+        let original_analyzer_count = loaded.lifecore.current_analysis_suite().0.len();
         let mut candidate = loaded.clone();
 
+        log::trace!("staging transaction candidate");
         if let Err(error) = stage_change(&mut candidate, &request.change) {
-            return Err(self.abort(&candidate, original_end, error.to_string(), Vec::new()));
+            return Err(self.abort(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                error.to_string(),
+                Vec::new(),
+            ));
         }
 
+        log::trace!("analyzing complete transaction candidate");
         let report = match run_analysis(&candidate.lifecore, self.registry) {
         Ok(report) => report,
         Err(error) => {
-            return Err(self.abort(&candidate, original_end, error.to_string(), Vec::new()));
+            return Err(self.abort(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                error.to_string(),
+                Vec::new(),
+            ));
         }
         };
         let universe = match MessageUniverse::from_analysis(
@@ -135,7 +151,13 @@ impl<'a> TransactionService<'a> {
         ) {
         Ok(universe) => universe,
         Err(error) => {
-            return Err(self.abort(&candidate, original_end, error.to_string(), Vec::new()));
+            return Err(self.abort(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                error.to_string(),
+                Vec::new(),
+            ));
         }
         };
         let mut messages = universe.visible();
@@ -148,25 +170,41 @@ impl<'a> TransactionService<'a> {
             return Err(self.abort(
                 &candidate,
                 original_end,
+                original_analyzer_count,
                 "candidate analysis emitted an Inconsistency",
                 messages,
             ));
         }
 
         if !request.commit {
-            return build_result(&candidate, original_end, messages, TransactionState::DryRun);
+            log::trace!("transaction analysis passed; returning dry-run candidate");
+            return build_result(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                messages,
+                TransactionState::DryRun,
+            );
         }
 
         //A Application is delayed until the entire staged graph and configured
         //A analyzer suite have passed. The loaded state remains the rollback
         //A source for every subsequent failure.
+        log::trace!("applying analyzed transaction candidate");
         if let Err(error) = self.apply_candidate(&mut candidate) {
-            return Err(self.abort(&candidate, original_end, error.to_string(), messages));
+            return Err(self.abort(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                error.to_string(),
+                messages,
+            ));
         }
         if candidate.lifecore.is_mock() {
             return Err(self.abort(
                 &candidate,
                 original_end,
+                original_analyzer_count,
                 "applied candidate still contains a Mock circumstance",
                 messages,
             ));
@@ -184,21 +222,41 @@ impl<'a> TransactionService<'a> {
             ) {
             Ok(universe) => universe.visible(),
             Err(error) => {
-                return Err(self.abort(&candidate, original_end, error.to_string(), messages));
+                return Err(self.abort(
+                    &candidate,
+                    original_end,
+                    original_analyzer_count,
+                    error.to_string(),
+                    messages,
+                ));
             }
             }
         } else {
             messages.clone()
         };
 
-        if let Some(expectation) = request.expected_head.as_ref()
-            && let Err(error) = verify_expected_head(self.store, expectation)
-        {
-            return Err(self.abort(&candidate, original_end, error.to_string(), messages));
+        if let Some(expectation) = request.expected_head.as_ref() {
+            log::trace!("verifying canonical head expectation before save");
+            if let Err(error) = verify_expected_head(self.store, expectation) {
+                return Err(self.abort(
+                    &candidate,
+                    original_end,
+                    original_analyzer_count,
+                    error.to_string(),
+                    messages,
+                ));
+            }
         }
 
+        log::trace!("saving applied transaction candidate");
         if let Err(error) = self.store.save(&candidate) {
-            return Err(self.abort(&candidate, original_end, error.to_string(), messages));
+            return Err(self.abort(
+                &candidate,
+                original_end,
+                original_analyzer_count,
+                error.to_string(),
+                messages,
+            ));
         }
 
         messages = committed_messages;
@@ -206,6 +264,7 @@ impl<'a> TransactionService<'a> {
         build_result(
             &candidate,
             original_end,
+            original_analyzer_count,
             messages,
             TransactionState::Committed,
         )
@@ -241,13 +300,15 @@ impl<'a> TransactionService<'a> {
         &self,
         candidate: &PersistedState,
         original_end: usize,
+        original_analyzer_count: usize,
         message: impl Into<String>,
         messages: Vec<MessageRecord>,
     ) -> AppError {
         let (entries, view) = candidate_records(candidate, original_end)
             .unwrap_or_else(|_| (Vec::new(), ViewSummary::empty()));
+        let analyzers = candidate_analyzers(candidate, original_analyzer_count);
 
-        AppError::transaction_aborted(message, entries, messages, view)
+        AppError::transaction_aborted(message, entries, analyzers, messages, view)
     }
 }
 
@@ -409,15 +470,32 @@ fn candidate_records(
 fn build_result(
     state: &PersistedState,
     original_end: usize,
+    original_analyzer_count: usize,
     messages: Vec<MessageRecord>,
     transaction_state: TransactionState,
 ) -> Result<TransactionResult, AppError> {
     let (entries, view) = candidate_records(state, original_end)?;
+    let analyzers = candidate_analyzers(state, original_analyzer_count);
 
     Ok(TransactionResult {
         state: transaction_state,
         entries,
+        analyzers,
         messages,
         view,
     })
+}
+
+fn candidate_analyzers(state: &PersistedState, original_count: usize) -> Vec<AnalyzerRecord> {
+    state
+        .lifecore
+        .current_analysis_suite()
+        .0
+        .into_iter()
+        .skip(original_count)
+        .map(|config| AnalyzerRecord {
+            name: config.name,
+            config: config.config,
+        })
+        .collect()
 }

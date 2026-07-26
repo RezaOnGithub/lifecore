@@ -2,7 +2,7 @@ use clap::error::ErrorKind;
 use std::{ffi::OsStr, io, path::Path, process::ExitStatus};
 
 use crate::{
-    app::{EntryRecord, ViewSummary},
+    app::{AnalyzerRecord, EntryRecord, ViewSummary},
     cli::OutputFormat,
     messages::MessageRecord,
 };
@@ -10,6 +10,7 @@ use crate::{
 #[derive(Debug)]
 pub struct TransactionAbortDetail {
     pub entries: Vec<EntryRecord>,
+    pub analyzers: Vec<AnalyzerRecord>,
     pub messages: Vec<MessageRecord>,
     pub view: ViewSummary,
 }
@@ -19,7 +20,7 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 5")]
+    #[error("operation '{operation}' is unavailable in implementation stage 6")]
     Unavailable {
         operation: String,
         format: OutputFormat,
@@ -154,6 +155,18 @@ pub enum AppError {
 
     #[error("invalid node reference: {message}")]
     InvalidNodeReference {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid field assignment: {message}")]
+    InvalidFieldAssignment {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid payload: {message}")]
+    InvalidPayload {
         message: String,
         format: OutputFormat,
     },
@@ -361,6 +374,7 @@ impl AppError {
     pub fn transaction_aborted(
         message: impl Into<String>,
         entries: Vec<EntryRecord>,
+        analyzers: Vec<AnalyzerRecord>,
         messages: Vec<MessageRecord>,
         view: ViewSummary,
     ) -> Self {
@@ -368,6 +382,7 @@ impl AppError {
             message: message.into(),
             detail: Box::new(TransactionAbortDetail {
                 entries,
+                analyzers,
                 messages,
                 view,
             }),
@@ -419,6 +434,20 @@ impl AppError {
 
     pub fn invalid_node_reference(message: impl Into<String>) -> Self {
         Self::InvalidNodeReference {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_field_assignment(message: impl Into<String>) -> Self {
+        Self::InvalidFieldAssignment {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_payload(message: impl Into<String>) -> Self {
+        Self::InvalidPayload {
             message: message.into(),
             format: OutputFormat::Lines,
         }
@@ -532,6 +561,8 @@ impl AppError {
         | Self::EntryNotNode { format, .. }
         | Self::EntryOutsideView { format, .. }
         | Self::InvalidNodeReference { format, .. }
+        | Self::InvalidFieldAssignment { format, .. }
+        | Self::InvalidPayload { format, .. }
         | Self::InvalidAlias { format, .. }
         | Self::InvalidQueryPredicate { format, .. }
         | Self::QuerySelection { format, .. }
@@ -572,6 +603,8 @@ impl AppError {
         | Self::EntryNotNode { .. }
         | Self::EntryOutsideView { .. }
         | Self::InvalidNodeReference { .. }
+        | Self::InvalidFieldAssignment { .. }
+        | Self::InvalidPayload { .. }
         | Self::InvalidAlias { .. }
         | Self::InvalidQueryPredicate { .. }
         | Self::QuerySelection { .. }
@@ -610,6 +643,8 @@ impl AppError {
         | Self::EntryNotNode { format, .. }
         | Self::EntryOutsideView { format, .. }
         | Self::InvalidNodeReference { format, .. }
+        | Self::InvalidFieldAssignment { format, .. }
+        | Self::InvalidPayload { format, .. }
         | Self::InvalidAlias { format, .. }
         | Self::InvalidQueryPredicate { format, .. }
         | Self::QuerySelection { format, .. }
@@ -648,6 +683,8 @@ impl AppError {
         Self::EntryNotNode { .. } => "entry_not_node",
         Self::EntryOutsideView { .. } => "entry_outside_view",
         Self::InvalidNodeReference { .. } => "node_reference_syntax",
+        Self::InvalidFieldAssignment { .. } => "field_assignment_syntax",
+        Self::InvalidPayload { .. } => "payload_syntax",
         Self::InvalidAlias { .. } => "alias_syntax",
         Self::InvalidQueryPredicate { .. } => "query_predicate_syntax",
         Self::QuerySelection { .. } => "query_selection",

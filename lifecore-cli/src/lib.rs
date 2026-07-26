@@ -9,6 +9,7 @@ mod interactive_analyzer;
 pub mod locator;
 pub mod messages;
 pub mod output;
+pub mod payload_input;
 pub mod query;
 pub mod reference;
 pub mod state;

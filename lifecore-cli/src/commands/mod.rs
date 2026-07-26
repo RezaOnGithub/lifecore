@@ -1,10 +1,13 @@
-use lifecore::{LifeCore, LifeCoreList};
+use lifecore::{Body, EntryIndex, LifeCore, LifeCoreList};
 
 use crate::{
     InvocationContext,
     analysis::{AnalyzerRegistry, initial_graph, run_analysis},
-    app::{CommandOutcome, PredicateResult, QueryExplanationRecord, ViewSummary},
-    cli::{Command, EntryCommand, MessageCommand, QueryCommand, SelectionActionKind},
+    app::{AnalyzerRecord, CommandOutcome, PredicateResult, QueryExplanationRecord, ViewSummary},
+    cli::{
+        AnalyzerCommand, Command, EntryCommand, MessageCommand, QueryCommand, SelectionActionKind,
+        TransactionArgs,
+    },
     entry::entry_record,
     error::AppError,
     graphviz::{
@@ -12,11 +15,45 @@ use crate::{
     },
     locator::{EntryExpectation, EntryLocator, resolve_entry, resolve_index},
     messages::{MessageFilter, MessageUniverse, Severity, plan_suggestion},
+    payload_input::parse_field_assignments,
     query::{execute_query, explain_query, parse_query},
+    reference::{NodeReference, resolve_node_reference},
     state::{DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StatePath, StateStore},
     transaction::{ExpectedHead, TransactionRequest, TransactionService},
     view::{GraphView, ViewSpec},
 };
+
+struct AddRequest {
+    type_name: String,
+    body: Body,
+    parent: Option<EntryIndex>,
+}
+
+impl AddRequest {
+    fn into_plan(self) -> crate::transaction::PlannedChange {
+        crate::transaction::PlannedChange::AddNode {
+            type_name: self.type_name,
+            body: self.body,
+            parent: self.parent,
+        }
+    }
+}
+
+struct ConnectRequest {
+    from: EntryIndex,
+    type_name: String,
+    to: EntryIndex,
+}
+
+impl ConnectRequest {
+    fn into_plan(self) -> crate::transaction::PlannedChange {
+        crate::transaction::PlannedChange::AddEdge {
+            from: self.from,
+            type_name: self.type_name,
+            to: self.to,
+        }
+    }
+}
 
 pub fn dispatch(
     command: Command,
@@ -59,6 +96,119 @@ pub fn dispatch(
             },
             messages: universe.visible(),
         })
+    }
+    Command::Add(args) => {
+        let expected_head = parse_expected_head(&args.transaction)?;
+        let body = parse_field_assignments(&args.fields)?;
+        let parent = args
+            .parent
+            .as_deref()
+            .map(NodeReference::parse)
+            .transpose()?;
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "add")?;
+        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let parent = parent
+            .as_ref()
+            .map(|reference| resolve_node_reference(&state.lifecore, &state.cli, reference, &view))
+            .transpose()?
+            .map(|resolved| EntryIndex(resolved.index()));
+        let request = AddRequest {
+            type_name: args.r#type,
+            body,
+            parent,
+        };
+
+        log::debug!(
+            "prepared node append (parent={}, fields={})",
+            request.parent.is_some(),
+            request.body.iter().count()
+        );
+        execute_transaction(
+            &store,
+            &state,
+            request.into_plan(),
+            &args.transaction,
+            expected_head,
+            format,
+        )
+    }
+    Command::Connect(args) => {
+        let expected_head = parse_expected_head(&args.transaction)?;
+        let from = NodeReference::parse(&args.from)?;
+        let to = NodeReference::parse(&args.to)?;
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "connect")?;
+        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let from = resolve_node_reference(&state.lifecore, &state.cli, &from, &view)?;
+        let to = resolve_node_reference(&state.lifecore, &state.cli, &to, &view)?;
+        let request = ConnectRequest {
+            from: EntryIndex(from.index()),
+            type_name: args.r#type,
+            to: EntryIndex(to.index()),
+        };
+
+        log::debug!(
+            "prepared edge append (from={}, to={})",
+            request.from.0,
+            request.to.0
+        );
+        execute_transaction(
+            &store,
+            &state,
+            request.into_plan(),
+            &args.transaction,
+            expected_head,
+            format,
+        )
+    }
+    Command::Analyzer {
+        command: AnalyzerCommand::List(_),
+    } => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "analyzer list")?;
+        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let items = state
+            .lifecore
+            .current_analysis_suite()
+            .0
+            .into_iter()
+            .map(|config| AnalyzerRecord {
+                name: config.name,
+                config: config.config,
+            })
+            .collect();
+
+        Ok(CommandOutcome::Analyzers {
+            format,
+            view: view.summary(),
+            items,
+        })
+    }
+    Command::Analyzer {
+        command: AnalyzerCommand::Add(args),
+    } => {
+        let expected_head = parse_expected_head(&args.transaction)?;
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "analyzer add")?;
+        let change = crate::transaction::PlannedChange::AddAnalyzer {
+            name: args.name,
+            config: args.config,
+        };
+
+        log::debug!("prepared analyzer-suite extension");
+        execute_transaction(
+            &store,
+            &state,
+            change,
+            &args.transaction,
+            expected_head,
+            format,
+        )
     }
     Command::Check(args) => {
         let store = state_store(invocation)?;
@@ -374,11 +524,38 @@ pub fn dispatch(
         })
     }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 5");
+        log::trace!("operation '{operation}' is unavailable in stage 6");
 
         Err(AppError::unavailable(operation, format))
     }
     }
+}
+
+fn parse_expected_head(args: &TransactionArgs) -> Result<Option<ExpectedHead>, AppError> {
+    args.expect_head
+        .as_deref()
+        .map(str::parse::<ExpectedHead>)
+        .transpose()
+}
+
+fn execute_transaction(
+    store: &StateStore,
+    state: &PersistedState,
+    change: crate::transaction::PlannedChange,
+    args: &TransactionArgs,
+    expected_head: Option<ExpectedHead>,
+    format: crate::cli::OutputFormat,
+) -> Result<CommandOutcome, AppError> {
+    let registry = AnalyzerRegistry::built_in();
+    let request = TransactionRequest {
+        change,
+        commit: args.commit,
+        expected_head,
+        dismiss_after_commit: None,
+    };
+    let result = TransactionService::new(store, &registry).execute(state, request)?;
+
+    Ok(CommandOutcome::Transaction { format, result })
 }
 
 fn combinator_name(combinator: crate::cli::QueryCombinator) -> &'static str {

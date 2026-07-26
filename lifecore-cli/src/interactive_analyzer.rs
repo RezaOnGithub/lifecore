@@ -1,18 +1,22 @@
-use std::hash::Hash;
-
 use lifecore::{
-    Context, LifeCoreError, LifeCoreList,
-    analysis::{Analyzer, AnalyzerFactory, InnerMessageType, InnerOutput, MessageType, Output},
+    Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, LifeCoreList,
+    analysis::{
+        Analyzer, AnalyzerFactory, InnerMessageType, InnerOutput, MessageType, Output,
+        SuggestedAction, Suggestion,
+    },
 };
 
-//A The empty message type makes the Stage 2 no-op explicit: this analyzer
-//A cannot accidentally emit a diagnostic before its deferred behavior exists.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum InteractiveMessage {}
+struct InteractiveMessage {
+    offending: EntryContext,
+    relevance: Vec<EntryIndex>,
+    action: SuggestedAction,
+    text: String,
+}
 
 impl InnerMessageType for InteractiveMessage {
     fn ty(&self) -> MessageType {
-        match *self {}
+        MessageType::Suggestion
     }
 }
 
@@ -25,7 +29,9 @@ impl InnerOutput<InteractiveMessage> for InteractiveOutput {
     }
 }
 
-struct InteractiveAnalyzer;
+struct InteractiveAnalyzer {
+    config: String,
+}
 
 impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
     type MSG = InteractiveMessage;
@@ -35,15 +41,100 @@ impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
         InteractiveOutput(Vec::new())
     }
 
-    fn analyze_inner(&self, _lifecore: &LifeCoreList, _window: Context) -> Self::OUTPUT {
-        InteractiveOutput(Vec::new())
+    fn analyze_inner(&self, lifecore: &LifeCoreList, window: Context) -> Self::OUTPUT {
+        let Some(last) = window.last() else {
+            return InteractiveOutput(Vec::new());
+        };
+        let Some(child) = lifecore.node(last) else {
+            return InteractiveOutput(Vec::new());
+        };
+        let Some(parent_index) = child.parent else {
+            return InteractiveOutput(Vec::new());
+        };
+
+        //A Parent connections are inspected immediately before the child
+        //A append, while freshness and equivalent successors are judged in the
+        //A child-ending window that gives the suggestion its identity.
+        let preceding = last.shrink_to_exclusive_left();
+        let parent_now = window.look_at(parent_index.absolute());
+        let successors = lifecore.fresh_successors(parent_now);
+        let mut messages = Vec::new();
+
+        for edge in lifecore
+            .edges(preceding)
+            .filter(|edge| edge.from == parent_index || edge.to == parent_index)
+        {
+            let outgoing = edge.from == parent_index;
+            let opposite = if outgoing { edge.to } else { edge.from };
+            let opposite_now = window.look_at(opposite.absolute());
+            if lifecore.is_stale(opposite_now) != Some(false) {
+                continue;
+            }
+
+            //A Any equivalent connection on a fresh successor means the
+            //A relationship has already been deliberately recreated for this
+            //A family, so emitting another action would be misleading.
+            let recreated = successors.iter().any(|successor| {
+                lifecore.edges(window).any(|candidate| {
+                    !lifecore.is_stale(candidate.e).unwrap_or(true)
+                        && candidate.ty_name == edge.ty_name
+                        && if outgoing {
+                            candidate.from == successor.entry() && candidate.to == opposite
+                        } else {
+                            candidate.from == opposite && candidate.to == successor.entry()
+                        }
+                })
+            });
+            if recreated {
+                continue;
+            }
+
+            let action = if outgoing {
+                SuggestedAction::AddEdge {
+                    from: child.e.entry(),
+                    ty_name: edge.ty_name.clone(),
+                    to: opposite,
+                }
+            } else {
+                SuggestedAction::AddEdge {
+                    from: opposite,
+                    ty_name: edge.ty_name.clone(),
+                    to: child.e.entry(),
+                }
+            };
+            messages.push(InteractiveMessage {
+                offending: child.e,
+                relevance: vec![edge.e.entry(), parent_index, opposite, child.e.entry()],
+                action,
+                text: format!(
+                    "Recreate the parent node's {} {:?} connection for its fresh successor",
+                    if outgoing { "outgoing" } else { "incoming" },
+                    edge.ty_name
+                ),
+            });
+        }
+
+        InteractiveOutput(messages)
     }
 
     fn convert_report(&self, report: Self::OUTPUT) -> Output {
-        //A TODO: Remove this assertion with the placeholder implementation
-        //A when the analyzer gains its deferred connection-recreation behavior.
-        debug_assert!(report.0.is_empty());
-        Output(Vec::new())
+        Output(
+            report
+                .0
+                .into_iter()
+                .map(|message| {
+                    Suggestion {
+                        offending_event: message.offending.into(),
+                        system_name: InteractiveFactory.analyzer_name().to_string(),
+                        system_config: self.config.clone(),
+                        relevance: message.relevance,
+                        message: message.text,
+                        action: vec![message.action],
+                    }
+                    .into()
+                })
+                .collect(),
+        )
     }
 
     fn initialize(&mut self, lifecore: &LifeCoreList) -> Output {
@@ -62,9 +153,11 @@ pub(crate) struct InteractiveFactory;
 impl AnalyzerFactory<LifeCoreList> for InteractiveFactory {
     fn analyzer_with_config(
         &mut self,
-        _config: &str,
+        config: &str,
     ) -> Result<Box<dyn Analyzer<LifeCoreList>>, LifeCoreError> {
-        Ok(Box::new(InteractiveAnalyzer))
+        Ok(Box::new(InteractiveAnalyzer {
+            config: config.to_string(),
+        }))
     }
 
     fn analyzer_name(&self) -> &'static str {

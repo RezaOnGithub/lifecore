@@ -73,6 +73,12 @@ pub struct QueryExplanationRecord {
     pub matches: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalyzerRecord {
+    pub name: String,
+    pub config: String,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandOutcome {
     Text(String),
@@ -98,6 +104,11 @@ pub enum CommandOutcome {
         action: String,
         id: String,
         emitted: bool,
+    },
+    Analyzers {
+        format: OutputFormat,
+        view: ViewSummary,
+        items: Vec<AnalyzerRecord>,
     },
     Transaction {
         format: OutputFormat,
@@ -133,6 +144,7 @@ impl CommandOutcome {
         | Self::Messages { format, .. }
         | Self::Dismissals { format, .. }
         | Self::DismissalChanged { format, .. }
+        | Self::Analyzers { format, .. }
         | Self::Transaction { format, .. }
         | Self::Entries { format, .. }
         | Self::QueryExplanation { format, .. } => *format,

@@ -3,7 +3,10 @@ use std::io::{self, Write};
 use serde_json::json;
 
 use crate::{
-    app::{CircumstanceRecord, CommandOutcome, EntryRecord, QueryExplanationRecord, ViewSummary},
+    app::{
+        AnalyzerRecord, CircumstanceRecord, CommandOutcome, EntryRecord, QueryExplanationRecord,
+        ViewSummary,
+    },
     cli::OutputFormat,
     error::AppError,
     messages::MessageRecord,
@@ -114,6 +117,27 @@ pub fn render_outcome(
             writeln!(writer, "{} dismissal {} (emitted={emitted})", action, id)
         }
     }
+    CommandOutcome::Analyzers {
+        format,
+        view,
+        items,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "items": items,
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            render_view(view, writer)?;
+            render_analyzers(items, format, writer)
+        }
+    }
     CommandOutcome::Transaction { format, result } => {
         let format = resolve_format(*format, stdout_is_terminal);
 
@@ -125,6 +149,7 @@ pub fn render_outcome(
                     "transaction": {
                         "state": result.state,
                         "entries": result.entries,
+                        "analyzers": result.analyzers,
                         "messages": result.messages,
                     }
                 }),
@@ -134,6 +159,7 @@ pub fn render_outcome(
             writeln!(writer, "Transaction: {}", result.state.label())?;
             render_view(&result.view, writer)?;
             render_entry_listing(&result.entries, format, writer)?;
+            render_analyzers(&result.analyzers, format, writer)?;
             render_human_messages(&result.messages, &result.view, format, writer)
         }
     }
@@ -213,6 +239,7 @@ pub fn render_error(error: &AppError, writer: &mut dyn Write) -> io::Result<()> 
             detail["transaction"] = json!({
                 "state": "aborted",
                 "entries": transaction_detail.entries,
+                "analyzers": transaction_detail.analyzers,
                 "messages": transaction_detail.messages,
             });
         }
@@ -227,11 +254,34 @@ pub fn render_error(error: &AppError, writer: &mut dyn Write) -> io::Result<()> 
             writeln!(writer, "Transaction: aborted")?;
             render_view(&detail.view, writer)?;
             render_entry_listing(&detail.entries, OutputFormat::Lines, writer)?;
+            render_analyzers(&detail.analyzers, OutputFormat::Lines, writer)?;
             render_human_messages(&detail.messages, &detail.view, OutputFormat::Lines, writer)
         }
         _ => writeln!(writer, "error: {error}"),
         }
     }
+}
+
+fn render_analyzers(
+    analyzers: &[AnalyzerRecord],
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> io::Result<()> {
+    if analyzers.is_empty() {
+        return Ok(());
+    }
+    if format == OutputFormat::Table {
+        writeln!(writer, "ANALYZER\tCONFIG")?;
+    }
+    for analyzer in analyzers {
+        if format == OutputFormat::Table {
+            writeln!(writer, "{}\t{}", analyzer.name, analyzer.config)?;
+        } else {
+            writeln!(writer, "{}  config={:?}", analyzer.name, analyzer.config)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn resolve_format(format: OutputFormat, stdout_is_terminal: bool) -> OutputFormat {
