@@ -14,6 +14,7 @@ pub mod query;
 pub mod reference;
 pub mod state;
 pub mod transaction;
+pub mod type_edit;
 pub mod view;
 
 use std::{

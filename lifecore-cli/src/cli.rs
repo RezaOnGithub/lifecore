@@ -703,13 +703,13 @@ pub(crate) struct SelectedTypeOverrideArgs {
         value_name = "NEW-NAME",
         help = "Rename the child declaration"
     )]
-    new_name: Option<String>,
+    pub(crate) new_name: Option<String>,
 
     #[command(flatten)]
-    patch: TypePatchArgs,
+    pub(crate) patch: TypePatchArgs,
 
     #[command(flatten)]
-    transaction: TransactionArgs,
+    pub(crate) transaction: TransactionArgs,
 }
 
 #[derive(Subcommand, Debug)]

@@ -9,6 +9,8 @@ use std::{
 use lifecore::{
     Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList, OrderedSet, Payload,
     analysis::{AnalyzerFactory, Inconsistency, Message, SuggestedAction, Suggestion, Warning},
+    serialize::NodeBody,
+    typing::Type,
 };
 use lifecore_typecheck::TypeCheckFactory;
 use uuid::{Uuid, Version};
@@ -155,56 +157,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
     let cases: &[(&[&str], &str)] = &[
         (&["lifecore", "interactive"], "interactive"),
         (
-            &["lifecore", "type", "list", "--at", "4:abcde"],
-            "type list",
-        ),
-        (&["lifecore", "type", "show", "4:abcde"], "type show"),
-        (
-            &[
-                "lifecore",
-                "type",
-                "create",
-                "Task",
-                "--field",
-                "title = Text : Mandatory",
-                "--outgoing",
-                "Blocks",
-                "--incoming",
-                "Blocked_By",
-                "--allows-override",
-                "ArchivedTask",
-                "--commit",
-            ],
-            "type create",
-        ),
-        (
-            &[
-                "lifecore",
-                "type",
-                "override",
-                "Task",
-                "--at",
-                "4:abcde",
-                "--as",
-                "FocusedTask",
-                "--drop-field",
-                "legacy",
-                "--allow-outgoing",
-                "Relates_To",
-                "--disallow-outgoing",
-                "Blocks",
-                "--allow-incoming",
-                "Mentions",
-                "--disallow-incoming",
-                "Blocked_By",
-                "--allows-override",
-                "ArchivedTask",
-                "--disallow-override",
-                "OldTask",
-            ],
-            "type override",
-        ),
-        (
             &["lifecore", "sidecar", "attach", "entries.toml"],
             "sidecar attach",
         ),
@@ -223,8 +175,8 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
 
 #[test]
 fn query_selection_actions_have_typed_nested_grammar() {
-    assert_unavailable(
-        &[
+    assert!(matches!(
+        run(&[
             "lifecore",
             "query",
             "nodes",
@@ -239,9 +191,9 @@ fn query_selection_actions_have_typed_nested_grammar() {
             "--field",
             "priority = Number : Optional",
             "--commit",
-        ],
-        "query nodes --select -- type override",
-    );
+        ],),
+        Err(AppError::StateIo { .. })
+    ));
 
     assert_usage_error(
         &[
@@ -356,19 +308,19 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "type", "list"], &mut io);
+    let exit = run_cli(["lifecore", "sidecar", "dump"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'type list' is unavailable in implementation stage 7\n"
+        "error: operation 'sidecar dump' is unavailable in implementation stage 8\n"
     );
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "type", "list", "--format", "json"], &mut io);
+    let exit = run_cli(["lifecore", "sidecar", "dump", "--format", "json"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
@@ -376,7 +328,7 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let value: serde_json::Value =
         serde_json::from_slice(&stderr).expect("stderr contains one JSON value");
     assert_eq!(value["error"]["kind"], "unavailable");
-    assert_eq!(value["error"]["operation"], "type list");
+    assert_eq!(value["error"]["operation"], "sidecar dump");
 }
 
 #[test]
@@ -403,7 +355,7 @@ fn deferred_commands_do_not_create_or_modify_files() -> io::Result<()> {
     }
 
     assert!(matches!(
-        run_in(&["lifecore", "type", "list"], &directory, None),
+        run_in(&["lifecore", "sidecar", "dump"], &directory, None),
         Err(AppError::Unavailable { .. })
     ));
 
@@ -1034,6 +986,36 @@ fn initialize_stage7_state(directory: &std::path::Path) -> PersistedState {
     );
     store.initialize(&state).expect("Stage 7 state initializes");
     state
+}
+
+fn initialize_stage8_state(directory: &std::path::Path) -> PersistedState {
+    let initialized =
+        run_in(&["lifecore", "init"], directory, None).expect("Stage 8 state initializes");
+    let suggestion = match initialized {
+    CommandOutcome::Initialized { messages, .. } => messages
+        .into_iter()
+        .next()
+        .expect("bootstrap suggestion is emitted"),
+    outcome => panic!("expected initialized Stage 8 state, got {outcome:?}"),
+    };
+    run_in(
+        &[
+            "lifecore",
+            "message",
+            "apply",
+            &suggestion.display_id,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory,
+        None,
+    )
+    .expect("bootstrap declaration commits");
+
+    StateStore::new(StatePath::resolve(None, directory).expect("Stage 8 state path resolves"))
+        .load()
+        .expect("bootstrapped Stage 8 state loads")
 }
 
 #[test]
@@ -1879,6 +1861,701 @@ fn stage7_query_actions_attest_membership_and_fix_the_selected_parent() {
     assert_eq!(
         fs::read(&path).expect("changed membership preserves state"),
         after_commit
+    );
+}
+
+#[test]
+fn stage8_type_create_list_show_and_rendering_are_deterministic() {
+    let directory = tempfile::tempdir().expect("temporary Stage 8 type directory");
+    let state = initialize_stage8_state(directory.path());
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let path = store.path();
+    let view = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let bootstrap = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        0,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )
+    .expect("bootstrap declaration resolves");
+    let before = fs::read(path).expect("bootstrapped bytes are readable");
+    let declaration_args = [
+        "lifecore",
+        "type",
+        "create",
+        "Rich",
+        "--field",
+        "literal = \"fixed\" : Optional",
+        "--field",
+        "history = Sequence(Text) : Optional",
+        "--field",
+        "pair = Tuple(Text, Number) : Optional",
+        "--field",
+        "tags = OrderedSet(Text) : Optional",
+        "--field",
+        "status = OneOf(\"Owner's\", \"Done\") : Optional",
+        "--outgoing",
+        "Blocks",
+        "--incoming",
+        "Blocked_By",
+        "--allows-override",
+        "ArchivedRich",
+    ];
+
+    let dry_run = run_in(&declaration_args, directory.path(), None)
+        .expect("rich declaration dry run succeeds");
+    match dry_run {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert_eq!(result.entries.len(), 1);
+        let fields = result.entries[0]
+            .fields
+            .as_ref()
+            .expect("staged Type node has fields");
+        let declaration = Type::try_from_body(fields).expect("staged Type body decodes");
+        assert_eq!(declaration.name, "Rich");
+        assert_eq!(declaration.body.len(), 5);
+    }
+    outcome => panic!("expected type-create transaction, got {outcome:?}"),
+    }
+    assert_eq!(fs::read(path).expect("dry-run state is readable"), before);
+
+    let mut commit_args = declaration_args.to_vec();
+    let bootstrap_locator = bootstrap.display_locator();
+    commit_args.extend(["--commit", "--expect-head", bootstrap_locator.as_str()]);
+    let committed =
+        run_in(&commit_args, directory.path(), None).expect("rich declaration commit succeeds");
+    assert!(matches!(
+        committed,
+        CommandOutcome::Transaction { result, .. }
+            if result.state == TransactionState::Committed
+    ));
+
+    let loaded = store.load().expect("committed rich declaration loads");
+    let latest =
+        GraphView::latest(&loaded.lifecore, &loaded.cli).expect("latest rich view constructs");
+    let rich = resolve_index(
+        &loaded.lifecore,
+        &loaded.cli,
+        1,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("rich declaration resolves");
+
+    let listed = run_in(
+        &["lifecore", "type", "list", "--format", "json"],
+        directory.path(),
+        None,
+    )
+    .expect("type listing succeeds");
+    match &listed {
+    CommandOutcome::Types {
+        items,
+        detail: false,
+        ..
+    } => {
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Rich", "Type"]
+        );
+        assert_eq!(items[0].fields.len(), 5);
+        assert_eq!(items[0].outgoing, ["Blocks"]);
+        assert_eq!(items[0].incoming, ["Blocked_By"]);
+        assert_eq!(items[0].allows_override, ["ArchivedRich"]);
+    }
+    outcome => panic!("expected type listing, got {outcome:?}"),
+    }
+    let mut json = Vec::new();
+    render_outcome(&listed, &mut json, false).expect("type JSON renders");
+    let json: serde_json::Value = serde_json::from_slice(&json).expect("type output is JSON");
+    assert_eq!(json["items"][0]["name"], "Rich");
+    assert_eq!(json["items"][0]["locator"], rich.full_locator());
+    assert_eq!(json["view"]["end"], 2);
+
+    let table = run_in(&["lifecore", "type", "list"], directory.path(), None)
+        .expect("type table source succeeds");
+    let mut rendered = Vec::new();
+    render_outcome(&table, &mut rendered, true).expect("type table renders");
+    let rendered = String::from_utf8(rendered).expect("type table is UTF-8");
+    assert!(rendered.contains("NAME\tLOCATOR"));
+    assert!(rendered.contains(&format!("Rich\t{}", rich.display_locator())));
+
+    let shown = run_in(
+        &[
+            "lifecore",
+            "type",
+            "show",
+            &rich.display_locator(),
+            "--format",
+            "lines",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("type show succeeds");
+    let mut rendered = Vec::new();
+    render_outcome(&shown, &mut rendered, false).expect("type detail renders");
+    let rendered = String::from_utf8(rendered).expect("type detail is UTF-8");
+    assert!(rendered.contains(&format!("Locator: {}", rich.full_locator())));
+    assert!(rendered.contains("lifecore type create 'Rich'"));
+    assert!(rendered.contains("--field 'pair = Tuple(Text, Number) : Optional'"));
+    assert!(rendered.contains("--field 'status = OneOf(\"Owner'\"'\"'s\", \"Done\") : Optional'"));
+    assert!(!rendered.contains("--commit"));
+}
+
+#[test]
+fn stage8_overrides_preserve_order_parent_history_and_query_attestation() {
+    let directory = tempfile::tempdir().expect("temporary Stage 8 override directory");
+    let state = initialize_stage8_state(directory.path());
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let bootstrap_view =
+        GraphView::latest(&state.lifecore, &state.cli).expect("bootstrap view constructs");
+    let bootstrap = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        0,
+        EntryExpectation::Node,
+        Some(bootstrap_view.end_exclusive()),
+    )
+    .expect("bootstrap resolves");
+    run_in(
+        &[
+            "lifecore",
+            "type",
+            "create",
+            "Task",
+            "--field",
+            "first = Text : Optional",
+            "--field",
+            "second = Number : Optional",
+            "--outgoing",
+            "Blocks",
+            "--outgoing",
+            "Keeps",
+            "--incoming",
+            "Blocked_By",
+            "--incoming",
+            "Keeps_In",
+            "--allows-override",
+            "OldTask",
+            "--commit",
+            "--expect-head",
+            &bootstrap.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("Task declaration commits");
+
+    let loaded = store.load().expect("Task declaration loads");
+    let view = GraphView::latest(&loaded.lifecore, &loaded.cli).expect("Task view constructs");
+    let source = resolve_index(
+        &loaded.lifecore,
+        &loaded.cli,
+        1,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )
+    .expect("source Task declaration resolves");
+    run_in(
+        &[
+            "lifecore",
+            "add",
+            "Task",
+            "--field",
+            "first = \"present\"",
+            "--commit",
+            "--expect-head",
+            &source.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("existing Task node commits");
+
+    let patched = run_in(
+        &[
+            "lifecore",
+            "type",
+            "override",
+            "Task",
+            "--field",
+            "first = Text : Encouraged",
+            "--drop-field",
+            "second",
+            "--field",
+            "third = Number : Optional",
+            "--disallow-outgoing",
+            "Blocks",
+            "--allow-outgoing",
+            "Relates_To",
+            "--disallow-incoming",
+            "Blocked_By",
+            "--allow-incoming",
+            "Mentions",
+            "--disallow-override",
+            "OldTask",
+            "--allows-override",
+            "FocusedTask",
+            "--commit",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("Task override commits");
+    let patched_entry = match patched {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::Committed);
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(source.full_locator().as_str())
+        );
+        result.entries[0].clone()
+    }
+    outcome => panic!("expected type-override transaction, got {outcome:?}"),
+    };
+    let patched_type = Type::try_from_body(
+        patched_entry
+            .fields
+            .as_ref()
+            .expect("patched Type node has fields"),
+    )
+    .expect("patched Type body decodes");
+    assert_eq!(patched_type.name, "Task");
+    assert_eq!(
+        patched_type
+            .body
+            .iter()
+            .map(|field| field.name())
+            .collect::<Vec<_>>(),
+        vec!["first", "third"]
+    );
+    assert_eq!(
+        patched_type
+            .outgoing
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["Keeps", "Relates_To"]
+    );
+    assert_eq!(
+        patched_type
+            .incoming
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["Keeps_In", "Mentions"]
+    );
+    assert_eq!(
+        patched_type
+            .additional_override
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["FocusedTask"]
+    );
+
+    assert!(matches!(
+        run_in(
+            &["lifecore", "type", "show", &source.display_locator()],
+            directory.path(),
+            None,
+        ),
+        Ok(CommandOutcome::Types { detail: true, .. })
+    ));
+    let historical_list = run_in(
+        &[
+            "lifecore",
+            "type",
+            "list",
+            "--at",
+            &source.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("historical type listing succeeds");
+    assert!(matches!(
+        historical_list,
+        CommandOutcome::Types { items, .. }
+            if items.iter().map(|item| item.name.as_str()).collect::<Vec<_>>()
+                == ["Task", "Type"]
+    ));
+
+    let stable = fs::read(store.path()).expect("patched bytes are readable");
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "type",
+                "override",
+                "Task",
+                "--allow-outgoing",
+                "Keeps",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::TypePatchNoOp { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "type",
+                "override",
+                "Task",
+                "--allow-outgoing",
+                "Conflict",
+                "--disallow-outgoing",
+                "Conflict",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::InvalidTypePatch { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("failed patch bytes load"),
+        stable
+    );
+
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "type",
+                "override",
+                "Task",
+                "--field",
+                "required = Text : Mandatory",
+                "--commit",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("TypeCheck rejection bytes load"),
+        stable
+    );
+
+    let historical = run_in(
+        &[
+            "lifecore",
+            "type",
+            "override",
+            "Task",
+            "--at",
+            &source.display_locator(),
+            "--as",
+            "FocusedTask",
+            "--field",
+            "branch = OneOf(\"Focused\", \"Paused\") : Optional",
+            "--commit",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("historical branch commits");
+    match historical {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(source.full_locator().as_str())
+        );
+        let declaration = Type::try_from_body(
+            result.entries[0]
+                .fields
+                .as_ref()
+                .expect("historical branch has fields"),
+        )
+        .expect("historical branch decodes");
+        assert_eq!(declaration.name, "FocusedTask");
+    }
+    outcome => panic!("expected historical type transaction, got {outcome:?}"),
+    }
+
+    let loaded = store.load().expect("historical branch state loads");
+    let latest =
+        GraphView::latest(&loaded.lifecore, &loaded.cli).expect("branch latest view constructs");
+    let current_task = resolve_index(
+        &loaded.lifecore,
+        &loaded.cli,
+        patched_entry.index,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("current Task declaration resolves");
+    let ordinary_task = resolve_index(
+        &loaded.lifecore,
+        &loaded.cli,
+        2,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("ordinary Task node resolves");
+
+    let selected = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--where",
+            "type Type",
+            "--where",
+            "field name equals-text Task",
+            "--select",
+            &current_task.display_locator(),
+            "--",
+            "type",
+            "override",
+            "--allow-incoming",
+            "Guarded",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("query-attested type override dry run succeeds");
+    match selected {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert_eq!(
+            result.entries[0].parent.as_deref(),
+            Some(current_task.full_locator().as_str())
+        );
+    }
+    outcome => panic!("expected selected type transaction, got {outcome:?}"),
+    }
+
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "query",
+                "nodes",
+                "all",
+                "--where",
+                "fresh",
+                "--select",
+                &source.display_locator(),
+                "--",
+                "type",
+                "override",
+                "--as",
+                "Rejected",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::QuerySelection { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "query",
+                "nodes",
+                "all",
+                "--select",
+                &source.display_locator(),
+                "--",
+                "type",
+                "override",
+                "--as",
+                "Rejected",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::InvalidTypeDeclaration { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "query",
+                "nodes",
+                "all",
+                "--select",
+                &ordinary_task.display_locator(),
+                "--",
+                "type",
+                "override",
+                "--as",
+                "Rejected",
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::InvalidTypeDeclaration { .. })
+    ));
+}
+
+#[test]
+fn stage8_type_failures_are_early_view_aware_and_byte_safe() {
+    let empty = tempfile::tempdir().expect("temporary empty type directory");
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "type",
+                "create",
+                "Broken",
+                "--field",
+                "not a field declaration",
+            ],
+            empty.path(),
+            None,
+        ),
+        Err(AppError::InvalidTypeDeclaration { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "type",
+                "override",
+                "Task",
+                "--field",
+                "title = Text : Optional",
+                "--drop-field",
+                "title",
+            ],
+            empty.path(),
+            None,
+        ),
+        Err(AppError::InvalidTypePatch { .. })
+    ));
+    assert!(!empty.path().join("LifeCoreState.json").exists());
+
+    let directory = tempfile::tempdir().expect("temporary malformed type directory");
+    let mut state = initialize_stage8_state(directory.path());
+    let malformed = state
+        .lifecore
+        .add_mock(
+            Type::TYPE_NAME,
+            Body::from([("name", Payload::Number(1))]),
+            None,
+        )
+        .expect("malformed declaration is basically valid");
+    let duplicate_a = state
+        .lifecore
+        .add_mock(
+            Type::TYPE_NAME,
+            Type::new("Duplicate", &[], &[], &[], &[]).into_body(),
+            None,
+        )
+        .expect("first duplicate declaration is basically valid");
+    let duplicate_b = state
+        .lifecore
+        .add_mock(
+            Type::TYPE_NAME,
+            Type::new(
+                "Duplicate",
+                &[(
+                    "distinguishing",
+                    (
+                        lifecore::typing::ValueType::Text,
+                        lifecore::typing::FieldStatus::Optional,
+                    ),
+                )],
+                &[],
+                &[],
+                &[],
+            )
+            .into_body(),
+            None,
+        )
+        .expect("second duplicate declaration is basically valid");
+    state
+        .lifecore
+        .apply()
+        .expect("malformed fixture suffix applies");
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    store.save(&state).expect("malformed fixture saves");
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("fixture view constructs");
+    let malformed = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        malformed.e.entry().0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("malformed declaration resolves");
+    let duplicate_a = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        duplicate_a.e.entry().0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("first duplicate resolves");
+    let duplicate_b = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        duplicate_b.e.entry().0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("second duplicate resolves");
+    let before = fs::read(store.path()).expect("malformed fixture bytes are readable");
+
+    let listed = run_in(&["lifecore", "type", "list"], directory.path(), None)
+        .expect("malformed declarations are omitted from listing");
+    match listed {
+    CommandOutcome::Types { items, .. } => {
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Duplicate", "Duplicate", "Type"]
+        );
+        assert_eq!(items[0].index, duplicate_a.index());
+        assert_eq!(items[1].index, duplicate_b.index());
+    }
+    outcome => panic!("expected malformed-safe type listing, got {outcome:?}"),
+    }
+    assert!(matches!(
+        run_in(
+            &["lifecore", "type", "show", &malformed.display_locator()],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::InvalidTypeDeclaration { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &["lifecore", "type", "override", "Duplicate", "--as", "Other",],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::AmbiguousTypeDeclaration { count: 2, .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &["lifecore", "type", "override", "Missing", "--as", "Other",],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::TypeDeclarationNotFound { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("failed type operation bytes load"),
+        before
     );
 }
 

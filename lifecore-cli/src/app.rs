@@ -96,6 +96,19 @@ pub struct AliasChangeRecord {
     pub locator: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TypeRecord {
+    pub index: usize,
+    pub name: String,
+    pub locator: String,
+    pub display_locator: String,
+    pub fields: Vec<String>,
+    pub outgoing: Vec<String>,
+    pub incoming: Vec<String>,
+    pub allows_override: Vec<String>,
+    pub command: String,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandOutcome {
     Text(String),
@@ -136,6 +149,12 @@ pub enum CommandOutcome {
         format: OutputFormat,
         alias: AliasChangeRecord,
     },
+    Types {
+        format: OutputFormat,
+        view: ViewSummary,
+        items: Vec<TypeRecord>,
+        detail: bool,
+    },
     Transaction {
         format: OutputFormat,
         result: TransactionResult,
@@ -173,6 +192,7 @@ impl CommandOutcome {
         | Self::Analyzers { format, .. }
         | Self::Aliases { format, .. }
         | Self::AliasChanged { format, .. }
+        | Self::Types { format, .. }
         | Self::Transaction { format, .. }
         | Self::Entries { format, .. }
         | Self::QueryExplanation { format, .. } => *format,

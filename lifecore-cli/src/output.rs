@@ -5,7 +5,7 @@ use serde_json::json;
 use crate::{
     app::{
         AliasRecord, AnalyzerRecord, CircumstanceRecord, CommandOutcome, EntryRecord,
-        QueryExplanationRecord, ViewSummary,
+        QueryExplanationRecord, TypeRecord, ViewSummary,
     },
     cli::OutputFormat,
     error::AppError,
@@ -171,6 +171,31 @@ pub fn render_outcome(
             writeln!(writer, "{} alias {}", alias.action, alias.name)
         }
     }
+    CommandOutcome::Types {
+        format,
+        view,
+        items,
+        detail,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "items": items,
+                }),
+            )?;
+            writeln!(writer)
+        } else if *detail {
+            render_view(view, writer)?;
+            render_type_detail(&items[0], writer)
+        } else {
+            render_view(view, writer)?;
+            render_types(items, format, writer)
+        }
+    }
     CommandOutcome::Transaction { format, result } => {
         let format = resolve_format(*format, stdout_is_terminal);
 
@@ -251,6 +276,39 @@ pub fn render_outcome(
         render_view(view, writer)
     }
     }
+}
+
+fn render_types(
+    declarations: &[TypeRecord],
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> io::Result<()> {
+    if declarations.is_empty() {
+        return writeln!(writer, "No active, well-formed type declarations.");
+    }
+    if format == OutputFormat::Table {
+        writeln!(writer, "NAME\tLOCATOR")?;
+    }
+    for declaration in declarations {
+        if format == OutputFormat::Table {
+            writeln!(
+                writer,
+                "{}\t{}",
+                declaration.name, declaration.display_locator
+            )?;
+        } else {
+            writeln!(writer, "{}  {}", declaration.name, declaration.locator)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn render_type_detail(declaration: &TypeRecord, writer: &mut dyn Write) -> io::Result<()> {
+    writeln!(writer, "Locator: {}", declaration.locator)?;
+    writeln!(writer, "Display locator: {}", declaration.display_locator)?;
+    writeln!(writer, "Declaration:")?;
+    writeln!(writer, "{}", declaration.command)
 }
 
 fn render_aliases(

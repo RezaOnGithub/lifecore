@@ -9,7 +9,8 @@ use crate::{
     },
     cli::{
         AliasCommand, AnalyzerCommand, Command, EntryCommand, MessageCommand, QueryCommand,
-        SelectionAction, SelectionAliasCommand, SelectionEntryCommand, TransactionArgs,
+        SelectionAction, SelectionAliasCommand, SelectionEntryCommand, SelectionTypeCommand,
+        TransactionArgs, TypeCommand,
     },
     entry::entry_record,
     error::AppError,
@@ -23,6 +24,10 @@ use crate::{
     reference::{AliasName, NodeReference, alias_status, resolve_node_reference, visible_aliases},
     state::{DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StatePath, StateStore},
     transaction::{ExpectedHead, TransactionRequest, TransactionService},
+    type_edit::{
+        TypeCreateRequest, TypePatch, inspect_type, list_types, plan_type_append,
+        resolve_active_type, resolve_selected_type,
+    },
     view::{GraphView, ViewSpec},
 };
 
@@ -263,6 +268,106 @@ pub fn dispatch(
             },
         })
     }
+    Command::Type {
+        command: TypeCommand::List(args),
+    } => {
+        let view_spec = args
+            .at
+            .as_deref()
+            .map(EntryLocator::parse)
+            .transpose()?
+            .map_or(ViewSpec::Latest, ViewSpec::Through);
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "type list")?;
+        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let items = list_types(&state.lifecore, &state.cli, &view)?
+            .into_iter()
+            .map(|listing| listing.record())
+            .collect();
+
+        Ok(CommandOutcome::Types {
+            format,
+            view: view.summary(),
+            items,
+            detail: false,
+        })
+    }
+    Command::Type {
+        command: TypeCommand::Show(args),
+    } => {
+        let locator = EntryLocator::parse(&args.locator)?;
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "type show")?;
+        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let entry = resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &locator,
+            EntryExpectation::Node,
+            Some(view.end_exclusive()),
+        )?;
+        let declaration = inspect_type(&state.lifecore, &view, entry)?;
+
+        Ok(CommandOutcome::Types {
+            format,
+            view: view.summary(),
+            items: vec![declaration.record()],
+            detail: true,
+        })
+    }
+    Command::Type {
+        command: TypeCommand::Create(args),
+    } => {
+        let expected_head = parse_expected_head(&args.transaction)?;
+        let declaration = TypeCreateRequest::parse(args.name, &args.declaration)?.build();
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "type create")?;
+
+        log::debug!("prepared stored type declaration append");
+        execute_transaction(
+            &store,
+            &state,
+            plan_type_append(declaration, None),
+            &args.transaction,
+            expected_head,
+            format,
+        )
+    }
+    Command::Type {
+        command: TypeCommand::Override(args),
+    } => {
+        let view_spec = args
+            .at
+            .as_deref()
+            .map(EntryLocator::parse)
+            .transpose()?
+            .map_or(ViewSpec::Latest, ViewSpec::Through);
+        let expected_head = parse_expected_head(&args.transaction)?;
+        let patch = TypePatch::parse(args.new_name, &args.patch)?;
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "type override")?;
+        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let source = resolve_active_type(&state.lifecore, &state.cli, &view, &args.name)?;
+        let parent = EntryIndex(source.entry.index());
+        let declaration = patch.apply(&source.declaration)?;
+
+        log::debug!(
+            "prepared stored type declaration override (parent={})",
+            parent.0
+        );
+        execute_transaction(
+            &store,
+            &state,
+            plan_type_append(declaration, Some(parent)),
+            &args.transaction,
+            expected_head,
+            format,
+        )
+    }
     Command::Analyzer {
         command: AnalyzerCommand::Add(args),
     } => {
@@ -457,9 +562,15 @@ pub fn dispatch(
         command: QueryCommand::Nodes(args),
     } => {
         let action = args.selection_action().map_err(AppError::usage)?;
-        if matches!(action, Some(SelectionAction::Type { .. })) {
-            return Err(AppError::unavailable(operation, format));
-        }
+        let mut prepared_type_override = match action.as_ref() {
+        Some(SelectionAction::Type {
+            command: SelectionTypeCommand::Override(override_args),
+        }) => Some((
+            TypePatch::parse(override_args.new_name.clone(), &override_args.patch)?,
+            parse_expected_head(&override_args.transaction)?,
+        )),
+        _ => None,
+        };
         if let Some(SelectionAction::AddChild(child)) = action.as_ref() {
             parse_field_assignments(&child.fields)?;
             parse_expected_head(&child.transaction)?;
@@ -565,8 +676,24 @@ pub fn dispatch(
                     format,
                 );
             }
-            Some(SelectionAction::Type { .. }) => {
-                unreachable!("deferred type selection action was rejected before state access")
+            Some(SelectionAction::Type {
+                command: SelectionTypeCommand::Override(override_args),
+            }) => {
+                let (patch, expected_head) = prepared_type_override
+                    .take()
+                    .expect("selected type override was prepared before state access");
+                let source = resolve_selected_type(&state.lifecore, &view, resolved)?;
+                let parent = EntryIndex(source.entry.index());
+                let declaration = patch.apply(&source.declaration)?;
+
+                return execute_transaction(
+                    &store,
+                    &state,
+                    plan_type_append(declaration, Some(parent)),
+                    &override_args.transaction,
+                    expected_head,
+                    format,
+                );
             }
             }
         }
@@ -637,7 +764,7 @@ pub fn dispatch(
         })
     }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 7");
+        log::trace!("operation '{operation}' is unavailable in stage 8");
 
         Err(AppError::unavailable(operation, format))
     }

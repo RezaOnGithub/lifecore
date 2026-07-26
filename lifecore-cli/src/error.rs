@@ -20,7 +20,7 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 7")]
+    #[error("operation '{operation}' is unavailable in implementation stage 8")]
     Unavailable {
         operation: String,
         format: OutputFormat,
@@ -189,6 +189,33 @@ pub enum AppError {
         locator: String,
         format: OutputFormat,
     },
+
+    #[error("invalid stored type declaration: {message}")]
+    InvalidTypeDeclaration {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("no active, well-formed type declaration named {name:?} exists in the selected view")]
+    TypeDeclarationNotFound { name: String, format: OutputFormat },
+
+    #[error(
+        "{count} active, well-formed type declarations named {name:?} exist in the selected view"
+    )]
+    AmbiguousTypeDeclaration {
+        name: String,
+        count: usize,
+        format: OutputFormat,
+    },
+
+    #[error("invalid type patch: {message}")]
+    InvalidTypePatch {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("type patch does not change declaration {name:?}")]
+    TypePatchNoOp { name: String, format: OutputFormat },
 
     #[error("GraphViz generation failed: {message}")]
     GraphvizGeneration {
@@ -478,6 +505,42 @@ impl AppError {
         }
     }
 
+    pub fn invalid_type_declaration(message: impl Into<String>) -> Self {
+        Self::InvalidTypeDeclaration {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn type_declaration_not_found(name: impl Into<String>) -> Self {
+        Self::TypeDeclarationNotFound {
+            name: name.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn ambiguous_type_declaration(name: impl Into<String>, count: usize) -> Self {
+        Self::AmbiguousTypeDeclaration {
+            name: name.into(),
+            count,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_type_patch(message: impl Into<String>) -> Self {
+        Self::InvalidTypePatch {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn type_patch_no_op(name: impl Into<String>) -> Self {
+        Self::TypePatchNoOp {
+            name: name.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
     pub fn graphviz_generation(message: impl Into<String>) -> Self {
         Self::GraphvizGeneration {
             message: message.into(),
@@ -566,6 +629,11 @@ impl AppError {
         | Self::InvalidAlias { format, .. }
         | Self::InvalidQueryPredicate { format, .. }
         | Self::QuerySelection { format, .. }
+        | Self::InvalidTypeDeclaration { format, .. }
+        | Self::TypeDeclarationNotFound { format, .. }
+        | Self::AmbiguousTypeDeclaration { format, .. }
+        | Self::InvalidTypePatch { format, .. }
+        | Self::TypePatchNoOp { format, .. }
         | Self::GraphvizGeneration { format, .. }
         | Self::GraphvizTarget { format, .. }
         | Self::GraphvizTargetIo { format, .. }
@@ -608,6 +676,11 @@ impl AppError {
         | Self::InvalidAlias { .. }
         | Self::InvalidQueryPredicate { .. }
         | Self::QuerySelection { .. }
+        | Self::InvalidTypeDeclaration { .. }
+        | Self::TypeDeclarationNotFound { .. }
+        | Self::AmbiguousTypeDeclaration { .. }
+        | Self::InvalidTypePatch { .. }
+        | Self::TypePatchNoOp { .. }
         | Self::GraphvizGeneration { .. }
         | Self::GraphvizTarget { .. }
         | Self::GraphvizTargetIo { .. }
@@ -648,6 +721,11 @@ impl AppError {
         | Self::InvalidAlias { format, .. }
         | Self::InvalidQueryPredicate { format, .. }
         | Self::QuerySelection { format, .. }
+        | Self::InvalidTypeDeclaration { format, .. }
+        | Self::TypeDeclarationNotFound { format, .. }
+        | Self::AmbiguousTypeDeclaration { format, .. }
+        | Self::InvalidTypePatch { format, .. }
+        | Self::TypePatchNoOp { format, .. }
         | Self::GraphvizGeneration { format, .. }
         | Self::GraphvizTarget { format, .. }
         | Self::GraphvizTargetIo { format, .. }
@@ -688,6 +766,11 @@ impl AppError {
         Self::InvalidAlias { .. } => "alias_syntax",
         Self::InvalidQueryPredicate { .. } => "query_predicate_syntax",
         Self::QuerySelection { .. } => "query_selection",
+        Self::InvalidTypeDeclaration { .. } => "type_declaration",
+        Self::TypeDeclarationNotFound { .. } => "type_declaration_not_found",
+        Self::AmbiguousTypeDeclaration { .. } => "type_declaration_ambiguous",
+        Self::InvalidTypePatch { .. } => "type_patch",
+        Self::TypePatchNoOp { .. } => "type_patch_no_op",
         Self::GraphvizGeneration { .. } => "graphviz_generation",
         Self::GraphvizTarget { .. } => "graphviz_target",
         Self::GraphvizTargetIo { .. } => "graphviz_target_io",

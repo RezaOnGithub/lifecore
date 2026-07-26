@@ -1095,8 +1095,8 @@ that parent/edge workflows exist to demonstrate it.
 ## Stage 7 — Durable aliases and query-attested actions
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 8 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): Stage 8 may begin**
 
 ### Description
 
@@ -1200,14 +1200,14 @@ trusting row numbers.
 
 - [x] **Implementation gate (implementor only):** aliases and selection actions, tests, checks, and
       walkthrough are complete.
-- [ ] **Review gate (reviewer only):** alias/selection feedback is incorporated or explicitly
+- [X] **Review gate (reviewer only):** alias/selection feedback is incorporated or explicitly
       deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 7 item blocks type editing.
 
 ## Stage 8 — Stored type inspection, creation, and patch-based override
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 9 may begin**
 
@@ -1275,13 +1275,13 @@ Every candidate remains subject to the normal transaction and TypeCheck gates.
 
 ### Implementation checklist
 
-- [ ] Implement active type resolution and deterministic listing.
-- [ ] Implement locator-based type inspection and copy-pasteable rendering.
-- [ ] Implement creation through core type parsers and serialization.
-- [ ] Implement ordered patch representation, conflict checking, and application.
-- [ ] Implement direct and query-attested overrides.
-- [ ] Route every append through `TransactionService`.
-- [ ] Add focused tests for historical/name resolution, malformed declarations,
+- [x] Implement active type resolution and deterministic listing.
+- [x] Implement locator-based type inspection and copy-pasteable rendering.
+- [x] Implement creation through core type parsers and serialization.
+- [x] Implement ordered patch representation, conflict checking, and application.
+- [x] Implement direct and query-attested overrides.
+- [x] Route every append through `TransactionService`.
+- [x] Add focused tests for historical/name resolution, malformed declarations,
       name preservation/rename, parent identity, conflict/no-op detection,
       insertion order, TypeCheck rejection, and query membership.
 
@@ -1289,22 +1289,22 @@ Every candidate remains subject to the normal transaction and TypeCheck gates.
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run focused `lifecore` and `lifecore-typecheck` tests if parser or typed
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run focused `lifecore` and `lifecore-typecheck` tests if parser or typed
       serialization prerequisites change.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Run `cargo test --workspace`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test --workspace`.
 
 #### Manual walkthrough
 
-- [ ] Create a type with literal, sequence, tuple, ordered-set, and OneOf fields.
-- [ ] Show it and verify the output is copy-pasteable.
-- [ ] Patch a field and permission while preserving prior ordering.
-- [ ] Branch from a historical declaration with `--as`.
-- [ ] Attempt a no-op/conflicting patch and a TypeCheck-invalid mandatory-field
+- [x] Create a type with literal, sequence, tuple, ordered-set, and OneOf fields.
+- [x] Show it and verify the output is copy-pasteable.
+- [x] Patch a field and permission while preserving prior ordering.
+- [x] Branch from a historical declaration with `--as`.
+- [x] Attempt a no-op/conflicting patch and a TypeCheck-invalid mandatory-field
       change; confirm nothing is saved.
-- [ ] Perform the same override through a query-attested selection.
+- [x] Perform the same override through a query-attested selection.
 
 ### Review questions
 
@@ -1316,7 +1316,7 @@ Every candidate remains subject to the normal transaction and TypeCheck gates.
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** type inspection/editing, tests, checks, and
+- [x] **Implementation gate (implementor only):** type inspection/editing, tests, checks, and
       walkthrough are complete.
 - [ ] **Review gate (reviewer only):** type-workflow feedback is incorporated or explicitly
       deferred by agreement.
