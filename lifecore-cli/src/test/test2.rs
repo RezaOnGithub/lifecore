@@ -20,6 +20,9 @@ use crate::{
     app::CommandOutcome,
     entry::entry_record,
     error::AppError,
+    graphviz::{
+        GraphvizExporter, GraphvizInput, GraphvizKind, GraphvizOptions, GraphvizTarget, generate,
+    },
     interactive_analyzer::InteractiveFactory,
     locator::{
         EntryExpectation, EntryFingerprint, EntryLocator, entry_fingerprint_identity_bytes,
@@ -256,19 +259,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
         (
             &[
                 "lifecore",
-                "graphviz",
-                "graph.svg",
-                "--at",
-                "4:abcde",
-                "--full",
-                "--fields",
-            ],
-            "graphviz",
-        ),
-        (&["lifecore", "graphviz", "graph.dot", "--dot"], "graphviz"),
-        (
-            &[
-                "lifecore",
                 "check",
                 "--include-dismissed",
                 "--include-resolved",
@@ -461,7 +451,7 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'add' is unavailable in implementation stage 3\n"
+        "error: operation 'add' is unavailable in implementation stage 4\n"
     );
 
     let mut stdout = Vec::new();
@@ -1493,6 +1483,298 @@ fn stage3_cli_lists_selects_inspects_and_explains_without_writing_state() {
         fs::read(path).expect("state remains readable"),
         before,
         "Stage 3 read operations must preserve exact state bytes"
+    );
+}
+
+fn graphviz_state() -> PersistedState {
+    let mut state = stage3_state();
+    state
+        .lifecore
+        .add_mock(
+            "Special|Type",
+            Body::from([
+                (
+                    "special",
+                    Payload::Text(
+                        "quote \" slash \\ braces {} pipe | angle <tag> line\nnext".to_string(),
+                    ),
+                ),
+                (
+                    "nested",
+                    Payload::Sequence(vec![
+                        Payload::Text("left|right".to_string()),
+                        Payload::Number(7),
+                    ]),
+                ),
+            ]),
+            None,
+        )
+        .expect("special-character node is valid");
+    state
+        .lifecore
+        .apply()
+        .expect("special-character suffix applies");
+    state
+}
+
+#[test]
+fn graphviz_generation_is_deterministic_view_aware_and_safely_escaped() {
+    let state = graphviz_state();
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let default_options = GraphvizOptions {
+        full: false,
+        fields: false,
+    };
+    let generate_latest = |options| {
+        generate(
+            GraphvizInput {
+                graph: &state.lifecore,
+                state: &state.cli,
+                view: &latest,
+            },
+            options,
+        )
+        .expect("DOT generation succeeds")
+    };
+    let fresh = generate_latest(default_options);
+    let repeated = generate_latest(default_options);
+
+    assert_eq!(fresh.as_bytes(), repeated.as_bytes());
+    assert!(!fresh.as_str().contains("cluster_family"));
+    assert!(!fresh.as_str().contains("style=dashed"));
+    assert!(!fresh.as_str().contains("  n0 ["));
+    assert!(fresh.as_str().contains("  n1 ["));
+    assert!(fresh.as_str().contains("  n2 ["));
+    assert!(fresh.as_str().contains("  n4 ["));
+    assert!(fresh.as_str().contains("n2 -> n1"));
+
+    let full = generate_latest(GraphvizOptions {
+        full: true,
+        fields: true,
+    });
+    assert!(full.as_str().contains("subgraph cluster_family_0"));
+    assert!(full.as_str().contains("n0 -> n2"));
+    assert!(full.as_str().contains("style=dashed"));
+    assert!(full.as_str().contains("Special\\|Type"));
+    assert!(full.as_str().contains("{nested|"));
+    assert!(full.as_str().contains("{special|"));
+    assert!(full.as_str().contains("\\<tag\\>"));
+    assert!(full.as_str().contains("left\\|right"));
+    assert!(full.as_str().contains("\\\\"));
+    assert!(full.as_str().contains("label=\"{{{4:"));
+    assert!(!full.as_str().contains("\\\"nested\\\":"));
+    for index in 0..=4 {
+        let entry = resolve_index(
+            &state.lifecore,
+            &state.cli,
+            index,
+            EntryExpectation::Any,
+            Some(latest.end_exclusive()),
+        )
+        .expect("GraphViz entry resolves");
+        let short = format!("{index}:{}", &entry.fingerprint.as_str()[..5]);
+
+        assert!(full.as_str().contains(&short));
+        assert!(!full.as_str().contains(&entry.display_locator()));
+    }
+
+    let boundary = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        1,
+        EntryExpectation::Any,
+        Some(latest.end_exclusive()),
+    )
+    .expect("historical boundary resolves");
+    let historical = GraphView::through(
+        &state.lifecore,
+        &state.cli,
+        &EntryLocator::parse(&boundary.display_locator()).expect("boundary locator parses"),
+    )
+    .expect("historical view constructs");
+    let historical = generate(
+        GraphvizInput {
+            graph: &state.lifecore,
+            state: &state.cli,
+            view: &historical,
+        },
+        default_options,
+    )
+    .expect("historical DOT generation succeeds");
+
+    assert!(historical.as_str().contains("  n0 ["));
+    assert!(historical.as_str().contains("  n1 ["));
+    assert!(!historical.as_str().contains("  n2 ["));
+    assert!(!historical.as_str().contains("n2 -> n1"));
+}
+
+#[test]
+fn graphviz_cli_writes_dot_and_preserves_canonical_state_on_every_path() {
+    let directory = tempfile::tempdir().expect("temporary GraphViz directory");
+    let state = initialize_stage3_state(directory.path());
+    let state_path = directory.path().join("LifeCoreState.json");
+    let before = fs::read(&state_path).expect("state bytes are readable");
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let boundary = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        1,
+        EntryExpectation::Any,
+        Some(latest.end_exclusive()),
+    )
+    .expect("historical boundary resolves");
+
+    let outcome = run_in(
+        &[
+            "lifecore",
+            "graphviz",
+            "latest.dot",
+            "--dot",
+            "--full",
+            "--fields",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("DOT export succeeds");
+    match outcome {
+    CommandOutcome::GraphvizArtifact {
+        target,
+        artifact_kind,
+        view,
+    } => {
+        assert_eq!(target, directory.path().join("latest.dot"));
+        assert_eq!(artifact_kind, "DOT");
+        assert_eq!(view.end, 4);
+    }
+    outcome => panic!("expected GraphViz artifact, got {outcome:?}"),
+    }
+    let dot =
+        fs::read_to_string(directory.path().join("latest.dot")).expect("DOT artifact is readable");
+    assert!(dot.starts_with("digraph lifecore {"));
+
+    run_in(
+        &[
+            "lifecore",
+            "graphviz",
+            "historical.dot",
+            "--dot",
+            "--at",
+            &boundary.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("historical DOT export succeeds");
+    let historical = fs::read_to_string(directory.path().join("historical.dot"))
+        .expect("historical DOT artifact is readable");
+    assert!(historical.contains("  n0 ["));
+    assert!(!historical.contains("  n2 ["));
+
+    let blocked_target = directory.path().join("blocked");
+    fs::create_dir(&blocked_target).expect("blocked target directory is created");
+    assert!(matches!(
+        run_in(
+            &["lifecore", "graphviz", "blocked", "--dot"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::GraphvizTargetIo { .. })
+    ));
+    assert_eq!(
+        fs::read(state_path).expect("state remains readable"),
+        before,
+        "GraphViz success and failure must preserve exact state bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn graphviz_svg_export_streams_input_and_reports_process_failures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    fn executable_script(directory: &std::path::Path, name: &str, body: &str) -> PathBuf {
+        let path = directory.join(name);
+        fs::write(&path, body).expect("test executable is written");
+        let mut permissions = fs::metadata(&path)
+            .expect("test executable metadata is readable")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).expect("test executable is made executable");
+        path
+    }
+
+    let directory = tempfile::tempdir().expect("temporary exporter directory");
+    let state = stage3_state();
+    let view = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let document = generate(
+        GraphvizInput {
+            graph: &state.lifecore,
+            state: &state.cli,
+            view: &view,
+        },
+        GraphvizOptions {
+            full: true,
+            fields: true,
+        },
+    )
+    .expect("DOT generation succeeds");
+    let success_program = executable_script(directory.path(), "fake-dot", "#!/bin/sh\ncat\n");
+    let target = GraphvizTarget::resolve(
+        PathBuf::from("graph.svg"),
+        directory.path(),
+        GraphvizKind::Svg,
+    )
+    .expect("SVG target resolves");
+
+    GraphvizExporter::new(success_program)
+        .write_svg(&target, &document)
+        .expect("streamed SVG conversion succeeds");
+    assert_eq!(
+        fs::read(target.path()).expect("streamed artifact is readable"),
+        document.as_bytes()
+    );
+
+    let failing_program = executable_script(
+        directory.path(),
+        "failing-dot",
+        "#!/bin/sh\necho conversion-failed >&2\nexit 7\n",
+    );
+    fs::write(target.path(), b"previous artifact").expect("existing artifact is written");
+    match GraphvizExporter::new(failing_program).write_svg(&target, &document) {
+    Err(AppError::GraphvizProcessFailed { stderr, .. }) => {
+        assert!(stderr.contains("conversion-failed"));
+    }
+    result => panic!("expected failed GraphViz process, got {result:?}"),
+    }
+    assert_eq!(
+        fs::read(target.path()).expect("prior artifact remains readable"),
+        b"previous artifact"
+    );
+
+    let missing = directory.path().join("missing-dot");
+    let missing_exporter = GraphvizExporter::new(&missing);
+    assert!(matches!(
+        missing_exporter.write_svg(&target, &document),
+        Err(AppError::GraphvizProcessSpawn { .. })
+    ));
+    assert_eq!(
+        fs::read(target.path()).expect("prior artifact remains readable"),
+        b"previous artifact"
+    );
+
+    let dot_target = GraphvizTarget::resolve(
+        PathBuf::from("direct.dot"),
+        directory.path(),
+        GraphvizKind::Dot,
+    )
+    .expect("DOT target resolves");
+    missing_exporter
+        .write_dot(&dot_target, &document)
+        .expect("DOT export never invokes the configured executable");
+    assert_eq!(
+        fs::read(dot_target.path()).expect("direct DOT artifact is readable"),
+        document.as_bytes()
     );
 }
 

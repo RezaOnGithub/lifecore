@@ -1,5 +1,5 @@
 use clap::error::ErrorKind;
-use std::{io, path::Path};
+use std::{ffi::OsStr, io, path::Path, process::ExitStatus};
 
 use crate::cli::OutputFormat;
 
@@ -8,7 +8,7 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 3")]
+    #[error("operation '{operation}' is unavailable in implementation stage 4")]
     Unavailable {
         operation: String,
         format: OutputFormat,
@@ -123,6 +123,51 @@ pub enum AppError {
     #[error("selected entry was not returned by query: {locator}")]
     QuerySelection {
         locator: String,
+        format: OutputFormat,
+    },
+
+    #[error("GraphViz generation failed: {message}")]
+    GraphvizGeneration {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid GraphViz target: {message}")]
+    GraphvizTarget {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("could not {action} GraphViz target {path}: {source}")]
+    GraphvizTargetIo {
+        path: String,
+        action: &'static str,
+        #[source]
+        source: io::Error,
+        format: OutputFormat,
+    },
+
+    #[error("could not start GraphViz executable {program:?}: {source}")]
+    GraphvizProcessSpawn {
+        program: String,
+        #[source]
+        source: io::Error,
+        format: OutputFormat,
+    },
+
+    #[error("GraphViz process I/O failed while attempting to {action}: {source}")]
+    GraphvizProcessIo {
+        action: &'static str,
+        #[source]
+        source: io::Error,
+        format: OutputFormat,
+    },
+
+    #[error("GraphViz executable {program:?} exited with {status}: {stderr}")]
+    GraphvizProcessFailed {
+        program: String,
+        status: String,
+        stderr: String,
         format: OutputFormat,
     },
 
@@ -294,6 +339,64 @@ impl AppError {
         }
     }
 
+    pub fn graphviz_generation(message: impl Into<String>) -> Self {
+        Self::GraphvizGeneration {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn graphviz_target(message: impl Into<String>) -> Self {
+        Self::GraphvizTarget {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn graphviz_target_io(path: &Path, action: &'static str, source: io::Error) -> Self {
+        Self::GraphvizTargetIo {
+            path: path.display().to_string(),
+            action,
+            source,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn graphviz_process_spawn(program: &OsStr, source: io::Error) -> Self {
+        Self::GraphvizProcessSpawn {
+            program: program.to_string_lossy().into_owned(),
+            source,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn graphviz_process_io(action: &'static str, source: io::Error) -> Self {
+        Self::GraphvizProcessIo {
+            action,
+            source,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn graphviz_process(message: impl Into<String>) -> Self {
+        Self::graphviz_generation(message)
+    }
+
+    pub fn graphviz_process_failed(program: &OsStr, status: ExitStatus, stderr: &[u8]) -> Self {
+        let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+
+        Self::GraphvizProcessFailed {
+            program: program.to_string_lossy().into_owned(),
+            status: status.to_string(),
+            stderr: if stderr.is_empty() {
+                "no stderr output".to_string()
+            } else {
+                stderr
+            },
+            format: OutputFormat::Lines,
+        }
+    }
+
     pub fn with_format(mut self, selected: OutputFormat) -> Self {
         let format = match &mut self {
         Self::Usage { .. } | Self::Io(_) => return self,
@@ -315,7 +418,13 @@ impl AppError {
         | Self::InvalidNodeReference { format, .. }
         | Self::InvalidAlias { format, .. }
         | Self::InvalidQueryPredicate { format, .. }
-        | Self::QuerySelection { format, .. } => format,
+        | Self::QuerySelection { format, .. }
+        | Self::GraphvizGeneration { format, .. }
+        | Self::GraphvizTarget { format, .. }
+        | Self::GraphvizTargetIo { format, .. }
+        | Self::GraphvizProcessSpawn { format, .. }
+        | Self::GraphvizProcessIo { format, .. }
+        | Self::GraphvizProcessFailed { format, .. } => format,
         };
 
         *format = selected;
@@ -344,6 +453,12 @@ impl AppError {
         | Self::InvalidAlias { .. }
         | Self::InvalidQueryPredicate { .. }
         | Self::QuerySelection { .. }
+        | Self::GraphvizGeneration { .. }
+        | Self::GraphvizTarget { .. }
+        | Self::GraphvizTargetIo { .. }
+        | Self::GraphvizProcessSpawn { .. }
+        | Self::GraphvizProcessIo { .. }
+        | Self::GraphvizProcessFailed { .. }
         | Self::Io(_) => 1,
         }
     }
@@ -369,7 +484,13 @@ impl AppError {
         | Self::InvalidNodeReference { format, .. }
         | Self::InvalidAlias { format, .. }
         | Self::InvalidQueryPredicate { format, .. }
-        | Self::QuerySelection { format, .. } => *format,
+        | Self::QuerySelection { format, .. }
+        | Self::GraphvizGeneration { format, .. }
+        | Self::GraphvizTarget { format, .. }
+        | Self::GraphvizTargetIo { format, .. }
+        | Self::GraphvizProcessSpawn { format, .. }
+        | Self::GraphvizProcessIo { format, .. }
+        | Self::GraphvizProcessFailed { format, .. } => *format,
         Self::Io(_) => OutputFormat::Lines,
         }
     }
@@ -396,6 +517,12 @@ impl AppError {
         Self::InvalidAlias { .. } => "alias_syntax",
         Self::InvalidQueryPredicate { .. } => "query_predicate_syntax",
         Self::QuerySelection { .. } => "query_selection",
+        Self::GraphvizGeneration { .. } => "graphviz_generation",
+        Self::GraphvizTarget { .. } => "graphviz_target",
+        Self::GraphvizTargetIo { .. } => "graphviz_target_io",
+        Self::GraphvizProcessSpawn { .. } => "graphviz_process_spawn",
+        Self::GraphvizProcessIo { .. } => "graphviz_process_io",
+        Self::GraphvizProcessFailed { .. } => "graphviz_process_failed",
         Self::Io(_) => "io",
         }
     }

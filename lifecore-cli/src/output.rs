@@ -112,6 +112,14 @@ pub fn render_outcome(
             render_query_explanation(explanation, writer)
         }
     }
+    CommandOutcome::GraphvizArtifact {
+        target,
+        artifact_kind,
+        view,
+    } => {
+        writeln!(writer, "Wrote {artifact_kind}: {}", target.display())?;
+        render_view(view, writer)
+    }
     }
 }
 

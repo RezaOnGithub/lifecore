@@ -7,6 +7,9 @@ use crate::{
     cli::{Command, EntryCommand, MessageCommand, QueryCommand, SelectionActionKind},
     entry::entry_record,
     error::AppError,
+    graphviz::{
+        GraphvizExporter, GraphvizInput, GraphvizKind, GraphvizOptions, GraphvizTarget, generate,
+    },
     locator::{EntryExpectation, EntryLocator, resolve_entry, resolve_index},
     messages::{MessageUniverse, Severity},
     query::{execute_query, explain_query, parse_query},
@@ -231,8 +234,50 @@ pub fn dispatch(
             detail: false,
         })
     }
+    Command::Graphviz(args) => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "graphviz")?;
+        let view_spec = args
+            .at
+            .as_deref()
+            .map(EntryLocator::parse)
+            .transpose()?
+            .map_or(ViewSpec::Latest, ViewSpec::Through);
+        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let options = GraphvizOptions {
+            full: args.full,
+            fields: args.fields,
+        };
+        let document = generate(
+            GraphvizInput {
+                graph: &state.lifecore,
+                state: &state.cli,
+                view: &view,
+            },
+            options,
+        )?;
+        let kind = if args.dot {
+            GraphvizKind::Dot
+        } else {
+            GraphvizKind::Svg
+        };
+        let target = GraphvizTarget::resolve(args.target, invocation.current_directory(), kind)?;
+        let exporter = GraphvizExporter::default();
+
+        match kind {
+        GraphvizKind::Dot => exporter.write_dot(&target, &document)?,
+        GraphvizKind::Svg => exporter.write_svg(&target, &document)?,
+        }
+
+        Ok(CommandOutcome::GraphvizArtifact {
+            target: target.path().to_path_buf(),
+            artifact_kind: target.kind().name().to_string(),
+            view: view.summary(),
+        })
+    }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 3");
+        log::trace!("operation '{operation}' is unavailable in stage 4");
 
         Err(AppError::unavailable(operation, format))
     }

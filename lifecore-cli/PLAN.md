@@ -522,8 +522,8 @@ runner.
 ## Stage 3 — Entry identity, bounded views, inspection, and query
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 4 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): Stage 4 may begin**
 
 ### Description
 
@@ -686,15 +686,15 @@ Later commands must consume `GraphView`, `EntryLocator`, or resolved
 
 - [x] **Implementation gate (implementor only):** identity, view, inspection, query, Stage 3
       fixture, tests, checks, and walkthrough are complete.
-- [ ] **Review gate (reviewer only):** locator/query feedback is incorporated or explicitly
+- [X] **Review gate (reviewer only):** locator/query feedback is incorporated or explicitly
       deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 3 item blocks visualization
       work.
 
 ## Stage 4 — Read-only GraphViz generation and export
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 5 may begin**
 
@@ -774,30 +774,30 @@ move loading, sidecar preparation, or persistence into `graphviz`.
 
 ### Implementation checklist
 
-- [ ] Define the immutable graph/view input contract without depending on the
+- [x] Define the immutable graph/view input contract without depending on the
       later `EffectiveGraph` type.
-- [ ] Implement deterministic default/full/fields DOT generation and escaping.
-- [ ] Implement direct DOT and streamed SVG export.
-- [ ] Wire the command adapter only to canonical state and Stage 3 view services.
-- [ ] Add focused tests for historical views, fresh/full behavior, escaping,
+- [x] Implement deterministic default/full/fields DOT generation and escaping.
+- [x] Implement direct DOT and streamed SVG export.
+- [x] Wire the command adapter only to canonical state and Stage 3 view services.
+- [x] Add focused tests for historical views, fresh/full behavior, escaping,
       deterministic bytes, missing/failing `dot`, and unchanged state.
 
 ### Verification
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
 
 #### Manual walkthrough
 
-- [ ] Generate default and full DOT from the Stage 3 fixture in latest and
+- [x] Generate default and full DOT from the Stage 3 fixture in latest and
       historical views.
-- [ ] Inspect field values containing GraphViz-special characters.
-- [ ] Generate SVG when `dot` is available and inspect the artifact.
-- [ ] Exercise missing/failing `dot` and unwritable-target errors.
-- [ ] Compare canonical state bytes before and after every case.
+- [x] Inspect field values containing GraphViz-special characters.
+- [x] Generate SVG when `dot` is available and inspect the artifact.
+- [x] Exercise missing/failing `dot` and unwritable-target errors.
+- [x] Compare canonical state bytes before and after every case.
 
 ### Review questions
 
@@ -809,7 +809,7 @@ move loading, sidecar preparation, or persistence into `graphviz`.
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** canonical DOT/SVG generation,
+- [x] **Implementation gate (implementor only):** canonical DOT/SVG generation,
       tests, checks, and walkthrough are complete.
 - [ ] **Review gate (reviewer only):** visualization and interface feedback is
       incorporated or explicitly deferred by agreement.

@@ -4,6 +4,7 @@ pub mod cli;
 pub mod commands;
 pub mod entry;
 pub mod error;
+pub mod graphviz;
 mod interactive_analyzer;
 pub mod locator;
 pub mod messages;

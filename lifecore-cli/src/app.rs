@@ -96,6 +96,11 @@ pub enum CommandOutcome {
         view: ViewSummary,
         explanation: Box<QueryExplanationRecord>,
     },
+    GraphvizArtifact {
+        target: PathBuf,
+        artifact_kind: String,
+        view: ViewSummary,
+    },
 }
 
 impl CommandOutcome {
@@ -110,6 +115,7 @@ impl CommandOutcome {
         | Self::Messages { format, .. }
         | Self::Entries { format, .. }
         | Self::QueryExplanation { format, .. } => *format,
+        Self::GraphvizArtifact { .. } => OutputFormat::Lines,
         }
     }
 }
