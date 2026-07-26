@@ -10,9 +10,9 @@ use crate::{
     cli::{
         AliasCommand, AnalyzerCommand, Command, EntryCommand, MessageCommand, QueryCommand,
         SelectionAction, SelectionAliasCommand, SelectionEntryCommand, SelectionTypeCommand,
-        TransactionArgs, TypeCommand,
+        SidecarCommand, TransactionArgs, TypeCommand,
     },
-    entry::entry_record,
+    effective::{EffectiveCapability, EffectiveGraph, prepare_effective, reject_attached_mutation},
     error::AppError,
     graphviz::{
         GraphvizExporter, GraphvizInput, GraphvizKind, GraphvizOptions, GraphvizTarget, generate,
@@ -22,6 +22,7 @@ use crate::{
     payload_input::parse_field_assignments,
     query::{execute_query, explain_query, parse_query},
     reference::{AliasName, NodeReference, alias_status, resolve_node_reference, visible_aliases},
+    sidecar::{attach_path, detach},
     state::{DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StatePath, StateStore},
     transaction::{ExpectedHead, TransactionRequest, TransactionService},
     type_edit::{
@@ -99,11 +100,84 @@ pub fn dispatch(
             uuid,
             view: ViewSummary {
                 end: view_end,
+                canonical_end: view_end,
                 through: None,
                 display_through: None,
             },
             messages: universe.visible(),
         })
+    }
+    Command::Sidecar {
+        command: SidecarCommand::Attach(args),
+    } => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        let path = attach_path(&store, &state, &args.path, invocation.current_directory())?;
+
+        Ok(CommandOutcome::SidecarAttachment {
+            action: "attached".to_string(),
+            path,
+        })
+    }
+    Command::Sidecar {
+        command: SidecarCommand::Detach,
+    } => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        let path = detach(&store, &state)?;
+
+        Ok(CommandOutcome::SidecarAttachment {
+            action: "detached".to_string(),
+            path,
+        })
+    }
+    Command::Sidecar {
+        command: SidecarCommand::Dump(_),
+    } => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective =
+            effective_graph(&state, &registry, EffectiveCapability::Dump, "sidecar dump")?;
+        let items = effective.dump_suffix()?;
+        let view = effective.view(ViewSpec::Latest)?;
+
+        Ok(CommandOutcome::SidecarDump {
+            format,
+            view: view.summary(),
+            items,
+        })
+    }
+    Command::Sidecar {
+        command: SidecarCommand::Commit(args),
+    } => {
+        let expected_head = args
+            .expect_head
+            .as_deref()
+            .map(EntryLocator::parse)
+            .transpose()?
+            .map(ExpectedHead::Entry);
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective = effective_graph(
+            &state,
+            &registry,
+            EffectiveCapability::Commit,
+            "sidecar commit",
+        )?;
+        let plan = effective
+            .plan()
+            .cloned()
+            .ok_or_else(AppError::sidecar_not_attached)?;
+        let result = TransactionService::new(&store, &registry).execute_sidecar(
+            &state,
+            plan.change,
+            plan.temporary_aliases,
+            expected_head,
+        )?;
+
+        Ok(CommandOutcome::SidecarCommitted { format, result })
     }
     Command::Add(args) => {
         let expected_head = parse_expected_head(&args.transaction)?;
@@ -115,7 +189,7 @@ pub fn dispatch(
             .transpose()?;
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "add")?;
+        reject_attached_mutation(&state, "add")?;
         let view = GraphView::latest(&state.lifecore, &state.cli)?;
         let parent = parent
             .as_ref()
@@ -148,7 +222,7 @@ pub fn dispatch(
         let to = NodeReference::parse(&args.to)?;
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "connect")?;
+        reject_attached_mutation(&state, "connect")?;
         let view = GraphView::latest(&state.lifecore, &state.cli)?;
         let from = resolve_node_reference(&state.lifecore, &state.cli, &from, &view)?;
         let to = resolve_node_reference(&state.lifecore, &state.cli, &to, &view)?;
@@ -177,9 +251,16 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "analyzer list")?;
-        let view = GraphView::latest(&state.lifecore, &state.cli)?;
-        let items = state
+        let registry = AnalyzerRegistry::built_in();
+        let effective = effective_graph(
+            &state,
+            &registry,
+            EffectiveCapability::Browse,
+            "analyzer list",
+        )?;
+        let view = effective.view(ViewSpec::Latest)?;
+        let items = effective
+            .state()
             .lifecore
             .current_analysis_suite()
             .0
@@ -201,26 +282,36 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "alias list")?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective =
+            effective_graph(&state, &registry, EffectiveCapability::Browse, "alias list")?;
         let view_spec = args
             .at
             .as_deref()
             .map(EntryLocator::parse)
             .transpose()?
             .map_or(ViewSpec::Latest, ViewSpec::Through);
-        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
-        let items = state
+        let view = effective.view(view_spec)?;
+        let items = effective
+            .state()
             .cli
             .aliases
             .iter()
             .map(|(name, target)| {
-                let (resolved, status) = alias_status(&state.lifecore, &state.cli, target, &view)?;
+                let effective_state = effective.state();
+                let (resolved, status) = alias_status(
+                    &effective_state.lifecore,
+                    &effective_state.cli,
+                    target,
+                    &view,
+                )?;
 
                 Ok(AliasRecord {
                     name: name.clone(),
                     locator: resolved.full_locator(),
                     display_locator: resolved.display_locator(),
                     status,
+                    temporary: effective.is_temporary_alias(name),
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
@@ -236,7 +327,7 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let mut state = store.load()?;
-        reject_attached_sidecar(&state, "alias set")?;
+        reject_attached_mutation(&state, "alias set")?;
         let view = GraphView::latest(&state.lifecore, &state.cli)?;
         let target = resolve_entry(
             &state.lifecore,
@@ -252,7 +343,7 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let mut state = store.load()?;
-        reject_attached_sidecar(&state, "alias remove")?;
+        reject_attached_mutation(&state, "alias remove")?;
         let target = state.cli.aliases.remove_name(&args.name).ok_or_else(|| {
             AppError::invalid_node_reference(format!("unknown alias {:?}", args.name.as_str()))
         })?;
@@ -279,9 +370,12 @@ pub fn dispatch(
             .map_or(ViewSpec::Latest, ViewSpec::Through);
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "type list")?;
-        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
-        let items = list_types(&state.lifecore, &state.cli, &view)?
+        let registry = AnalyzerRegistry::built_in();
+        let effective =
+            effective_graph(&state, &registry, EffectiveCapability::Browse, "type list")?;
+        let view = effective.view(view_spec)?;
+        let effective_state = effective.state();
+        let items = list_types(&effective_state.lifecore, &effective_state.cli, &view)?
             .into_iter()
             .map(|listing| listing.record())
             .collect();
@@ -299,16 +393,19 @@ pub fn dispatch(
         let locator = EntryLocator::parse(&args.locator)?;
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "type show")?;
-        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective =
+            effective_graph(&state, &registry, EffectiveCapability::Browse, "type show")?;
+        let view = effective.view(ViewSpec::Latest)?;
+        let effective_state = effective.state();
         let entry = resolve_entry(
-            &state.lifecore,
-            &state.cli,
+            &effective_state.lifecore,
+            &effective_state.cli,
             &locator,
             EntryExpectation::Node,
             Some(view.end_exclusive()),
         )?;
-        let declaration = inspect_type(&state.lifecore, &view, entry)?;
+        let declaration = inspect_type(&effective_state.lifecore, &view, entry)?;
 
         Ok(CommandOutcome::Types {
             format,
@@ -324,7 +421,7 @@ pub fn dispatch(
         let declaration = TypeCreateRequest::parse(args.name, &args.declaration)?.build();
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "type create")?;
+        reject_attached_mutation(&state, "type create")?;
 
         log::debug!("prepared stored type declaration append");
         execute_transaction(
@@ -349,7 +446,7 @@ pub fn dispatch(
         let patch = TypePatch::parse(args.new_name, &args.patch)?;
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "type override")?;
+        reject_attached_mutation(&state, "type override")?;
         let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
         let source = resolve_active_type(&state.lifecore, &state.cli, &view, &args.name)?;
         let parent = EntryIndex(source.entry.index());
@@ -374,7 +471,7 @@ pub fn dispatch(
         let expected_head = parse_expected_head(&args.transaction)?;
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "analyzer add")?;
+        reject_attached_mutation(&state, "analyzer add")?;
         let change = crate::transaction::PlannedChange::AddAnalyzer {
             name: args.name,
             config: args.config,
@@ -393,25 +490,21 @@ pub fn dispatch(
     Command::Check(args) => {
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "check")?;
-
-        let report = run_analysis(&state.lifecore, &AnalyzerRegistry::built_in())?;
-        let universe =
-            MessageUniverse::from_analysis(&report, &state.lifecore, &state.cli.dismissals)?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective = effective_graph(&state, &registry, EffectiveCapability::Check, "check")?;
+        let universe = effective.messages(&registry)?;
+        let effective_state = effective.state();
+        let view = effective.view(ViewSpec::Latest)?;
 
         if args.dismissal_ids {
             Ok(CommandOutcome::Dismissals {
                 format,
-                items: universe.dismissal_statuses(&state.cli.dismissals),
+                items: universe.dismissal_statuses(&effective_state.cli.dismissals),
             })
         } else {
             Ok(CommandOutcome::Messages {
                 format,
-                view: ViewSummary {
-                    end: view_end(&state.lifecore),
-                    through: None,
-                    display_through: None,
-                },
+                view: view.summary(),
                 items: universe.filtered(MessageFilter {
                     include_dismissed: args.include_dismissed,
                     only_dismissed: args.only_dismissed,
@@ -426,20 +519,20 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "message show")?;
-
-        let report = run_analysis(&state.lifecore, &AnalyzerRegistry::built_in())?;
-        let universe =
-            MessageUniverse::from_analysis(&report, &state.lifecore, &state.cli.dismissals)?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective = effective_graph(
+            &state,
+            &registry,
+            EffectiveCapability::Browse,
+            "message show",
+        )?;
+        let universe = effective.messages(&registry)?;
+        let view = effective.view(ViewSpec::Latest)?;
         let message = universe.resolve(&args.message_id)?;
 
         Ok(CommandOutcome::Messages {
             format,
-            view: ViewSummary {
-                end: view_end(&state.lifecore),
-                through: None,
-                display_through: None,
-            },
+            view: view.summary(),
             items: vec![message],
             detail: true,
         })
@@ -449,7 +542,7 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let mut state = store.load()?;
-        reject_attached_sidecar(&state, "message dismiss")?;
+        reject_attached_mutation(&state, "message dismiss")?;
 
         let report = run_analysis(&state.lifecore, &AnalyzerRegistry::built_in())?;
         let universe =
@@ -478,7 +571,7 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let mut state = store.load()?;
-        reject_attached_sidecar(&state, "message restore")?;
+        reject_attached_mutation(&state, "message restore")?;
 
         let report = run_analysis(&state.lifecore, &AnalyzerRegistry::built_in())?;
         let universe =
@@ -516,7 +609,7 @@ pub fn dispatch(
             .transpose()?;
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "message apply")?;
+        reject_attached_mutation(&state, "message apply")?;
 
         let registry = AnalyzerRegistry::built_in();
         let report = run_analysis(&state.lifecore, &registry)?;
@@ -539,17 +632,20 @@ pub fn dispatch(
     } => {
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "entry show")?;
-        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective =
+            effective_graph(&state, &registry, EffectiveCapability::Browse, "entry show")?;
+        let view = effective.view(ViewSpec::Latest)?;
+        let effective_state = effective.state();
         let locator = EntryLocator::parse(&args.locator)?;
         let resolved = resolve_entry(
-            &state.lifecore,
-            &state.cli,
+            &effective_state.lifecore,
+            &effective_state.cli,
             &locator,
             EntryExpectation::Any,
             Some(view.end_exclusive()),
         )?;
-        let item = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+        let item = effective.entry_record(&view, &resolved)?;
 
         Ok(CommandOutcome::Entries {
             format,
@@ -578,21 +674,37 @@ pub fn dispatch(
 
         let store = state_store(invocation)?;
         let mut state = store.load()?;
-        reject_attached_sidecar(&state, "query nodes")?;
+        let mutation_operation = match action.as_ref() {
+        Some(SelectionAction::Alias { .. }) => Some("query nodes --select -- alias set"),
+        Some(SelectionAction::Type { .. }) => Some("query nodes --select -- type override"),
+        Some(SelectionAction::AddChild(_)) => Some("query nodes --select -- add-child"),
+        None | Some(SelectionAction::Entry { .. }) => None,
+        };
+        if let Some(operation) = mutation_operation {
+            reject_attached_mutation(&state, operation)?;
+        }
+        let registry = AnalyzerRegistry::built_in();
+        let effective = effective_graph(
+            &state,
+            &registry,
+            EffectiveCapability::Browse,
+            "query nodes",
+        )?;
+        let effective_state = effective.state();
         let view_spec = args
             .at
             .as_deref()
             .map(EntryLocator::parse)
             .transpose()?
             .map_or(ViewSpec::Latest, ViewSpec::Through);
-        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let view = effective.view(view_spec)?;
         let query = parse_query(&view, args.combinator, &args.predicates)?;
 
         if let Some(locator_text) = args.explain.as_deref() {
             let locator = EntryLocator::parse(locator_text)?;
             let resolved = resolve_entry(
-                &state.lifecore,
-                &state.cli,
+                &effective_state.lifecore,
+                &effective_state.cli,
                 &locator,
                 EntryExpectation::Node,
                 Some(view.end_exclusive()),
@@ -600,8 +712,8 @@ pub fn dispatch(
             let candidate = view
                 .context()
                 .look_at(resolved.entry.entry_context().absolute());
-            let explanation = explain_query(&state.lifecore, &query, candidate)?;
-            let candidate = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+            let explanation = explain_query(&effective_state.lifecore, &query, candidate)?;
+            let candidate = effective.entry_record(&view, &resolved)?;
             let predicates = query
                 .predicates
                 .iter()
@@ -622,12 +734,12 @@ pub fn dispatch(
             });
         }
 
-        let results = execute_query(&state.lifecore, &query);
+        let results = execute_query(&effective_state.lifecore, &query);
         if let Some(locator_text) = args.select.as_deref() {
             let locator = EntryLocator::parse(locator_text)?;
             let resolved = resolve_entry(
-                &state.lifecore,
-                &state.cli,
+                &effective_state.lifecore,
+                &effective_state.cli,
                 &locator,
                 EntryExpectation::Node,
                 Some(view.end_exclusive()),
@@ -644,7 +756,7 @@ pub fn dispatch(
             | Some(SelectionAction::Entry {
                 command: SelectionEntryCommand::Inspect,
             }) => {
-                let item = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+                let item = effective.entry_record(&view, &resolved)?;
 
                 return Ok(CommandOutcome::Entries {
                     format,
@@ -682,7 +794,7 @@ pub fn dispatch(
                 let (patch, expected_head) = prepared_type_override
                     .take()
                     .expect("selected type override was prepared before state access");
-                let source = resolve_selected_type(&state.lifecore, &view, resolved)?;
+                let source = resolve_selected_type(&effective_state.lifecore, &view, resolved)?;
                 let parent = EntryIndex(source.entry.index());
                 let declaration = patch.apply(&source.declaration)?;
 
@@ -702,13 +814,13 @@ pub fn dispatch(
             .into_iter()
             .map(|node| {
                 resolve_index(
-                    &state.lifecore,
-                    &state.cli,
+                    &effective_state.lifecore,
+                    &effective_state.cli,
                     node.e.entry().0,
                     EntryExpectation::Node,
                     Some(view.end_exclusive()),
                 )
-                .and_then(|resolved| entry_record(&state.lifecore, &state.cli, &view, &resolved))
+                .and_then(|resolved| effective.entry_record(&view, &resolved))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -722,25 +834,36 @@ pub fn dispatch(
     Command::Graphviz(args) => {
         let store = state_store(invocation)?;
         let state = store.load()?;
-        reject_attached_sidecar(&state, "graphviz")?;
+        let registry = AnalyzerRegistry::built_in();
+        let effective =
+            effective_graph(&state, &registry, EffectiveCapability::Browse, "graphviz")?;
+        let effective_state = effective.state();
         let view_spec = args
             .at
             .as_deref()
             .map(EntryLocator::parse)
             .transpose()?
             .map_or(ViewSpec::Latest, ViewSpec::Through);
-        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let view = effective.view(view_spec)?;
         let options = GraphvizOptions {
             full: args.full,
             fields: args.fields,
         };
-        let aliases = visible_aliases(&state.lifecore, &state.cli, &view)?;
+        let mut aliases = visible_aliases(&effective_state.lifecore, &effective_state.cli, &view)?;
+        for names in aliases.values_mut() {
+            for name in names {
+                if effective.is_temporary_alias(name) {
+                    name.push_str(" (temporary)");
+                }
+            }
+        }
         let document = generate(
             GraphvizInput {
-                graph: &state.lifecore,
-                state: &state.cli,
+                graph: &effective_state.lifecore,
+                state: &effective_state.cli,
                 view: &view,
                 aliases: &aliases,
+                canonical_end: effective.canonical_end(),
             },
             options,
         )?;
@@ -764,7 +887,7 @@ pub fn dispatch(
         })
     }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 8");
+        log::trace!("operation '{operation}' is unavailable in stage 9");
 
         Err(AppError::unavailable(operation, format))
     }
@@ -843,15 +966,13 @@ fn state_store(invocation: &InvocationContext) -> Result<StateStore, AppError> {
     Ok(StateStore::new(path))
 }
 
-fn reject_attached_sidecar(state: &PersistedState, operation: &str) -> Result<(), AppError> {
-    if state.cli.sidecar_path.is_some() {
-        return Err(AppError::unavailable(
-            format!("{operation} with attached sidecar"),
-            crate::cli::OutputFormat::Lines,
-        ));
-    }
-
-    Ok(())
+fn effective_graph(
+    state: &PersistedState,
+    registry: &AnalyzerRegistry,
+    capability: EffectiveCapability,
+    operation: &str,
+) -> Result<EffectiveGraph, AppError> {
+    prepare_effective(state, registry).require(capability, operation)
 }
 
 fn insert_dismissal(dismissals: &mut Vec<DismissalRecord>, digest: String) {

@@ -126,6 +126,16 @@ impl CliStateV1 {
             previous = Some(dismissal.digest.clone());
         }
 
+        if self
+            .sidecar_path
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err(AppError::invalid_state(
+                "attached sidecar path is not absolute",
+            ));
+        }
+
         Ok(())
     }
 }

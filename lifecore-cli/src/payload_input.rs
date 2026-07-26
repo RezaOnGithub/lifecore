@@ -17,7 +17,7 @@ pub enum PayloadInput {
 }
 
 impl PayloadInput {
-    fn into_payload(self) -> Result<Payload, AppError> {
+    pub(crate) fn into_payload(self) -> Result<Payload, AppError> {
         match self {
         Self::Text(value) => Ok(Payload::Text(value)),
         Self::Number(value) => Ok(Payload::Number(value)),

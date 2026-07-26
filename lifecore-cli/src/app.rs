@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ViewSummary {
     pub end: usize,
+    pub canonical_end: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub through: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -23,6 +24,7 @@ impl ViewSummary {
     pub fn empty() -> Self {
         Self {
             end: 0,
+            canonical_end: 0,
             through: None,
             display_through: None,
         }
@@ -37,7 +39,9 @@ pub struct EntryRecord {
     pub kind: String,
     pub type_name: String,
     pub aliases: Vec<String>,
+    pub temporary_aliases: Vec<String>,
     pub fresh: bool,
+    pub provisional: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +90,7 @@ pub struct AliasRecord {
     pub locator: String,
     pub display_locator: String,
     pub status: AliasStatus,
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -102,6 +107,7 @@ pub struct TypeRecord {
     pub name: String,
     pub locator: String,
     pub display_locator: String,
+    pub provisional: bool,
     pub fields: Vec<String>,
     pub outgoing: Vec<String>,
     pub incoming: Vec<String>,
@@ -149,6 +155,19 @@ pub enum CommandOutcome {
         format: OutputFormat,
         alias: AliasChangeRecord,
     },
+    SidecarAttachment {
+        action: String,
+        path: PathBuf,
+    },
+    SidecarDump {
+        format: OutputFormat,
+        view: ViewSummary,
+        items: Vec<crate::sidecar::SidecarDumpItem>,
+    },
+    SidecarCommitted {
+        format: OutputFormat,
+        result: TransactionResult,
+    },
     Types {
         format: OutputFormat,
         view: ViewSummary,
@@ -192,11 +211,13 @@ impl CommandOutcome {
         | Self::Analyzers { format, .. }
         | Self::Aliases { format, .. }
         | Self::AliasChanged { format, .. }
+        | Self::SidecarDump { format, .. }
+        | Self::SidecarCommitted { format, .. }
         | Self::Types { format, .. }
         | Self::Transaction { format, .. }
         | Self::Entries { format, .. }
         | Self::QueryExplanation { format, .. } => *format,
-        Self::GraphvizArtifact { .. } => OutputFormat::Lines,
+        Self::SidecarAttachment { .. } | Self::GraphvizArtifact { .. } => OutputFormat::Lines,
         }
     }
 }

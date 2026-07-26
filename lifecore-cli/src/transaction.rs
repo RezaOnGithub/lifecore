@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
 use lifecore::{Body, EntryIndex, LifeCore};
 use serde::Serialize;
@@ -10,7 +10,9 @@ use crate::{
     error::AppError,
     locator::{EntryExpectation, EntryLocator, resolve_index},
     messages::{MessageRecord, MessageUniverse, Severity},
-    state::{DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StateStore},
+    state::{
+        DismissalRecord, MESSAGE_ID_VERSION, PersistedState, StateStore, StoredEntryLocatorV1,
+    },
     view::GraphView,
 };
 
@@ -95,6 +97,12 @@ pub struct TransactionService<'a> {
     fail_apply: bool,
 }
 
+#[derive(Default)]
+struct CommitEffects {
+    aliases: BTreeMap<String, StoredEntryLocatorV1>,
+    clear_sidecar: bool,
+}
+
 impl<'a> TransactionService<'a> {
     pub fn new(store: &'a StateStore, registry: &'a AnalyzerRegistry) -> Self {
         Self {
@@ -109,6 +117,38 @@ impl<'a> TransactionService<'a> {
         &self,
         loaded: &PersistedState,
         request: TransactionRequest,
+    ) -> Result<TransactionResult, AppError> {
+        self.execute_with_effects(loaded, request, CommitEffects::default())
+    }
+
+    pub fn execute_sidecar(
+        &self,
+        loaded: &PersistedState,
+        change: PlannedChange,
+        temporary_aliases: BTreeMap<String, StoredEntryLocatorV1>,
+        expected_head: Option<ExpectedHead>,
+    ) -> Result<TransactionResult, AppError> {
+        let request = TransactionRequest {
+            change,
+            commit: true,
+            expected_head,
+            dismiss_after_commit: None,
+        };
+        self.execute_with_effects(
+            loaded,
+            request,
+            CommitEffects {
+                aliases: temporary_aliases,
+                clear_sidecar: true,
+            },
+        )
+    }
+
+    fn execute_with_effects(
+        &self,
+        loaded: &PersistedState,
+        request: TransactionRequest,
+        effects: CommitEffects,
     ) -> Result<TransactionResult, AppError> {
         if request.expected_head.is_some() && !request.commit {
             return Err(AppError::invalid_expected_head(
@@ -208,6 +248,15 @@ impl<'a> TransactionService<'a> {
                 "applied candidate still contains a Mock circumstance",
                 messages,
             ));
+        }
+
+        //A Sidecar metadata joins the already-applied graph candidate only
+        //A after every graph and analyzer gate passes, and before the one save.
+        for (name, locator) in effects.aliases {
+            candidate.cli.aliases.insert(name, locator);
+        }
+        if effects.clear_sidecar {
+            candidate.cli.sidecar_path = None;
         }
 
         let updates_dismissal = request.dismiss_after_commit.is_some();

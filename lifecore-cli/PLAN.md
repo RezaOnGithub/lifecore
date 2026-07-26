@@ -1208,8 +1208,8 @@ trusting row numbers.
 ## Stage 8 — Stored type inspection, creation, and patch-based override
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 9 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): Stage 9 may begin**
 
 ### Description
 
@@ -1318,14 +1318,14 @@ Every candidate remains subject to the normal transaction and TypeCheck gates.
 
 - [x] **Implementation gate (implementor only):** type inspection/editing, tests, checks, and
       walkthrough are complete.
-- [ ] **Review gate (reviewer only):** type-workflow feedback is incorporated or explicitly
+- [X] **Review gate (reviewer only):** type-workflow feedback is incorporated or explicitly
       deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 8 item blocks sidecar work.
 
 ## Stage 9 — Attached sidecars and effective-graph preparation
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 10 may begin**
 
@@ -1432,15 +1432,15 @@ Commands may not independently read an attached sidecar or append its entries.
 
 ### Implementation checklist
 
-- [ ] Implement sidecar schema, parser, ordered planner, and temporary aliases.
-- [ ] Implement attach/detach metadata operations with byte-restoration tests.
-- [ ] Implement effective-state preparation and command-capability gating.
-- [ ] Adapt all existing read-only commands to `EffectiveGraph`.
-- [ ] Implement diagnosable check behavior through the final staged entry.
-- [ ] Implement dump and commit through shared locator/transaction services.
-- [ ] Feed ready effective views through the existing GraphViz read boundary.
-- [ ] Persist temporary aliases only with successful commit.
-- [ ] Add focused tests for recursive payload round trips, ordering, reference
+- [x] Implement sidecar schema, parser, ordered planner, and temporary aliases.
+- [x] Implement attach/detach metadata operations with byte-restoration tests.
+- [x] Implement effective-state preparation and command-capability gating.
+- [x] Adapt all existing read-only commands to `EffectiveGraph`.
+- [x] Implement diagnosable check behavior through the final staged entry.
+- [x] Implement dump and commit through shared locator/transaction services.
+- [x] Feed ready effective views through the existing GraphViz read boundary.
+- [x] Persist temporary aliases only with successful commit.
+- [x] Add focused tests for recursive payload round trips, ordering, reference
       timing, self-links, shadowing, all effective states, prohibited mutations,
       recovery detach, predicted locator stability, effective-view
       visualization, and atomic commit.
@@ -1449,22 +1449,22 @@ Commands may not independently read an attached sidecar or append its entries.
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Run `cargo test --workspace`.
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test --workspace`.
 
 #### Manual walkthrough
 
-- [ ] Attach a valid multi-entry sidecar and browse its effective nodes, edges,
+- [x] Attach a valid multi-entry sidecar and browse its effective nodes, edges,
       aliases, types, queries, messages, and GraphViz output.
-- [ ] Dump the suffix, commit it, and verify every predicted locator.
-- [ ] Confirm singular mutation and dismissal operations are refused while
+- [x] Dump the suffix, commit it, and verify every predicted locator.
+- [x] Confirm singular mutation and dismissal operations are refused while
       attached.
-- [ ] Attach then detach without another change and compare state bytes.
-- [ ] Detach deleted, malformed, basically invalid, analyzer-unavailable, and
+- [x] Attach then detach without another change and compare state bytes.
+- [x] Detach deleted, malformed, basically invalid, analyzer-unavailable, and
       analysis-inconsistent sidecars.
-- [ ] Run `check` on an inconsistent but basically valid sidecar and confirm
+- [x] Run `check` on an inconsistent but basically valid sidecar and confirm
       diagnostics include its final entry.
 
 ### Review questions
@@ -1475,7 +1475,7 @@ Commands may not independently read an attached sidecar or append its entries.
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** sidecar/effective-state behavior, recovery,
+- [x] **Implementation gate (implementor only):** sidecar/effective-state behavior, recovery,
       tests, checks, and walkthrough are complete.
 - [ ] **Review gate (reviewer only):** sidecar feedback is incorporated or explicitly deferred
       by agreement.

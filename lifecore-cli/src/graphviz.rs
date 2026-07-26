@@ -92,6 +92,7 @@ pub struct GraphvizInput<'a> {
     pub state: &'a CliStateV1,
     pub view: &'a GraphView,
     pub aliases: &'a BTreeMap<usize, Vec<String>>,
+    pub canonical_end: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -274,13 +275,28 @@ pub fn generate(
             EntryExpectation::Any,
             Some(input.view.end_exclusive()),
         )?;
-        let label = format!("{}\n{}", edge.ty_name, graphviz_locator(&locator));
+        let provisional = edge.e.entry().0 >= input.canonical_end;
+        let label = if provisional {
+            format!(
+                "{}\n{}\nprovisional",
+                edge.ty_name,
+                graphviz_locator(&locator)
+            )
+        } else {
+            format!("{}\n{}", edge.ty_name, graphviz_locator(&locator))
+        };
+        let provisional_style = if provisional {
+            ", color=\"dodgerblue3\", fontcolor=\"dodgerblue4\", style=dashed"
+        } else {
+            ""
+        };
 
         dot.push_str(&format!(
-            "  n{} -> n{} [label=\"{}\"];\n",
+            "  n{} -> n{} [label=\"{}\"{}];\n",
             edge.from.0,
             edge.to.0,
-            escape_dot_string(&label)
+            escape_dot_string(&label),
+            provisional_style
         ));
     }
 
@@ -313,6 +329,10 @@ fn write_node(
             names.join(", ")
         )));
     }
+    let provisional = node.e.entry().0 >= input.canonical_end;
+    if provisional {
+        header_parts.push("provisional".to_string());
+    }
     let header = format!("{{{}}}", header_parts.join("|"));
     let label = if options.fields {
         let mut rows = vec![header];
@@ -336,11 +356,17 @@ fn write_node(
         header
     };
 
+    let provisional_style = if provisional {
+        ", color=\"dodgerblue3\", fontcolor=\"dodgerblue4\", style=\"dashed,bold\""
+    } else {
+        ""
+    };
     dot.push_str(&format!(
-        "{:indentation$}n{} [label=\"{}\"];\n",
+        "{:indentation$}n{} [label=\"{}\"{}];\n",
         "",
         node.e.entry().0,
         label,
+        provisional_style,
         indentation = indentation
     ));
 

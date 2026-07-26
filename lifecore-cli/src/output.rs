@@ -171,6 +171,63 @@ pub fn render_outcome(
             writeln!(writer, "{} alias {}", alias.action, alias.name)
         }
     }
+    CommandOutcome::SidecarAttachment { action, path } => {
+        writeln!(writer, "Sidecar {action}: {}", path.display())
+    }
+    CommandOutcome::SidecarDump {
+        format,
+        view,
+        items,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "items": items,
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            render_view(view, writer)?;
+            let entries = items
+                .iter()
+                .map(|item| item.entry.clone())
+                .collect::<Vec<_>>();
+            render_entry_listing(&entries, format, writer)
+        }
+    }
+    CommandOutcome::SidecarCommitted { format, result } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "sidecar": {
+                        "action": "committed",
+                        "attachment_cleared": true,
+                    },
+                    "view": result.view,
+                    "transaction": {
+                        "state": result.state,
+                        "entries": result.entries,
+                        "analyzers": result.analyzers,
+                        "messages": result.messages,
+                    }
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            writeln!(writer, "Sidecar committed; attachment cleared.")?;
+            writeln!(writer, "Transaction: {}", result.state.label())?;
+            render_view(&result.view, writer)?;
+            render_entry_listing(&result.entries, format, writer)?;
+            render_human_messages(&result.messages, &result.view, format, writer)
+        }
+    }
     CommandOutcome::Types {
         format,
         view,
@@ -287,17 +344,21 @@ fn render_types(
         return writeln!(writer, "No active, well-formed type declarations.");
     }
     if format == OutputFormat::Table {
-        writeln!(writer, "NAME\tLOCATOR")?;
+        writeln!(writer, "NAME\tLOCATOR\tPROVISIONAL")?;
     }
     for declaration in declarations {
         if format == OutputFormat::Table {
             writeln!(
                 writer,
-                "{}\t{}",
-                declaration.name, declaration.display_locator
+                "{}\t{}\t{}",
+                declaration.name, declaration.display_locator, declaration.provisional
             )?;
         } else {
-            writeln!(writer, "{}  {}", declaration.name, declaration.locator)?;
+            writeln!(
+                writer,
+                "{}  {}  provisional={}",
+                declaration.name, declaration.locator, declaration.provisional
+            )?;
         }
     }
 
@@ -307,6 +368,7 @@ fn render_types(
 fn render_type_detail(declaration: &TypeRecord, writer: &mut dyn Write) -> io::Result<()> {
     writeln!(writer, "Locator: {}", declaration.locator)?;
     writeln!(writer, "Display locator: {}", declaration.display_locator)?;
+    writeln!(writer, "Provisional: {}", declaration.provisional)?;
     writeln!(writer, "Declaration:")?;
     writeln!(writer, "{}", declaration.command)
 }
@@ -320,24 +382,26 @@ fn render_aliases(
         return writeln!(writer, "No aliases.");
     }
     if format == OutputFormat::Table {
-        writeln!(writer, "NAME\tLOCATOR\tSTATUS")?;
+        writeln!(writer, "NAME\tLOCATOR\tSTATUS\tTEMPORARY")?;
     }
     for alias in aliases {
         if format == OutputFormat::Table {
             writeln!(
                 writer,
-                "{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
                 alias.name,
                 alias.display_locator,
-                alias.status.label()
+                alias.status.label(),
+                alias.temporary
             )?;
         } else {
             writeln!(
                 writer,
-                "{}  {}  status={}",
+                "{}  {}  status={}  temporary={}",
                 alias.name,
                 alias.locator,
-                alias.status.label()
+                alias.status.label(),
+                alias.temporary
             )?;
         }
     }
@@ -354,6 +418,29 @@ pub fn render_error(error: &AppError, writer: &mut dyn Write) -> io::Result<()> 
 
         if let AppError::Unavailable { operation, .. } = error {
             detail["operation"] = json!(operation);
+        }
+        match error {
+        AppError::SidecarUnavailable {
+            operation,
+            path,
+            reason,
+            ..
+        } => {
+            detail["operation"] = json!(operation);
+            detail["path"] = json!(path);
+            detail["reason"] = json!(reason);
+            detail["recovery"] = json!("lifecore sidecar detach");
+        }
+        AppError::MutationWithSidecar { operation, .. }
+        | AppError::SidecarDiagnosable { operation, .. } => {
+            detail["operation"] = json!(operation);
+            detail["recovery"] = json!("lifecore sidecar detach");
+        }
+        AppError::SidecarAlreadyAttached { path, .. } => {
+            detail["path"] = json!(path);
+            detail["recovery"] = json!("lifecore sidecar detach");
+        }
+        _ => {}
         }
         if let AppError::TransactionAborted {
             detail: transaction_detail,
@@ -531,8 +618,12 @@ fn message_presentation_state(message: &MessageRecord) -> &'static str {
 
 fn render_view(view: &ViewSummary, writer: &mut dyn Write) -> io::Result<()> {
     match &view.display_through {
-    Some(locator) => writeln!(writer, "View: through {locator} (0..{})", view.end),
-    None => writeln!(writer, "View: empty (0..0)"),
+    Some(locator) => writeln!(
+        writer,
+        "View: through {locator} (0..{}; canonical boundary {})",
+        view.end, view.canonical_end
+    ),
+    None => writeln!(writer, "View: empty (0..0; canonical boundary 0)"),
     }
 }
 
@@ -546,25 +637,38 @@ fn render_entry_listing(
     }
 
     if format == OutputFormat::Table {
-        writeln!(writer, "LOCATOR\tKIND\tTYPE\tFRESH\tALIASES")?;
+        writeln!(
+            writer,
+            "LOCATOR\tKIND\tTYPE\tFRESH\tPROVISIONAL\tALIASES\tTEMPORARY_ALIASES"
+        )?;
     }
 
     for entry in entries {
         let aliases = entry.aliases.join(",");
+        let temporary_aliases = entry.temporary_aliases.join(",");
         if format == OutputFormat::Table {
             writeln!(
                 writer,
-                "{}\t{}\t{}\t{}\t{}",
-                entry.display_locator, entry.kind, entry.type_name, entry.fresh, aliases
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                entry.display_locator,
+                entry.kind,
+                entry.type_name,
+                entry.fresh,
+                entry.provisional,
+                aliases,
+                temporary_aliases
             )?;
         } else {
             write!(
                 writer,
-                "{}  {}  {}  fresh={}",
-                entry.display_locator, entry.kind, entry.type_name, entry.fresh
+                "{}  {}  {}  fresh={}  provisional={}",
+                entry.display_locator, entry.kind, entry.type_name, entry.fresh, entry.provisional
             )?;
             if !aliases.is_empty() {
                 write!(writer, "  aliases={aliases}")?;
+            }
+            if !temporary_aliases.is_empty() {
+                write!(writer, "  temporary_aliases={temporary_aliases}")?;
             }
             writeln!(writer)?;
         }
@@ -580,7 +684,13 @@ fn render_entry_detail(entry: &EntryRecord, writer: &mut dyn Write) -> io::Resul
     writeln!(writer, "Kind: {}", entry.kind)?;
     writeln!(writer, "Type: {}", entry.type_name)?;
     writeln!(writer, "Fresh: {}", entry.fresh)?;
+    writeln!(writer, "Provisional: {}", entry.provisional)?;
     writeln!(writer, "Aliases: {}", entry.aliases.join(", "))?;
+    writeln!(
+        writer,
+        "Temporary aliases: {}",
+        entry.temporary_aliases.join(", ")
+    )?;
 
     if let Some(parent) = &entry.parent {
         writeln!(writer, "Parent: {parent}")?;

@@ -22,6 +22,7 @@ struct FixtureCli {
 enum FixtureCommand {
     Stage3(Stage3Args),
     Stage7(Stage7Args),
+    Stage9MissingAnalyzer(Stage9MissingAnalyzerArgs),
 }
 
 #[derive(Args)]
@@ -33,6 +34,12 @@ struct Stage3Args {
 #[derive(Args)]
 struct Stage7Args {
     #[arg(long, default_value = "Stage7LifeCoreState.json")]
+    path: PathBuf,
+}
+
+#[derive(Args)]
+struct Stage9MissingAnalyzerArgs {
+    #[arg(long, default_value = "Stage9MissingAnalyzerState.json")]
     path: PathBuf,
 }
 
@@ -50,7 +57,35 @@ fn run(cli: FixtureCli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
     FixtureCommand::Stage3(args) => build_stage3(args),
     FixtureCommand::Stage7(args) => build_stage7(args),
+    FixtureCommand::Stage9MissingAnalyzer(args) => build_stage9_missing_analyzer(args),
     }
+}
+
+fn build_stage9_missing_analyzer(
+    args: Stage9MissingAnalyzerArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let current_directory = env::current_dir()?;
+    let path = StatePath::resolve(Some(args.path.into_os_string()), &current_directory)?;
+    let store = StateStore::new(path);
+    let mut graph = initial_graph();
+
+    //A Normal analyzer-add transactions reject an unregistered factory, so
+    //A this fixture creates only the otherwise unreachable recovery boundary.
+    graph.add_analyzer("Stage9_Missing_Factory", "");
+    let state = PersistedState::new(graph);
+    store.initialize(&state)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "scenario": "stage9-missing-analyzer",
+            "state_path": store.path(),
+            "missing_analyzer": "Stage9_Missing_Factory",
+            "next_step": "attach any existing sidecar with the ordinary CLI, then verify browsing fails and detach succeeds"
+        }))?
+    );
+
+    Ok(())
 }
 
 fn build_stage7(args: Stage7Args) -> Result<(), Box<dyn std::error::Error>> {

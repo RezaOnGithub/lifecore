@@ -20,8 +20,55 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 8")]
+    #[error("operation '{operation}' is unavailable in implementation stage 9")]
     Unavailable {
+        operation: String,
+        format: OutputFormat,
+    },
+
+    #[error("sidecar {action} failed at {path}: {source}")]
+    SidecarIo {
+        path: String,
+        action: &'static str,
+        #[source]
+        source: io::Error,
+        format: OutputFormat,
+    },
+
+    #[error("invalid sidecar: {message}")]
+    InvalidSidecar {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("a sidecar is already attached at {path}; detach it before attaching another")]
+    SidecarAlreadyAttached { path: String, format: OutputFormat },
+
+    #[error("no sidecar is attached")]
+    SidecarNotAttached { format: OutputFormat },
+
+    #[error(
+        "operation '{operation}' cannot run while a sidecar is attached; use 'lifecore sidecar detach' to discard the attachment"
+    )]
+    MutationWithSidecar {
+        operation: String,
+        format: OutputFormat,
+    },
+
+    #[error(
+        "operation '{operation}' cannot use attached sidecar {path}: {reason}; run 'lifecore sidecar detach' to recover"
+    )]
+    SidecarUnavailable {
+        operation: String,
+        path: String,
+        reason: String,
+        format: OutputFormat,
+    },
+
+    #[error(
+        "operation '{operation}' cannot browse an analysis-inconsistent sidecar; use 'lifecore check' for diagnostics or 'lifecore sidecar detach' to recover"
+    )]
+    SidecarDiagnosable {
         operation: String,
         format: OutputFormat,
     },
@@ -287,6 +334,62 @@ impl AppError {
         Self::Unavailable {
             operation: operation.into(),
             format,
+        }
+    }
+
+    pub fn sidecar_io(path: &Path, action: &'static str, source: io::Error) -> Self {
+        Self::SidecarIo {
+            path: path.display().to_string(),
+            action,
+            source,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_sidecar(message: impl Into<String>) -> Self {
+        Self::InvalidSidecar {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn sidecar_already_attached(path: &Path) -> Self {
+        Self::SidecarAlreadyAttached {
+            path: path.display().to_string(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn sidecar_not_attached() -> Self {
+        Self::SidecarNotAttached {
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn mutation_with_sidecar(operation: impl Into<String>) -> Self {
+        Self::MutationWithSidecar {
+            operation: operation.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn sidecar_unavailable(
+        operation: impl Into<String>,
+        path: &Path,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::SidecarUnavailable {
+            operation: operation.into(),
+            path: path.display().to_string(),
+            reason: reason.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn sidecar_diagnosable(operation: impl Into<String>) -> Self {
+        Self::SidecarDiagnosable {
+            operation: operation.into(),
+            format: OutputFormat::Lines,
         }
     }
 
@@ -603,6 +706,13 @@ impl AppError {
         let format = match &mut self {
         Self::Usage { .. } | Self::Io(_) => return self,
         Self::Unavailable { format, .. }
+        | Self::SidecarIo { format, .. }
+        | Self::InvalidSidecar { format, .. }
+        | Self::SidecarAlreadyAttached { format, .. }
+        | Self::SidecarNotAttached { format }
+        | Self::MutationWithSidecar { format, .. }
+        | Self::SidecarUnavailable { format, .. }
+        | Self::SidecarDiagnosable { format, .. }
         | Self::InvalidStatePath { format, .. }
         | Self::StateIo { format, .. }
         | Self::StateDecode { format, .. }
@@ -650,6 +760,13 @@ impl AppError {
         match self {
         Self::Usage { exit_code, .. } => *exit_code,
         Self::Unavailable { .. }
+        | Self::SidecarIo { .. }
+        | Self::InvalidSidecar { .. }
+        | Self::SidecarAlreadyAttached { .. }
+        | Self::SidecarNotAttached { .. }
+        | Self::MutationWithSidecar { .. }
+        | Self::SidecarUnavailable { .. }
+        | Self::SidecarDiagnosable { .. }
         | Self::InvalidStatePath { .. }
         | Self::StateIo { .. }
         | Self::StateDecode { .. }
@@ -695,6 +812,13 @@ impl AppError {
         match self {
         Self::Usage { .. } => OutputFormat::Lines,
         Self::Unavailable { format, .. }
+        | Self::SidecarIo { format, .. }
+        | Self::InvalidSidecar { format, .. }
+        | Self::SidecarAlreadyAttached { format, .. }
+        | Self::SidecarNotAttached { format }
+        | Self::MutationWithSidecar { format, .. }
+        | Self::SidecarUnavailable { format, .. }
+        | Self::SidecarDiagnosable { format, .. }
         | Self::InvalidStatePath { format, .. }
         | Self::StateIo { format, .. }
         | Self::StateDecode { format, .. }
@@ -740,6 +864,13 @@ impl AppError {
         match self {
         Self::Usage { .. } => "usage",
         Self::Unavailable { .. } => "unavailable",
+        Self::SidecarIo { .. } => "sidecar_io",
+        Self::InvalidSidecar { .. } => "sidecar_invalid",
+        Self::SidecarAlreadyAttached { .. } => "sidecar_already_attached",
+        Self::SidecarNotAttached { .. } => "sidecar_not_attached",
+        Self::MutationWithSidecar { .. } => "sidecar_mutation_forbidden",
+        Self::SidecarUnavailable { .. } => "sidecar_unavailable",
+        Self::SidecarDiagnosable { .. } => "sidecar_diagnosable",
         Self::InvalidStatePath { .. } => "state_path",
         Self::StateIo { .. } => "state_io",
         Self::StateDecode { .. } => "state_decode",

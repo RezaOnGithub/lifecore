@@ -21,6 +21,7 @@ use crate::{
         AnalysisReport, AnalyzerRegistry, configured_analyzers, initial_graph, run_analysis,
     },
     app::{CircumstanceRecord, CommandOutcome},
+    effective::{EffectiveState, prepare_effective, reject_attached_mutation},
     entry::entry_record,
     error::AppError,
     graphviz::{
@@ -32,13 +33,15 @@ use crate::{
         resolve_entry, resolve_index,
     },
     messages::{
-        MessageFilter, MessageUniverse, Severity, encode_lower_hex, message_identity_bytes,
+        MessageFilter, MessageLocation, MessageUniverse, Severity, encode_lower_hex,
+        message_identity_bytes,
     },
     output::{render_error, render_outcome},
     payload_input::{parse_field_assignment, parse_field_assignments},
     query::{execute_query, parse_predicate, parse_query},
     reference::{AliasStatus, NodeReference, resolve_node_reference},
     run_cli, run_from_in,
+    sidecar::{build_sidecar_plan, parse_sidecar},
     state::{PersistedState, StatePath, StateStore, StoredEntryLocatorV1},
     transaction::{
         ExpectedHead, PlannedChange, TransactionRequest, TransactionService, TransactionState,
@@ -154,23 +157,7 @@ fn help_and_version_are_successful_at_every_command_level() {
 
 #[test]
 fn complete_command_tree_dispatches_to_named_unavailable_operations() {
-    let cases: &[(&[&str], &str)] = &[
-        (&["lifecore", "interactive"], "interactive"),
-        (
-            &["lifecore", "sidecar", "attach", "entries.toml"],
-            "sidecar attach",
-        ),
-        (&["lifecore", "sidecar", "detach"], "sidecar detach"),
-        (&["lifecore", "sidecar", "dump"], "sidecar dump"),
-        (
-            &["lifecore", "sidecar", "commit", "--expect-head", "4:abcde"],
-            "sidecar commit",
-        ),
-    ];
-
-    for (args, operation) in cases {
-        assert_unavailable(args, operation);
-    }
+    assert_unavailable(&["lifecore", "interactive"], "interactive");
 }
 
 #[test]
@@ -308,27 +295,23 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "sidecar", "dump"], &mut io);
+    let exit = run_cli(["lifecore", "interactive"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'sidecar dump' is unavailable in implementation stage 8\n"
+        "error: operation 'interactive' is unavailable in implementation stage 9\n"
     );
 
-    let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "sidecar", "dump", "--format", "json"], &mut io);
-
-    assert_eq!(exit, std::process::ExitCode::FAILURE);
-    assert!(stdout.is_empty());
+    let error = AppError::unavailable("interactive", crate::cli::OutputFormat::Json);
+    render_error(&error, &mut stderr).expect("JSON unavailable error renders");
 
     let value: serde_json::Value =
         serde_json::from_slice(&stderr).expect("stderr contains one JSON value");
     assert_eq!(value["error"]["kind"], "unavailable");
-    assert_eq!(value["error"]["operation"], "sidecar dump");
+    assert_eq!(value["error"]["operation"], "interactive");
 }
 
 #[test]
@@ -355,7 +338,7 @@ fn deferred_commands_do_not_create_or_modify_files() -> io::Result<()> {
     }
 
     assert!(matches!(
-        run_in(&["lifecore", "sidecar", "dump"], &directory, None),
+        run_in(&["lifecore", "interactive"], &directory, None),
         Err(AppError::Unavailable { .. })
     ));
 
@@ -1016,6 +999,157 @@ fn initialize_stage8_state(directory: &std::path::Path) -> PersistedState {
     StateStore::new(StatePath::resolve(None, directory).expect("Stage 8 state path resolves"))
         .load()
         .expect("bootstrapped Stage 8 state loads")
+}
+
+fn initialize_stage9_ready_state(directory: &std::path::Path) -> (PersistedState, String, String) {
+    initialize_stage8_state(directory);
+    run_in(
+        &[
+            "lifecore",
+            "type",
+            "create",
+            "Note",
+            "--field",
+            "title = Text : Optional",
+            "--field",
+            "tags = OrderedSet(Text) : Optional",
+            "--outgoing",
+            "Rel",
+            "--incoming",
+            "Rel",
+            "--commit",
+        ],
+        directory,
+        None,
+    )
+    .expect("Stage 9 Note declaration commits");
+    run_in(
+        &[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "title = \"base\"",
+            "--commit",
+        ],
+        directory,
+        None,
+    )
+    .expect("Stage 9 base node commits");
+    run_in(
+        &[
+            "lifecore",
+            "add",
+            "Note",
+            "--field",
+            "title = \"other\"",
+            "--commit",
+        ],
+        directory,
+        None,
+    )
+    .expect("Stage 9 other node commits");
+
+    let store =
+        StateStore::new(StatePath::resolve(None, directory).expect("Stage 9 state path resolves"));
+    let state = store.load().expect("Stage 9 nodes load");
+    let view = GraphView::latest(&state.lifecore, &state.cli).expect("Stage 9 view constructs");
+    let base = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        2,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )
+    .expect("Stage 9 base resolves");
+    let other = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        3,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )
+    .expect("Stage 9 other resolves");
+    let base_locator = base.display_locator();
+    let other_locator = other.display_locator();
+
+    run_in(
+        &[
+            "lifecore",
+            "connect",
+            "--from",
+            &base_locator,
+            "--type",
+            "Rel",
+            "--to",
+            &other_locator,
+            "--commit",
+        ],
+        directory,
+        None,
+    )
+    .expect("Stage 9 canonical edge commits");
+    run_in(
+        &["lifecore", "alias", "set", "Base", &base_locator],
+        directory,
+        None,
+    )
+    .expect("Stage 9 Base alias saves");
+    run_in(
+        &["lifecore", "alias", "set", "Other", &other_locator],
+        directory,
+        None,
+    )
+    .expect("Stage 9 Other alias saves");
+
+    (
+        store.load().expect("Stage 9 ready state reloads"),
+        base_locator,
+        other_locator,
+    )
+}
+
+fn stage9_ready_sidecar() -> &'static str {
+    r#"
+[[entry]]
+alias = "SideTypeAlias"
+ty = "Type"
+
+[entry.body]
+name = "SideType"
+body = { ordered_set = [] }
+outgoing = { ordered_set = [] }
+incoming = { ordered_set = [] }
+additional_override = { ordered_set = [] }
+
+[[entry]]
+alias = "TempFirst"
+ty = "Note"
+
+[entry.body]
+title = "provisional first"
+tags = { ordered_set = ["home", "errand"] }
+
+[entry.connect]
+connect_to = [{ target = "Other", ty = "Rel" }]
+connect_back_from = [{ target = "Other", ty = "Rel" }]
+
+[[entry]]
+alias = "TempChild"
+ty = "Note"
+parent = "Base"
+
+[entry.body]
+title = "provisional child"
+
+[[entry]]
+alias = "TempLast"
+ty = "Note"
+parent = "HEAD"
+
+[entry.body]
+title = "provisional last"
+"#
 }
 
 #[test]
@@ -2605,6 +2739,7 @@ fn graphviz_generation_is_deterministic_view_aware_and_safely_escaped() {
                 state: &state.cli,
                 view: &latest,
                 aliases: &BTreeMap::new(),
+                canonical_end: latest.end_exclusive(),
             },
             options,
         )
@@ -2672,6 +2807,7 @@ fn graphviz_generation_is_deterministic_view_aware_and_safely_escaped() {
             state: &state.cli,
             view: &historical,
             aliases: &BTreeMap::new(),
+            canonical_end: historical.end_exclusive(),
         },
         default_options,
     )
@@ -3360,6 +3496,7 @@ fn graphviz_svg_export_streams_input_and_reports_process_failures() {
             state: &state.cli,
             view: &view,
             aliases: &BTreeMap::new(),
+            canonical_end: view.end_exclusive(),
         },
         GraphvizOptions {
             full: true,
@@ -3899,6 +4036,885 @@ fn stage6_interactive_analyzer_preserves_direction_and_suppresses_ineligible_con
         .add_mock("SecondChild", Body::default(), Some(recreated_parent.e))
         .expect("second successor appends");
     assert!(suggestions_at(&recreated_graph, second_successor.e.entry().0).is_empty());
+}
+
+#[test]
+fn stage9_sidecar_schema_and_recursive_payloads_are_exact() {
+    let document = parse_sidecar(
+        br#"
+[[entry]]
+alias = "Nested"
+ty = "Note"
+
+[entry.body]
+text = "hello"
+number = -7
+nested = { sequence = ["outer", { ordered_set = [1, 2] }] }
+"#,
+    )
+    .expect("exact sidecar schema parses");
+    assert_eq!(document.entry.len(), 1);
+    let built = build_sidecar_plan(&PersistedState::new(LifeCoreList::default()), document)
+        .expect("recursive payload sidecar stages");
+    let node = built
+        .staged
+        .lifecore
+        .node(EntryIndex(0).before_and_including())
+        .expect("sidecar node exists");
+    assert_eq!(node.field["text"], Payload::Text("hello".to_string()));
+    assert_eq!(node.field["number"], Payload::Number(-7));
+    assert_eq!(
+        node.field["nested"],
+        Payload::Sequence(vec![
+            Payload::Text("outer".to_string()),
+            Payload::OrderedSet(OrderedSet::from([Payload::Number(1), Payload::Number(2)])),
+        ])
+    );
+
+    assert!(
+        parse_sidecar(b"")
+            .expect("empty document is valid")
+            .entry
+            .is_empty()
+    );
+    for invalid in [
+        "[[entry]\nty = \"Note\"",
+        "unknown = 1",
+        "[[entry]]\nty = \"Note\"\nunknown = 1",
+        "[[entry]]\nty = \"Note\"\n[entry.connect]\nunknown = []",
+        "[[entry]]\nty = \"Note\"\n[entry.connect]\nconnect_to = [{ target = \"HEAD\", ty = \"Rel\", unknown = 1 }]",
+    ] {
+        assert!(
+            matches!(
+                parse_sidecar(invalid.as_bytes()),
+                Err(AppError::InvalidSidecar { .. })
+            ),
+            "{invalid:?}"
+        );
+    }
+
+    for unsupported in [
+        "[[entry]]\nty = \"Note\"\n[entry.body]\nvalue = true",
+        "[[entry]]\nty = \"Note\"\n[entry.body]\nvalue = 1.5",
+        "[[entry]]\nty = \"Note\"\n[entry.body]\nvalue = [1, 2]",
+        "[[entry]]\nty = \"Note\"\n[entry.body]\nvalue = 1979-05-27T07:32:00Z",
+        "[[entry]]\nty = \"Note\"\n[entry.body]\nvalue = { arbitrary = [] }",
+        "[[entry]]\nty = \"Note\"\n[entry.body]\nvalue = { ordered_set = [1, 1] }",
+    ] {
+        let document = parse_sidecar(unsupported.as_bytes()).expect("TOML shape decodes first");
+        assert!(
+            matches!(
+                build_sidecar_plan(&PersistedState::new(LifeCoreList::default()), document),
+                Err(AppError::InvalidSidecar { .. })
+            ),
+            "{unsupported:?}"
+        );
+    }
+}
+
+#[test]
+fn stage9_planner_preserves_order_head_timing_aliases_and_directions() {
+    let mut graph = LifeCoreList::default();
+    graph
+        .add_mock(
+            "Note",
+            Body::from([("id", Payload::Text("base".to_string()))]),
+            None,
+        )
+        .expect("base node stages");
+    graph
+        .add_mock(
+            "Note",
+            Body::from([("id", Payload::Text("head".to_string()))]),
+            None,
+        )
+        .expect("head node stages");
+    graph.apply().expect("canonical nodes apply");
+    let mut canonical = PersistedState::new(graph);
+    let base = resolve_index(
+        &canonical.lifecore,
+        &canonical.cli,
+        0,
+        EntryExpectation::Node,
+        None,
+    )
+    .expect("base resolves");
+    canonical
+        .cli
+        .aliases
+        .insert("Base".to_string(), base.durable_locator());
+    let before = serde_json::to_vec(&canonical).expect("canonical state encodes");
+    let document = parse_sidecar(
+        br#"
+[[entry]]
+alias = "First"
+ty = "Note"
+
+[entry.connect]
+connect_to = [
+    { target = "HEAD", ty = "Captured" },
+    { target = "First", ty = "Self" },
+]
+connect_back_from = [{ target = "Base", ty = "Back" }]
+
+[[entry]]
+alias = "Second"
+ty = "Note"
+parent = "First"
+
+[[entry]]
+ty = "Note"
+parent = "HEAD"
+"#,
+    )
+    .expect("planner fixture parses");
+    let built = build_sidecar_plan(&canonical, document).expect("planner fixture stages");
+
+    assert_eq!(
+        serde_json::to_vec(&canonical).expect("canonical state still encodes"),
+        before
+    );
+    let first = built
+        .staged
+        .lifecore
+        .node(EntryIndex(2).before_and_including())
+        .expect("first node occupies first suffix index");
+    let captured = built
+        .staged
+        .lifecore
+        .edge(EntryIndex(3).before_and_including())
+        .expect("captured-head edge follows node");
+    let self_edge = built
+        .staged
+        .lifecore
+        .edge(EntryIndex(4).before_and_including())
+        .expect("self edge retains source order");
+    let back = built
+        .staged
+        .lifecore
+        .edge(EntryIndex(5).before_and_including())
+        .expect("back edge follows outgoing edges");
+    let second = built
+        .staged
+        .lifecore
+        .node(EntryIndex(6).before_and_including())
+        .expect("second node follows first entry");
+    let third = built
+        .staged
+        .lifecore
+        .node(EntryIndex(7).before_and_including())
+        .expect("third node follows second entry");
+
+    assert_eq!(first.parent, None);
+    assert_eq!((captured.from.0, captured.to.0), (2, 1));
+    assert_eq!((self_edge.from.0, self_edge.to.0), (2, 2));
+    assert_eq!((back.from.0, back.to.0), (0, 2));
+    assert_eq!(second.parent, Some(EntryIndex(2)));
+    assert_eq!(third.parent, Some(EntryIndex(6)));
+    assert_eq!(
+        built
+            .plan
+            .temporary_aliases
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["First", "Second"]
+    );
+
+    for invalid in [
+        "[[entry]]\nalias = \"Base\"\nty = \"Note\"",
+        "[[entry]]\nalias = \"HEAD\"\nty = \"Note\"",
+        "[[entry]]\nalias = \"Dupe\"\nty = \"Note\"\n[[entry]]\nalias = \"Dupe\"\nty = \"Note\"",
+        "[[entry]]\nty = \"Note\"\nparent = \"Later\"\n[[entry]]\nalias = \"Later\"\nty = \"Note\"",
+    ] {
+        let document = parse_sidecar(invalid.as_bytes()).expect("invalid plan still parses");
+        assert!(
+            matches!(
+                build_sidecar_plan(&canonical, document),
+                Err(AppError::InvalidSidecar { .. })
+            ),
+            "{invalid:?}"
+        );
+        assert_eq!(
+            serde_json::to_vec(&canonical).expect("rollback state encodes"),
+            before
+        );
+    }
+}
+
+#[test]
+fn stage9_attach_and_detach_are_metadata_only_and_byte_reversible() {
+    let directory = tempfile::tempdir().expect("temporary attachment directory");
+    initialize_stage8_state(directory.path());
+    let state_path = directory.path().join("LifeCoreState.json");
+    let sidecar_path = directory.path().join("broken.toml");
+    fs::write(&sidecar_path, b"not valid = [").expect("malformed sidecar writes");
+    let source_before = fs::read(&sidecar_path).expect("source bytes read");
+    let state_before = fs::read(&state_path).expect("state bytes read");
+
+    let attached = run_in(
+        &["lifecore", "sidecar", "attach", "broken.toml"],
+        directory.path(),
+        None,
+    )
+    .expect("attach does not parse source");
+    match attached {
+    CommandOutcome::SidecarAttachment { action, path } => {
+        assert_eq!(action, "attached");
+        assert!(path.is_absolute());
+        assert_eq!(
+            path,
+            fs::canonicalize(&sidecar_path).expect("source canonicalizes")
+        );
+    }
+    outcome => panic!("expected attachment outcome, got {outcome:?}"),
+    }
+    assert_eq!(
+        fs::read(&sidecar_path).expect("attached source remains readable"),
+        source_before
+    );
+    assert!(matches!(
+        run_in(
+            &["lifecore", "sidecar", "attach", "broken.toml"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::SidecarAlreadyAttached { .. })
+    ));
+    assert!(matches!(
+        run_in(
+            &["lifecore", "query", "nodes", "all"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::SidecarUnavailable { .. })
+    ));
+
+    fs::remove_file(&sidecar_path).expect("attached source is deleted externally");
+    let detached = run_in(&["lifecore", "sidecar", "detach"], directory.path(), None)
+        .expect("detach never reads deleted source");
+    assert!(matches!(
+        detached,
+        CommandOutcome::SidecarAttachment { action, .. } if action == "detached"
+    ));
+    assert_eq!(
+        fs::read(&state_path).expect("detached state bytes read"),
+        state_before
+    );
+    assert!(matches!(
+        run_in(&["lifecore", "sidecar", "detach"], directory.path(), None,),
+        Err(AppError::SidecarNotAttached { .. })
+    ));
+}
+
+#[test]
+fn stage9_effective_states_distinguish_ready_diagnosable_and_unavailable() {
+    let directory = tempfile::tempdir().expect("temporary effective-state directory");
+    let canonical = initialize_stage8_state(directory.path());
+    let registry = AnalyzerRegistry::built_in();
+    assert!(matches!(
+        prepare_effective(&canonical, &registry),
+        EffectiveState::EffectiveReady(graph) if !graph.is_attached()
+    ));
+
+    let empty_path = directory.path().join("empty.toml");
+    fs::write(&empty_path, b"").expect("empty sidecar writes");
+    let mut attached_empty = canonical.clone();
+    attached_empty.cli.sidecar_path =
+        Some(fs::canonicalize(&empty_path).expect("empty sidecar canonicalizes"));
+    assert!(matches!(
+        prepare_effective(&attached_empty, &registry),
+        EffectiveState::EffectiveReady(graph) if graph.is_attached()
+    ));
+
+    let inconsistent_path = directory.path().join("inconsistent.toml");
+    fs::write(
+        &inconsistent_path,
+        b"[[entry]]\nty = \"No_Such_Type\"\n[[entry]]\nty = \"Still_Missing\"\n",
+    )
+    .expect("inconsistent sidecar writes");
+    let mut inconsistent = canonical.clone();
+    inconsistent.cli.sidecar_path =
+        Some(fs::canonicalize(&inconsistent_path).expect("inconsistent sidecar canonicalizes"));
+    assert!(matches!(
+        prepare_effective(&inconsistent, &registry),
+        EffectiveState::SidecarDiagnosable(_)
+    ));
+
+    let malformed_path = directory.path().join("malformed.toml");
+    fs::write(&malformed_path, b"[[entry]").expect("malformed sidecar writes");
+    let mut malformed = canonical.clone();
+    malformed.cli.sidecar_path =
+        Some(fs::canonicalize(&malformed_path).expect("malformed sidecar canonicalizes"));
+    assert!(matches!(
+        prepare_effective(&malformed, &registry),
+        EffectiveState::SidecarUnavailable { .. }
+    ));
+
+    let mut missing_factory = attached_empty;
+    missing_factory
+        .lifecore
+        .add_analyzer("Stage9_Missing_Factory", "");
+    assert!(matches!(
+        prepare_effective(&missing_factory, &registry),
+        EffectiveState::SidecarUnavailable { reason, .. }
+            if reason.contains("Stage9_Missing_Factory")
+    ));
+}
+
+#[test]
+fn stage9_empty_commit_and_unavailable_recovery_preserve_canonical_graph() {
+    let directory = tempfile::tempdir().expect("temporary recovery directory");
+    initialize_stage8_state(directory.path());
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let state_before = fs::read(store.path()).expect("canonical state bytes read");
+    let empty = directory.path().join("empty.toml");
+    fs::write(&empty, b"").expect("empty sidecar writes");
+    run_in(
+        &["lifecore", "sidecar", "attach", "empty.toml"],
+        directory.path(),
+        None,
+    )
+    .expect("empty sidecar attaches");
+    let committed = run_in(&["lifecore", "sidecar", "commit"], directory.path(), None)
+        .expect("empty sidecar commits");
+    assert!(matches!(
+        committed,
+        CommandOutcome::SidecarCommitted { result, .. } if result.entries.is_empty()
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("empty commit state reads"),
+        state_before
+    );
+
+    let invalid = directory.path().join("invalid.toml");
+    fs::write(
+        &invalid,
+        b"[[entry]]\nty = \"Type\"\nparent = \"HEAD\"\n[entry.connect]\nconnect_to = [{ target = \"HEAD\", ty = \"Rel\" }]\n",
+    )
+    .expect("basically invalid sidecar writes");
+    run_in(
+        &["lifecore", "sidecar", "attach", "invalid.toml"],
+        directory.path(),
+        None,
+    )
+    .expect("basically invalid sidecar attaches");
+    assert!(matches!(
+        run_in(
+            &["lifecore", "entry", "show", "0:abcde"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::SidecarUnavailable { .. })
+    ));
+    run_in(&["lifecore", "sidecar", "detach"], directory.path(), None)
+        .expect("basically invalid sidecar detaches");
+
+    let mut missing_factory = store.load().expect("canonical state reloads");
+    missing_factory
+        .lifecore
+        .add_analyzer("Stage9_Missing_Factory", "");
+    store
+        .save(&missing_factory)
+        .expect("missing-factory recovery fixture saves");
+    run_in(
+        &["lifecore", "sidecar", "attach", "empty.toml"],
+        directory.path(),
+        None,
+    )
+    .expect("missing-factory sidecar attaches");
+    assert!(matches!(
+        run_in(
+            &["lifecore", "alias", "list"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::SidecarUnavailable { reason, .. })
+            if reason.contains("Stage9_Missing_Factory")
+    ));
+    run_in(&["lifecore", "sidecar", "detach"], directory.path(), None)
+        .expect("missing-factory sidecar detaches");
+}
+
+#[test]
+fn stage9_ready_sidecar_feeds_every_read_surface_and_commits_atomically() {
+    let directory = tempfile::tempdir().expect("temporary ready-sidecar directory");
+    let (canonical, _, _) = initialize_stage9_ready_state(directory.path());
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    let sidecar_path = directory.path().join("ready.toml");
+    fs::write(&sidecar_path, stage9_ready_sidecar()).expect("ready sidecar writes");
+    let source_before = fs::read(&sidecar_path).expect("ready source bytes read");
+    run_in(
+        &["lifecore", "sidecar", "attach", "ready.toml"],
+        directory.path(),
+        None,
+    )
+    .expect("ready sidecar attaches");
+    let attached_bytes = fs::read(store.path()).expect("attached state bytes read");
+
+    let dumped = run_in(
+        &["lifecore", "sidecar", "dump", "--format", "json"],
+        directory.path(),
+        None,
+    )
+    .expect("ready suffix dumps");
+    let (predicted, effective_end) = match &dumped {
+    CommandOutcome::SidecarDump { view, items, .. } => {
+        assert_eq!(view.canonical_end, 5);
+        assert_eq!(items.len(), 6);
+        assert!(items.iter().all(|item| item.entry.provisional));
+        assert_eq!(items[0].temporary_aliases, ["SideTypeAlias"]);
+        assert_eq!(items[1].temporary_aliases, ["TempFirst"]);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.entry.index)
+                .collect::<Vec<_>>(),
+            vec![5, 6, 7, 8, 9, 10]
+        );
+        (
+            items
+                .iter()
+                .map(|item| item.entry.locator.clone())
+                .collect::<Vec<_>>(),
+            view.end,
+        )
+    }
+    outcome => panic!("expected sidecar dump, got {outcome:?}"),
+    };
+    let last_locator = predicted.last().expect("last predicted locator").clone();
+    let mut dumped_json = Vec::new();
+    render_outcome(&dumped, &mut dumped_json, false).expect("sidecar dump JSON renders");
+    let dumped_json: serde_json::Value =
+        serde_json::from_slice(&dumped_json).expect("sidecar dump output is JSON");
+    assert_eq!(dumped_json["view"]["canonical_end"], 5);
+    assert_eq!(dumped_json["items"][0]["provisional"], true);
+    assert_eq!(
+        dumped_json["items"][0]["temporary_aliases"][0],
+        "SideTypeAlias"
+    );
+    let dumped_lines = run_in(
+        &["lifecore", "sidecar", "dump", "--format", "lines"],
+        directory.path(),
+        None,
+    )
+    .expect("sidecar dump lines prepare");
+    let mut dumped_lines_output = Vec::new();
+    render_outcome(&dumped_lines, &mut dumped_lines_output, false)
+        .expect("sidecar dump lines render");
+    let dumped_lines_output =
+        String::from_utf8(dumped_lines_output).expect("sidecar dump lines are UTF-8");
+    assert!(dumped_lines_output.contains("provisional=true"));
+    assert!(dumped_lines_output.contains("temporary_aliases=SideTypeAlias"));
+
+    let queried = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh-outgoing Rel",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("query sees provisional edges");
+    match queried {
+    CommandOutcome::Entries { view, items, .. } => {
+        assert_eq!(view.end, effective_end);
+        assert!(items.iter().any(|item| item.provisional));
+    }
+    outcome => panic!("expected effective query entries, got {outcome:?}"),
+    }
+
+    let shown = run_in(
+        &["lifecore", "entry", "show", &last_locator],
+        directory.path(),
+        None,
+    )
+    .expect("entry show sees final provisional node");
+    assert!(matches!(
+        shown,
+        CommandOutcome::Entries { items, .. } if items[0].provisional
+    ));
+    let types = run_in(&["lifecore", "type", "list"], directory.path(), None)
+        .expect("type list sees provisional declaration");
+    assert!(matches!(
+        types,
+        CommandOutcome::Types { items, .. }
+            if items.iter().any(|item| item.name == "SideType" && item.provisional)
+    ));
+    let aliases = run_in(&["lifecore", "alias", "list"], directory.path(), None)
+        .expect("alias list sees temporary aliases");
+    assert!(matches!(
+        aliases,
+        CommandOutcome::Aliases { items, .. }
+            if items.iter().any(|item| item.name == "TempLast" && item.temporary)
+    ));
+    let analyzers = run_in(&["lifecore", "analyzer", "list"], directory.path(), None)
+        .expect("analyzer list uses effective view");
+    assert!(matches!(
+        analyzers,
+        CommandOutcome::Analyzers { view, .. } if view.end == effective_end
+    ));
+    let checked = run_in(
+        &["lifecore", "check", "--include-resolved"],
+        directory.path(),
+        None,
+    )
+    .expect("check reuses prepared sidecar diagnostics");
+    let message_id = match checked {
+    CommandOutcome::Messages { view, items, .. } => {
+        assert_eq!(view.end, effective_end);
+        items
+            .into_iter()
+            .find(|item| item.analyzer == "Interactive")
+            .map(|item| item.display_id)
+    }
+    outcome => panic!("expected effective messages, got {outcome:?}"),
+    };
+    if let Some(message_id) = message_id {
+        assert!(matches!(
+            run_in(
+                &["lifecore", "message", "show", &message_id],
+                directory.path(),
+                None,
+            ),
+            Ok(CommandOutcome::Messages { view, .. }) if view.end == effective_end
+        ));
+    }
+
+    let canonical_view =
+        GraphView::latest(&canonical.lifecore, &canonical.cli).expect("canonical view constructs");
+    let canonical_head = resolve_index(
+        &canonical.lifecore,
+        &canonical.cli,
+        4,
+        EntryExpectation::Any,
+        Some(canonical_view.end_exclusive()),
+    )
+    .expect("canonical head resolves");
+    let historical = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--at",
+            &canonical_head.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("historical effective query succeeds");
+    assert!(matches!(
+        historical,
+        CommandOutcome::Entries { view, items, .. }
+            if view.end == 5 && view.canonical_end == 5
+                && items.iter().all(|item| !item.provisional)
+    ));
+
+    let dot_path = directory.path().join("effective.dot");
+    run_in(
+        &[
+            "lifecore",
+            "graphviz",
+            dot_path.to_str().expect("DOT path is UTF-8"),
+            "--dot",
+            "--full",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("GraphViz sees effective suffix");
+    let dot = fs::read_to_string(&dot_path).expect("effective DOT reads");
+    assert!(dot.contains("provisional"));
+    assert!(dot.contains("dodgerblue3"));
+    assert_eq!(
+        fs::read(store.path()).expect("reads preserve attached state"),
+        attached_bytes
+    );
+
+    let committed = run_in(
+        &["lifecore", "sidecar", "commit", "--format", "json"],
+        directory.path(),
+        None,
+    )
+    .expect("ready sidecar commits");
+    match committed {
+    CommandOutcome::SidecarCommitted { result, .. } => {
+        assert_eq!(result.state, TransactionState::Committed);
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|item| item.locator.clone())
+                .collect::<Vec<_>>(),
+            predicted
+        );
+        assert!(result.entries.iter().all(|item| !item.provisional));
+    }
+    outcome => panic!("expected sidecar commit, got {outcome:?}"),
+    }
+    let committed = store.load().expect("committed sidecar state loads");
+    assert_eq!(committed.cli.sidecar_path, None);
+    assert!(!committed.lifecore.is_mock());
+    for alias in ["SideTypeAlias", "TempFirst", "TempChild", "TempLast"] {
+        assert!(committed.cli.aliases.contains_key(alias), "{alias}");
+    }
+    assert_eq!(
+        fs::read(&sidecar_path).expect("committed source bytes read"),
+        source_before
+    );
+    assert!(matches!(
+        run_in(&["lifecore", "sidecar", "dump"], directory.path(), None,),
+        Err(AppError::SidecarNotAttached { .. })
+    ));
+}
+
+#[test]
+fn stage9_attachment_gates_every_mutation_before_sidecar_read() {
+    let directory = tempfile::tempdir().expect("temporary mutation-gate directory");
+    let (_, base, other) = initialize_stage9_ready_state(directory.path());
+    let sidecar_path = directory.path().join("ready.toml");
+    fs::write(&sidecar_path, stage9_ready_sidecar()).expect("ready sidecar writes");
+    run_in(
+        &["lifecore", "sidecar", "attach", "ready.toml"],
+        directory.path(),
+        None,
+    )
+    .expect("sidecar attaches");
+    fs::remove_file(&sidecar_path).expect("source is removed after attach");
+    let state_path = directory.path().join("LifeCoreState.json");
+    let before = fs::read(&state_path).expect("attached bytes read");
+    let cases = vec![
+        vec!["lifecore", "add", "Note"],
+        vec![
+            "lifecore", "connect", "--from", &base, "--type", "Rel", "--to", &other,
+        ],
+        vec!["lifecore", "analyzer", "add", "Missing", ""],
+        vec!["lifecore", "alias", "set", "Blocked", &base],
+        vec!["lifecore", "alias", "remove", "Base"],
+        vec!["lifecore", "type", "create", "BlockedType"],
+        vec![
+            "lifecore",
+            "type",
+            "override",
+            "Note",
+            "--field",
+            "extra = Text : Optional",
+        ],
+        vec!["lifecore", "message", "dismiss", "m:abcde"],
+        vec!["lifecore", "message", "restore", "m:abcde"],
+        vec!["lifecore", "message", "apply", "m:abcde"],
+        vec![
+            "lifecore", "query", "nodes", "all", "--select", &base, "--", "alias", "set", "Blocked",
+        ],
+        vec![
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--select",
+            &base,
+            "--",
+            "add-child",
+            "Note",
+        ],
+        vec![
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--select",
+            &base,
+            "--",
+            "type",
+            "override",
+            "--field",
+            "extra = Text : Optional",
+        ],
+    ];
+
+    for args in cases {
+        assert!(
+            matches!(
+                run_in(&args, directory.path(), None),
+                Err(AppError::MutationWithSidecar { .. })
+            ),
+            "{args:?}"
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("forbidden mutation preserves state"),
+            before
+        );
+    }
+    assert!(matches!(
+        reject_attached_mutation(
+            &StateStore::new(
+                StatePath::resolve(None, directory.path()).expect("state path resolves")
+            )
+            .load()
+            .expect("attached state loads"),
+            "direct test",
+        ),
+        Err(AppError::MutationWithSidecar { .. })
+    ));
+    run_in(&["lifecore", "sidecar", "detach"], directory.path(), None)
+        .expect("deleted sidecar detaches");
+}
+
+#[test]
+fn stage9_diagnosable_check_reaches_final_entry_and_detach_recovers() {
+    let directory = tempfile::tempdir().expect("temporary diagnosable directory");
+    let canonical = initialize_stage8_state(directory.path());
+    let sidecar_path = directory.path().join("inconsistent.toml");
+    fs::write(
+        &sidecar_path,
+        b"[[entry]]\nty = \"Missing_One\"\n[[entry]]\nty = \"Missing_Two\"\n",
+    )
+    .expect("inconsistent sidecar writes");
+    run_in(
+        &[
+            "lifecore",
+            "sidecar",
+            "attach",
+            sidecar_path.to_str().expect("sidecar path is UTF-8"),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("inconsistent sidecar attaches");
+    assert!(matches!(
+        run_in(
+            &["lifecore", "query", "nodes", "all"],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::SidecarDiagnosable { .. })
+    ));
+    let checked =
+        run_in(&["lifecore", "check"], directory.path(), None).expect("diagnosable check succeeds");
+    let canonical_end = canonical
+        .lifecore
+        .last()
+        .map_or(0, |entry| entry.entry().0 + 1);
+    match checked {
+    CommandOutcome::Messages { view, items, .. } => {
+        assert_eq!(view.end, canonical_end + 2);
+        assert!(items.iter().any(|item| {
+            item.severity == Severity::Inconsistency
+                && matches!(
+                    item.location,
+                    MessageLocation::Entry { entry_index, .. }
+                        if entry_index == (canonical_end + 1) as u64
+                )
+        }));
+    }
+    outcome => panic!("expected diagnosable messages, got {outcome:?}"),
+    }
+
+    fs::remove_file(&sidecar_path).expect("inconsistent source deletes");
+    run_in(&["lifecore", "sidecar", "detach"], directory.path(), None)
+        .expect("diagnosable deleted source detaches");
+}
+
+#[test]
+fn stage9_commit_rolls_back_stage_apply_expectation_and_save_failures() {
+    let directory = tempfile::tempdir().expect("temporary sidecar rollback directory");
+    let source = directory.path().join("one.toml");
+    fs::write(&source, b"[[entry]]\nalias = \"One\"\nty = \"Note\"\n")
+        .expect("rollback sidecar writes");
+    let mut state = PersistedState::new(LifeCoreList::default());
+    state.cli.sidecar_path =
+        Some(fs::canonicalize(&source).expect("rollback sidecar canonicalizes"));
+    let store =
+        StateStore::new(StatePath::resolve(None, directory.path()).expect("state path resolves"));
+    store
+        .initialize(&state)
+        .expect("attached rollback state initializes");
+    let built = build_sidecar_plan(
+        &state,
+        parse_sidecar(&fs::read(&source).expect("rollback source reads"))
+            .expect("rollback source parses"),
+    )
+    .expect("rollback plan builds");
+    let before = fs::read(store.path()).expect("rollback state bytes read");
+    let registry = AnalyzerRegistry::built_in();
+
+    let staged_failure = TransactionService::new(&store, &registry).execute_sidecar(
+        &state,
+        PlannedChange::AddEdge {
+            from: EntryIndex(99),
+            type_name: "Rel".to_string(),
+            to: EntryIndex(100),
+        },
+        BTreeMap::new(),
+        None,
+    );
+    assert!(matches!(
+        staged_failure,
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("stage failure preserves bytes"),
+        before
+    );
+
+    let apply_failure = TransactionService::failing_apply_for_test(&store, &registry)
+        .execute_sidecar(
+            &state,
+            built.plan.change.clone(),
+            built.plan.temporary_aliases.clone(),
+            None,
+        );
+    assert!(matches!(
+        apply_failure,
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("apply failure preserves bytes"),
+        before
+    );
+
+    let expectation_failure = TransactionService::new(&store, &registry).execute_sidecar(
+        &state,
+        built.plan.change.clone(),
+        built.plan.temporary_aliases.clone(),
+        Some(ExpectedHead::Entry(
+            EntryLocator::parse("0:abcde").expect("wrong expectation parses"),
+        )),
+    );
+    assert!(matches!(
+        expectation_failure,
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("expectation failure preserves bytes"),
+        before
+    );
+
+    let failing_store = store.failing_save_for_test();
+    let save_failure = TransactionService::new(&failing_store, &registry).execute_sidecar(
+        &state,
+        built.plan.change,
+        built.plan.temporary_aliases,
+        None,
+    );
+    assert!(matches!(
+        save_failure,
+        Err(AppError::TransactionAborted { .. })
+    ));
+    assert_eq!(
+        fs::read(store.path()).expect("save failure preserves bytes"),
+        before
+    );
+    let reloaded = store.load().expect("rollback state reloads");
+    assert_eq!(reloaded.cli.sidecar_path, state.cli.sidecar_path);
+    assert!(reloaded.cli.aliases.get("One").is_none());
 }
 
 fn directory_snapshot(directory: &std::path::Path) -> io::Result<Vec<(PathBuf, Vec<u8>)>> {

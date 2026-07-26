@@ -444,6 +444,7 @@ fn type_record(entry: &ResolvedEntry, declaration: &Type) -> TypeRecord {
         name: declaration.name.clone(),
         locator: entry.full_locator(),
         display_locator: entry.display_locator(),
+        provisional: matches!(&entry.circumstance, lifecore::Circumstance::Mock),
         fields: declaration.body.iter().map(ToString::to_string).collect(),
         outgoing: declaration.outgoing.iter().cloned().collect(),
         incoming: declaration.incoming.iter().cloned().collect(),
