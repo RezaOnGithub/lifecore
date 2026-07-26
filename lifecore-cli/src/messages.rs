@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use lifecore::{
-    Body, Context, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList, Payload,
+    Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreList,
     analysis::{Message, SuggestedAction},
 };
 use serde::Serialize;
@@ -51,13 +51,6 @@ impl MessageLocation {
         } => format!("entry {entry_index} in 0..{context_end}"),
         }
     }
-
-    fn offending_index(&self) -> Option<u64> {
-        match self {
-        Self::Context { .. } => None,
-        Self::Entry { entry_index, .. } => Some(*entry_index),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -93,7 +86,7 @@ pub struct MessageId {
 
 impl MessageId {
     pub fn full_digest(&self) -> String {
-        hex::encode(self.digest)
+        encode_lower_hex(&self.digest)
     }
 
     pub fn display(&self) -> String {
@@ -134,7 +127,6 @@ impl MessageRecord {
 #[derive(Clone, Debug)]
 pub struct MessageUniverse {
     records: Vec<MessageRecord>,
-    entry_count: usize,
 }
 
 impl MessageUniverse {
@@ -150,14 +142,14 @@ impl MessageUniverse {
         let mut deduplicated = BTreeMap::<String, MessageRecord>::new();
 
         for message in &report.messages {
-            let canonical = CanonicalMessage::from_message(message, report.entry_count)?;
-            let message_id = canonical.message_id();
+            let canonical = CanonicalMessage::from_message(message)?;
+            let message_id = canonical.message_id()?;
             let full_digest = message_id.full_digest();
             let severity = canonical.severity;
             let dismissed =
                 severity != Severity::Inconsistency && dismissal_set.contains(full_digest.as_str());
-            let resolved = severity != Severity::Inconsistency
-                && canonical.is_resolved(lifecore, report.entry_count);
+            let resolved =
+                severity != Severity::Inconsistency && canonical.is_resolved(lifecore)?;
             let visible = severity == Severity::Inconsistency || (!dismissed && !resolved);
 
             let record = canonical.into_record(message_id, dismissed, resolved, visible);
@@ -179,10 +171,7 @@ impl MessageUniverse {
         let mut records = deduplicated.into_values().collect::<Vec<_>>();
         records.sort_by(compare_records);
 
-        Ok(Self {
-            records,
-            entry_count: report.entry_count,
-        })
+        Ok(Self { records })
     }
 
     pub fn records(&self) -> &[MessageRecord] {
@@ -210,10 +199,6 @@ impl MessageUniverse {
         [record] => Ok((*record).clone()),
         _ => Err(AppError::ambiguous_message_id(prefix)),
         }
-    }
-
-    pub fn entry_count(&self) -> usize {
-        self.entry_count
     }
 }
 
@@ -263,13 +248,50 @@ struct CanonicalMessage {
     analyzer: String,
     analyzer_config: String,
     location: MessageLocation,
+    offending_entry: Option<EntryContext>,
     relevance: Vec<u64>,
     text: String,
     actions: Vec<ActionRecord>,
 }
 
+//A This DTO is the complete v1 message-identity wire contract. Keeping it
+//A separate from presentation records prevents display-only fields from
+//A changing persisted diagnostic identities.
+#[derive(Serialize)]
+struct MessageIdentityV1<'a> {
+    domain: &'static str,
+    version: u32,
+    severity: Severity,
+    analyzer: &'a str,
+    analyzer_config: &'a str,
+    location: MessageIdentityLocationV1,
+    text: &'a str,
+    relevance: &'a [u64],
+    actions: Vec<MessageIdentityActionV1<'a>>,
+}
+
+#[derive(Serialize)]
+enum MessageIdentityLocationV1 {
+    Context { end: u64 },
+    Entry { context_end: u64, entry_index: u64 },
+}
+
+#[derive(Serialize)]
+enum MessageIdentityActionV1<'a> {
+    AddNode {
+        r#type: &'a str,
+        body: &'a Body,
+        parent: Option<u64>,
+    },
+    AddEdge {
+        from: u64,
+        r#type: &'a str,
+        to: u64,
+    },
+}
+
 impl CanonicalMessage {
-    fn from_message(message: &Message, entry_count: usize) -> Result<Self, AppError> {
+    fn from_message(message: &Message) -> Result<Self, AppError> {
         let (severity, analyzer, analyzer_config, location, relevance, text, actions) =
             match message {
             Message::Inconsistency(value) => (
@@ -301,16 +323,22 @@ impl CanonicalMessage {
             ),
             };
 
-        let location = normalize_location(location, entry_count)?;
+        let offending_entry = match location {
+        DiagnosticLocation::Context(_) => None,
+        DiagnosticLocation::Entry(entry) => Some(entry),
+        };
+        let location = normalize_location(location)?;
         let mut relevance = relevance
             .into_iter()
-            .map(|entry| checked_index(entry, entry_count, "message relevance"))
+            .map(|entry| normalize_index(entry, "message relevance"))
             .collect::<Result<Vec<_>, _>>()?;
+        //A Relevance is a set for identity purposes, while SuggestedActions
+        //A remain ordered because changing their order can change the repair.
         relevance.sort_unstable();
 
         let actions = actions
             .into_iter()
-            .map(|action| normalize_action(action, entry_count))
+            .map(normalize_action)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
@@ -318,52 +346,70 @@ impl CanonicalMessage {
             analyzer,
             analyzer_config,
             location,
+            offending_entry,
             relevance,
             text,
             actions,
         })
     }
 
-    fn message_id(&self) -> MessageId {
-        let mut encoded = Vec::new();
-        encode_bytes(&mut encoded, b"lifecore-message-id");
-        encode_u64(&mut encoded, u64::from(MESSAGE_ID_VERSION));
-        encode_u8(
-            &mut encoded,
-            match self.severity {
-            Severity::Inconsistency => 0,
-            Severity::Warning => 1,
-            Severity::Suggestion => 2,
-            },
-        );
-        encode_string(&mut encoded, &self.analyzer);
-        encode_string(&mut encoded, &self.analyzer_config);
-        encode_location(&mut encoded, &self.location);
-        encode_string(&mut encoded, &self.text);
-        encode_u64(&mut encoded, self.relevance.len() as u64);
-        for entry in &self.relevance {
-            encode_u64(&mut encoded, *entry);
-        }
-        encode_u64(&mut encoded, self.actions.len() as u64);
-        for action in &self.actions {
-            encode_action(&mut encoded, action);
-        }
-
-        MessageId {
-            digest: Sha3_512::digest(encoded).into(),
-        }
-    }
-
-    fn is_resolved(&self, lifecore: &LifeCoreList, entry_count: usize) -> bool {
-        let Some(offending) = self.location.offending_index() else {
-            return false;
+    fn identity_bytes(&self) -> Result<Vec<u8>, AppError> {
+        let identity = MessageIdentityV1 {
+            domain: "lifecore-message-id",
+            version: MESSAGE_ID_VERSION,
+            severity: self.severity,
+            analyzer: &self.analyzer,
+            analyzer_config: &self.analyzer_config,
+            location: MessageIdentityLocationV1::from(&self.location),
+            text: &self.text,
+            relevance: &self.relevance,
+            actions: self
+                .actions
+                .iter()
+                .map(MessageIdentityActionV1::from)
+                .collect(),
         };
 
-        is_stale(lifecore, offending, entry_count)
-            && self
-                .relevance
-                .iter()
-                .all(|entry| is_stale(lifecore, *entry, entry_count))
+        postcard::to_allocvec(&identity)
+            .map_err(|error| AppError::analysis(format!("message ID encoding failed: {error}")))
+    }
+
+    fn message_id(&self) -> Result<MessageId, AppError> {
+        Ok(MessageId {
+            digest: Sha3_512::digest(self.identity_bytes()?).into(),
+        })
+    }
+
+    fn is_resolved(&self, lifecore: &LifeCoreList) -> Result<bool, AppError> {
+        let Some(offending) = self.offending_entry else {
+            return Ok(false);
+        };
+
+        if lifecore.is_stale(offending) != Some(true) {
+            return Ok(false);
+        }
+
+        let MessageLocation::Entry { context_end, .. } = self.location else {
+            unreachable!("pointed diagnostics normalize to entry locations");
+        };
+
+        for entry in &self.relevance {
+            if *entry >= context_end {
+                return Err(AppError::analysis(
+                    "analyzer emitted message relevance outside the diagnostic context",
+                ));
+            }
+
+            let entry = usize::try_from(*entry)
+                .map_err(|_| AppError::analysis("message relevance does not fit this platform"))?;
+            let pointed = offending.window().look_at(EntryIndex(entry).absolute());
+
+            if lifecore.is_stale(pointed) != Some(true) {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
     }
 
     fn into_record(
@@ -391,60 +437,71 @@ impl CanonicalMessage {
     }
 }
 
-fn normalize_location(
-    location: DiagnosticLocation,
-    entry_count: usize,
-) -> Result<MessageLocation, AppError> {
-    match location {
-    DiagnosticLocation::Context(context) => Ok(MessageLocation::Context {
-        end: checked_context_end(context, entry_count)?,
-    }),
-    DiagnosticLocation::Entry(entry) => {
-        let entry_index = checked_index(entry.entry(), entry_count, "message location")?;
-        let context_end = checked_context_end(entry.window(), entry_count)?;
-
-        if entry_index >= context_end {
-            return Err(AppError::analysis(
-                "analyzer emitted an entry location outside its context",
-            ));
-        }
-
-        Ok(MessageLocation::Entry {
+impl From<&MessageLocation> for MessageIdentityLocationV1 {
+    fn from(location: &MessageLocation) -> Self {
+        match location {
+        MessageLocation::Context { end } => Self::Context { end: *end },
+        MessageLocation::Entry {
             context_end,
             entry_index,
-        })
-    }
+        } => Self::Entry {
+            context_end: *context_end,
+            entry_index: *entry_index,
+        },
+        }
     }
 }
 
-fn checked_context_end(context: Context, entry_count: usize) -> Result<u64, AppError> {
-    let end = if context == Context::universe() {
-        entry_count
-    } else {
-        context.last().map_or(0, |entry| entry.entry().0 + 1)
-    };
+impl<'a> From<&'a ActionRecord> for MessageIdentityActionV1<'a> {
+    fn from(action: &'a ActionRecord) -> Self {
+        match action {
+        ActionRecord::AddNode {
+            r#type,
+            body,
+            parent,
+        } => Self::AddNode {
+            r#type,
+            body,
+            parent: *parent,
+        },
+        ActionRecord::AddEdge { from, r#type, to } => Self::AddEdge {
+            from: *from,
+            r#type,
+            to: *to,
+        },
+        }
+    }
+}
 
-    if end > entry_count {
+fn normalize_location(location: DiagnosticLocation) -> Result<MessageLocation, AppError> {
+    match location {
+    DiagnosticLocation::Context(context) => Ok(MessageLocation::Context {
+        end: bounded_context_end(context)?,
+    }),
+    DiagnosticLocation::Entry(entry) => Ok(MessageLocation::Entry {
+        context_end: bounded_context_end(entry.window())?,
+        entry_index: normalize_index(entry.entry(), "message location")?,
+    }),
+    }
+}
+
+fn bounded_context_end(context: Context) -> Result<u64, AppError> {
+    if context == Context::universe() {
         return Err(AppError::analysis(
-            "analyzer emitted a diagnostic context beyond graph history",
+            "analyzer emitted an unbounded diagnostic context",
         ));
     }
 
+    let end = context.last().map_or(0, |entry| entry.entry().0 + 1);
     u64::try_from(end).map_err(|_| AppError::analysis("graph context does not fit in message ID"))
 }
 
-fn checked_index(entry: EntryIndex, entry_count: usize, field: &str) -> Result<u64, AppError> {
-    if entry.0 >= entry_count {
-        return Err(AppError::analysis(format!(
-            "analyzer emitted an out-of-range {field} index {}",
-            entry.0
-        )));
-    }
-
-    u64::try_from(entry.0).map_err(|_| AppError::analysis("entry index does not fit in message ID"))
+fn normalize_index(entry: EntryIndex, field: &str) -> Result<u64, AppError> {
+    u64::try_from(entry.0)
+        .map_err(|_| AppError::analysis(format!("{field} index does not fit in message ID")))
 }
 
-fn normalize_action(action: SuggestedAction, entry_count: usize) -> Result<ActionRecord, AppError> {
+fn normalize_action(action: SuggestedAction) -> Result<ActionRecord, AppError> {
     match action {
     SuggestedAction::AddNode {
         ty_name,
@@ -454,129 +511,30 @@ fn normalize_action(action: SuggestedAction, entry_count: usize) -> Result<Actio
         r#type: ty_name,
         body: payload,
         parent: parent
-            .map(|entry| checked_index(entry, entry_count, "suggested parent"))
+            .map(|entry| normalize_index(entry, "suggested parent"))
             .transpose()?,
     }),
     SuggestedAction::AddEdge { from, ty_name, to } => Ok(ActionRecord::AddEdge {
-        from: checked_index(from, entry_count, "suggested edge endpoint")?,
+        from: normalize_index(from, "suggested edge endpoint")?,
         r#type: ty_name,
-        to: checked_index(to, entry_count, "suggested edge endpoint")?,
+        to: normalize_index(to, "suggested edge endpoint")?,
     }),
     }
 }
 
-fn is_stale(lifecore: &LifeCoreList, entry: u64, entry_count: usize) -> bool {
-    let Ok(entry) = usize::try_from(entry) else {
-        return false;
-    };
+pub(crate) fn encode_lower_hex(digest: &[u8; 64]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
 
-    if entry >= entry_count {
-        return false;
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
 
-    lifecore
-        .is_stale(EntryIndex(entry).absolute())
-        .unwrap_or(false)
+    encoded
 }
 
-fn encode_u8(output: &mut Vec<u8>, value: u8) {
-    output.push(value);
-}
-
-fn encode_u64(output: &mut Vec<u8>, value: u64) {
-    output.extend_from_slice(&value.to_be_bytes());
-}
-
-fn encode_bytes(output: &mut Vec<u8>, value: &[u8]) {
-    encode_u64(output, value.len() as u64);
-    output.extend_from_slice(value);
-}
-
-fn encode_string(output: &mut Vec<u8>, value: &str) {
-    encode_bytes(output, value.as_bytes());
-}
-
-fn encode_location(output: &mut Vec<u8>, location: &MessageLocation) {
-    match location {
-    MessageLocation::Context { end } => {
-        encode_u8(output, 0);
-        encode_u64(output, *end);
-    }
-    MessageLocation::Entry {
-        context_end,
-        entry_index,
-    } => {
-        encode_u8(output, 1);
-        encode_u64(output, *context_end);
-        encode_u64(output, *entry_index);
-    }
-    }
-}
-
-fn encode_action(output: &mut Vec<u8>, action: &ActionRecord) {
-    match action {
-    ActionRecord::AddNode {
-        r#type,
-        body,
-        parent,
-    } => {
-        encode_u8(output, 0);
-        encode_string(output, r#type);
-        encode_body(output, body);
-        match parent {
-        Some(parent) => {
-            encode_u8(output, 1);
-            encode_u64(output, *parent);
-        }
-        None => encode_u8(output, 0),
-        }
-    }
-    ActionRecord::AddEdge {
-        from, r#type, to, ..
-    } => {
-        encode_u8(output, 1);
-        encode_u64(output, *from);
-        encode_string(output, r#type);
-        encode_u64(output, *to);
-    }
-    }
-}
-
-fn encode_body(output: &mut Vec<u8>, body: &Body) {
-    encode_u64(output, body.iter().count() as u64);
-    for (name, payload) in body.iter() {
-        encode_string(output, name);
-        encode_payload(output, payload);
-    }
-}
-
-fn encode_payload(output: &mut Vec<u8>, payload: &Payload) {
-    match payload {
-    Payload::PreciseTime(value) => {
-        encode_u8(output, 0);
-        encode_string(output, &value.to_string());
-    }
-    Payload::Text(value) => {
-        encode_u8(output, 1);
-        encode_string(output, value);
-    }
-    Payload::Number(value) => {
-        encode_u8(output, 2);
-        output.extend_from_slice(&value.to_be_bytes());
-    }
-    Payload::Sequence(values) => {
-        encode_u8(output, 3);
-        encode_u64(output, values.len() as u64);
-        for value in values {
-            encode_payload(output, value);
-        }
-    }
-    Payload::OrderedSet(values) => {
-        encode_u8(output, 4);
-        encode_u64(output, values.len() as u64);
-        for value in values {
-            encode_payload(output, value);
-        }
-    }
-    }
+#[cfg(test)]
+pub(crate) fn message_identity_bytes(message: &Message) -> Result<Vec<u8>, AppError> {
+    CanonicalMessage::from_message(message)?.identity_bytes()
 }

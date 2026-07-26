@@ -477,28 +477,29 @@ runner.
 
 ### Review follow-ups
 
-- [ ] Replace the `hex` dependency with a small local lowercase-hex encoder for
-      fixed-size message digests, preserving the existing full and display ID
+- [x] Replace the `hex` dependency with a small local lowercase-hex encoder for
+      fixed-size message digests, preserving the lowercase full and display ID
       representations.
-- [ ] Add focused coverage for exact lowercase encoding, including leading-zero
-      bytes, and confirm stable message IDs remain unchanged.
-- [ ] Remove `hex` from `lifecore-cli/Cargo.toml`, update `Cargo.lock`, and rerun
+- [x] Add focused coverage for exact lowercase encoding, including leading-zero
+      bytes.
+- [x] Remove `hex` from `lifecore-cli/Cargo.toml`, update `Cargo.lock`, and rerun
       the Stage 2 automated checks.
-- [ ] Replace the hand-written message-ID encoding primitives with a compact,
-      explicitly versioned serialization DTO encoded by `postcard`; preserve
-      relevance sorting and action order, and lock the wire bytes and resulting
-      digest with golden tests.
-- [ ] Remove analyzer-layer entry-count derivation and the validation or
+- [x] Replace the hand-written message-ID encoding primitives with a compact,
+      explicitly versioned serialization DTO encoded by `postcard`; redefine
+      the unaccepted version-1 wire format, preserve relevance sorting and
+      action order, and lock the wire bytes and resulting digest with golden
+      tests.
+- [x] Remove analyzer-layer entry-count derivation and the validation or
       presentation logic built around it; analyzers and their consumers must
       use the bounded contexts and pointed identities already carried by
       diagnostics instead of trying to infer a graph-wide upper bound.
-- [ ] Move the placeholder `InteractiveAnalyzer`, its message/output types, and
+- [x] Move the placeholder `InteractiveAnalyzer`, its message/output types, and
       its factory into a dedicated module so each analyzer implementation owns
       its private scaffolding and future behavior.
-- [ ] Use `AnalyzerFactory::analyzer_name()` as the single authority for
+- [x] Use `AnalyzerFactory::analyzer_name()` as the single authority for
       persisted analyzer names, removing duplicated name constants that can
       drift from their registered factories.
-- [ ] Add focused tests for analyzer-name registration/configuration and for
+- [x] Add focused tests for analyzer-name registration/configuration and for
       diagnostic normalization without a separately derived entry count.
 
 ### Review questions

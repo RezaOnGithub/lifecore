@@ -3,8 +3,8 @@
 use std::marker::PhantomData;
 
 use lifecore::{
-    Body, Context, DiagnosticLocation, EntryContext, LifeCore, LifeCoreList, OrderedSet, Payload,
-    PayloadKind,
+    Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreList,
+    OrderedSet, Payload, PayloadKind,
     analysis::{AnalysisRunner, Analyzer, AnalyzerFactory},
     serialize::{LifeCoreSerializeExt, NodeBody},
     typing::{FieldStatus, Type, ValueType},
@@ -77,7 +77,12 @@ fn initialize_suggests_the_bootstrap_type_when_missing() {
 
     let messages = analyzer().initialize_inner(&lifecore).0;
 
-    assert_eq!(messages, vec![TypeCheckMessage::AddBootstrapNode]);
+    assert_eq!(
+        messages,
+        vec![TypeCheckMessage::AddBootstrapNode {
+            context: EntryIndex(0).before(),
+        }]
+    );
 }
 
 #[test]
@@ -91,7 +96,7 @@ fn initialize_accepts_the_bootstrap_type_when_present() {
 }
 
 #[test]
-fn bootstrap_suggestion_uses_the_universe_context() {
+fn bootstrap_suggestion_uses_the_bounded_current_context() {
     let mut lifecore = LifeCoreList::default();
     configure(&mut lifecore);
 
@@ -104,7 +109,11 @@ fn bootstrap_suggestion_uses_the_universe_context() {
 
     assert_eq!(
         suggestion.offending_event,
-        DiagnosticLocation::Context(Context::universe())
+        DiagnosticLocation::Context(
+            lifecore
+                .last()
+                .map_or_else(|| EntryIndex(0).before(), EntryContext::window)
+        )
     );
 }
 

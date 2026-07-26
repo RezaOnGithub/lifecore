@@ -1,3 +1,5 @@
+use lifecore::{LifeCore, LifeCoreList};
+
 use crate::{
     InvocationContext,
     analysis::{AnalyzerRegistry, initial_graph, run_analysis},
@@ -19,6 +21,7 @@ pub fn dispatch(
     Command::Init(_) => {
         let store = state_store(invocation)?;
         let lifecore = initial_graph();
+        let view_end = view_end(&lifecore);
         let registry = AnalyzerRegistry::built_in();
         let report = run_analysis(&lifecore, &registry)?;
         let universe = MessageUniverse::from_analysis(&report, &lifecore, &[])?;
@@ -41,9 +44,7 @@ pub fn dispatch(
             format,
             path: store.path().to_path_buf(),
             uuid,
-            view: ViewSummary {
-                end: universe.entry_count(),
-            },
+            view: ViewSummary { end: view_end },
             messages: universe.visible(),
         })
     }
@@ -64,7 +65,7 @@ pub fn dispatch(
         Ok(CommandOutcome::Messages {
             format,
             view: ViewSummary {
-                end: universe.entry_count(),
+                end: view_end(&state.lifecore),
             },
             items: universe.visible(),
             detail: false,
@@ -85,7 +86,7 @@ pub fn dispatch(
         Ok(CommandOutcome::Messages {
             format,
             view: ViewSummary {
-                end: universe.entry_count(),
+                end: view_end(&state.lifecore),
             },
             items: vec![message],
             detail: true,
@@ -97,6 +98,12 @@ pub fn dispatch(
         Err(AppError::unavailable(operation, format))
     }
     }
+}
+
+fn view_end(lifecore: &LifeCoreList) -> usize {
+    lifecore
+        .last()
+        .map_or(0, |entry| entry.entry().0.saturating_add(1))
 }
 
 fn state_store(invocation: &InvocationContext) -> Result<StateStore, AppError> {

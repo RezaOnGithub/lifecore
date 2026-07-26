@@ -35,7 +35,11 @@ use strum::IntoDiscriminant;
     strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
 )]
 pub enum TypeCheckMessage {
-    AddBootstrapNode,
+    //A Initialization diagnostics carry their inspection window so consumers
+    //A never need to reconstruct graph bounds from unrelated analyzer output.
+    AddBootstrapNode {
+        context: Context,
+    },
     MalformedNodeTypeBody {
         offending_event: EntryContext,
     },
@@ -131,7 +135,7 @@ impl InnerMessageType for TypeCheckMessage {
     fn ty(&self) -> lifecore::analysis::MessageType {
         use lifecore::analysis::MessageType::*;
         match self {
-        TypeCheckMessage::AddBootstrapNode => Suggestion,
+        TypeCheckMessage::AddBootstrapNode { .. } => Suggestion,
         TypeCheckMessage::MalformedNodeTypeBody { .. } => Inconsistency,
         TypeCheckMessage::DuplicateTypeDefinition { .. } => Inconsistency,
         TypeCheckMessage::NonexistantOverrideType { .. } => Warning,
@@ -153,8 +157,8 @@ impl<LC: LifeCore> TypeCheck<LC> {
         let system_name = TypeCheckFactory::<LC>::name().to_string();
         let system_config = self.config.to_string();
         let r: lifecore::analysis::Message = match x.clone() {
-        TypeCheckMessage::AddBootstrapNode => Suggestion {
-            offending_event: Context::universe().into(),
+        TypeCheckMessage::AddBootstrapNode { context } => Suggestion {
+            offending_event: context.into(),
             system_name: TypeCheckFactory::<LC>::name().to_string(),
             system_config: self.config.to_string(),
             relevance: vec![],
@@ -359,7 +363,11 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             return TypeCheckOutput(vec![]);
         }
 
-        TypeCheckOutput(vec![TypeCheckMessage::AddBootstrapNode])
+        TypeCheckOutput(vec![TypeCheckMessage::AddBootstrapNode {
+            context: lc
+                .last()
+                .map_or_else(|| EntryIndex(0).before(), EntryContext::window),
+        }])
     }
 
     fn analyze_inner(&self, lc: &LC, window: Context) -> TypeCheckOutput

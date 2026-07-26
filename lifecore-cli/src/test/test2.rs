@@ -6,17 +6,21 @@ use std::{
 };
 
 use lifecore::{
-    Body, Context, DiagnosticLocation, LifeCore, LifeCoreList,
-    analysis::{Inconsistency, Message, SuggestedAction, Suggestion, Warning},
+    Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList,
+    analysis::{AnalyzerFactory, Inconsistency, Message, SuggestedAction, Suggestion, Warning},
 };
+use lifecore_typecheck::TypeCheckFactory;
 use uuid::Version;
 
 use crate::{
     InvocationContext, Io,
-    analysis::{AnalysisReport, AnalyzerRegistry, initial_graph, run_analysis},
+    analysis::{
+        AnalysisReport, AnalyzerRegistry, configured_analyzers, initial_graph, run_analysis,
+    },
     app::CommandOutcome,
     error::AppError,
-    messages::{MessageUniverse, Severity},
+    interactive_analyzer::InteractiveFactory,
+    messages::{MessageUniverse, Severity, encode_lower_hex, message_identity_bytes},
     output::render_outcome,
     run_cli, run_from_in,
     state::{PersistedState, StatePath, StateStore},
@@ -797,17 +801,21 @@ fn stage2_outcomes_render_deterministically_in_json_table_lines_and_auto() {
 #[test]
 fn message_identity_deduplicates_and_preserves_action_order() {
     let graph = LifeCoreList::default();
-    let warning = Message::Warning(Warning {
-        offending_event: DiagnosticLocation::Context(Context::universe()),
-        system_name: "Test".to_string(),
-        system_config: "{}".to_string(),
-        relevance: Vec::new(),
-        message: "same".to_string(),
-    });
+    let warning = |relevance| {
+        Message::Warning(Warning {
+            offending_event: DiagnosticLocation::Context(EntryIndex(3).before()),
+            system_name: "Test".to_string(),
+            system_config: "{}".to_string(),
+            relevance,
+            message: "same".to_string(),
+        })
+    };
     let duplicate_report = AnalysisReport {
         suite: Default::default(),
-        messages: vec![warning.clone(), warning],
-        entry_count: 0,
+        messages: vec![
+            warning(vec![EntryIndex(2), EntryIndex(1)]),
+            warning(vec![EntryIndex(1), EntryIndex(2)]),
+        ],
     };
     let duplicate_universe =
         MessageUniverse::from_analysis(&duplicate_report, &graph, &[]).expect("messages encode");
@@ -825,7 +833,7 @@ fn message_identity_deduplicates_and_preserves_action_order() {
     };
     let suggestion = |actions| {
         Message::Suggestion(Suggestion {
-            offending_event: DiagnosticLocation::Context(Context::universe()),
+            offending_event: DiagnosticLocation::Context(EntryIndex(0).before()),
             system_name: "Test".to_string(),
             system_config: "{}".to_string(),
             relevance: Vec::new(),
@@ -839,7 +847,6 @@ fn message_identity_deduplicates_and_preserves_action_order() {
             suggestion(vec![action_a.clone(), action_b.clone()]),
             suggestion(vec![action_b, action_a]),
         ],
-        entry_count: 0,
     };
     let ordered_universe =
         MessageUniverse::from_analysis(&ordered_report, &graph, &[]).expect("messages encode");
@@ -851,13 +858,110 @@ fn message_identity_deduplicates_and_preserves_action_order() {
 }
 
 #[test]
+fn message_identity_v1_has_golden_wire_bytes_and_digest() {
+    let graph = LifeCoreList::default();
+    let warning = Message::Warning(Warning {
+        offending_event: DiagnosticLocation::Context(EntryIndex(0).before()),
+        system_name: "Test".to_string(),
+        system_config: "{}".to_string(),
+        relevance: Vec::new(),
+        message: "same".to_string(),
+    });
+    let bytes = message_identity_bytes(&warning).expect("message identity serializes");
+    let report = AnalysisReport {
+        suite: Default::default(),
+        messages: vec![warning],
+    };
+    let universe =
+        MessageUniverse::from_analysis(&report, &graph, &[]).expect("message identity hashes");
+
+    assert_eq!(
+        bytes,
+        vec![
+            19, 108, 105, 102, 101, 99, 111, 114, 101, 45, 109, 101, 115, 115, 97, 103, 101, 45,
+            105, 100, 1, 1, 4, 84, 101, 115, 116, 2, 123, 125, 0, 0, 4, 115, 97, 109, 101, 0, 0,
+        ]
+    );
+    assert_eq!(
+        universe.records()[0].id,
+        "f11a41decf7a856c48341abe8473fdd70a279ded1dd5145dc20876fbebf2d85a532fa1a7355d65666a60afe56d58b00eecc9439fd29409540982958417987c3c"
+    );
+}
+
+#[test]
+fn fixed_digest_hex_is_exact_lowercase_with_leading_zeroes() {
+    let mut digest = [0_u8; 64];
+    digest[0] = 0x01;
+    digest[1] = 0xaf;
+    digest[63] = 0xf0;
+
+    let encoded = encode_lower_hex(&digest);
+
+    assert_eq!(encoded, format!("01af{}f0", "00".repeat(61)));
+}
+
+#[test]
+fn analyzer_configuration_uses_registered_factory_names() {
+    let graph = initial_graph();
+    let report =
+        run_analysis(&graph, &AnalyzerRegistry::built_in()).expect("built-in analyzers run");
+    let configured_names = configured_analyzers(&report)
+        .iter()
+        .map(|config| config.name.as_str())
+        .collect::<Vec<_>>();
+    let type_check = TypeCheckFactory::<LifeCoreList>::default();
+    let interactive = InteractiveFactory;
+
+    assert_eq!(
+        configured_names,
+        vec![type_check.analyzer_name(), interactive.analyzer_name()]
+    );
+}
+
+#[test]
+fn message_resolution_uses_the_diagnostic_window() {
+    let mut graph = LifeCoreList::default();
+    let parent = graph
+        .add_mock("Test", Body::default(), None)
+        .expect("parent is added");
+    let child = graph
+        .add_mock("Test", Body::default(), Some(parent.e))
+        .expect("child is added");
+    let warning_at = |offending_event| {
+        Message::Warning(Warning {
+            offending_event: DiagnosticLocation::Entry(offending_event),
+            system_name: "Test".to_string(),
+            system_config: String::new(),
+            relevance: Vec::new(),
+            message: "bounded".to_string(),
+        })
+    };
+    let historical = AnalysisReport {
+        suite: Default::default(),
+        messages: vec![warning_at(parent.e)],
+    };
+    let current = AnalysisReport {
+        suite: Default::default(),
+        messages: vec![warning_at(child.e.window().look_at(parent.e))],
+    };
+
+    let historical = MessageUniverse::from_analysis(&historical, &graph, &[])
+        .expect("historical message normalizes");
+    let current =
+        MessageUniverse::from_analysis(&current, &graph, &[]).expect("current message normalizes");
+
+    assert!(!historical.records()[0].resolved);
+    assert!(current.records()[0].resolved);
+}
+
+#[test]
 fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
     let graph = LifeCoreList::default();
     let mut messages = Vec::new();
 
     for index in 0..8_000 {
         messages.push(Message::Warning(Warning {
-            offending_event: DiagnosticLocation::Context(Context::universe()),
+            offending_event: DiagnosticLocation::Context(EntryIndex(0).before()),
             system_name: "Collision_Test".to_string(),
             system_config: String::new(),
             relevance: Vec::new(),
@@ -868,7 +972,6 @@ fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
     let report = AnalysisReport {
         suite: Default::default(),
         messages,
-        entry_count: 0,
     };
     let universe = MessageUniverse::from_analysis(&report, &graph, &[]).expect("messages encode");
     let mut prefixes = std::collections::BTreeMap::<String, usize>::new();
@@ -900,12 +1003,11 @@ fn inconsistencies_remain_visible_even_when_their_id_is_dismissed() {
     let report = AnalysisReport {
         suite: Default::default(),
         messages: vec![Message::Inconsistency(Inconsistency {
-            offending_event: DiagnosticLocation::Context(Context::universe()),
+            offending_event: DiagnosticLocation::Context(EntryIndex(0).before()),
             system_name: "Test".to_string(),
             system_config: String::new(),
             message: "broken".to_string(),
         })],
-        entry_count: 0,
     };
     let first =
         MessageUniverse::from_analysis(&report, &graph, &[]).expect("message identity is computed");

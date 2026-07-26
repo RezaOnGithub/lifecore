@@ -3,6 +3,7 @@ pub mod app;
 pub mod cli;
 pub mod commands;
 pub mod error;
+mod interactive_analyzer;
 pub mod messages;
 pub mod output;
 pub mod state;
