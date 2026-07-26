@@ -1,196 +1,285 @@
 use std::{
     collections::BTreeMap,
-    env,
-    fs::{self, File, OpenOptions},
+    ffi::OsString,
+    fs::File,
     io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    process,
-    sync::atomic::{AtomicU64, Ordering},
 };
 
-use anyhow::{Context as _, Result, bail};
 use lifecore::{LifeCore, LifeCoreList};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use serde_json::Value;
+use tempfile::NamedTempFile;
+use uuid::{Uuid, Version};
 
-use crate::locator::DurableLocator;
+use crate::error::AppError;
 
-pub const DEFAULT_STATE_FILE: &str = "LifeCoreState.json";
-pub const STATE_FILE_ENV: &str = "LIFECORE_STATE_FILE_PATH";
-pub const STATE_FORMAT_VERSION: u16 = 1;
-pub const ENTRY_FINGERPRINT_VERSION: u16 = 1;
-pub const MESSAGE_ID_VERSION: u16 = 1;
+pub const STATE_FORMAT_VERSION: u32 = 1;
+pub const ENTRY_FINGERPRINT_VERSION: u32 = 1;
+pub const MESSAGE_ID_VERSION: u32 = 1;
+pub const DEFAULT_STATE_FILE_NAME: &str = "LifeCoreState.json";
+pub const STATE_PATH_ENVIRONMENT: &str = "LIFECORE_STATE_FILE_PATH";
 
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Dismissal {
-    pub version: u16,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredEntryLocatorV1 {
+    pub version: u32,
+    pub index: u64,
     pub digest: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CliState {
-    pub state_format_version: u16,
-    pub state_uuid: Uuid,
-    pub entry_fingerprint_version: u16,
-    pub message_id_version: u16,
-    pub aliases: BTreeMap<String, DurableLocator>,
-    pub dismissals: Vec<Dismissal>,
-    pub sidecar: Option<PathBuf>,
-    pub metadata: BTreeMap<String, serde_json::Value>,
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DismissalRecord {
+    pub version: u32,
+    pub digest: String,
 }
 
-impl CliState {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CliStateV1 {
+    pub version: u32,
+    pub uuid: Uuid,
+    pub entry_fingerprint_version: u32,
+    pub message_id_version: u32,
+    pub aliases: BTreeMap<String, StoredEntryLocatorV1>,
+    pub dismissals: Vec<DismissalRecord>,
+    pub sidecar_path: Option<PathBuf>,
+    pub reserved: BTreeMap<String, Value>,
+}
+
+impl CliStateV1 {
     pub fn new() -> Self {
         Self {
-            state_format_version: STATE_FORMAT_VERSION,
-            state_uuid: Uuid::now_v7(),
+            version: STATE_FORMAT_VERSION,
+            uuid: Uuid::now_v7(),
             entry_fingerprint_version: ENTRY_FINGERPRINT_VERSION,
             message_id_version: MESSAGE_ID_VERSION,
             aliases: BTreeMap::new(),
             dismissals: Vec::new(),
-            sidecar: None,
-            metadata: BTreeMap::new(),
+            sidecar_path: None,
+            reserved: BTreeMap::new(),
         }
     }
 
-    fn validate(&self) -> Result<()> {
-        if self.state_format_version != STATE_FORMAT_VERSION {
-            bail!(
-                "unsupported CLI state format version {}; expected {}",
-                self.state_format_version,
-                STATE_FORMAT_VERSION
-            );
+    fn validate(&self) -> Result<(), AppError> {
+        if self.version != STATE_FORMAT_VERSION {
+            return Err(AppError::invalid_state(format!(
+                "unsupported CLI state version {}; expected {STATE_FORMAT_VERSION}",
+                self.version
+            )));
         }
+
+        if self.uuid.get_version() != Some(Version::SortRand) {
+            return Err(AppError::invalid_state("state UUID is not UUIDv7"));
+        }
+
         if self.entry_fingerprint_version != ENTRY_FINGERPRINT_VERSION {
-            bail!("unsupported entry fingerprint version");
+            return Err(AppError::invalid_state(format!(
+                "unsupported entry-fingerprint version {}; expected {ENTRY_FINGERPRINT_VERSION}",
+                self.entry_fingerprint_version
+            )));
         }
+
         if self.message_id_version != MESSAGE_ID_VERSION {
-            bail!("unsupported message ID version");
+            return Err(AppError::invalid_state(format!(
+                "unsupported message-ID version {}; expected {MESSAGE_ID_VERSION}",
+                self.message_id_version
+            )));
         }
-        if self.aliases.contains_key("HEAD") {
-            bail!("state contains reserved alias \"HEAD\"");
+
+        for (name, locator) in &self.aliases {
+            if name == "HEAD" {
+                return Err(AppError::invalid_state(
+                    "version-1 alias registry contains reserved name HEAD",
+                ));
+            }
+
+            if locator.version != ENTRY_FINGERPRINT_VERSION {
+                return Err(AppError::invalid_state(format!(
+                    "alias {name:?} has unsupported entry-fingerprint version {}",
+                    locator.version
+                )));
+            }
+
+            validate_digest(&locator.digest, "alias entry fingerprint")?;
         }
+
+        let mut previous = None;
+        for dismissal in &self.dismissals {
+            if dismissal.version != MESSAGE_ID_VERSION {
+                return Err(AppError::invalid_state(format!(
+                    "dismissal has unsupported message-ID version {}",
+                    dismissal.version
+                )));
+            }
+
+            validate_digest(&dismissal.digest, "dismissal message ID")?;
+
+            if previous
+                .as_ref()
+                .is_some_and(|value| value >= &dismissal.digest)
+            {
+                return Err(AppError::invalid_state(
+                    "dismissal registry must be strictly sorted and contain no duplicates",
+                ));
+            }
+
+            previous = Some(dismissal.digest.clone());
+        }
+
         Ok(())
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct StateFile {
-    pub lifecore: LifeCoreList,
-    pub cli: CliState,
+impl Default for CliStateV1 {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl StateFile {
-    pub fn new() -> Self {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedState {
+    pub lifecore: LifeCoreList,
+    pub cli: CliStateV1,
+}
+
+impl PersistedState {
+    pub fn new(lifecore: LifeCoreList) -> Self {
         Self {
-            lifecore: LifeCoreList::default(),
-            cli: CliState::new(),
+            lifecore,
+            cli: CliStateV1::new(),
         }
     }
 
-    pub fn load(path: &Path) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("failed to open state file {}", path.display()))?;
-        let state: Self = serde_json::from_reader(BufReader::new(file)).with_context(|| {
-            format!(
-                "failed to deserialize version-1 state file {}; older CLI states are unsupported",
-                path.display()
-            )
+    pub fn validate(&self) -> Result<(), AppError> {
+        self.cli.validate()?;
+        self.lifecore.basic_validation().map_err(|error| {
+            AppError::invalid_state(format!("basic validation failed: {error:?}"))
         })?;
-        state.cli.validate()?;
-        if state.lifecore.is_mock() {
-            bail!("persisted graph contains a provisional Mock circumstance");
+
+        if self.lifecore.is_mock() {
+            return Err(AppError::invalid_state(
+                "persisted graph contains a Mock circumstance",
+            ));
         }
-        for (name, locator) in &state.cli.aliases {
-            crate::locator::validate_alias(name)?;
-            crate::locator::resolve_node(&state, locator, latest_view(&state.lifecore))
-                .with_context(|| format!("invalid durable alias {name:?}"))?;
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatePath(PathBuf);
+
+impl StatePath {
+    pub fn resolve(
+        environment_value: Option<OsString>,
+        current_directory: &Path,
+    ) -> Result<Self, AppError> {
+        let selected = environment_value
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_FILE_NAME));
+
+        if selected.as_os_str().is_empty() {
+            return Err(AppError::invalid_state_path(format!(
+                "{STATE_PATH_ENVIRONMENT} names an empty path"
+            )));
         }
+
+        let path = if selected.is_absolute() {
+            selected
+        } else {
+            current_directory.join(selected)
+        };
+
+        Ok(Self(path))
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StateStore {
+    path: StatePath,
+}
+
+impl StateStore {
+    pub fn new(path: StatePath) -> Self {
+        Self { path }
+    }
+
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    pub fn load(&self) -> Result<PersistedState, AppError> {
+        log::trace!("loading canonical state from {}", self.path().display());
+
+        let file =
+            File::open(self.path()).map_err(|error| AppError::state_io(self.path(), error))?;
+        let state: PersistedState = serde_json::from_reader(BufReader::new(file))
+            .map_err(|error| AppError::state_decode(self.path(), error))?;
+
+        state.validate()?;
+
         Ok(state)
     }
 
-    pub fn create(&self, path: &Path) -> Result<()> {
-        self.write(path, true)
-    }
+    pub fn initialize(&self, state: &PersistedState) -> Result<(), AppError> {
+        state.validate()?;
 
-    pub fn save(&self, path: &Path) -> Result<()> {
-        self.write(path, false)
-    }
-
-    fn write(&self, path: &Path, create_only: bool) -> Result<()> {
-        self.cli.validate()?;
-        if self.lifecore.is_mock() {
-            bail!("refusing to persist a graph containing Mock");
-        }
-        if create_only && path.exists() {
-            bail!("state file {} already exists", path.display());
-        }
-        let parent = path
+        let parent = self
+            .path()
             .parent()
-            .filter(|value| !value.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let name = path
-            .file_name()
-            .context("state file path has no file name")?
-            .to_string_lossy();
-        let temporary = parent.join(format!(
-            ".{name}.{}.{}.tmp",
-            process::id(),
-            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
 
-        let result = (|| -> Result<()> {
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)?;
-            let mut writer = BufWriter::new(file);
-            serde_json::to_writer_pretty(&mut writer, self)?;
-            writer.write_all(b"\n")?;
-            writer.flush()?;
-            writer.get_ref().sync_all()?;
-            if create_only {
-                fs::hard_link(&temporary, path)
-                    .with_context(|| format!("state file {} already exists", path.display()))?;
-                fs::remove_file(&temporary)?;
-            } else {
-                fs::rename(&temporary, path)?;
-            }
-            if let Ok(directory) = File::open(parent) {
-                drop(directory.sync_all());
-            }
-            Ok(())
-        })();
-        if result.is_err() {
-            drop(fs::remove_file(&temporary));
+        log::trace!(
+            "preparing no-clobber state initialization at {}",
+            self.path().display()
+        );
+
+        let mut temporary =
+            NamedTempFile::new_in(parent).map_err(|error| AppError::state_io(parent, error))?;
+
+        {
+            let mut writer = BufWriter::new(temporary.as_file_mut());
+            serde_json::to_writer_pretty(&mut writer, state)
+                .map_err(|error| AppError::state_encode(self.path(), error))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|error| AppError::state_io(self.path(), error))?;
+            writer
+                .flush()
+                .map_err(|error| AppError::state_io(self.path(), error))?;
         }
-        result
+
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| AppError::state_io(self.path(), error))?;
+
+        temporary
+            .persist_noclobber(self.path())
+            .map_err(|error| AppError::state_io(self.path(), error.error))?;
+
+        Ok(())
     }
 }
 
-pub fn state_path() -> Result<PathBuf> {
-    match env::var_os(STATE_FILE_ENV) {
-    Some(value) if value.is_empty() => bail!("{STATE_FILE_ENV} is defined but empty"),
-    Some(value) => Ok(PathBuf::from(value)),
-    None => Ok(env::current_dir()?.join(DEFAULT_STATE_FILE)),
+fn validate_digest(digest: &str, field: &str) -> Result<(), AppError> {
+    if digest.len() != 128
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(AppError::invalid_state(format!(
+            "{field} must contain exactly 128 lowercase hexadecimal digits"
+        )));
     }
-}
 
-pub fn absolute_existing_path(path: &Path) -> Result<PathBuf> {
-    if !path.exists() {
-        bail!("sidecar file {} does not exist", path.display());
-    }
-    Ok(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        env::current_dir()?.join(path)
-    })
-}
-
-pub fn latest_view(lifecore: &LifeCoreList) -> lifecore::Context {
-    lifecore
-        .last()
-        .map_or_else(|| lifecore::EntryIndex(0).before(), |last| last.window())
+    Ok(())
 }

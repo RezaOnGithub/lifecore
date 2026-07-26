@@ -49,9 +49,9 @@ binary. This workspace continues to publish the interface through the
   presentation only; message-ID prefixes are resolved before those filters.
 - Committing graph mutations may use the optional `--expect-head` guard. Help
   encourages scripts to supply it, but it is never mandatory.
-- `-i` starts a small interactive mode for browsing, selection, type editing,
-  suggestion application, and message dismissal. It is not a second command
-  language or an interactive version of every batch feature.
+- `interactive` starts a small interactive mode for browsing, selection, type
+  editing, suggestion application, and message dismissal. It is not a second
+  command language or an interactive version of every batch feature.
 
 ## Vocabulary
 
@@ -918,13 +918,18 @@ endpoint is stale or when a fresh successor already has the equivalent
 connection. These are ordinary Suggestions: they are visible through `check` and
 are applied only through `message apply`.
 
-## Interactive mode (`-i`)
+## Interactive mode (`interactive`)
 
-`lifecore -i` starts a TTY-only session. It loads and analyzes the same
-effective graph as ordinary commands, holds no lock, and persists no hidden
-session. JSON output and `-i` are mutually exclusive. Non-interactive commands
-remain complete for automation; `-i` replaces repeated copying of locators and
-message handles while a human explores one state.
+`lifecore interactive` starts a TTY-only session. It loads and analyzes the
+same effective graph as ordinary commands, holds no lock, and persists no
+hidden session. The `interactive` subcommand rejects JSON output.
+Non-interactive commands remain complete for automation; `interactive` replaces
+repeated copying of locators and message handles while a human explores one
+state.
+
+```text
+lifecore interactive [--format auto|table|lines]
+```
 
 The session is a numbered, menu-driven interface, not another textual command
 language, and requires interactive standard input and output. An unavailable or
@@ -934,7 +939,7 @@ read-only browsing and hides mutation choices.
 
 The first interactive subset is deliberately bounded:
 
-| Available in `-i`                            | Deliberately not available in `-i`   |
+| Available in `interactive`                   | Deliberately not available there     |
 | -------------------------------------------- | ------------------------------------ |
 | query and entry inspection                   | sidecar attach, detach, or commit    |
 | select a query result                        | analyzer configuration changes       |
@@ -1096,7 +1101,8 @@ A practical module split is:
 - `analyzer_command`: configured-suite listing and cloned-suite staging;
 - `messages`: canonical IDs, emission universe, dismissal registry, visibility,
   `check`, and suggestion apply;
-- `interactive`: the `-i` state machine over the same command services; and
+- `interactive`: the `interactive` subcommand's state machine over the same
+  command services; and
 - existing `sidecar` and `graphviz` modules adapted to locators and views.
 
 The proposal is ready to claim implementation only when tests cover: dry-run
