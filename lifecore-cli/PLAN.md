@@ -334,8 +334,8 @@ business logic back into `main.rs` or clap types.
 ## Stage 2 — Canonical state, initialization, and diagnostic inspection
 
 - [x] **Stage implementation complete (implementor only)**
-- [ ] **Human review accepted (reviewer only)**
-- [ ] **Exit gate (implementor only): Stage 3 may begin**
+- [X] **Human review accepted (reviewer only)**
+- [x] **Exit gate (implementor only): Stage 3 may begin**
 
 ### Description
 
@@ -513,15 +513,15 @@ runner.
 
 - [x] **Implementation gate (implementor only):** canonical state, analysis, message inspection,
       tests, checks, and walkthrough are complete.
-- [ ] **Review gate (reviewer only):** initialization and diagnostic feedback is incorporated or
+- [X] **Review gate (reviewer only):** initialization and diagnostic feedback is incorporated or
       explicitly deferred by agreement.
-- [ ] **Progression gate (implementor only):** both reviewer-owned boxes are
+- [x] **Progression gate (implementor only):** both reviewer-owned boxes are
       checked in this file, and no unchecked Stage 2 item blocks identity and view
       work.
 
 ## Stage 3 — Entry identity, bounded views, inspection, and query
 
-- [ ] **Stage implementation complete (implementor only)**
+- [x] **Stage implementation complete (implementor only)**
 - [ ] **Human review accepted (reviewer only)**
 - [ ] **Exit gate (implementor only): Stage 4 may begin**
 
@@ -630,50 +630,50 @@ Later commands must consume `GraphView`, `EntryLocator`, or resolved
 
 ### Implementation checklist
 
-- [ ] Implement fingerprint encoding, display prefixes, and locator parsing.
-- [ ] Implement verified entry/node resolution and view construction.
-- [ ] Implement node-reference grammar and `HEAD` resolution.
-- [ ] Implement detailed entry inspection.
-- [ ] Implement the complete specified node-query predicate grammar.
-- [ ] Implement list, select/inspect, and explanation paths.
-- [ ] Extend shared output DTOs and renderers for entries, views, and queries.
-- [ ] Implement the self-contained Stage 3 fixture scenario without using
+- [x] Implement fingerprint encoding, display prefixes, and locator parsing.
+- [x] Implement verified entry/node resolution and view construction.
+- [x] Implement node-reference grammar and `HEAD` resolution.
+- [x] Implement detailed entry inspection.
+- [x] Implement the complete specified node-query predicate grammar.
+- [x] Implement list, select/inspect, and explanation paths.
+- [x] Extend shared output DTOs and renderers for entries, views, and queries.
+- [x] Implement the self-contained Stage 3 fixture scenario without using
       later-stage services or a state template.
-- [ ] Have the fixture report enough generated state and locator information for
+- [x] Have the fixture report enough generated state and locator information for
       the manual walkthrough.
-- [ ] Add focused tests for locator check order, lexical disjointness,
+- [x] Add focused tests for locator check order, lexical disjointness,
       historical freshness, empty combinators, predicate parsing, panic-free
       paths, deterministic ordering, selection rejection, and non-member
       explanation.
 
 ### Review fixture
 
-- [ ] Run `lifecore-cli-fixture stage3` and inspect both its construction recipe
+- [x] Run `lifecore-cli-fixture stage3` and inspect both its construction recipe
       and its reported state/locators.
-- [ ] Use the generated state for the Stage 3 manual walkthrough.
-- [ ] Confirm the recipe uses only base, Stage 2, and Stage 3 functionality.
+- [x] Use the generated state for the Stage 3 manual walkthrough.
+- [x] Confirm the recipe uses only base, Stage 2, and Stage 3 functionality.
 
 ### Verification
 
 #### Automated checks
 
-- [ ] Run `cargo test -p lifecore-cli`.
-- [ ] Run focused core query tests when CLI work exposes a core prerequisite.
-- [ ] Run `cargo +nightly fmt --check -p lifecore-cli`.
-- [ ] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
-- [ ] Run `cargo test --workspace` if any core query/context API changes.
+- [x] Run `cargo test -p lifecore-cli`.
+- [x] Run focused core query tests when CLI work exposes a core prerequisite.
+- [x] Run `cargo +nightly fmt --check -p lifecore-cli`.
+- [x] Run `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`.
+- [x] Run `cargo test --workspace` if any core query/context API changes.
 
 #### Manual walkthrough
 
-- [ ] Generate a fresh review state with `lifecore-cli-fixture stage3`.
-- [ ] Inspect the reported node and edge locators through the ordinary CLI.
-- [ ] Show the same entry in latest and historical views.
-- [ ] Exercise all/any/none queries, including an empty predicate list.
-- [ ] Select a member, reject a non-member, and explain a non-member.
-- [ ] Confirm `HEAD` identifies the latest visible node even when the latest
+- [x] Generate a fresh review state with `lifecore-cli-fixture stage3`.
+- [x] Inspect the reported node and edge locators through the ordinary CLI.
+- [x] Show the same entry in latest and historical views.
+- [x] Exercise all/any/none queries, including an empty predicate list.
+- [x] Select a member, reject a non-member, and explain a non-member.
+- [x] Confirm `HEAD` identifies the latest visible node even when the latest
       fixture entry is an edge.
-- [ ] Try a correct index with a wrong digest and confirm no alias fallback.
-- [ ] Compare state bytes before and after all operations.
+- [x] Try a correct index with a wrong digest and confirm no alias fallback.
+- [x] Compare state bytes before and after all operations.
 
 ### Review questions
 
@@ -684,7 +684,7 @@ Later commands must consume `GraphView`, `EntryLocator`, or resolved
 
 ### Stage gates
 
-- [ ] **Implementation gate (implementor only):** identity, view, inspection, query, Stage 3
+- [x] **Implementation gate (implementor only):** identity, view, inspection, query, Stage 3
       fixture, tests, checks, and walkthrough are complete.
 - [ ] **Review gate (reviewer only):** locator/query feedback is incorporated or explicitly
       deferred by agreement.

@@ -378,6 +378,23 @@ impl QueryNodesArgs {
 
         SelectionCli::try_parse_from(args).map(|cli| Some(cli.action))
     }
+
+    pub(crate) fn selection_action_kind(&self) -> Result<Option<SelectionActionKind>, clap::Error> {
+        self.selection_action().map(|action| {
+            action.map(|action| match action {
+            SelectionAction::Entry { .. } => SelectionActionKind::EntryInspect,
+            SelectionAction::Alias { .. }
+            | SelectionAction::Type { .. }
+            | SelectionAction::AddChild(_) => SelectionActionKind::Mutation,
+            })
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelectionActionKind {
+    EntryInspect,
+    Mutation,
 }
 
 #[derive(Parser, Debug)]

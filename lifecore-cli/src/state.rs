@@ -89,11 +89,9 @@ impl CliStateV1 {
         }
 
         for (name, locator) in &self.aliases {
-            if name == "HEAD" {
-                return Err(AppError::invalid_state(
-                    "version-1 alias registry contains reserved name HEAD",
-                ));
-            }
+            crate::reference::validate_alias(name).map_err(|error| {
+                AppError::invalid_state(format!("invalid alias {name:?}: {error}"))
+            })?;
 
             if locator.version != ENTRY_FINGERPRINT_VERSION {
                 return Err(AppError::invalid_state(format!(

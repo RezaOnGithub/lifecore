@@ -3,11 +3,15 @@ use lifecore::{LifeCore, LifeCoreList};
 use crate::{
     InvocationContext,
     analysis::{AnalyzerRegistry, initial_graph, run_analysis},
-    app::{CommandOutcome, ViewSummary},
-    cli::{Command, MessageCommand},
+    app::{CommandOutcome, PredicateResult, QueryExplanationRecord, ViewSummary},
+    cli::{Command, EntryCommand, MessageCommand, QueryCommand, SelectionActionKind},
+    entry::entry_record,
     error::AppError,
+    locator::{EntryExpectation, EntryLocator, resolve_entry, resolve_index},
     messages::{MessageUniverse, Severity},
+    query::{execute_query, explain_query, parse_query},
     state::{PersistedState, StatePath, StateStore},
+    view::{GraphView, ViewSpec},
 };
 
 pub fn dispatch(
@@ -44,7 +48,11 @@ pub fn dispatch(
             format,
             path: store.path().to_path_buf(),
             uuid,
-            view: ViewSummary { end: view_end },
+            view: ViewSummary {
+                end: view_end,
+                through: None,
+                display_through: None,
+            },
             messages: universe.visible(),
         })
     }
@@ -66,6 +74,8 @@ pub fn dispatch(
             format,
             view: ViewSummary {
                 end: view_end(&state.lifecore),
+                through: None,
+                display_through: None,
             },
             items: universe.visible(),
             detail: false,
@@ -87,16 +97,153 @@ pub fn dispatch(
             format,
             view: ViewSummary {
                 end: view_end(&state.lifecore),
+                through: None,
+                display_through: None,
             },
             items: vec![message],
             detail: true,
         })
     }
+    Command::Entry {
+        command: EntryCommand::Show(args),
+    } => {
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "entry show")?;
+        let view = GraphView::latest(&state.lifecore, &state.cli)?;
+        let locator = EntryLocator::parse(&args.locator)?;
+        let resolved = resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &locator,
+            EntryExpectation::Any,
+            Some(view.end_exclusive()),
+        )?;
+        let item = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+
+        Ok(CommandOutcome::Entries {
+            format,
+            view: view.summary(),
+            items: vec![item],
+            detail: true,
+        })
+    }
+    Command::Query {
+        command: QueryCommand::Nodes(args),
+    } => {
+        if args.selection_action_kind().map_err(AppError::usage)?
+            == Some(SelectionActionKind::Mutation)
+        {
+            return Err(AppError::unavailable(operation, format));
+        }
+
+        let store = state_store(invocation)?;
+        let state = store.load()?;
+        reject_attached_sidecar(&state, "query nodes")?;
+        let view_spec = args
+            .at
+            .as_deref()
+            .map(EntryLocator::parse)
+            .transpose()?
+            .map_or(ViewSpec::Latest, ViewSpec::Through);
+        let view = GraphView::construct(&state.lifecore, &state.cli, view_spec)?;
+        let query = parse_query(&view, args.combinator, &args.predicates)?;
+
+        if let Some(locator_text) = args.explain.as_deref() {
+            let locator = EntryLocator::parse(locator_text)?;
+            let resolved = resolve_entry(
+                &state.lifecore,
+                &state.cli,
+                &locator,
+                EntryExpectation::Node,
+                Some(view.end_exclusive()),
+            )?;
+            let candidate = view
+                .context()
+                .look_at(resolved.entry.entry_context().absolute());
+            let explanation = explain_query(&state.lifecore, &query, candidate)?;
+            let candidate = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+            let predicates = query
+                .predicates
+                .iter()
+                .cloned()
+                .zip(explanation.predicate_matches)
+                .map(|(predicate, matches)| PredicateResult { predicate, matches })
+                .collect();
+
+            return Ok(CommandOutcome::QueryExplanation {
+                format,
+                view: view.summary(),
+                explanation: Box::new(QueryExplanationRecord {
+                    candidate,
+                    combinator: combinator_name(query.combinator).to_string(),
+                    predicates,
+                    matches: explanation.matches,
+                }),
+            });
+        }
+
+        let results = execute_query(&state.lifecore, &query);
+        if let Some(locator_text) = args.select.as_deref() {
+            let locator = EntryLocator::parse(locator_text)?;
+            let resolved = resolve_entry(
+                &state.lifecore,
+                &state.cli,
+                &locator,
+                EntryExpectation::Node,
+                Some(view.end_exclusive()),
+            )?;
+            if !results
+                .iter()
+                .any(|node| node.e.entry().0 == resolved.index())
+            {
+                return Err(AppError::query_selection(locator_text));
+            }
+
+            let item = entry_record(&state.lifecore, &state.cli, &view, &resolved)?;
+
+            return Ok(CommandOutcome::Entries {
+                format,
+                view: view.summary(),
+                items: vec![item],
+                detail: true,
+            });
+        }
+
+        let items = results
+            .into_iter()
+            .map(|node| {
+                resolve_index(
+                    &state.lifecore,
+                    &state.cli,
+                    node.e.entry().0,
+                    EntryExpectation::Node,
+                    Some(view.end_exclusive()),
+                )
+                .and_then(|resolved| entry_record(&state.lifecore, &state.cli, &view, &resolved))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(CommandOutcome::Entries {
+            format,
+            view: view.summary(),
+            items,
+            detail: false,
+        })
+    }
     _ => {
-        log::trace!("operation '{operation}' is unavailable in stage 2");
+        log::trace!("operation '{operation}' is unavailable in stage 3");
 
         Err(AppError::unavailable(operation, format))
     }
+    }
+}
+
+fn combinator_name(combinator: crate::cli::QueryCombinator) -> &'static str {
+    match combinator {
+    crate::cli::QueryCombinator::All => "all",
+    crate::cli::QueryCombinator::Any => "any",
+    crate::cli::QueryCombinator::None => "none",
     }
 }
 

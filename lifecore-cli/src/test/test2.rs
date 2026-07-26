@@ -6,11 +6,11 @@ use std::{
 };
 
 use lifecore::{
-    Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList,
+    Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList, OrderedSet, Payload,
     analysis::{AnalyzerFactory, Inconsistency, Message, SuggestedAction, Suggestion, Warning},
 };
 use lifecore_typecheck::TypeCheckFactory;
-use uuid::Version;
+use uuid::{Uuid, Version};
 
 use crate::{
     InvocationContext, Io,
@@ -18,12 +18,20 @@ use crate::{
         AnalysisReport, AnalyzerRegistry, configured_analyzers, initial_graph, run_analysis,
     },
     app::CommandOutcome,
+    entry::entry_record,
     error::AppError,
     interactive_analyzer::InteractiveFactory,
+    locator::{
+        EntryExpectation, EntryFingerprint, EntryLocator, entry_fingerprint_identity_bytes,
+        resolve_entry, resolve_index,
+    },
     messages::{MessageUniverse, Severity, encode_lower_hex, message_identity_bytes},
     output::render_outcome,
+    query::{execute_query, parse_predicate, parse_query},
+    reference::{NodeReference, resolve_node_reference},
     run_cli, run_from_in,
-    state::{PersistedState, StatePath, StateStore},
+    state::{PersistedState, StatePath, StateStore, StoredEntryLocatorV1},
+    view::{GraphView, ViewSpec},
 };
 
 fn test_io<'a>(stdout: &'a mut Vec<u8>, stderr: &'a mut Vec<u8>) -> Io<'a> {
@@ -135,7 +143,6 @@ fn help_and_version_are_successful_at_every_command_level() {
 fn complete_command_tree_dispatches_to_named_unavailable_operations() {
     let cases: &[(&[&str], &str)] = &[
         (&["lifecore", "interactive"], "interactive"),
-        (&["lifecore", "entry", "show", "4:abcde"], "entry show"),
         (
             &[
                 "lifecore",
@@ -164,16 +171,6 @@ fn complete_command_tree_dispatches_to_named_unavailable_operations() {
                 "--commit",
             ],
             "connect",
-        ),
-        (
-            &[
-                "lifecore", "query", "nodes", "all", "--at", "4:abcde", "--where", "fresh",
-            ],
-            "query nodes",
-        ),
-        (
-            &["lifecore", "query", "nodes", "any", "--explain", "4:abcde"],
-            "query nodes",
         ),
         (
             &["lifecore", "alias", "list", "--at", "4:abcde"],
@@ -312,13 +309,6 @@ fn query_selection_actions_have_typed_nested_grammar() {
     let cases: &[(&[&str], &str)] = &[
         (
             &[
-                "lifecore", "query", "nodes", "all", "--select", "4:abcde", "--", "entry",
-                "inspect",
-            ],
-            "query nodes --select -- entry inspect",
-        ),
-        (
-            &[
                 "lifecore", "query", "nodes", "all", "--select", "4:abcde", "--", "alias", "set",
                 "chosen",
             ],
@@ -432,13 +422,6 @@ fn structural_conflicts_fail_before_dispatch() {
 
 #[test]
 fn format_is_available_only_on_output_commands() {
-    match run(&["lifecore", "query", "nodes", "all", "--format", "json"]) {
-    Err(AppError::Unavailable { format, .. }) => {
-        assert_eq!(format, crate::cli::OutputFormat::Json);
-    }
-    result => panic!("expected JSON unavailable error, got {result:?}"),
-    }
-
     match run(&["lifecore", "interactive", "--format", "table"]) {
     Err(AppError::Unavailable { format, .. }) => {
         assert_eq!(format, crate::cli::OutputFormat::Table);
@@ -472,22 +455,19 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(["lifecore", "entry", "show", "4:abcde"], &mut io);
+    let exit = run_cli(["lifecore", "add", "Note"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
     assert_eq!(
         String::from_utf8(stderr).expect("stderr is UTF-8"),
-        "error: operation 'entry show' is unavailable in implementation stage 2\n"
+        "error: operation 'add' is unavailable in implementation stage 3\n"
     );
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = test_io(&mut stdout, &mut stderr);
-    let exit = run_cli(
-        ["lifecore", "entry", "show", "4:abcde", "--format", "json"],
-        &mut io,
-    );
+    let exit = run_cli(["lifecore", "add", "Note", "--format", "json"], &mut io);
 
     assert_eq!(exit, std::process::ExitCode::FAILURE);
     assert!(stdout.is_empty());
@@ -495,7 +475,7 @@ fn unavailable_errors_render_to_stderr_in_human_and_json_modes() {
     let value: serde_json::Value =
         serde_json::from_slice(&stderr).expect("stderr contains one JSON value");
     assert_eq!(value["error"]["kind"], "unavailable");
-    assert_eq!(value["error"]["operation"], "entry show");
+    assert_eq!(value["error"]["operation"], "add");
 }
 
 #[test]
@@ -1020,6 +1000,500 @@ fn inconsistencies_remain_visible_even_when_their_id_is_dismissed() {
 
     assert_eq!(dismissed.visible().len(), 1);
     assert!(!dismissed.records()[0].dismissed);
+}
+
+fn stage3_state() -> PersistedState {
+    let mut graph = initial_graph();
+    let original = graph
+        .add_mock(
+            "Note",
+            Body::from([
+                ("title", Payload::Text("Draft note".to_string())),
+                ("score", Payload::Number(1)),
+                (
+                    "history",
+                    Payload::Sequence(vec![Payload::Text("draft".to_string()), Payload::Number(1)]),
+                ),
+                (
+                    "tags",
+                    Payload::OrderedSet(OrderedSet::from([
+                        Payload::Text("archived".to_string()),
+                        Payload::Text("review".to_string()),
+                    ])),
+                ),
+            ]),
+            None,
+        )
+        .expect("original node is valid");
+    let task = graph
+        .add_mock(
+            "Task",
+            Body::from([
+                ("title", Payload::Text("Pay invoice".to_string())),
+                ("score", Payload::Number(2)),
+                (
+                    "history",
+                    Payload::Sequence(vec![Payload::Text("open".to_string())]),
+                ),
+                (
+                    "tags",
+                    Payload::OrderedSet(OrderedSet::from([Payload::Text("urgent".to_string())])),
+                ),
+            ]),
+            None,
+        )
+        .expect("task node is valid");
+    let revised = graph
+        .add_mock(
+            "Note",
+            Body::from([
+                ("title", Payload::Text("Published note".to_string())),
+                ("score", Payload::Number(3)),
+                (
+                    "history",
+                    Payload::Sequence(vec![
+                        Payload::Text("draft".to_string()),
+                        Payload::Text("published".to_string()),
+                    ]),
+                ),
+                (
+                    "tags",
+                    Payload::OrderedSet(OrderedSet::from([Payload::Text("review".to_string())])),
+                ),
+            ]),
+            Some(original.e),
+        )
+        .expect("successor node is valid");
+    graph
+        .connect_mock(revised.e, "Relates_To", task.e)
+        .expect("final edge is valid");
+    graph.apply().expect("fixture suffix applies");
+
+    let mut state = PersistedState::new(graph);
+    state.cli.uuid =
+        Uuid::parse_str("019f9b41-fa40-7f43-8f99-c5a480f9027c").expect("fixed UUID is valid");
+    state
+}
+
+fn initialize_stage3_state(directory: &std::path::Path) -> PersistedState {
+    let state = stage3_state();
+    let store = StateStore::new(
+        StatePath::resolve(None, directory).expect("default Stage 3 state path resolves"),
+    );
+    store.initialize(&state).expect("Stage 3 state initializes");
+    state
+}
+
+#[test]
+fn entry_fingerprint_wire_and_digest_are_stable() {
+    let state = stage3_state();
+    let entry = state
+        .lifecore
+        .get(EntryIndex(0).before_and_including())
+        .expect("first fixture entry exists");
+    let bytes = entry_fingerprint_identity_bytes(&state.cli, EntryIndex(0), &entry)
+        .expect("fingerprint input encodes");
+    let fingerprint =
+        EntryFingerprint::for_entry(&state.cli, EntryIndex(0), &entry).expect("fingerprint hashes");
+
+    let wire_hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        wire_hex,
+        "1e6c696665636f72652d636c692d656e7472792d66696e6765727072696e7401019f9b41fa407f438f99c5a480f9027c0000044e6f746504"
+    );
+    assert_eq!(
+        fingerprint.as_str(),
+        "e0f12e6ec9c62fa65e6bc99566ee2cea4a6599a05b2211bb5a4ee30dae1977438cabbf95796ed6e5de086e0113a483e81640ffe5ed8ec0f8e796954427cdbb9c"
+    );
+}
+
+#[test]
+fn locator_resolution_is_strict_and_checks_in_the_required_order() {
+    let state = stage3_state();
+    let view = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let node = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        2,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )
+    .expect("node resolves");
+    let edge = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        3,
+        EntryExpectation::Any,
+        Some(view.end_exclusive()),
+    )
+    .expect("edge resolves");
+
+    for invalid in [
+        "",
+        "2",
+        " 2:abcde",
+        "+2:abcde",
+        "2:abcd",
+        "2:ABCDE",
+        "2:abcde:",
+        "184467440737095516161:abcde",
+    ] {
+        assert!(
+            matches!(
+                EntryLocator::parse(invalid),
+                Err(AppError::InvalidEntryLocator { .. })
+            ),
+            "{invalid:?}"
+        );
+    }
+
+    let unknown = EntryLocator::parse("99:abcde").expect("locator grammar is valid");
+    assert!(matches!(
+        resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &unknown,
+            EntryExpectation::Node,
+            Some(0)
+        ),
+        Err(AppError::UnknownEntryIndex { .. })
+    ));
+    let wrong_digest =
+        EntryLocator::parse(&format!("3:{}", "0".repeat(16))).expect("locator grammar is valid");
+    assert!(matches!(
+        resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &wrong_digest,
+            EntryExpectation::Node,
+            Some(3)
+        ),
+        Err(AppError::EntryFingerprintMismatch { .. })
+    ));
+    assert!(matches!(
+        resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &EntryLocator::parse(&edge.display_locator()).expect("edge locator parses"),
+            EntryExpectation::Node,
+            Some(view.end_exclusive())
+        ),
+        Err(AppError::EntryNotNode { .. })
+    ));
+    assert!(matches!(
+        resolve_entry(
+            &state.lifecore,
+            &state.cli,
+            &EntryLocator::parse(&node.display_locator()).expect("node locator parses"),
+            EntryExpectation::Node,
+            Some(2)
+        ),
+        Err(AppError::EntryOutsideView { .. })
+    ));
+}
+
+#[test]
+fn node_references_are_lexically_disjoint_and_head_skips_the_latest_edge() {
+    let mut state = stage3_state();
+    let view = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let expected = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        2,
+        EntryExpectation::Node,
+        Some(view.end_exclusive()),
+    )
+    .expect("latest node resolves");
+    state.cli.aliases.insert(
+        "chosen".to_string(),
+        StoredEntryLocatorV1 {
+            version: 1,
+            index: 2,
+            digest: expected.fingerprint.as_str().to_string(),
+        },
+    );
+
+    let head = resolve_node_reference(&state.lifecore, &state.cli, &NodeReference::Head, &view)
+        .expect("HEAD resolves");
+    let alias = resolve_node_reference(
+        &state.lifecore,
+        &state.cli,
+        &NodeReference::parse("chosen").expect("alias parses"),
+        &view,
+    )
+    .expect("alias resolves");
+    assert_eq!(head.index(), 2);
+    assert_eq!(alias.index(), 2);
+    assert!(matches!(
+        NodeReference::parse("foo:bar"),
+        Err(AppError::InvalidEntryLocator { .. })
+    ));
+    assert!(matches!(
+        NodeReference::parse("42"),
+        Err(AppError::InvalidAlias { .. })
+    ));
+    assert_eq!(
+        NodeReference::parse("head").expect("lowercase head is an alias"),
+        NodeReference::Alias("head".to_string())
+    );
+
+    let durable = state.cli.aliases["chosen"].clone();
+    state.cli.aliases.insert("bad-name".to_string(), durable);
+    assert!(matches!(
+        state.validate(),
+        Err(AppError::InvalidState { .. })
+    ));
+}
+
+#[test]
+fn bounded_views_change_freshness_without_changing_entry_identity() {
+    let state = stage3_state();
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let boundary = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        1,
+        EntryExpectation::Any,
+        Some(latest.end_exclusive()),
+    )
+    .expect("historical boundary resolves");
+    let historical = GraphView::construct(
+        &state.lifecore,
+        &state.cli,
+        ViewSpec::Through(
+            EntryLocator::parse(&boundary.display_locator()).expect("boundary locator parses"),
+        ),
+    )
+    .expect("historical view constructs");
+    let original = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("original node resolves");
+    let historical_record = entry_record(&state.lifecore, &state.cli, &historical, &original)
+        .expect("historical record renders");
+    let latest_record = entry_record(&state.lifecore, &state.cli, &latest, &original)
+        .expect("latest record renders");
+
+    assert!(historical_record.fresh);
+    assert!(!latest_record.fresh);
+    assert_eq!(historical_record.locator, latest_record.locator);
+}
+
+#[test]
+fn complete_predicate_grammar_adapts_to_core_queries() {
+    for predicate in [
+        "fresh",
+        "type Note",
+        "field title exists",
+        "field title kind text",
+        "field title equals-text Draft note",
+        "field score equals-number -1",
+        "field title matches (?i)note",
+        "field history sequence-contains-text draft",
+        "field history sequence-contains-number 1",
+        "field history sequence-count 2",
+        "field tags set-contains-text review",
+        "field tags set-contains-number 1",
+        "field tags set-count 2",
+        "field tags[*] count 2",
+        "outgoing Relates_To",
+        "incoming Relates_To",
+        "fresh-outgoing Relates_To",
+        "fresh-incoming Relates_To",
+        "not (field tags[*] equals-text archived)",
+    ] {
+        parse_predicate(predicate).unwrap_or_else(|error| panic!("{predicate:?}: {error}"));
+    }
+    for invalid in [
+        "field Title exists",
+        "field title equals-number nope",
+        "field title sequence-count -1",
+        "field title matches (",
+        "not fresh",
+    ] {
+        assert!(matches!(
+            parse_predicate(invalid),
+            Err(AppError::InvalidQueryPredicate { .. })
+        ));
+    }
+
+    let state = stage3_state();
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let query = parse_query(
+        &latest,
+        crate::cli::QueryCombinator::All,
+        &[
+            "fresh".to_string(),
+            "type Note".to_string(),
+            "field tags set-contains-text review".to_string(),
+            "incoming Relates_To".to_string(),
+        ],
+    )
+    .expect("combined query parses");
+    let results = execute_query(&state.lifecore, &query);
+
+    assert!(results.is_empty());
+    assert_eq!(
+        execute_query(
+            &state.lifecore,
+            &parse_query(&latest, crate::cli::QueryCombinator::All, &[])
+                .expect("empty all query parses")
+        )
+        .len(),
+        3
+    );
+    assert!(
+        execute_query(
+            &state.lifecore,
+            &parse_query(&latest, crate::cli::QueryCombinator::Any, &[])
+                .expect("empty any query parses")
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        execute_query(
+            &state.lifecore,
+            &parse_query(&latest, crate::cli::QueryCombinator::None, &[])
+                .expect("empty none query parses")
+        )
+        .len(),
+        3
+    );
+}
+
+#[test]
+fn stage3_cli_lists_selects_inspects_and_explains_without_writing_state() {
+    let directory = tempfile::tempdir().expect("temporary Stage 3 directory");
+    let state = initialize_stage3_state(directory.path());
+    let path = directory.path().join("LifeCoreState.json");
+    let before = fs::read(&path).expect("state bytes are readable");
+    let latest = GraphView::latest(&state.lifecore, &state.cli).expect("latest view constructs");
+    let original = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        0,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("original node resolves");
+    let revised = resolve_index(
+        &state.lifecore,
+        &state.cli,
+        2,
+        EntryExpectation::Node,
+        Some(latest.end_exclusive()),
+    )
+    .expect("revised node resolves");
+
+    let shown = run_in(
+        &["lifecore", "entry", "show", &original.display_locator()],
+        directory.path(),
+        None,
+    )
+    .expect("entry show succeeds");
+    match shown {
+    CommandOutcome::Entries { items, detail, .. } => {
+        assert!(detail);
+        assert_eq!(items[0].index, 0);
+        assert!(!items[0].fresh);
+    }
+    outcome => panic!("expected entry detail, got {outcome:?}"),
+    }
+
+    let listed = run_in(
+        &[
+            "lifecore", "query", "nodes", "all", "--where", "fresh", "--format", "json",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("query listing succeeds");
+    let mut rendered = Vec::new();
+    render_outcome(&listed, &mut rendered, false).expect("query JSON renders");
+    let value: serde_json::Value = serde_json::from_slice(&rendered).expect("query output is JSON");
+    assert_eq!(
+        value["items"].as_array().expect("items is an array").len(),
+        2
+    );
+    assert_eq!(value["view"]["end"], 4);
+
+    let selected = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--select",
+            &revised.display_locator(),
+            "--",
+            "entry",
+            "inspect",
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("query member selection succeeds");
+    assert!(matches!(
+        selected,
+        CommandOutcome::Entries { detail: true, .. }
+    ));
+
+    assert!(matches!(
+        run_in(
+            &[
+                "lifecore",
+                "query",
+                "nodes",
+                "all",
+                "--where",
+                "fresh",
+                "--select",
+                &original.display_locator(),
+            ],
+            directory.path(),
+            None,
+        ),
+        Err(AppError::QuerySelection { .. })
+    ));
+
+    let explained = run_in(
+        &[
+            "lifecore",
+            "query",
+            "nodes",
+            "all",
+            "--where",
+            "fresh",
+            "--explain",
+            &original.display_locator(),
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("non-member explanation succeeds");
+    match explained {
+    CommandOutcome::QueryExplanation { explanation, .. } => {
+        assert_eq!(explanation.predicates.len(), 1);
+        assert!(!explanation.predicates[0].matches);
+        assert!(!explanation.matches);
+    }
+    outcome => panic!("expected query explanation, got {outcome:?}"),
+    }
+
+    assert_eq!(
+        fs::read(path).expect("state remains readable"),
+        before,
+        "Stage 3 read operations must preserve exact state bytes"
+    );
 }
 
 fn directory_snapshot(directory: &std::path::Path) -> io::Result<Vec<(PathBuf, Vec<u8>)>> {

@@ -2,11 +2,16 @@ pub mod analysis;
 pub mod app;
 pub mod cli;
 pub mod commands;
+pub mod entry;
 pub mod error;
 mod interactive_analyzer;
+pub mod locator;
 pub mod messages;
 pub mod output;
+pub mod query;
+pub mod reference;
 pub mod state;
+pub mod view;
 
 use std::{
     ffi::OsString,

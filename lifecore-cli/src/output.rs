@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use serde_json::json;
 
 use crate::{
-    app::{CommandOutcome, ViewSummary},
+    app::{CircumstanceRecord, CommandOutcome, EntryRecord, QueryExplanationRecord, ViewSummary},
     cli::OutputFormat,
     error::AppError,
     messages::MessageRecord,
@@ -64,6 +64,52 @@ pub fn render_outcome(
             render_message_detail(&items[0], view, writer)
         } else {
             render_human_messages(items, view, format, writer)
+        }
+    }
+    CommandOutcome::Entries {
+        format,
+        view,
+        items,
+        detail,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "items": items,
+                }),
+            )?;
+            writeln!(writer)
+        } else if *detail {
+            render_view(view, writer)?;
+            render_entry_detail(&items[0], writer)
+        } else {
+            render_view(view, writer)?;
+            render_entry_listing(items, format, writer)
+        }
+    }
+    CommandOutcome::QueryExplanation {
+        format,
+        view,
+        explanation,
+    } => {
+        let format = resolve_format(*format, stdout_is_terminal);
+
+        if format == OutputFormat::Json {
+            serde_json::to_writer(
+                &mut *writer,
+                &json!({
+                    "view": view,
+                    "explanation": explanation,
+                }),
+            )?;
+            writeln!(writer)
+        } else {
+            render_view(view, writer)?;
+            render_query_explanation(explanation, writer)
         }
     }
     }
@@ -173,4 +219,103 @@ fn render_message_detail(
     }
 
     Ok(())
+}
+
+fn render_view(view: &ViewSummary, writer: &mut dyn Write) -> io::Result<()> {
+    match &view.display_through {
+    Some(locator) => writeln!(writer, "View: through {locator} (0..{})", view.end),
+    None => writeln!(writer, "View: empty (0..0)"),
+    }
+}
+
+fn render_entry_listing(
+    entries: &[EntryRecord],
+    format: OutputFormat,
+    writer: &mut dyn Write,
+) -> io::Result<()> {
+    if entries.is_empty() {
+        return writeln!(writer, "No entries.");
+    }
+
+    if format == OutputFormat::Table {
+        writeln!(writer, "LOCATOR\tKIND\tTYPE\tFRESH\tALIASES")?;
+    }
+
+    for entry in entries {
+        let aliases = entry.aliases.join(",");
+        if format == OutputFormat::Table {
+            writeln!(
+                writer,
+                "{}\t{}\t{}\t{}\t{}",
+                entry.display_locator, entry.kind, entry.type_name, entry.fresh, aliases
+            )?;
+        } else {
+            write!(
+                writer,
+                "{}  {}  {}  fresh={}",
+                entry.display_locator, entry.kind, entry.type_name, entry.fresh
+            )?;
+            if !aliases.is_empty() {
+                write!(writer, "  aliases={aliases}")?;
+            }
+            writeln!(writer)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn render_entry_detail(entry: &EntryRecord, writer: &mut dyn Write) -> io::Result<()> {
+    writeln!(writer, "Locator: {}", entry.locator)?;
+    writeln!(writer, "Display locator: {}", entry.display_locator)?;
+    writeln!(writer, "Index: {}", entry.index)?;
+    writeln!(writer, "Kind: {}", entry.kind)?;
+    writeln!(writer, "Type: {}", entry.type_name)?;
+    writeln!(writer, "Fresh: {}", entry.fresh)?;
+    writeln!(writer, "Aliases: {}", entry.aliases.join(", "))?;
+
+    if let Some(parent) = &entry.parent {
+        writeln!(writer, "Parent: {parent}")?;
+    }
+    if let Some(fields) = &entry.fields {
+        writeln!(
+            writer,
+            "Fields: {}",
+            serde_json::to_string(fields).expect("serializable entry fields")
+        )?;
+    }
+    if let Some(from) = &entry.from {
+        writeln!(writer, "From: {from}")?;
+    }
+    if let Some(to) = &entry.to {
+        writeln!(writer, "To: {to}")?;
+    }
+
+    match &entry.circumstance {
+    CircumstanceRecord::Mock => writeln!(writer, "Circumstance: Mock"),
+    CircumstanceRecord::Session {
+        when_1h,
+        hostname,
+        username,
+    } => writeln!(
+        writer,
+        "Circumstance: Session {when_1h} {username}@{hostname}"
+    ),
+    }
+}
+
+fn render_query_explanation(
+    explanation: &QueryExplanationRecord,
+    writer: &mut dyn Write,
+) -> io::Result<()> {
+    writeln!(
+        writer,
+        "Candidate: {}",
+        explanation.candidate.display_locator
+    )?;
+    writeln!(writer, "Combinator: {}", explanation.combinator)?;
+    for predicate in &explanation.predicates {
+        writeln!(writer, "{}\t{}", predicate.matches, predicate.predicate)?;
+    }
+    writeln!(writer, "Matches: {}", explanation.matches)
 }

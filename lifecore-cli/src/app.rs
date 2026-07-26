@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use lifecore::Body;
 use serde::Serialize;
 
 use crate::{cli::OutputFormat, messages::MessageRecord};
@@ -7,6 +8,65 @@ use crate::{cli::OutputFormat, messages::MessageRecord};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ViewSummary {
     pub end: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_through: Option<String>,
+}
+
+impl ViewSummary {
+    pub fn empty() -> Self {
+        Self {
+            end: 0,
+            through: None,
+            display_through: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct EntryRecord {
+    pub index: usize,
+    pub locator: String,
+    pub display_locator: String,
+    pub kind: String,
+    pub type_name: String,
+    pub aliases: Vec<String>,
+    pub fresh: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Body>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    pub circumstance: CircumstanceRecord,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CircumstanceRecord {
+    Mock,
+    Session {
+        when_1h: String,
+        hostname: String,
+        username: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PredicateResult {
+    pub predicate: String,
+    pub matches: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct QueryExplanationRecord {
+    pub candidate: EntryRecord,
+    pub combinator: String,
+    pub predicates: Vec<PredicateResult>,
+    pub matches: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -25,6 +85,17 @@ pub enum CommandOutcome {
         items: Vec<MessageRecord>,
         detail: bool,
     },
+    Entries {
+        format: OutputFormat,
+        view: ViewSummary,
+        items: Vec<EntryRecord>,
+        detail: bool,
+    },
+    QueryExplanation {
+        format: OutputFormat,
+        view: ViewSummary,
+        explanation: Box<QueryExplanationRecord>,
+    },
 }
 
 impl CommandOutcome {
@@ -35,7 +106,10 @@ impl CommandOutcome {
     pub fn format(&self) -> OutputFormat {
         match self {
         Self::Text(_) => OutputFormat::Lines,
-        Self::Initialized { format, .. } | Self::Messages { format, .. } => *format,
+        Self::Initialized { format, .. }
+        | Self::Messages { format, .. }
+        | Self::Entries { format, .. }
+        | Self::QueryExplanation { format, .. } => *format,
         }
     }
 }

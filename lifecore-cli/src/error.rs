@@ -8,7 +8,7 @@ pub enum AppError {
     #[error("{message}")]
     Usage { message: String, exit_code: u8 },
 
-    #[error("operation '{operation}' is unavailable in implementation stage 2")]
+    #[error("operation '{operation}' is unavailable in implementation stage 3")]
     Unavailable {
         operation: String,
         format: OutputFormat,
@@ -71,6 +71,58 @@ pub enum AppError {
     #[error("message ID {prefix:?} is ambiguous")]
     AmbiguousMessageId {
         prefix: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid entry locator: {message}")]
+    InvalidEntryLocator {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("unknown entry index {index}")]
+    UnknownEntryIndex { index: usize, format: OutputFormat },
+
+    #[error("entry fingerprint mismatch at index {index}: supplied {supplied}, actual {actual}")]
+    EntryFingerprintMismatch {
+        index: usize,
+        supplied: String,
+        actual: String,
+        format: OutputFormat,
+    },
+
+    #[error("entry {index} is not a node")]
+    EntryNotNode { index: usize, format: OutputFormat },
+
+    #[error("entry {index} is outside the selected view ending at {view_end}")]
+    EntryOutsideView {
+        index: usize,
+        view_end: usize,
+        format: OutputFormat,
+    },
+
+    #[error("invalid node reference: {message}")]
+    InvalidNodeReference {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid alias: {message}")]
+    InvalidAlias {
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("invalid query predicate {predicate:?}: {message}")]
+    InvalidQueryPredicate {
+        predicate: String,
+        message: String,
+        format: OutputFormat,
+    },
+
+    #[error("selected entry was not returned by query: {locator}")]
+    QuerySelection {
+        locator: String,
         format: OutputFormat,
     },
 
@@ -168,6 +220,80 @@ impl AppError {
         }
     }
 
+    pub fn invalid_entry_locator(message: impl Into<String>) -> Self {
+        Self::InvalidEntryLocator {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn unknown_entry_index(index: usize) -> Self {
+        Self::UnknownEntryIndex {
+            index,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn entry_fingerprint_mismatch(
+        index: usize,
+        supplied: impl Into<String>,
+        actual: impl Into<String>,
+    ) -> Self {
+        Self::EntryFingerprintMismatch {
+            index,
+            supplied: supplied.into(),
+            actual: actual.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn entry_not_node(index: usize) -> Self {
+        Self::EntryNotNode {
+            index,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn entry_outside_view(index: usize, view_end: usize) -> Self {
+        Self::EntryOutsideView {
+            index,
+            view_end,
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_node_reference(message: impl Into<String>) -> Self {
+        Self::InvalidNodeReference {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_alias(message: impl Into<String>) -> Self {
+        Self::InvalidAlias {
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn invalid_query_predicate(
+        predicate: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::InvalidQueryPredicate {
+            predicate: predicate.into(),
+            message: message.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
+    pub fn query_selection(locator: impl Into<String>) -> Self {
+        Self::QuerySelection {
+            locator: locator.into(),
+            format: OutputFormat::Lines,
+        }
+    }
+
     pub fn with_format(mut self, selected: OutputFormat) -> Self {
         let format = match &mut self {
         Self::Usage { .. } | Self::Io(_) => return self,
@@ -180,7 +306,16 @@ impl AppError {
         | Self::Analysis { format, .. }
         | Self::InvalidMessageId { format, .. }
         | Self::UnknownMessageId { format, .. }
-        | Self::AmbiguousMessageId { format, .. } => format,
+        | Self::AmbiguousMessageId { format, .. }
+        | Self::InvalidEntryLocator { format, .. }
+        | Self::UnknownEntryIndex { format, .. }
+        | Self::EntryFingerprintMismatch { format, .. }
+        | Self::EntryNotNode { format, .. }
+        | Self::EntryOutsideView { format, .. }
+        | Self::InvalidNodeReference { format, .. }
+        | Self::InvalidAlias { format, .. }
+        | Self::InvalidQueryPredicate { format, .. }
+        | Self::QuerySelection { format, .. } => format,
         };
 
         *format = selected;
@@ -200,6 +335,15 @@ impl AppError {
         | Self::InvalidMessageId { .. }
         | Self::UnknownMessageId { .. }
         | Self::AmbiguousMessageId { .. }
+        | Self::InvalidEntryLocator { .. }
+        | Self::UnknownEntryIndex { .. }
+        | Self::EntryFingerprintMismatch { .. }
+        | Self::EntryNotNode { .. }
+        | Self::EntryOutsideView { .. }
+        | Self::InvalidNodeReference { .. }
+        | Self::InvalidAlias { .. }
+        | Self::InvalidQueryPredicate { .. }
+        | Self::QuerySelection { .. }
         | Self::Io(_) => 1,
         }
     }
@@ -216,7 +360,16 @@ impl AppError {
         | Self::Analysis { format, .. }
         | Self::InvalidMessageId { format, .. }
         | Self::UnknownMessageId { format, .. }
-        | Self::AmbiguousMessageId { format, .. } => *format,
+        | Self::AmbiguousMessageId { format, .. }
+        | Self::InvalidEntryLocator { format, .. }
+        | Self::UnknownEntryIndex { format, .. }
+        | Self::EntryFingerprintMismatch { format, .. }
+        | Self::EntryNotNode { format, .. }
+        | Self::EntryOutsideView { format, .. }
+        | Self::InvalidNodeReference { format, .. }
+        | Self::InvalidAlias { format, .. }
+        | Self::InvalidQueryPredicate { format, .. }
+        | Self::QuerySelection { format, .. } => *format,
         Self::Io(_) => OutputFormat::Lines,
         }
     }
@@ -234,6 +387,15 @@ impl AppError {
         Self::InvalidMessageId { .. } => "message_id_syntax",
         Self::UnknownMessageId { .. } => "message_id_unknown",
         Self::AmbiguousMessageId { .. } => "message_id_ambiguous",
+        Self::InvalidEntryLocator { .. } => "entry_locator_syntax",
+        Self::UnknownEntryIndex { .. } => "entry_index_unknown",
+        Self::EntryFingerprintMismatch { .. } => "entry_fingerprint_mismatch",
+        Self::EntryNotNode { .. } => "entry_not_node",
+        Self::EntryOutsideView { .. } => "entry_outside_view",
+        Self::InvalidNodeReference { .. } => "node_reference_syntax",
+        Self::InvalidAlias { .. } => "alias_syntax",
+        Self::InvalidQueryPredicate { .. } => "query_predicate_syntax",
+        Self::QuerySelection { .. } => "query_selection",
         Self::Io(_) => "io",
         }
     }
