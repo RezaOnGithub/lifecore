@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, str::FromStr};
 
-use lifecore::{Body, EntryIndex, LifeCore};
+use lifecore::{Body, EntryIndex, LifeCore, LifeCoreAccess};
 use serde::Serialize;
 
 use crate::{
@@ -429,7 +429,7 @@ pub fn verify_expected_head(
     //A This reread is deliberately adjacent to save. It is an optimistic
     //A compare-before-save guard, not a file lock.
     let current = store.load()?;
-    let actual_index = current.lifecore.last().map(|entry| entry.entry().0);
+    let actual_index = current.lifecore.last().map(|entry| entry.index().0);
 
     match (expectation, actual_index) {
     (ExpectedHead::Empty, None) => Ok(()),
@@ -478,7 +478,7 @@ fn pointed_index(
             index.0
         )));
     };
-    let pointed = last.window().look_at(index.absolute());
+    let pointed = last.context().look_at(index.absolute());
     if graph.get(pointed).is_none() {
         return Err(AppError::transaction_stage(format!(
             "entry index {} does not exist in the candidate",
@@ -506,7 +506,7 @@ fn graph_end(state: &PersistedState) -> usize {
     state
         .lifecore
         .last()
-        .map_or(0, |entry| entry.entry().0.saturating_add(1))
+        .map_or(0, |entry| entry.index().0.saturating_add(1))
 }
 
 fn candidate_records(

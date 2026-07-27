@@ -1,6 +1,6 @@
 use lifecore::{
-    FieldQuery, LifeCore, LifeCoreList, Node, NodeQuery, NodeQueryExplanation, NodeQueryExpression,
-    NodeQueryPredicate, Payload, PayloadKind, QueryRegex,
+    FieldQuery, LifeCore, LifeCoreAccess, LifeCoreList, Node, NodeQuery, NodeQueryExplanation,
+    NodeQueryExpression, NodeQueryPredicate, Payload, PayloadKind, QueryRegex,
 };
 
 use crate::{cli::QueryCombinator, error::AppError, view::GraphView};

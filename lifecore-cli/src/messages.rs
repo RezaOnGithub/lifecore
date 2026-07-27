@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use lifecore::{
-    Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreList,
+    Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCoreAccess, LifeCoreList,
     analysis::{Message, SuggestedAction},
 };
 use serde::Serialize;
@@ -535,7 +535,7 @@ impl CanonicalMessage {
 
             let entry = usize::try_from(*entry)
                 .map_err(|_| AppError::analysis("message relevance does not fit this platform"))?;
-            let pointed = offending.window().look_at(EntryIndex(entry).absolute());
+            let pointed = offending.context().look_at(EntryIndex(entry).absolute());
 
             if lifecore.is_stale(pointed) != Some(true) {
                 return Ok(false);
@@ -612,8 +612,8 @@ fn normalize_location(location: DiagnosticLocation) -> Result<MessageLocation, A
         end: bounded_context_end(context)?,
     }),
     DiagnosticLocation::Entry(entry) => Ok(MessageLocation::Entry {
-        context_end: bounded_context_end(entry.window())?,
-        entry_index: normalize_index(entry.entry(), "message location")?,
+        context_end: bounded_context_end(entry.context())?,
+        entry_index: normalize_index(entry.index(), "message location")?,
     }),
     }
 }
@@ -625,7 +625,7 @@ fn bounded_context_end(context: Context) -> Result<u64, AppError> {
         ));
     }
 
-    let end = context.last().map_or(0, |entry| entry.entry().0 + 1);
+    let end = context.last().map_or(0, |entry| entry.index().0 + 1);
     u64::try_from(end).map_err(|_| AppError::analysis("graph context does not fit in message ID"))
 }
 

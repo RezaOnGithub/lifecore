@@ -108,28 +108,28 @@ fn build_stage7(args: Stage7Args) -> Result<(), Box<dyn std::error::Error>> {
     let original = resolve_index(
         &state.lifecore,
         &state.cli,
-        original.e.entry().0,
+        original.e.index().0,
         EntryExpectation::Node,
         Some(view.end_exclusive()),
     )?;
     let task = resolve_index(
         &state.lifecore,
         &state.cli,
-        task.e.entry().0,
+        task.e.index().0,
         EntryExpectation::Node,
         Some(view.end_exclusive()),
     )?;
     let revised = resolve_index(
         &state.lifecore,
         &state.cli,
-        revised.e.entry().0,
+        revised.e.index().0,
         EntryExpectation::Node,
         Some(view.end_exclusive()),
     )?;
     let edge = resolve_index(
         &state.lifecore,
         &state.cli,
-        edge.e.entry().0,
+        edge.e.index().0,
         EntryExpectation::Any,
         Some(view.end_exclusive()),
     )?;
@@ -225,28 +225,28 @@ fn build_stage3(args: Stage3Args) -> Result<(), Box<dyn std::error::Error>> {
     let original = resolve_index(
         &state.lifecore,
         &state.cli,
-        original.e.entry().0,
+        original.e.index().0,
         EntryExpectation::Node,
         Some(view.end_exclusive()),
     )?;
     let task = resolve_index(
         &state.lifecore,
         &state.cli,
-        task.e.entry().0,
+        task.e.index().0,
         EntryExpectation::Node,
         Some(view.end_exclusive()),
     )?;
     let revised = resolve_index(
         &state.lifecore,
         &state.cli,
-        revised.e.entry().0,
+        revised.e.index().0,
         EntryExpectation::Node,
         Some(view.end_exclusive()),
     )?;
     let edge = resolve_index(
         &state.lifecore,
         &state.cli,
-        edge.e.entry().0,
+        edge.e.index().0,
         EntryExpectation::Any,
         Some(view.end_exclusive()),
     )?;

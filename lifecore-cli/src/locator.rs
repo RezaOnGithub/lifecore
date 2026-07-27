@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use lifecore::{Circumstance, Entry, EntryIndex, LifeCore, LifeCoreList};
+use lifecore::{Circumstance, Entry, EntryIndex, LifeCore, LifeCoreAccess, LifeCoreList};
 use serde::Serialize;
 use sha3::{Digest, Sha3_512};
 
@@ -168,7 +168,7 @@ pub struct ResolvedEntry {
 
 impl ResolvedEntry {
     pub fn index(&self) -> usize {
-        self.entry.entry_context().entry().0
+        self.entry.entry_context().index().0
     }
 
     pub fn full_locator(&self) -> String {
@@ -201,7 +201,7 @@ pub fn resolve_entry(
     let Some((entry, circumstance)) = graph.get_with_circumstance(context) else {
         return Err(AppError::unknown_entry_index(locator.index()));
     };
-    let fingerprint = EntryFingerprint::for_entry(state, context.entry(), &entry)?;
+    let fingerprint = EntryFingerprint::for_entry(state, context.index(), &entry)?;
 
     if !fingerprint.as_str().starts_with(locator.prefix()) {
         return Err(AppError::entry_fingerprint_mismatch(
@@ -239,7 +239,7 @@ pub fn resolve_index(
     let entry = graph
         .get(context)
         .ok_or_else(|| AppError::unknown_entry_index(index))?;
-    let fingerprint = EntryFingerprint::for_entry(state, context.entry(), &entry)?;
+    let fingerprint = EntryFingerprint::for_entry(state, context.index(), &entry)?;
 
     resolve_entry(
         graph,

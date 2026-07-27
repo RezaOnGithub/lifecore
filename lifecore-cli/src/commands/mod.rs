@@ -746,7 +746,7 @@ pub fn dispatch(
             )?;
             if !results
                 .iter()
-                .any(|node| node.e.entry().0 == resolved.index())
+                .any(|node| node.e.index().0 == resolved.index())
             {
                 return Err(AppError::query_selection(locator_text));
             }
@@ -818,7 +818,7 @@ pub fn dispatch(
                 resolve_index(
                     &effective_state.lifecore,
                     &effective_state.cli,
-                    node.e.entry().0,
+                    node.e.index().0,
                     EntryExpectation::Node,
                     Some(view.end_exclusive()),
                 )
@@ -952,7 +952,7 @@ fn combinator_name(combinator: crate::cli::QueryCombinator) -> &'static str {
 fn view_end(lifecore: &LifeCoreList) -> usize {
     lifecore
         .last()
-        .map_or(0, |entry| entry.entry().0.saturating_add(1))
+        .map_or(0, |entry| entry.index().0.saturating_add(1))
 }
 
 fn state_store(invocation: &InvocationContext) -> Result<StateStore, AppError> {

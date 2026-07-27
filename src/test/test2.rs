@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    Body, Circumstance, Edge, EntryContext, LifeCore, LifeCoreList, Node,
+    Body, Circumstance, Edge, EntryContext, LifeCore, LifeCoreAccess, LifeCoreList, Node,
     analysis::{Suggestion, Warning},
 };
 
@@ -96,7 +96,7 @@ fn node_parent_inherits_the_inspection_window() {
 
     let child = lc.node(child_at_end).unwrap();
 
-    assert_eq!(child.parent, Some(root.e.entry()));
+    assert_eq!(child.parent, Some(root.e.index()));
 }
 
 // TODO revise
@@ -470,7 +470,7 @@ fn node_query_empty_combinators_have_explicit_identities() {
     lifecore
         .add_mock("Two", Body::from([("value", Payload::Number(2))]), None)
         .unwrap();
-    let context = lifecore.last().unwrap().window();
+    let context = lifecore.last().unwrap().context();
 
     assert_eq!(
         lifecore
@@ -509,7 +509,7 @@ fn node_query_explains_non_membership_without_reimplementing_predicates() {
         .add_mock("Thing", Body::from([("value", Payload::Number(1))]), None)
         .unwrap();
     let query = NodeQuery {
-        context: node.e.window(),
+        context: node.e.context(),
         expression: NodeQueryExpression::All(vec![
             NodeQueryPredicate::Fresh,
             NodeQueryPredicate::NodeType("Other".to_string()),

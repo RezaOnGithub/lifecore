@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use lifecore::{
     Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreList,
     OrderedSet, Payload, PayloadKind,
-    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory},
+    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, LifeCoreAnalysisHarness},
     serialize::{LifeCoreSerializeExt, NodeBody},
     typing::{FieldStatus, Type, ValueType},
 };
@@ -20,7 +20,9 @@ fn analyzer() -> TypeCheck<LifeCoreList> {
 }
 
 fn analyze_at(lifecore: &LifeCoreList, window: Context) -> Vec<TypeCheckMessage> {
-    analyzer().analyze_inner(lifecore, window).0
+    analyzer()
+        .analyze_inner(LifeCoreAnalysisHarness::new(lifecore, window), window)
+        .0
 }
 
 fn analyze_final(lifecore: &LifeCoreList) -> Vec<TypeCheckMessage> {
@@ -72,31 +74,9 @@ fn is_field_message(message: &TypeCheckMessage) -> bool {
 }
 
 #[test]
-fn initialize_suggests_the_bootstrap_type_when_missing() {
-    let lifecore = LifeCoreList::default();
+fn initialization_has_no_graph_output_and_empty_analysis_suggests_bootstrap() {
+    assert!(analyzer().initialize_inner().0.is_empty());
 
-    let messages = analyzer().initialize_inner(&lifecore).0;
-
-    assert_eq!(
-        messages,
-        vec![TypeCheckMessage::AddBootstrapNode {
-            context: EntryIndex(0).before(),
-        }]
-    );
-}
-
-#[test]
-fn initialize_accepts_the_bootstrap_type_when_present() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-
-    let messages = analyzer().initialize_inner(&lifecore).0;
-
-    assert!(messages.is_empty());
-}
-
-#[test]
-fn bootstrap_suggestion_uses_the_bounded_current_context() {
     let mut lifecore = LifeCoreList::default();
     configure(&mut lifecore);
 
@@ -106,14 +86,9 @@ fn bootstrap_suggestion_uses_the_bounded_current_context() {
         .into_iter()
         .find(|message| message.message.contains("bootstrap"))
         .unwrap();
-
     assert_eq!(
         suggestion.offending_event,
-        DiagnosticLocation::Context(
-            lifecore
-                .last()
-                .map_or_else(|| EntryIndex(0).before(), EntryContext::window)
-        )
+        DiagnosticLocation::Context(EntryIndex(0).before())
     );
 }
 

@@ -1,6 +1,6 @@
 use crate::{
     BasicValidationFailure, BasicValidationFailureScenario::*, Body, Context, DiagnosticLocation,
-    EntryContext, LifeCore, LifeCoreError, LifeCoreList, Payload,
+    EntryContext, LifeCore, LifeCoreAccess, LifeCoreError, LifeCoreList, Payload,
 };
 
 fn simple_body(value: &str) -> Body {
@@ -224,7 +224,7 @@ fn context_typestates_preserve_window_and_point() {
 
     let point = window.look_at(EntryContext { end: 8, thing: 2 });
     assert_eq!(point, EntryContext { end: 5, thing: 2 });
-    assert_eq!(point.window(), window);
+    assert_eq!(point.context(), window);
     assert_eq!(point.absolute().end, usize::MAX);
     assert_eq!(point.absolute().thing, 2);
     assert_eq!(point.shrink_to_exclusive_left(), Context { end: 2 });

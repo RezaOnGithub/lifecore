@@ -146,7 +146,7 @@ mod indexing_and_context {
         /// Throw away the context and get the index without it.
         ///
         /// *Note:* This method throws away information! Handle with care.
-        pub fn entry(&self) -> EntryIndex {
+        pub fn index(&self) -> EntryIndex {
             EntryIndex(self.thing)
         }
 
@@ -154,7 +154,7 @@ mod indexing_and_context {
             self.range().contains(&self.thing)
         }
 
-        pub fn window(self) -> Context {
+        pub fn context(self) -> Context {
             Context { end: self.end }
         }
 
@@ -163,15 +163,15 @@ mod indexing_and_context {
         }
 
         pub fn last(&self) -> Option<Self> {
-            self.window().last()
+            self.context().last()
         }
 
         pub fn first(&self) -> Option<Self> {
-            self.window().first()
+            self.context().first()
         }
 
         pub fn items(self) -> impl Iterator<Item = Self> {
-            self.window().items()
+            self.context().items()
         }
 
         pub fn shrink_to_inclusive_left(&self) -> Context {
@@ -208,7 +208,7 @@ mod indexing_and_context {
         }
 
         pub fn look_at(&self, e: Self) -> Self {
-            self.window().look_at(e)
+            self.context().look_at(e)
         }
     }
 

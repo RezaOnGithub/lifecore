@@ -1,4 +1,4 @@
-use lifecore::LifeCore;
+use lifecore::LifeCoreAccess;
 
 use crate::{TypeCheckFactory, TypeCheckMessage, TypeCheckOutput};
 
@@ -8,7 +8,7 @@ impl TypeCheckOutput {
     }
 }
 
-impl<LC: LifeCore> Default for TypeCheckFactory<LC> {
+impl<LC: LifeCoreAccess> Default for TypeCheckFactory<LC> {
     fn default() -> Self {
         Self {
             _x: Default::default(),

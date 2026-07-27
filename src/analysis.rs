@@ -6,7 +6,10 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
 
-use crate::{Body, Context, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreError};
+use crate::{
+    Body, Context, DiagnosticLocation, Edge, Entry, EntryContext, EntryIndex, LifeCore,
+    LifeCoreAccess, LifeCoreError, LifeCoreFamily, Node, NodeQuery,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SuiteConfig(pub Vec<Config>);
@@ -58,6 +61,115 @@ pub enum SuggestedAction {
     },
 }
 
+//A The harness exposes only read access.
+//A Every context is capped at the runner's historical prefix.
+pub struct LifeCoreAnalysisHarness<'a, LC: LifeCoreAccess> {
+    lc: &'a LC,
+    bounds: Context,
+}
+
+impl<'a, LC: LifeCoreAccess> LifeCoreAnalysisHarness<'a, LC> {
+    pub fn new(lc: &'a LC, bounds: Context) -> Self {
+        Self { lc, bounds }
+    }
+
+    fn valid_index(&self, e: EntryIndex) -> bool {
+        self.bounds.end > e.0
+    }
+
+    fn constrain_context(&self, c: Context) -> Context {
+        if self.bounds.end >= c.end {
+            c
+        } else {
+            self.bounds
+        }
+    }
+
+    fn constrain_entry_context(&self, e: EntryContext) -> Option<EntryContext> {
+        if self.valid_index(e.index()) {
+            Some(self.constrain_context(e.context()).look_at(e))
+        } else {
+            None
+        }
+    }
+}
+
+impl<LC: LifeCoreAccess> LifeCoreAccess for LifeCoreAnalysisHarness<'_, LC> {
+    fn get(&self, e: EntryContext) -> Option<Entry> {
+        self.lc.get(self.constrain_entry_context(e)?)
+    }
+
+    fn window<I>(&self, i: I) -> impl Iterator<Item = Entry>
+    where
+        I: IntoIterator<Item = EntryContext>,
+    {
+        i.into_iter().map_while(|x| self.get(x))
+    }
+
+    fn is_stale(&self, e: EntryContext) -> Option<bool> {
+        self.lc.is_stale(self.constrain_entry_context(e)?)
+    }
+
+    fn query(&self, query: NodeQuery) -> Vec<Node> {
+        self.lc
+            .query(NodeQuery {
+                context: self.constrain_context(query.context),
+                expression: query.expression,
+            })
+            .into_iter()
+            .filter_map(|mut node| {
+                node.e = self.constrain_entry_context(node.e)?;
+                Some(node)
+            })
+            .collect()
+    }
+
+    fn nodes(&self, ctx: Context) -> impl Iterator<Item = Node> {
+        self.lc
+            .nodes(self.constrain_context(ctx))
+            .filter_map(|mut node| {
+                node.e = self.constrain_entry_context(node.e)?;
+                Some(node)
+            })
+    }
+
+    fn edges(&self, ctx: Context) -> impl Iterator<Item = Edge> {
+        self.lc
+            .edges(self.constrain_context(ctx))
+            .filter_map(|mut edge| {
+                edge.e = self.constrain_entry_context(edge.e)?;
+                Some(edge)
+            })
+    }
+
+    fn root_of(&self, e: EntryContext) -> Option<EntryContext> {
+        let root = self.lc.root_of(self.constrain_entry_context(e)?)?;
+        self.constrain_entry_context(root)
+    }
+
+    fn fresh_successors(&self, node: EntryContext) -> Vec<EntryContext> {
+        let Some(node) = self.constrain_entry_context(node) else {
+            return vec![];
+        };
+        self.lc
+            .fresh_successors(node)
+            .into_iter()
+            .filter_map(|successor| self.constrain_entry_context(successor))
+            .collect()
+    }
+
+    fn relative_degree(&self, a: EntryContext, b: EntryContext) -> Option<usize> {
+        self.lc.relative_degree(
+            self.constrain_entry_context(a)?,
+            self.constrain_entry_context(b)?,
+        )
+    }
+
+    fn families(&self, ctx: Context) -> Vec<LifeCoreFamily> {
+        self.lc.families(self.constrain_context(ctx))
+    }
+}
+
 /// A Message from an `Analyzer`
 ///
 /// # "Relevance"
@@ -101,27 +213,29 @@ pub trait InnerOutput<MSG: InnerMessageType>: Clone + Sized {
 /// The idea behind `initialize` is that if some pre-condition is not quite
 /// correct, or if we are "done" in some sense, analyzer can disable itself and
 /// potentially issue a warning.
-pub trait Analyzer<LC: LifeCore>: Send + Sync {
+//A Initialization intentionally has no database access; all inspection happens
+//A through a prefix-bounded harness during `analyze`.
+pub trait Analyzer<LC: LifeCoreAccess>: Send + Sync {
     type MSG: InnerMessageType
     where
         Self: Sized;
     type OUTPUT: InnerOutput<Self::MSG>
     where
         Self: Sized;
-    fn initialize_inner(&mut self, lc: &LC) -> Self::OUTPUT
+    fn initialize_inner(&mut self) -> Self::OUTPUT
     where
         Self: Sized;
-    fn analyze_inner(&self, lc: &LC, window: Context) -> Self::OUTPUT
+    fn analyze_inner(&self, lc: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> Self::OUTPUT
     where
         Self: Sized;
     fn convert_report(&self, r: Self::OUTPUT) -> Output
     where
         Self: Sized;
-    fn initialize(&mut self, lc: &LC) -> Output;
-    fn analyze(&self, lc: &LC, window: Context) -> Output;
+    fn initialize(&mut self) -> Output;
+    fn analyze(&self, lc: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> Output;
 }
 
-pub trait AnalyzerFactory<LC: LifeCore> {
+pub trait AnalyzerFactory<LC: LifeCoreAccess> {
     fn analyzer_with_config(
         &mut self,
         config: &str,
@@ -132,7 +246,6 @@ pub trait AnalyzerFactory<LC: LifeCore> {
 #[derive(Default)]
 pub struct AnalysisRunner<LC: LifeCore> {
     factory: BTreeMap<String, Box<dyn AnalyzerFactory<LC>>>,
-    analyzer: Vec<Box<dyn Analyzer<LC>>>,
 }
 
 impl<LC: LifeCore> AnalysisRunner<LC> {
@@ -169,22 +282,29 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
         let mut r: Vec<Message> =
             analyzer
                 .iter_mut()
-                .map(|x| x.initialize(lc).0)
+                .map(|x| x.initialize().0)
                 .fold(vec![], |acc, x| {
                     let mut t = vec![];
                     t.extend(acc);
                     t.extend(x);
                     t
                 });
+        let mut windows = lc
+            .window(Context::universe().items())
+            .map(|x| x.entry_context().shrink_to_inclusive_left())
+            .collect_vec();
+        if windows.is_empty() {
+            //A An empty database still has one bounded historical prefix.
+            windows.push(EntryIndex(0).before());
+        }
         r.extend(
             analyzer
                 .iter()
-                .cartesian_product(
-                    &lc.window(Context::universe().items())
-                        .map(|x| x.entry_context().shrink_to_inclusive_left())
-                        .collect_vec(), // TODO PERF get rid of this
-                )
-                .map(|(a, window)| a.analyze(&lc, *window).0)
+                .cartesian_product(&windows)
+                .map(|(a, window)| {
+                    a.analyze(LifeCoreAnalysisHarness::new(lc, *window), *window)
+                        .0
+                })
                 .fold(vec![], |mut acc, x| {
                     acc.extend(x);
                     acc
@@ -313,3 +433,6 @@ impl Hash for Suggestion {
         self.action.hash(state);
     }
 }
+
+#[cfg(test)]
+mod test;

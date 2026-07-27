@@ -7,7 +7,7 @@ use log;
 use crate::{
     BasicValidationFailure,
     BasicValidationFailureScenario::ExtraneousMockCircumstance,
-    Body, Circumstance, Edge, EntryContext, LifeCore, LifeCoreError, LifeCoreList, Node,
+    Body, Circumstance, Context, Edge, EntryContext, LifeCore, LifeCoreError, LifeCoreList, Node,
     reference_impl::{XEdge, XEntry, XNode},
 };
 
@@ -25,7 +25,7 @@ fn init_test_logging() {
 
 #[test]
 fn context01() {
-    let ctx = EventContext::universe();
+    let ctx = Context::universe();
     assert!(ctx.range().contains(&1024));
 }
 
@@ -43,19 +43,19 @@ fn raw_edge_window() {
         );
     }
 
-    let w = || EventContext::universe().items();
+    let w = || Context::universe().items();
 
     assert_eq!(lc.window(w()).count(), 10);
-    assert_eq!(lc.edges(EventContext::universe()).count(), 0);
-    assert_eq!(lc.raw_edges(EventContext::universe()).count(), 0);
-    assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 0);
+    assert_eq!(lc.edges(Context::universe()).count(), 0);
+    assert_eq!(lc.raw_edges(Context::universe()).count(), 0);
+    assert_eq!(lc.raw_edges(Context::universe()).unique().count(), 0);
 
     e.push(lc.connect(n[0].e, "Some_Edge", n[1].e).unwrap());
     assert!(lc.basic_validation().is_ok());
     assert_eq!(w().zip(lc.window(w())).count(), 11);
-    assert_eq!(lc.raw_edges(EventContext::universe()).count(), 1);
-    assert_eq!(lc.raw_edges(EventContext::universe()).unique().count(), 1);
-    assert_eq!(lc.edges(EventContext::universe()).count(), 1);
+    assert_eq!(lc.raw_edges(Context::universe()).count(), 1);
+    assert_eq!(lc.raw_edges(Context::universe()).unique().count(), 1);
+    assert_eq!(lc.edges(Context::universe()).count(), 1);
 }
 
 #[test]

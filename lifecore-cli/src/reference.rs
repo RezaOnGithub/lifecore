@@ -5,7 +5,7 @@ use std::{
     str::FromStr,
 };
 
-use lifecore::{EntryIndex, LifeCore, LifeCoreList};
+use lifecore::{EntryIndex, LifeCoreAccess, LifeCoreList};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -174,7 +174,7 @@ pub fn resolve_node_reference(
                     AppError::invalid_state("visible HEAD candidate could not be loaded")
                 })?;
                 let fingerprint =
-                    crate::locator::EntryFingerprint::for_entry(state, context.entry(), &entry)?;
+                    crate::locator::EntryFingerprint::for_entry(state, context.index(), &entry)?;
 
                 return resolve_entry(
                     graph,

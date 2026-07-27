@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use lifecore::{
-    Entry, EntryIndex, LifeCore, LifeCoreList, OrderedSet,
+    Entry, EntryIndex, LifeCoreAccess, LifeCoreList, OrderedSet,
     serialize::NodeBody,
     typing::{FieldDecl, Type},
 };
@@ -210,7 +210,7 @@ pub fn list_types(
         .filter_map(|node| {
             Type::try_from_body(&node.field)
                 .ok()
-                .map(|declaration| (node.e.entry().0, declaration))
+                .map(|declaration| (node.e.index().0, declaration))
         })
         .collect::<Vec<_>>();
     declarations.sort_by(|left, right| {

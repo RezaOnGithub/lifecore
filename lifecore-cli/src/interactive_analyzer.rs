@@ -1,8 +1,8 @@
 use lifecore::{
-    Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, LifeCoreList,
+    Context, EntryContext, EntryIndex, LifeCoreAccess, LifeCoreError, LifeCoreList,
     analysis::{
-        Analyzer, AnalyzerFactory, InnerMessageType, InnerOutput, MessageType, Output,
-        SuggestedAction, Suggestion,
+        Analyzer, AnalyzerFactory, InnerMessageType, InnerOutput, LifeCoreAnalysisHarness,
+        MessageType, Output, SuggestedAction, Suggestion,
     },
 };
 
@@ -37,11 +37,15 @@ impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
     type MSG = InteractiveMessage;
     type OUTPUT = InteractiveOutput;
 
-    fn initialize_inner(&mut self, _lifecore: &LifeCoreList) -> Self::OUTPUT {
+    fn initialize_inner(&mut self) -> Self::OUTPUT {
         InteractiveOutput(Vec::new())
     }
 
-    fn analyze_inner(&self, lifecore: &LifeCoreList, window: Context) -> Self::OUTPUT {
+    fn analyze_inner(
+        &self,
+        lifecore: LifeCoreAnalysisHarness<'_, LifeCoreList>,
+        window: Context,
+    ) -> Self::OUTPUT {
         let Some(last) = window.last() else {
             return InteractiveOutput(Vec::new());
         };
@@ -79,9 +83,9 @@ impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
                     !lifecore.is_stale(candidate.e).unwrap_or(true)
                         && candidate.ty_name == edge.ty_name
                         && if outgoing {
-                            candidate.from == successor.entry() && candidate.to == opposite
+                            candidate.from == successor.index() && candidate.to == opposite
                         } else {
-                            candidate.from == opposite && candidate.to == successor.entry()
+                            candidate.from == opposite && candidate.to == successor.index()
                         }
                 })
             });
@@ -91,7 +95,7 @@ impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
 
             let action = if outgoing {
                 SuggestedAction::AddEdge {
-                    from: child.e.entry(),
+                    from: child.e.index(),
                     ty_name: edge.ty_name.clone(),
                     to: opposite,
                 }
@@ -99,12 +103,12 @@ impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
                 SuggestedAction::AddEdge {
                     from: opposite,
                     ty_name: edge.ty_name.clone(),
-                    to: child.e.entry(),
+                    to: child.e.index(),
                 }
             };
             messages.push(InteractiveMessage {
                 offending: child.e,
-                relevance: vec![edge.e.entry(), parent_index, opposite, child.e.entry()],
+                relevance: vec![edge.e.index(), parent_index, opposite, child.e.index()],
                 action,
                 text: format!(
                     "Recreate the parent node's {} {:?} connection for its fresh successor",
@@ -137,12 +141,16 @@ impl Analyzer<LifeCoreList> for InteractiveAnalyzer {
         )
     }
 
-    fn initialize(&mut self, lifecore: &LifeCoreList) -> Output {
-        let report = self.initialize_inner(lifecore);
+    fn initialize(&mut self) -> Output {
+        let report = self.initialize_inner();
         self.convert_report(report)
     }
 
-    fn analyze(&self, lifecore: &LifeCoreList, window: Context) -> Output {
+    fn analyze(
+        &self,
+        lifecore: LifeCoreAnalysisHarness<'_, LifeCoreList>,
+        window: Context,
+    ) -> Output {
         self.convert_report(self.analyze_inner(lifecore, window))
     }
 }

@@ -6,7 +6,8 @@ use std::{
 };
 
 use lifecore::{
-    Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreList, OrderedSet, Payload,
+    Body, DiagnosticLocation, EntryIndex, LifeCore, LifeCoreAccess, LifeCoreList, OrderedSet,
+    Payload,
     analysis::{AnalyzerFactory, Inconsistency, Message, SuggestedAction, Suggestion, Warning},
     serialize::NodeBody,
     typing::Type,
@@ -155,7 +156,7 @@ impl StateSnapshot {
             entries: state
                 .lifecore
                 .last()
-                .map_or(0, |entry| entry.entry().0.saturating_add(1)),
+                .map_or(0, |entry| entry.index().0.saturating_add(1)),
             has_mock: state.lifecore.is_mock(),
         }
     }
@@ -936,7 +937,7 @@ fn message_resolution_uses_the_diagnostic_window() {
     };
     let current = AnalysisReport {
         suite: Default::default(),
-        messages: vec![warning_at(child.e.window().look_at(parent.e))],
+        messages: vec![warning_at(child.e.context().look_at(parent.e))],
     };
 
     let historical = MessageUniverse::from_analysis(&historical, &graph, &[])
@@ -962,9 +963,9 @@ fn message_prefix_resolution_detects_syntax_unknown_and_ambiguity() {
     for index in 0..8_000 {
         messages.push(Message::Warning(Warning {
             offending_event: if index % 2 == 0 {
-                DiagnosticLocation::Entry(child.e.window().look_at(parent.e))
+                DiagnosticLocation::Entry(child.e.context().look_at(parent.e))
             } else {
-                DiagnosticLocation::Context(child.e.window())
+                DiagnosticLocation::Context(child.e.context())
             },
             system_name: "Collision_Test".to_string(),
             system_config: String::new(),
@@ -2828,7 +2829,7 @@ fn stage8_type_failures_are_early_view_aware_and_byte_safe() {
     let malformed = resolve_index(
         &state.lifecore,
         &state.cli,
-        malformed.e.entry().0,
+        malformed.e.index().0,
         EntryExpectation::Node,
         Some(latest.end_exclusive()),
     )
@@ -2836,7 +2837,7 @@ fn stage8_type_failures_are_early_view_aware_and_byte_safe() {
     let duplicate_a = resolve_index(
         &state.lifecore,
         &state.cli,
-        duplicate_a.e.entry().0,
+        duplicate_a.e.index().0,
         EntryExpectation::Node,
         Some(latest.end_exclusive()),
     )
@@ -2844,7 +2845,7 @@ fn stage8_type_failures_are_early_view_aware_and_byte_safe() {
     let duplicate_b = resolve_index(
         &state.lifecore,
         &state.cli,
-        duplicate_b.e.entry().0,
+        duplicate_b.e.index().0,
         EntryExpectation::Node,
         Some(latest.end_exclusive()),
     )
@@ -4149,7 +4150,7 @@ fn stage6_interactive_analyzer_preserves_direction_and_suppresses_ineligible_con
             Message::Suggestion(suggestion)
                 if matches!(
                     suggestion.offending_event,
-                    DiagnosticLocation::Entry(entry) if entry.entry().0 == index
+                    DiagnosticLocation::Entry(entry) if entry.index().0 == index
                 ) =>
             {
                 Some(suggestion)
@@ -4179,31 +4180,31 @@ fn stage6_interactive_analyzer_preserves_direction_and_suppresses_ineligible_con
     let child = graph
         .add_mock("Child", Body::default(), Some(parent.e))
         .expect("child appends");
-    let suggestions = suggestions_at(&graph, child.e.entry().0);
+    let suggestions = suggestions_at(&graph, child.e.index().0);
 
     assert_eq!(suggestions.len(), 2);
     assert!(suggestions.iter().all(|suggestion| {
         suggestion.system_name == "Interactive"
             && suggestion.system_config == "configured"
-            && suggestion.relevance.contains(&parent.e.entry())
-            && suggestion.relevance.contains(&child.e.entry())
+            && suggestion.relevance.contains(&parent.e.index())
+            && suggestion.relevance.contains(&child.e.index())
     }));
     assert!(suggestions.iter().any(|suggestion| {
-        suggestion.relevance.contains(&outgoing.e.entry())
+        suggestion.relevance.contains(&outgoing.e.index())
             && suggestion.action
                 == vec![SuggestedAction::AddEdge {
-                    from: child.e.entry(),
+                    from: child.e.index(),
                     ty_name: "Outgoing".into(),
-                    to: outgoing_other.e.entry(),
+                    to: outgoing_other.e.index(),
                 }]
     }));
     assert!(suggestions.iter().any(|suggestion| {
-        suggestion.relevance.contains(&incoming.e.entry())
+        suggestion.relevance.contains(&incoming.e.index())
             && suggestion.action
                 == vec![SuggestedAction::AddEdge {
-                    from: incoming_other.e.entry(),
+                    from: incoming_other.e.index(),
                     ty_name: "Incoming".into(),
-                    to: child.e.entry(),
+                    to: child.e.index(),
                 }]
     }));
 
@@ -4224,7 +4225,7 @@ fn stage6_interactive_analyzer_preserves_direction_and_suppresses_ineligible_con
     let stale_child = stale_graph
         .add_mock("ParentChild", Body::default(), Some(stale_parent.e))
         .expect("child appends");
-    assert!(suggestions_at(&stale_graph, stale_child.e.entry().0).is_empty());
+    assert!(suggestions_at(&stale_graph, stale_child.e.index().0).is_empty());
 
     let mut recreated_graph = LifeCoreList::default();
     recreated_graph.add_analyzer("Interactive", "");
@@ -4246,7 +4247,7 @@ fn stage6_interactive_analyzer_preserves_direction_and_suppresses_ineligible_con
     let second_successor = recreated_graph
         .add_mock("SecondChild", Body::default(), Some(recreated_parent.e))
         .expect("second successor appends");
-    assert!(suggestions_at(&recreated_graph, second_successor.e.entry().0).is_empty());
+    assert!(suggestions_at(&recreated_graph, second_successor.e.index().0).is_empty());
 }
 
 #[test]
@@ -5012,7 +5013,7 @@ fn stage9_diagnosable_check_reaches_final_entry_and_detach_recovers() {
     let canonical_end = canonical
         .lifecore
         .last()
-        .map_or(0, |entry| entry.entry().0 + 1);
+        .map_or(0, |entry| entry.index().0 + 1);
     match checked {
     CommandOutcome::Messages { view, items, .. } => {
         assert_eq!(view.end, canonical_end + 2);

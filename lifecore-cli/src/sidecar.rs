@@ -168,7 +168,7 @@ pub fn build_sidecar_plan(
             .lifecore
             .last()
             .ok_or_else(|| AppError::invalid_sidecar("staged node did not produce an entry"))?
-            .entry();
+            .index();
 
         if let Some(alias) = entry.alias {
             let alias = AliasName::parse(&alias).map_err(|error| {

@@ -17,9 +17,10 @@
 //! approach but correctness for now. NOTDO PERF
 
 use itertools::Itertools;
+use lifecore::analysis::LifeCoreAnalysisHarness;
 use lifecore::typing::{FieldStatus, ValueType};
 use lifecore::{
-    Context, EntryContext, EntryIndex, LifeCore, LifeCoreError, PayloadKind,
+    Context, EntryContext, EntryIndex, LifeCoreAccess, LifeCoreError, PayloadKind,
     analysis::InnerMessageType, serialize::NodeBody, typing::Type,
 };
 use std::{collections::BTreeMap, marker::PhantomData};
@@ -99,7 +100,7 @@ pub enum TypeCheckMessage {
     },
 }
 
-pub fn types<LC: LifeCore>(
+pub fn types<LC: LifeCoreAccess>(
     lc: &LC,
     ctx: Context,
 ) -> impl Iterator<Item = (String, (EntryContext, Type))> {
@@ -114,17 +115,17 @@ pub fn types<LC: LifeCore>(
 #[derive(Clone)]
 pub struct TypeCheckOutput(pub Vec<TypeCheckMessage>);
 
-pub struct TypeCheckFactory<LC: LifeCore> {
+pub struct TypeCheckFactory<LC: LifeCoreAccess> {
     _x: PhantomData<LC>,
 }
 
-impl<LC: LifeCore> TypeCheckFactory<LC> {
+impl<LC: LifeCoreAccess> TypeCheckFactory<LC> {
     pub fn name() -> &'static str {
         "Type_Check"
     }
 }
 
-pub struct TypeCheck<LC: LifeCore> {
+pub struct TypeCheck<LC: LifeCoreAccess> {
     pub config: String,
     _lc: PhantomData<LC>,
 }
@@ -151,7 +152,7 @@ impl InnerMessageType for TypeCheckMessage {
     }
 }
 
-impl<LC: LifeCore> TypeCheck<LC> {
+impl<LC: LifeCoreAccess> TypeCheck<LC> {
     fn convert_message(&self, x: TypeCheckMessage) -> lifecore::analysis::Message {
         use lifecore::analysis::{Inconsistency, SuggestedAction::*, Suggestion, Warning};
         let system_name = TypeCheckFactory::<LC>::name().to_string();
@@ -345,7 +346,7 @@ impl lifecore::analysis::InnerOutput<TypeCheckMessage> for TypeCheckOutput {
     }
 }
 
-impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
+impl<LC: LifeCoreAccess> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
     type MSG
         = TypeCheckMessage
     where
@@ -355,27 +356,25 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
         = TypeCheckOutput
     where
         Self: Sized;
-    fn initialize_inner(&mut self, lc: &LC) -> TypeCheckOutput
+    fn initialize_inner(&mut self) -> TypeCheckOutput
     where
         Self: Sized,
     {
-        if types(lc, Context::universe()).any(|(name, _)| name == Type::TYPE_NAME) {
-            return TypeCheckOutput(vec![]);
-        }
-
-        TypeCheckOutput(vec![TypeCheckMessage::AddBootstrapNode {
-            context: lc
-                .last()
-                .map_or_else(|| EntryIndex(0).before(), EntryContext::window),
-        }])
+        //A Database-dependent setup belongs to bounded analysis.
+        TypeCheckOutput(vec![])
     }
 
-    fn analyze_inner(&self, lc: &LC, window: Context) -> TypeCheckOutput
+    fn analyze_inner(&self, lc: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> TypeCheckOutput
     where
         Self: Sized,
     {
         use TypeCheckMessage::*;
         let mut r = TypeCheckOutput(vec![]);
+        if window.is_empty() {
+            r.push(AddBootstrapNode { context: window });
+            return r;
+        }
+
         // check whether a Node_Type declaring some type X is not clashing with an older
         // but non-stale Node_Type declaring a type of the same name.
         for some_type_at_some_point_node in lc
@@ -383,7 +382,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             .filter(|node| node.ty_name.as_str() == Type::TYPE_NAME)
         {
             let type_table = types(
-                lc,
+                &lc,
                 some_type_at_some_point_node.e.shrink_to_exclusive_left(),
             )
             .collect::<BTreeMap<_, _>>();
@@ -412,7 +411,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             }
         }
 
-        let type_table = types(lc, window).collect::<BTreeMap<_, _>>();
+        let type_table = types(&lc, window).collect::<BTreeMap<_, _>>();
 
         // Check that override types exist
         // TODO I'm not sure whether this should be an error or not.
@@ -426,7 +425,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
                         offending_event: *ty_event,
                         base_ty_name: ty.name.to_string(),
                         override_ty_name: override_ty.to_string(),
-                        relevance: vec![ty_event.entry()],
+                        relevance: vec![ty_event.index()],
                     })
                 }
             }
@@ -595,7 +594,7 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
             let parent_in_context =
                 preceding.look_at(last_event_in_context.as_node().parent.unwrap().absolute());
             let parent_node = lc.node(parent_in_context).unwrap();
-            let preceding_type_table = types(lc, preceding).collect::<BTreeMap<_, _>>();
+            let preceding_type_table = types(&lc, preceding).collect::<BTreeMap<_, _>>();
             let Some((_type_event, parent_type)) =
                 preceding_type_table.get(parent_node.ty_name.as_str())
             else {
@@ -628,17 +627,23 @@ impl<LC: LifeCore> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
         )
     }
 
-    fn initialize(&mut self, lc: &LC) -> lifecore::analysis::Output {
-        let x = self.initialize_inner(lc);
+    fn initialize(&mut self) -> lifecore::analysis::Output {
+        let x = self.initialize_inner();
         self.convert_report(x)
     }
 
-    fn analyze(&self, lc: &LC, window: Context) -> lifecore::analysis::Output {
+    fn analyze(
+        &self,
+        lc: LifeCoreAnalysisHarness<'_, LC>,
+        window: Context,
+    ) -> lifecore::analysis::Output {
         self.convert_report(self.analyze_inner(lc, window))
     }
 }
 
-impl<LC: LifeCore + 'static> lifecore::analysis::AnalyzerFactory<LC> for TypeCheckFactory<LC> {
+impl<LC: LifeCoreAccess + 'static> lifecore::analysis::AnalyzerFactory<LC>
+    for TypeCheckFactory<LC>
+{
     fn analyzer_with_config(
         &mut self,
         config: &str,

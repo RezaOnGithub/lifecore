@@ -12,7 +12,7 @@
 
 use crate::{
     BasicValidationFailure, BasicValidationFailureScenario::*, Circumstance, Context, EntryContext,
-    EntryIndex, FamilyInsert, LifeCore, LifeCoreError, LifeCoreFamily, NodeQuery,
+    EntryIndex, FamilyInsert, LifeCore, LifeCoreAccess, LifeCoreError, LifeCoreFamily, NodeQuery,
     NodeQueryPredicate, OrderedSet, Payload, Timestamp, analysis,
 };
 use indexmap::IndexSet;
@@ -249,7 +249,7 @@ impl LifeCoreList {
         }
         self.entry.push(XEntry::Node(XNode {
             ty,
-            parent: parent.map(|x| x.entry()),
+            parent: parent.map(|x| x.index()),
             body: internal_body,
         }));
         self.circumstance.push(circumstance);
@@ -268,8 +268,8 @@ impl LifeCoreList {
         let circumstance = self.get_or_insert_circumstance(&Circumstance::Mock);
         self.entry.push(XEntry::Edge(XEdge {
             ty,
-            from: from.entry(),
-            to: to.entry(),
+            from: from.index(),
+            to: to.index(),
         }));
         self.circumstance.push(circumstance);
         self.basic_validation()?;
@@ -579,6 +579,40 @@ impl LifeCore for LifeCoreList {
         Ok(())
     }
 
+    fn get_with_circumstance(
+        &self,
+        e: crate::EntryContext,
+    ) -> Option<(crate::Entry, Circumstance)> {
+        let circumstance = *self.circumstance.get(e.thing)?;
+        self.get(e).map(|entry| (entry, self[circumstance].clone()))
+    }
+
+    fn explain_query(
+        &self,
+        query: &NodeQuery,
+        candidate: EntryContext,
+    ) -> Option<crate::NodeQueryExplanation> {
+        let candidate = self
+            .raw_nodes(query.context)
+            .find(|(context, _)| context.index() == candidate.index())?
+            .0;
+        let combinator = query.expression.discriminant();
+        let predicate_matches = query
+            .expression
+            .predicates()
+            .iter()
+            .map(|predicate| predicate.test(self, candidate.index(), candidate.context()))
+            .collect::<Vec<_>>();
+        let matches = combinator.combine(predicate_matches.iter().copied());
+
+        Some(crate::NodeQueryExplanation {
+            predicate_matches,
+            matches,
+        })
+    }
+}
+
+impl LifeCoreAccess for LifeCoreList {
     fn get(&self, e: crate::EntryContext) -> Option<crate::Entry> {
         let x = self.entry.get(e.thing);
         x.map(|x| match x {
@@ -603,14 +637,6 @@ impl LifeCore for LifeCoreList {
         })
     }
 
-    fn get_with_circumstance(
-        &self,
-        e: crate::EntryContext,
-    ) -> Option<(crate::Entry, Circumstance)> {
-        let circumstance = *self.circumstance.get(e.thing)?;
-        self.get(e).map(|entry| (entry, self[circumstance].clone()))
-    }
-
     fn window<I>(&self, i: I) -> impl Iterator<Item = crate::Entry>
     where
         I: IntoIterator<Item = crate::EntryContext>,
@@ -622,7 +648,7 @@ impl LifeCore for LifeCoreList {
         if e.thing >= self.entry.len() {
             return None;
         }
-        match &self.raw(e.entry()) {
+        match &self.raw(e.index()) {
         XEntry::Node(_) => {
             let ctx = || e.inclusive_right_items();
             for event in self.raw_window(ctx()) {
@@ -666,7 +692,7 @@ impl LifeCore for LifeCoreList {
     }
 
     fn root_of(&self, e: crate::EntryContext) -> Option<crate::EntryContext> {
-        let index = e.entry();
+        let index = e.index();
         if self.raw(index).is_edge() {
             return None;
         }
@@ -765,35 +791,11 @@ impl LifeCore for LifeCoreList {
                         .expression
                         .predicates()
                         .iter()
-                        .map(|pred| pred.test(self, ctx.entry(), ctx.window())),
+                        .map(|pred| pred.test(self, ctx.index(), ctx.context())),
                 )
             })
             .map(|(ctx, _)| self.node(ctx).unwrap())
             .collect()
-    }
-
-    fn explain_query(
-        &self,
-        query: &NodeQuery,
-        candidate: EntryContext,
-    ) -> Option<crate::NodeQueryExplanation> {
-        let candidate = self
-            .raw_nodes(query.context)
-            .find(|(context, _)| context.entry() == candidate.entry())?
-            .0;
-        let combinator = query.expression.discriminant();
-        let predicate_matches = query
-            .expression
-            .predicates()
-            .iter()
-            .map(|predicate| predicate.test(self, candidate.entry(), candidate.window()))
-            .collect::<Vec<_>>();
-        let matches = combinator.combine(predicate_matches.iter().copied());
-
-        Some(crate::NodeQueryExplanation {
-            predicate_matches,
-            matches,
-        })
     }
 }
 

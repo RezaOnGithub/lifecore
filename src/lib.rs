@@ -26,8 +26,8 @@ pub struct EntryIndex(pub usize);
 /// when sorting.
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Clone, Copy, Hash, Debug)]
 pub struct EntryContext {
-    thing: usize,
-    end: usize,
+    pub(crate) thing: usize,
+    pub(crate) end: usize,
 }
 
 /// A window of entries in the database.
@@ -251,7 +251,7 @@ pub struct FamilyInsert {
     pub child: EntryContext,
 }
 
-/// The return type for [`LifeCore::families`]
+/// The return type for [`LifeCoreAccess::families`]
 #[derive(Clone, EnumIs, EnumTryAs)]
 pub enum LifeCoreFamily {
     Leaf(EntryContext),
@@ -341,12 +341,131 @@ pub enum QueryComparison {
     Eq,
 }
 
+//A This is the read-only surface shared by full databases and bounded analyzer
+//A views. Methods must honor the context carried by their inputs.
+pub trait LifeCoreAccess: Send + Sync {
+    /// Get the event selected by `e`. Preserves the context across invocations.
+    ///
+    /// *Note:* We used to also do type resolution for callers, but as typecheck
+    /// grew away from the main crate, it is no longer critical to get the
+    /// window exactly right; still, it is recommended that you use the best
+    /// context you can for the event to maintain consistency with Analyzers and
+    /// minimize confusion.
+    fn get(&self, e: EntryContext) -> Option<Entry>;
+    fn window<I>(&self, i: I) -> impl Iterator<Item = Entry>
+    where
+        I: IntoIterator<Item = EntryContext>;
+    /// Check whether `e.thing` is stale within context. Return None for invalid
+    /// input. Stale Node means a newer node has it as its parent within
+    /// context. Stale Edge means at least one end is a Stale Node
+    fn is_stale(&self, e: EntryContext) -> Option<bool>;
+
+    /// Find all Entries that pass **all** [`Query`] predicates
+    fn query(&self, query: NodeQuery) -> Vec<Node>;
+
+    /// Get node at the specified index and context, `None` if is not a node or
+    /// is out-of-bounds. See also: [`LifeCoreAccess::get`]
+    fn node(&self, ctx: EntryContext) -> Option<Node> {
+        if let Some(Entry::Node(n)) = self.get(ctx) {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// Get edge at the specified index and context, `None` if is not a edge or
+    /// is out-of-bounds. See also: [`LifeCoreAccess::get`]
+    fn edge(&self, ctx: EntryContext) -> Option<Edge> {
+        if let Some(Entry::Edge(e)) = self.get(ctx) {
+            Some(e)
+        } else {
+            None
+        }
+    }
+
+    fn nodes(&self, ctx: Context) -> impl Iterator<Item = Node>;
+    fn edges(&self, ctx: Context) -> impl Iterator<Item = Edge>;
+
+    fn fresh_nodes(&self, ctx: Context) -> impl Iterator<Item = Node> {
+        self.nodes(ctx).filter(|x| !self.is_stale(x.e).unwrap())
+    }
+    fn fresh_edges(&self, ctx: Context) -> impl Iterator<Item = Edge> {
+        self.edges(ctx).filter(|x| !self.is_stale(x.e).unwrap())
+    }
+
+    /// Get non-stale edges connected to node `n`
+    ///
+    /// *Note:* for this function to return anything meaningful, `n` itself
+    /// needs to be fresh within the context that implies. That is, if `end` is
+    /// far enough past the index so that `n` is stale, any edge connected to
+    /// it is also stale.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use lifecore::{LifeCoreList, LifeCore, LifeCoreAccess, Body, Node, Edge};
+    /// let mut lc = LifeCoreList::default();
+    /// let a0 = lc.add_mock("A", Body::default(), None).unwrap();
+    /// let b0 = lc.add_mock("B", Body::default(), None).unwrap();
+    /// let _ = lc.connect_mock(a0.e, "X", b0.e).unwrap();
+    /// let b1 = lc.add_mock("B", Body::default(), Some(b0.e)).unwrap();
+    /// let _ = lc.connect_mock(a0.e, "X", b1.e).unwrap();
+    /// assert_eq!(lc.fresh_edges_of(b0.e).count(), 0);
+    /// ```
+    fn fresh_edges_of(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
+        self.edges(n.context()).filter(move |x| {
+            !self.is_stale(n.look_at(x.e)).unwrap()
+                && (x.from.absolute() == n.absolute() || x.to.absolute() == n.absolute())
+        })
+    }
+
+    /// Get fresh outgoing edges from `n` within the implied context. See
+    /// [`LifeCoreAccess::fresh_edges_of`]
+    ///
+    /// Outgoing edge means an edge where `n` is `from`, also known as the head
+    /// of the edge.
+    fn fresh_outgoing_edges_of(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
+        self.edges(n.context())
+            .filter(move |x| !self.is_stale(x.e).unwrap() && x.from.absolute() == n.absolute())
+    }
+
+    /// Get fresh Incoming edges from `n` within the implied context. See
+    /// [`LifeCoreAccess::fresh_edges_of`]
+    ///
+    /// Incoming edge means an edge where `n` is `to`, also known as the tail of
+    /// the edge
+    fn fresh_incoming_edges_to(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
+        self.edges(n.context())
+            .filter(move |x| !self.is_stale(x.e).unwrap() && x.to.absolute() == n.absolute())
+    }
+
+    /// Get root of node at `e`. That is, the ancestor node by the way of
+    /// `parent` component
+    fn root_of(&self, e: EntryContext) -> Option<EntryContext>;
+
+    /// Returns fresh successors within context.
+    /// A 'successor' is defined as any non-stale node within context that has
+    /// `node` as its ancestor. An 'ancestor' of a node is any node within
+    /// `.parent` chain of it. If a node has no parent, it is its own ancestor.
+    ///
+    /// *Note:* Only searches within the context.
+    fn fresh_successors(&self, node: EntryContext) -> Vec<EntryContext>;
+
+    /// Find relative degree. Siblings (nodes that share a parent) have degree
+    /// 0. Note that the left sides of the contexts need to extend far back
+    /// enough in order to find the shared parent.
+    fn relative_degree(&self, a: EntryContext, b: EntryContext) -> Option<usize>;
+    fn are_siblings(&self, a: EntryContext, b: EntryContext) -> bool {
+        self.relative_degree(a, b) == Some(0)
+    }
+    fn families(&self, ctx: Context) -> Vec<LifeCoreFamily>;
+}
+
 /// The primary trait describing the interface to the database.
 ///
 /// Mutations are committed only after the resulting database passes basic
 /// validation. Ordinary mutations therefore fail while a mock suffix is
 /// pending, without changing the database.
-pub trait LifeCore: Send + Sync {
+pub trait LifeCore: LifeCoreAccess {
     /// Get last event in LifeCore as a bounded Context
     fn last(&self) -> Option<EntryContext>;
 
@@ -395,127 +514,12 @@ pub trait LifeCore: Send + Sync {
     /// database unchanged.
     fn apply(&mut self) -> Result<(), LifeCoreError>;
 
-    /// Get the event selected by `e`. Preserves the context across invocations.
-    ///
-    /// *Note:* We used to also do type resolution for callers, but as typecheck
-    /// grew away from the main crate, it is no longer critical to get the
-    /// window exactly right; still, it is recommended that you use the best
-    /// context you can for the event to maintain consistency with Analyzers and
-    /// minimize confusion.
-    fn get(&self, e: EntryContext) -> Option<Entry>;
     fn get_with_circumstance(&self, e: EntryContext) -> Option<(Entry, Circumstance)>;
-    fn window<I>(&self, i: I) -> impl Iterator<Item = Entry>
-    where
-        I: IntoIterator<Item = EntryContext>;
-    /// Check whether `e.thing` is stale within context. Return None for invalid
-    /// input. Stale Node means a newer node has it as its parent within
-    /// context. Stale Edge means at least one end is a Stale Node
-    fn is_stale(&self, e: EntryContext) -> Option<bool>;
-
-    /// Find all Entries that pass **all** [`Query`] predicates
-    fn query(&self, query: NodeQuery) -> Vec<Node>;
-
     fn explain_query(
         &self,
         query: &NodeQuery,
         candidate: EntryContext,
     ) -> Option<NodeQueryExplanation>;
-
-    /// Get node at the specified index and context, `None` if is not a node or
-    /// is out-of-bounds. See also: [`LifeCore::get`]
-    fn node(&self, ctx: EntryContext) -> Option<Node> {
-        if let Some(Entry::Node(n)) = self.get(ctx) {
-            Some(n)
-        } else {
-            None
-        }
-    }
-
-    /// Get edge at the specified index and context, `None` if is not a edge or
-    /// is out-of-bounds. See also: [`LifeCore::get`]
-    fn edge(&self, ctx: EntryContext) -> Option<Edge> {
-        if let Some(Entry::Edge(e)) = self.get(ctx) {
-            Some(e)
-        } else {
-            None
-        }
-    }
-
-    fn nodes(&self, ctx: Context) -> impl Iterator<Item = Node>;
-    fn edges(&self, ctx: Context) -> impl Iterator<Item = Edge>;
-
-    fn fresh_nodes(&self, ctx: Context) -> impl Iterator<Item = Node> {
-        self.nodes(ctx).filter(|x| !self.is_stale(x.e).unwrap())
-    }
-    fn fresh_edges(&self, ctx: Context) -> impl Iterator<Item = Edge> {
-        self.edges(ctx).filter(|x| !self.is_stale(x.e).unwrap())
-    }
-
-    /// Get non-stale edges connected to node `n`
-    ///
-    /// *Note:* for this function to return anything meaningful, `n` itself
-    /// needs to be fresh within the context that implies. That is, if `end` is
-    /// far enough past the index so that `n` is stale, any edge connected to
-    /// it is also stale.
-    ///
-    /// # Example
-    /// ```rust
-    /// # use lifecore::{LifeCoreList, LifeCore, Body, Node, Edge};
-    /// let mut lc = LifeCoreList::default();
-    /// let a0 = lc.add_mock("A", Body::default(), None).unwrap();
-    /// let b0 = lc.add_mock("B", Body::default(), None).unwrap();
-    /// let _ = lc.connect_mock(a0.e, "X", b0.e).unwrap();
-    /// let b1 = lc.add_mock("B", Body::default(), Some(b0.e)).unwrap();
-    /// let _ = lc.connect_mock(a0.e, "X", b1.e).unwrap();
-    /// assert_eq!(lc.fresh_edges_of(b0.e).count(), 0);
-    /// ```
-    fn fresh_edges_of(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
-        self.edges(n.window()).filter(move |x| {
-            !self.is_stale(n.look_at(x.e)).unwrap()
-                && (x.from.absolute() == n.absolute() || x.to.absolute() == n.absolute())
-        })
-    }
-
-    /// Get fresh outgoing edges from `n` within the implied context. See
-    /// [`LifeCore::fresh_edges_of`]
-    ///
-    /// Outgoing edge means an edge where `n` is `from`, also known as the head
-    /// of the edge.
-    fn fresh_outgoing_edges_of(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
-        self.edges(n.window())
-            .filter(move |x| !self.is_stale(x.e).unwrap() && x.from.absolute() == n.absolute())
-    }
-
-    /// Get fresh Incoming edges from `n` within the implied context. See
-    /// [`LifeCore::fresh_edges_of`]
-    ///
-    /// Incoming edge means an edge where `n` is `to`, also known as the tail of
-    /// the edge
-    fn fresh_incoming_edges_to(&self, n: EntryContext) -> impl Iterator<Item = Edge> {
-        self.edges(n.window())
-            .filter(move |x| !self.is_stale(x.e).unwrap() && x.to.absolute() == n.absolute())
-    }
-
-    /// Get root of node at `e`. That is, the ancestor node by the way of
-    /// `parent` component
-    fn root_of(&self, e: EntryContext) -> Option<EntryContext>;
-
-    /// Returns fresh successors within context.
-    /// A 'successor' is defined as any non-stale node within context that has
-    /// `node` as its ancestor. An 'ancestor' of a node is any node within
-    /// `.parent` chain of it. If a node has no parent, it is its own ancestor.
-    ///
-    /// *Note:* Only searches within the context.
-    fn fresh_successors(&self, node: EntryContext) -> Vec<EntryContext>;
-
-    /// Find relative degree. Siblings (nodes that share a parent) have degree
-    /// 0. Note that the left sides of the contexts need to extend far back
-    /// enough in order to find the shared parent.
-    fn relative_degree(&self, a: EntryContext, b: EntryContext) -> Option<usize>;
-    fn are_siblings(&self, a: EntryContext, b: EntryContext) -> bool {
-        self.relative_degree(a, b) == Some(0)
-    }
-    fn families(&self, ctx: Context) -> Vec<LifeCoreFamily>;
     fn add_analyzer(&mut self, name: &str, config: &str);
     fn current_analysis_suite(&self) -> analysis::SuiteConfig;
 }

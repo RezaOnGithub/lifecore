@@ -6,7 +6,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use lifecore::{LifeCore, LifeCoreFamily, LifeCoreList, Node};
+use lifecore::{LifeCoreAccess, LifeCoreFamily, LifeCoreList, Node};
 use tempfile::NamedTempFile;
 
 use crate::{
@@ -242,7 +242,7 @@ pub fn generate(
         if options.full || !stale {
             //A Entry index is both the stable DOT identifier and the map key,
             //A making traversal independent of hash or allocation ordering.
-            selected_nodes.insert(node.e.entry().0, node);
+            selected_nodes.insert(node.e.index().0, node);
         }
     }
     let selected_indices = selected_nodes.keys().copied().collect::<BTreeSet<_>>();
@@ -295,7 +295,7 @@ pub fn generate(
                 dot.push_str(&format!(
                     "  n{} -> n{} [arrowhead=none, label=\"parent\", style=dashed];\n",
                     parent.0,
-                    node.e.entry().0
+                    node.e.index().0
                 ));
             }
         }
@@ -312,17 +312,17 @@ pub fn generate(
         if !selected_indices.contains(&edge.from.0) || !selected_indices.contains(&edge.to.0) {
             return Err(AppError::graphviz_generation(format!(
                 "visible edge {} has an unavailable endpoint",
-                edge.e.entry().0
+                edge.e.index().0
             )));
         }
         let locator = resolve_index(
             input.graph,
             input.state,
-            edge.e.entry().0,
+            edge.e.index().0,
             EntryExpectation::Any,
             Some(input.view.end_exclusive()),
         )?;
-        let provisional = edge.e.entry().0 >= input.canonical_end;
+        let provisional = edge.e.index().0 >= input.canonical_end;
         let label = if provisional {
             format!(
                 "{}\n{}\nprovisional",
@@ -362,7 +362,7 @@ fn write_node(
     let locator = resolve_index(
         input.graph,
         input.state,
-        node.e.entry().0,
+        node.e.index().0,
         EntryExpectation::Node,
         Some(input.view.end_exclusive()),
     )?;
@@ -370,13 +370,13 @@ fn write_node(
         escape_record_component(&graphviz_locator(&locator)),
         escape_record_component(&node.ty_name),
     ];
-    if let Some(names) = input.aliases.get(&node.e.entry().0) {
+    if let Some(names) = input.aliases.get(&node.e.index().0) {
         header_parts.push(escape_record_component(&format!(
             "aliases: {}",
             names.join(", ")
         )));
     }
-    let provisional = node.e.entry().0 >= input.canonical_end;
+    let provisional = node.e.index().0 >= input.canonical_end;
     if provisional {
         header_parts.push("provisional".to_string());
     }
@@ -411,7 +411,7 @@ fn write_node(
     dot.push_str(&format!(
         "{:indentation$}n{} [label=\"{}\"{}];\n",
         "",
-        node.e.entry().0,
+        node.e.index().0,
         label,
         provisional_style,
         indentation = indentation
@@ -430,9 +430,9 @@ fn graphviz_locator(entry: &ResolvedEntry) -> String {
 
 fn collect_family_members(family: &LifeCoreFamily, members: &mut Vec<usize>) {
     match family {
-    LifeCoreFamily::Leaf(entry) => members.push(entry.entry().0),
+    LifeCoreFamily::Leaf(entry) => members.push(entry.index().0),
     LifeCoreFamily::Parent(entry, children) => {
-        members.push(entry.entry().0);
+        members.push(entry.index().0);
         for child in children {
             collect_family_members(child, members);
         }

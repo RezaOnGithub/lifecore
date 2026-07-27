@@ -1,4 +1,4 @@
-use lifecore::{Circumstance, Entry, LifeCore, LifeCoreList};
+use lifecore::{Circumstance, Entry, LifeCoreAccess, LifeCoreList};
 
 use crate::{
     app::{CircumstanceRecord, EntryRecord},

@@ -1,4 +1,4 @@
-use lifecore::{Context, EntryIndex, LifeCore, LifeCoreList};
+use lifecore::{Context, EntryIndex, LifeCore, LifeCoreAccess, LifeCoreList};
 
 use crate::{
     app::ViewSummary,
@@ -29,7 +29,7 @@ impl GraphView {
     ) -> Result<Self, AppError> {
         let canonical_end = graph
             .last()
-            .map_or(0, |entry| entry.entry().0.saturating_add(1));
+            .map_or(0, |entry| entry.index().0.saturating_add(1));
         Self::construct_effective(graph, state, spec, canonical_end)
     }
 
@@ -50,7 +50,7 @@ impl GraphView {
     pub fn latest(graph: &LifeCoreList, state: &CliStateV1) -> Result<Self, AppError> {
         let canonical_end = graph
             .last()
-            .map_or(0, |entry| entry.entry().0.saturating_add(1));
+            .map_or(0, |entry| entry.index().0.saturating_add(1));
         Self::latest_effective(graph, state, canonical_end)
     }
 
@@ -70,20 +70,20 @@ impl GraphView {
         let entry = graph
             .get(last)
             .ok_or_else(|| AppError::invalid_state("graph last entry could not be loaded"))?;
-        let fingerprint = crate::locator::EntryFingerprint::for_entry(state, last.entry(), &entry)?;
+        let fingerprint = crate::locator::EntryFingerprint::for_entry(state, last.index(), &entry)?;
         let boundary = resolve_entry(
             graph,
             state,
-            &EntryLocator::parse(&format!("{}:{}", last.entry().0, fingerprint.as_str()))?,
+            &EntryLocator::parse(&format!("{}:{}", last.index().0, fingerprint.as_str()))?,
             EntryExpectation::Any,
             None,
         )?;
 
         Ok(Self {
-            context: last.window(),
-            end_exclusive: last.entry().0.saturating_add(1),
+            context: last.context(),
+            end_exclusive: last.index().0.saturating_add(1),
             boundary: Some(boundary),
-            canonical_end: canonical_end.min(last.entry().0.saturating_add(1)),
+            canonical_end: canonical_end.min(last.index().0.saturating_add(1)),
         })
     }
 
@@ -94,7 +94,7 @@ impl GraphView {
     ) -> Result<Self, AppError> {
         let canonical_end = graph
             .last()
-            .map_or(0, |entry| entry.entry().0.saturating_add(1));
+            .map_or(0, |entry| entry.index().0.saturating_add(1));
         Self::through_effective(graph, state, locator, canonical_end)
     }
 
@@ -108,7 +108,9 @@ impl GraphView {
         //A graph before its index is allowed to construct a bounded context.
         let boundary = resolve_entry(graph, state, locator, EntryExpectation::Any, None)?;
         let end_exclusive = boundary.index().saturating_add(1);
-        let context = EntryIndex(boundary.index()).before_and_including().window();
+        let context = EntryIndex(boundary.index())
+            .before_and_including()
+            .context();
 
         Ok(Self {
             context,

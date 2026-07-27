@@ -226,5 +226,5 @@ fn graph_end(state: &PersistedState) -> usize {
     state
         .lifecore
         .last()
-        .map_or(0, |entry| entry.entry().0.saturating_add(1))
+        .map_or(0, |entry| entry.index().0.saturating_add(1))
 }
