@@ -1,0 +1,4 @@
+interface:
+  display_name: "Crux Finder"
+  short_description: "Stress-test requirements to uncover the crux"
+  default_prompt: "Use $crux-finder to pressure-test these requirements and help us find the underlying crux."
