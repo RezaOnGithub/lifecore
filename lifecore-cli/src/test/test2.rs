@@ -12,6 +12,7 @@ use lifecore::{
     serialize::NodeBody,
     typing::Type,
 };
+use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
 use uuid::{Uuid, Version};
 
@@ -4136,6 +4137,66 @@ fn stage6_analyzer_list_and_add_preserve_order_and_reject_missing_factories() {
     assert_eq!(
         fs::read(&path).expect("state remains readable"),
         before_unknown
+    );
+}
+
+#[test]
+fn dag_check_is_registered_but_opt_in_and_invalid_config_rolls_back() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    run_in(&["lifecore", "init"], directory.path(), None).expect("initialization succeeds");
+    let path = directory.path().join("LifeCoreState.json");
+    let initialized = fs::read(&path).expect("initialized bytes are readable");
+    let valid_config = r#"{"on_cycle":"warning"}"#;
+
+    let dry_run = run_in(
+        &[
+            "lifecore",
+            "analyzer",
+            "add",
+            DagCheckFactory::<LifeCoreList>::name(),
+            valid_config,
+        ],
+        directory.path(),
+        None,
+    )
+    .expect("DAG Check factory is available");
+    match dry_run {
+    CommandOutcome::Transaction { result, .. } => {
+        assert_eq!(result.state, TransactionState::DryRun);
+        assert_eq!(result.analyzers.len(), 1);
+        assert_eq!(result.analyzers[0].name, "DAG_Check");
+        assert_eq!(result.analyzers[0].config, valid_config);
+    }
+    outcome => panic!("expected analyzer transaction, got {outcome:?}"),
+    }
+    assert_eq!(
+        fs::read(&path).expect("dry-run state remains readable"),
+        initialized
+    );
+
+    match run_in(
+        &[
+            "lifecore",
+            "analyzer",
+            "add",
+            DagCheckFactory::<LifeCoreList>::name(),
+            r#"{"on_cycle":"warning","unknown":true}"#,
+            "--commit",
+            "--expect-head",
+            "EMPTY",
+        ],
+        directory.path(),
+        None,
+    ) {
+    Err(AppError::TransactionAborted { detail, .. }) => {
+        assert_eq!(detail.analyzers.len(), 1);
+        assert_eq!(detail.analyzers[0].name, "DAG_Check");
+    }
+    result => panic!("invalid DAG Check configuration should abort, got {result:?}"),
+    }
+    assert_eq!(
+        fs::read(&path).expect("aborted state remains readable"),
+        initialized
     );
 }
 

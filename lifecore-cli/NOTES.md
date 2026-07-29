@@ -43,3 +43,6 @@ into the `lifecore-cli` utility:
 The stock CLI can only execute analyzer configurations whose factories were
 compiled into that binary. State containing another analyzer name will fail
 analysis with a missing-factory error.
+
+`DAG_Check` is compiled into the stock registry but remains opt-in: `init` does
+not add it to the configured analyzer suite.

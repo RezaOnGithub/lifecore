@@ -530,6 +530,7 @@ dependencies = [
  "clap",
  "env_logger",
  "lifecore",
+ "lifecore-dag-check",
  "lifecore-typecheck",
  "log",
  "postcard",
@@ -540,6 +541,16 @@ dependencies = [
  "thiserror",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "lifecore-dag-check"
+version = "0.1.0"
+dependencies = [
+ "lifecore",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

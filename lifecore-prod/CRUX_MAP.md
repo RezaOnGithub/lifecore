@@ -81,6 +81,23 @@ otherwise superseding a dependent without reinstating its old dependency edge
 makes that connection stale, so it ceases to create current pressure. No
 separate pressure-cleanup mechanism is needed.
 
+- Staleness applies when either endpoint is superseded, not only when the
+  dependent is superseded. Completing a prerequisite therefore also makes its
+  old dependency edge stale.
+  - If the edge is not reinstated, the dependent appears to have lost the
+    prerequisite precisely when the prerequisite was satisfied.
+  - If completing the dependent makes all of its incoming edges stale, an
+    analyzer over only the fresh graph cannot tell whether unfinished strict
+    prerequisites were bypassed. Freshness-as-cleanup therefore conflicts with
+    enforcing dependency order and retaining the explanation of completion.
+  - Reinstating every surviving incident relationship on each replacement
+    would make a node version an adjacency snapshot, but even a small status
+    edit could require a large, atomic fan-out rewrite.
+  - Inspecting the pre-replacement graph could enforce the transition without
+    retaining those relationships in the current graph. Representing completion
+    separately from node supersession could retain them, but would introduce a
+    different status/event model.
+
 ## Requirements
 
 ### 1. Every work item should be traceable to broader end goals
@@ -151,6 +168,13 @@ separate pressure-cleanup mechanism is needed.
 - A Habit defines recurring participation, not one completable action. “Run”
   and “swim” name activities or Habits; they are not immediately actionable
   TODO items.
+  - The dependency graph can remain acyclic while a Habit produces a sequence
+    of participation opportunities. A timeless Habit node alone does not say
+    which opportunity currently exists, was satisfied, or was missed.
+    - Deriving opportunities from wall-clock time makes analysis depend on an
+      explicit evaluation time if historical results are to be reproducible.
+      Recording each opportunity in the graph preserves history but requires
+      some actor other than the analyzer to create the records reliably.
   - When a Habit is a strict dependency of a finite Project, each pending
     participation instance can be treated as an unfulfilled work item under
     that Project.
@@ -215,6 +239,14 @@ separate pressure-cleanup mechanism is needed.
   that it exists. These interpretations produce very different pressure.
 - Recording an optional dependency accepts pressure to make its contribution;
   it does not make the dependent's success conditional on that contribution.
+  - This gives one edge two meanings: “this would be valuable” and “I currently
+    owe action on this.” Under broad capture and finite capacity, those claims
+    need not coincide.
+  - Removing the edge to decline the work restores feasibility by erasing
+    useful context. Keeping it makes honest recognition an indefinite
+    commitment. An explicit distinction between recognized contribution and
+    selected commitment might preserve both, but selection could become a new
+    route for evading pressure.
 - If every recognized concern demands action, breadth deliberately creates more
   pressure and makes omission harder to ignore.
   - This may be a desired consequence rather than a flaw. We still need to ask
@@ -251,6 +283,11 @@ separate pressure-cleanup mechanism is needed.
 - A goal can have a large dependency subgraph yet no executable source.
   - Every pursued unfinished goal might require at least one current, concrete
     TODO that is neither blocked nor waiting.
+  - A legitimately waiting goal may have no action that can advance its outcome.
+    Requiring an executable TODO then either misdiagnoses a coherent plan or
+    encourages a ceremonial “check whether it is still blocked” task.
+    Distinguishing a broken plan from an externally gated plan requires evidence
+    and a review condition, not merely the absence of an actionable source.
 - Pressure from an unfinished optional dependency should flow backward through
   its strict hierarchy to actionable TODOs.
   - Warning only on the abstract optional Project would identify importance
@@ -301,14 +338,27 @@ separate pressure-cleanup mechanism is needed.
   which sacrifice is right.
   - The system may pressure for a selection and an explicit displaced item
     without prescribing the selection.
+- Capacity becomes enforceable only over commitments that share an accounting
+  window and unit. TODO execution, Habit participation, Cycler review, and
+  waiting for an external event do not consume attention in the same way.
+  - Restricting the budget to selected actionable work gives it a coherent
+    meaning, but leaves open how recurring and review obligations reserve future
+    capacity rather than repeatedly surprising the current selection.
 
 ### 8. Goal classes should preserve their different success semantics
 
 - A work container can combine a grouping role, a completion status, and a
   resource budget. A broad goal such as “maintain close friendships” has no
   natural completion point or total budget.
-  - Projects, Cyclers, Habits, and Fuzzy End Goals should not inherit one shared
-    meaning of `Done` merely because each can depend on work.
+- Projects, Cyclers, Habits, and Fuzzy End Goals should not inherit one shared
+  meaning of `Done` merely because each can depend on work.
+- These classes combine several independent dimensions: whether something is
+  actionable or a container, finite or recurring, and mechanically completed or
+  explicitly judged sufficient.
+  - A concern can occupy more than one point on those dimensions. Making the
+    classes exclusive may require arbitrary classification or parallel nodes;
+    modeling the dimensions independently permits nonsensical combinations that
+    the analyzer would then need to reject.
 - An ongoing area may be considered attended merely because it received some
   completed work, but a trivial action need not constitute meaningful care.
   - Coverage may need a review interval, meaningful evidence, or an explicit
@@ -337,3 +387,31 @@ separate pressure-cleanup mechanism is needed.
   - The analyzer might enforce a small protocol—map, select, act, review—over
     user-defined goal and area content rather than encode a universal theory of
     a good life.
+- The analyzer nevertheless needs a deterministic way to recognize TODO,
+  Project, Cycler, Habit, Fuzzy End Goal, strict dependency, and optional
+  contribution roles across user-defined and historically changing types.
+  - Canonical type names make the planning ontology rigid. Structural inference
+    is ambiguous. Explicit role configuration preserves user control but must
+    itself be versioned and may leave historical prefixes temporarily
+    uninterpretable.
+- Structural rules can make evasion visible as an explicit graph edit, omission,
+  or contradiction; they cannot make the declared reason sincere or the
+  completed action meaningful.
+  - “Difficult to evade” may need to mean difficult to evade while preserving a
+    coherent declared account. Stronger behavioral claims exceed what this
+    analyzer can observe.
+
+## Candidate crux
+
+We want the graph to record every recognized goal and worthwhile contribution,
+and we want recorded work to create pressure that is difficult to evade. But a
+broad set of recognized possibilities cannot all be current obligations under
+finite capacity. If the same dependency edge means both “this matters” and “I
+owe action now,” honest breadth creates chronic overcommitment, while pruning
+the graph becomes the easiest way to restore feasibility.
+
+The missing distinction may be between awareness and commitment. Awareness
+could create pressure to review or decide; commitment could create pressure to
+act. That distinction is not yet an answer: the framework would still need to
+make declining, deferring, and releasing a commitment explicit enough that
+“not selected” does not become a quiet escape hatch.

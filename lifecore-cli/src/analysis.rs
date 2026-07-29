@@ -2,6 +2,7 @@ use lifecore::{
     LifeCore, LifeCoreList,
     analysis::{AnalysisRunner, AnalyzerFactory, Config, Message, SuiteConfig},
 };
+use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
 
 use crate::{error::AppError, interactive_analyzer::InteractiveFactory};
@@ -10,6 +11,7 @@ use crate::{error::AppError, interactive_analyzer::InteractiveFactory};
 pub struct AnalyzerRegistry {
     type_check: bool,
     interactive: bool,
+    dag_check: bool,
 }
 
 impl AnalyzerRegistry {
@@ -17,6 +19,7 @@ impl AnalyzerRegistry {
         Self {
             type_check: true,
             interactive: true,
+            dag_check: true,
         }
     }
 
@@ -25,6 +28,7 @@ impl AnalyzerRegistry {
         Self {
             type_check: false,
             interactive: false,
+            dag_check: false,
         }
     }
 
@@ -40,6 +44,12 @@ impl AnalyzerRegistry {
         if self.interactive {
             runner
                 .register_analyzer_kind(Box::new(InteractiveFactory))
+                .map_err(|error| AppError::analysis(error.to_string()))?;
+        }
+
+        if self.dag_check {
+            runner
+                .register_analyzer_kind(Box::new(DagCheckFactory::<LifeCoreList>::default()))
                 .map_err(|error| AppError::analysis(error.to_string()))?;
         }
 

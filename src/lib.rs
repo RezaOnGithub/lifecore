@@ -133,6 +133,11 @@ pub enum LifeCoreError {
     DuplicateAnalyzer { dupe_name: String },
     #[error("Analyzer {name:?} not found!")]
     AnalyzerNotFound { name: String },
+    #[error("Invalid configuration for analyzer {analyzer_name:?}: {message}")]
+    InvalidAnalyzerConfiguration {
+        analyzer_name: String,
+        message: String,
+    },
     #[error("Systems Error")]
     SystemsError(Vec<analysis::Inconsistency>),
     #[error("Validation Failure")]

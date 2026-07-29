@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "lifecore-cli",
+    "lifecore-dag-check",
     # "lifecore-kman",
     # "lifecore-proc-macro",
     # "lifecore-prod",

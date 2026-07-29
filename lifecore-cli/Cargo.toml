@@ -8,6 +8,7 @@ default-run = "lifecore-cli"
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.11"
 lifecore = { path = ".." }
+lifecore-dag-check = { path = "../lifecore-dag-check" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 log = "0.4.33"
 postcard = { version = "1.1.3", features = ["alloc"] }
