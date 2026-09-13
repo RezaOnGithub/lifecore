@@ -609,3 +609,5 @@ pub mod serialize;
 mod test;
 /// Vocabulary for declaring the shape of typed node bodies.
 pub mod typing;
+
+pub mod transaction;

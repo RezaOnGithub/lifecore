@@ -1,6 +1,6 @@
 # Rust Sketch 02 Cleanup Plan
 
-Status: Stage 0 complete. Stages 1–2 authorized; later stages remain planned.
+Status: Stages 0–1 complete. Stage 2 authorized; later stages remain planned.
 
 ## 1. Outcome
 
@@ -196,21 +196,30 @@ test currently asserts it.
 
 ### Stage 1 — Retire the old CLI and attached sidecars
 
-- [ ] Extract only the reusable persistence, staging, and inspection behavior
+- [x] Extract only the reusable persistence, staging, and inspection behavior
   identified in Stage 0 into frontend-independent library code. Preserve the
   existing composite operation's atomic persistence and prefix checks during
   extraction; frontend removal must not weaken those guarantees.
-- [ ] Move relevant regression scenarios into the retained libraries' tests.
+- [x] Move relevant regression scenarios into the retained libraries' tests.
   Do not reproduce the old command/output contract in the new API.
-- [ ] Remove `lifecore-cli` from the workspace and remove its implementation,
+- [x] Remove `lifecore-cli` from the workspace and remove its implementation,
   CLI-specific state, attached-sidecar machinery, and obsolete package docs.
-- [ ] Remove dependencies and lockfile entries that no remaining target needs.
-- [ ] Update AGENTS and repository entry documentation to describe the active
+- [x] Remove dependencies and lockfile entries that no remaining target needs.
+- [x] Update AGENTS and repository entry documentation to describe the active
   workspace and available verification commands.
 
 Exit evidence: core and analyzer tests run without the old CLI. No retained
 library depends on an attached draft to answer a committed-data query. A small
 new executable is introduced later for explicit file operations.
+
+Stage 1 evidence: `cargo test --workspace` passes 69 unit tests and one doctest,
+with the two Stage 0 defect witnesses ignored. The shared transaction tests cover
+composite rollback, missing factories, stale memory/file bases, no-clobber
+initialization, failed atomic replacement, malformed references, and a historical
+cycle repaired only in the final view. Remaining warnings are in the old core
+and disabled tests scheduled for Stage 2. File writers now exclude one another
+through an advisory lock held over base verification and replacement. Receipts
+for retries after uncertain acknowledgment remain Stage 5 work.
 
 ### Stage 2 — Replace contexts, then simplify values and core operations
 

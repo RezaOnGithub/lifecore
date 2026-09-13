@@ -16,8 +16,9 @@ Preserve historical correctness under the chosen model and unrelated user work.
 
 ## Checks
 
-Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-and the old `lifecore-cli` pending removal.
+Active workspace: `lifecore` (root), `lifecore-typecheck`, and
+`lifecore-dag-check`. Shared checking and file persistence live in
+`lifecore::transaction`; the old CLI and sidecars have been removed.
 
 - Tests: `cargo test --workspace` or `cargo test -p <package>`.
 - Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.

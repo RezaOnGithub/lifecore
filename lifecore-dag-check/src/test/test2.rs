@@ -335,3 +335,39 @@ fn factory_rejects_invalid_json_with_typed_core_error_and_harness_stays_bounded(
             .all(|entry| entry.0 < bound.last().unwrap().index().0)
     );
 }
+
+#[test]
+fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
+    use lifecore::transaction::{Change, check};
+    let mut graph = LifeCoreList::default();
+    graph.add_analyzer(
+        DagCheckFactory::<LifeCoreList>::name(),
+        r#"{"on_cycle":"inconsistency"}"#,
+    );
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(DagCheckFactory::<LifeCoreList>::default()))
+        .unwrap();
+    let node = |name: &str, parent| Change::AddNode {
+        ty_name: name.into(),
+        body: Body::default(),
+        parent,
+    };
+    let changes = [
+        node("A", None),
+        node("B", None),
+        Change::AddEdge {
+            from: EntryIndex(0),
+            ty_name: "link".into(),
+            to: EntryIndex(1),
+        },
+        Change::AddEdge {
+            from: EntryIndex(1),
+            ty_name: "link".into(),
+            to: EntryIndex(0),
+        },
+        node("A2", Some(EntryIndex(0))),
+    ];
+    assert!(check(&graph, &changes, &mut runner).is_err());
+    assert!(graph.last().is_none());
+}
