@@ -47,18 +47,14 @@ arrays of tables to preserve entry order. Later TOML features are not implicitly
 enabled by installing a newer parser.
 
 The initial value profile is `toml-basic-v1`: strings, booleans, signed 64-bit
-integers, finite binary64 floats, arrays, and string-keyed maps. Date/time values,
-NaN, and infinities are rejected. Dates can be strings checked by a schema.
-Null is unsupported in this profile; absence must not be represented by an
-empty string or another implicit substitute. A database containing other value
-kinds requires a separately specified profile before these files can represent
-those values losslessly.
-
-Equality distinguishes value kinds, including integers, floats, and booleans.
-Map key order is irrelevant; array order matters. Floating positive and negative
-zero compare equal. Hashes must follow these equality rules. Literal source
-line endings are normalized to LF before parsing; escaped string content retains
-its parsed meaning. No Unicode normalization or other coercion is implicit.
+integers, offset date/time instants, lists, and string-keyed records. Local dates,
+local times, floats, null, sets, tuples, and unions are outside this round.
+Lists and records may nest. Schema lists are homogeneous; records declare named
+fields with presence policies. Timestamp values denote instants, not display
+zones. Map key order is irrelevant; list order matters. Equality distinguishes
+scalar kinds, and hashes must follow equality. No coercion or Unicode
+normalization is implicit. Literal source line endings normalize to LF before
+parsing; escaped string content retains its parsed meaning.
 
 Unknown format versions, profiles, and control fields are errors. Payload field
 names are governed by the contextual type declaration, including its
@@ -213,16 +209,11 @@ there is no implicit rebase. A newer evaluation context requires a new check
 result to be presented, rather than claiming the earlier result still applies.
 During application the selected context remains fixed.
 
-Each append is independently atomic, with validation and insertion protected
-against concurrent changes. The expected head for operation N includes only the
-successful earlier operations of this plan. An unrelated intervening append
-stops application. Holding a writer lock across the command is an optional way
-to avoid interleaving; it does not make the command a single transaction.
-
-Users can reorder or edit a generated plan. This changes its check result and,
-for collection plans, requires the correspondence to source documents to be
-verified again. A started plan is immutable: changing its content requires a new
-plan identity and explicit reconciliation with its committed prefix.
+The complete plan commits atomically after every prefix passes. Hold the writer
+exclusion and expected-base check through replacement so another writer cannot
+interleave with publication. Each committed intermediate boundary remains
+inspectable. Editing the plan changes its check result and requires a new plan
+identity; there is no partially committed plan suffix to resume.
 
 ## 4. Document collections
 
@@ -430,8 +421,8 @@ Every current edge in the affected neighborhood must be explained in the
 preview as document-managed, externally managed, or unowned. The interface must
 not claim that a document lists all its connections when it lists only some.
 
-The database can remain valid during a partial application while the collection
-has not reached its intended state. The frontend must display that distinction.
+Database publication and collection writeback are separate. The frontend must
+display when the graph has committed but document synchronization is incomplete.
 
 ## 6. Compiling a collection to a change file
 
@@ -556,32 +547,20 @@ branches from historical predecessors.
 
 ## 8. Robust application and recovery
 
-### 8.1 Receipts and partial commits
+### 8.1 Receipts and atomic publication
 
-A successful preflight reduces predictable failures but cannot eliminate commit
-failures. The default persistence contract remains one entry at a time.
+Persist the frozen plan identity, check context, and assigned operation IDs in
+the same atomic publication as the graph. A workspace-only journal written after
+commit cannot close the crash window. Receipts are auxiliary persistence
+metadata, not graph entries.
 
-Before the first append, persist the frozen plan, manifest, context, and recovery
-intent. Each committed entry must be durably associated with `(plan_id,
-operation name)` and its assigned ID in the same persistence transaction as that
-entry, or by an equivalent crash-safe protocol. A workspace-only journal written
-after commit cannot close the crash window. These receipts are auxiliary
-persistence metadata, not additional graph entries.
-
-On failure, report committed operations and IDs, the failed operation, the
-remaining suffix, and the actual boundary. Reusing a plan identity with different
-content is an error. Retrying an identical completed plan reports its receipt
-rather than appending again. Retrying a partial plan uses receipts to resume
-only its uncommitted suffix, subject to fresh checks of the expected head and
-context. Content equality alone is not evidence that an operation committed.
-After verifying database identity and plan content, receipt lookup precedes a
-new-plan base check: this plan's own successful appends are expected to have
-advanced its original base.
-
-If another writer has advanced history, resumption requires reconciliation and
-a new plan for any remaining work. Successful prior entries are never erased.
-An abandoned partial plan remains an inspectable valid prefix, not an invisible
-transaction to roll back.
+A failure before publication leaves the previous graph intact. A failure after
+publication but before acknowledgment is recovered through the durable receipt.
+Retrying an identical completed plan returns its receipt without appending again;
+reusing its identity with different content is an error. Verify identity/content
+and look up the receipt before checking the original expected base, since a
+successful application has itself advanced that base. Safe retries and receipts
+are implemented with TOML authoring in Stage 5.
 
 ### 8.2 Source edits and file writeback
 
@@ -632,7 +611,7 @@ exceptions to the core contract.
 | --- | --- |
 | Database identity differs despite matching IDs/count | Reject before mutation. |
 | Head advances between planning and apply | Reject stale base; require refresh/replan. |
-| Writer interleaves after some operations commit | Stop at head mismatch; preserve/report the committed prefix. |
+| Writer advances the base during checking | Reject under writer exclusion before publishing any operation. |
 | Analyzer changes, disappears, fails, or receives a new evaluation time | Invalidate the old check; never silently skip it. |
 | Schema migration is valid only at the final view | Reject the first invalid prefix. |
 | Both A and B change and A removes its link | Plan both revisions without unnecessary transient reconnection. |
@@ -648,7 +627,7 @@ exceptions to the core contract.
 | File link target escapes the root or has case ambiguity | Reject graph resolution deterministically. |
 | Payloads of independent new roots are identical | Apply the core duplicate rule; do not invent identity fields. |
 | Crash occurs after commit but before client acknowledgment | Recover the operation receipt; do not append twice. |
-| Plan is edited after partial application | Reject reuse of its identity; reconcile remaining work explicitly. |
+| Plan identity is reused with changed content | Reject the conflicting identity, even if the earlier plan committed. |
 | User edits a file during apply or writeback | Preserve newer bytes and expose the synchronization conflict. |
 | Alias URI writeback is followed by an unchanged collection check | Produce no revision; use the recorded normalized checkout baseline. |
 | Old document contains a renamed path or plan-local alias | Resolve from retained view-specific information, never today's files. |
@@ -671,6 +650,5 @@ fallback behavior for unfinished recovery cases.
 This proposal deliberately leaves the storage engine, concrete schema language,
 workspace/manifest physical encoding, and UI toolkit open. Those choices must
 implement the contracts above. Optional future conveniences include patch-based
-draft generators, interactive ordering, merge assistance, and atomic persistence
-of prefix-valid plans. They must not change exact endpoints, invent an automatic
+draft generators, interactive ordering, and merge assistance. They must not change exact endpoints, invent an automatic
 winner after a split, or hide invalid intermediate views.

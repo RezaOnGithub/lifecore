@@ -2,10 +2,11 @@
 
 Status: proposed contract for the simplified LifeCore model.
 
-This document specifies a typed graph with explicit replacement history. It
-supersedes the README's description of optional type checking. Every entry
-prefix must be valid and inspectable; the default transaction appends exactly
-one entry. It does not select a storage engine, authoring language, or user
+This document specifies a typed graph with explicit replacement history. Every entry
+prefix must be valid and inspectable; an ordered plan commits atomically.
+For this cleanup, type checking remains a configured analyzer. Its rules below
+apply when TypeCheck is configured; mandatory installation is an authoring-policy
+decision before TOML check/apply. It does not select a storage engine, authoring language, or user
 interface. Appendix A records the transaction tradeoffs behind this decision.
 
 ## 1. Purpose
@@ -21,7 +22,7 @@ The model has two structures:
   directed edges.
 
 Replacement determines which revisions are current. A historical view determines
-which replacements and type declarations apply. Type checking is mandatory.
+which replacements and type declarations apply. Type checking is configured explicitly for this cleanup.
 Optional analyzers express rules beyond typing.
 
 ## 2. History, entries, and transactions
@@ -33,28 +34,15 @@ Every entry has a unique ID and an unambiguous position in append order. An
 implementation may use the position itself as the ID. Content equality does not
 imply entry identity.
 
-A transaction appends exactly one entry atomically. It either commits that entry
-after all required checks pass or leaves committed history unchanged. Existing
-entries cannot be edited or deleted through the LifeCore mutation interface.
+A transaction appends an ordered plan atomically: all entries commit after the
+checks pass, or committed history remains unchanged. Existing entries cannot be
+edited or deleted through the mutation interface.
 
-The empty history and every committed entry prefix are historical boundaries. A
-**view** contains all entries from the beginning of history through one such
-boundary. Every prefix must satisfy structural and type validation. Each append
-must also pass the configured analyzers before it commits.
-
-Implementations may represent boundaries as exclusive entry counts or another
-equivalent stable identifier. Queries must resolve a request for the latest view
-to one fixed boundary before evaluation.
-
-A command that creates several entries performs a sequence of independently
-validated transactions. If a later append fails, earlier successful appends
-remain committed. There is no exemption for an invalid prefix that a later entry
-would repair. A rejected candidate is not part of history.
-
-Atomic persistence of multiple entries with validation of every prefix is a
-possible future convenience, not required by this specification. It must not
-hide entry boundaries or weaken the every-prefix-valid invariant. Validation
-only at the end of a multi-entry batch is outside this contract.
+The empty history and every entry prefix are inspection boundaries, including
+prefixes inside a committed plan. A view fixes one exclusive boundary and source.
+Every proposed prefix passes structural validation. The configured analyzers,
+including TypeCheck when installed, replay every historical prefix under fixed
+evaluation inputs. Checking only the final graph is insufficient.
 
 The database history is ordered. The branching described in this specification
 belongs to individual node revisions; repository branches are not required.
@@ -213,9 +201,9 @@ if null is supported. Validation must not rewrite committed data, inject newly
 introduced defaults, or silently coerce historical values. Authoring helpers may
 normalize input before constructing the payload to be stored.
 
-Type checking cannot be disabled. Encouraged and deprecated field warnings are
-part of type-checker diagnostics and do not require an optional analyzer. They
-do not block an append or weaken mandatory schema validation.
+TypeCheck remains configurable in this cleanup. Its inconsistencies block writes
+when configured; encouraged and deprecated field warnings are advisory. The
+authoring layer must settle whether TypeCheck is mandatory before it ships.
 
 ### 6.1 Built-in metatype
 
@@ -271,7 +259,7 @@ not assumed to be captured by that hash.
 
 Validation has two responsibilities: checking an append against the preceding
 committed view and checking the resulting candidate view. Both must succeed
-before the single entry commits.
+before the containing plan commits.
 
 ### 7.1 Append checks
 
@@ -331,8 +319,8 @@ view:
    set and the target type's incoming permission set. Both must permit it.
 5. Run the configured analyzers and reject blocking inconsistencies.
 
-No append with a type error can commit. A type error is not dismissible and
-cannot be downgraded by disabling an analyzer.
+With TypeCheck configured, no append with a type error can commit. Presentation
+and dismissal cannot downgrade its inconsistencies.
 
 Superseded nodes and historical edges are not required to satisfy the current
 declarations. Their validity in earlier committed views is evaluated using those
@@ -344,8 +332,7 @@ invalid endpoint permissions at its creation.
 ### 7.4 Failure and persistence
 
 Any failed append, type check, analyzer run, or commit discards the proposed
-single-entry transaction without changing committed history. A command that has
-already committed earlier entries does not roll those entries back. Staged
+ordered plan without changing committed history. Staged
 objects must not expose mutable aliases capable of changing committed payloads.
 
 Hooks, database constraints, and in-process staging are possible enforcement
@@ -362,8 +349,8 @@ diagnostics. It may inspect that view's history as well as its current graph,
 but may not inspect entries beyond the supplied boundary.
 
 Analyzers express application rules such as dependency acyclicity, missing
-justification, overdue work, or suggested restructuring. They do not provide the
-core type system, mutate history, or implicitly apply repairs.
+justification, overdue work, or suggested restructuring. TypeCheck implements the type rules above as a configured analyzer. Analyzers
+do not mutate history or implicitly apply repairs.
 
 Diagnostics distinguish:
 
@@ -494,20 +481,19 @@ explicit relationships, contextual type names, and validity at every prefix.**
 ## Appendix A. Transaction granularity and prefix validity
 
 This appendix records the design discussion and alternatives. Sections 2 and 7
-define the selected contract: single-entry transactions and validation at every
-prefix.
+define the selected contract: atomic plans and validation at every prefix.
 
 ### A.1 Validation and atomic persistence are separate choices
 
 | Model                              | Full validation                                    | Persistence             | Status                      |
 | ---------------------------------- | -------------------------------------------------- | ----------------------- | --------------------------- |
-| Single-entry transactions          | Every entry prefix                                 | One entry at a time     | Default                     |
-| Batches with prefix validation     | Every entry prefix                                 | Entire batch or nothing | Possible future convenience |
+| Single-entry transactions          | Every entry prefix                                 | One entry at a time     | Not selected                |
+| Batches with prefix validation     | Every entry prefix                                 | Entire batch or nothing | Selected                    |
 | Batches with final-view validation | Only the final view, plus structural append checks | Entire batch or nothing | Excluded from this contract |
 
 The first two permit the same entry sequences when evaluated with the same
 analyzers, configuration, and explicit inputs. They differ in what is saved if a
-later append fails. Prefix-valid batches would still expose every entry boundary
+later append fails. Prefix-valid batches expose every entry boundary
 for historical inspection, even if those entries were persisted together.
 
 Final-view validation permits additional sequences with invalid intermediate
@@ -574,17 +560,11 @@ visible migration progress without admitting invalid history. It does not make
 every possible schema change constructible; other constraints must also permit
 the migration path.
 
-### A.5 Failure handling, cost, and future batching
+### A.5 Failure handling and cost
 
-With single-entry persistence, a command may finish part of a split or migration
-before failing. Earlier appends remain valid and committed. Recovery proceeds by
-continuing or adding corrective revisions; it does not erase earlier committed
-entries.
-
-A future batch facility could stage an entire sequence, validate every prefix,
-and persist none of it if any check fails. This would improve command-level
-failure handling without permitting temporary type or analyzer inconsistencies.
-It would not repair the construction problem in A.3.
+A plan stages the entire sequence, validates every prefix, and persists none of
+it if any check fails. This preserves the existing CLI's atomic composite-write
+behavior. It does not repair the construction problem in A.3.
 
 Validating after every append may cost more than checking one final graph. The
 prototype should favor the simpler invariant; caching or incremental checks must

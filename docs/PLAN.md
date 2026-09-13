@@ -1,6 +1,6 @@
 # Rust Sketch 02 Cleanup Plan
 
-Status: proposed attack plan. Implementation has not started under this plan.
+Status: Stage 0 complete. Stages 1–2 authorized; later stages remain planned.
 
 ## 1. Outcome
 
@@ -81,6 +81,38 @@ Independent cleanup can proceed while an unrelated decision remains open.
 | Finding identity | Existing identity includes boundary, rendered text, raw configuration, and actions. | Specify a typed semantic key, its normalization, and which changes should invalidate a dismissal. Hashing must not define equality or silently merge collisions. |
 | Advisory presentation | Historical replay, current applicability, and user dismissal are distinct. | Exercise state warnings, transition suggestions, and splits. Decide the default report without treating non-emission or supersession as proof of resolution. |
 
+Stage 0 decisions: text, signed integers, booleans, and timestamps; nested lists
+and string-keyed records; no floats, sets, tuples, or unions. Lists have a declared
+element shape; records have named fields and presence policies. `Type` uses
+records for named field descriptions, with structured kind/element/fields tags;
+the fixed metatype decoder checks that vocabulary without a second schema DSL.
+TypeCheck remains configured, with its fixed built-in metatype available in an
+empty graph. Correctly shaped empty collections count as present. Plans persist
+atomically; every prefix remains checked and inspectable. SPEC/FILES reflect
+these choices. Finding identity and advisory defaults remain for Stage 4.
+
+Baseline at `5dbb719`: `cargo test --workspace` passed 119 unit tests and one
+doctest. Warnings include disabled `cfg(revise)`/`cfg(never)` tests, unused
+variables/helpers/imports, and the misplaced root manifest lint setting. The two
+ignored `*_witness` tests fail when explicitly run, reproducing ordering/hash
+contract defects; Stage 2 removes their obsolete types.
+
+| Retained behavior / contract difference | Cleanup action |
+| --- | --- |
+| Exact edge duplicates and currently identical nodes are rejected; stale node duplicates are permitted | Preserve, with owned structural equality. |
+| A stale endpoint cannot receive a new edge; the old core permits self-links | Preserve freshness, reject self-links under SPEC. Retain SCC self-loop coverage with a direct algorithm fixture. |
+| Splits can branch from an old predecessor | Preserve exact parent identity and pre-append transition interpretation. |
+| Active declarations reinterpret fresh nodes, and transitions use the preceding schema | Preserve; add revoked-permission and future-lookup regression cases. |
+| Empty matching containers count as missing; Type requires a bootstrap graph node | Change to presence by key and a fixed built-in metatype. |
+| Composite CLI transactions clone/stage/check/apply/save once; save uses a flushed/fsynced temporary and atomic replacement | Extract shared staging and persistence, retain failed-save and stale-base tests. Existing head reread alone does not exclude concurrent writers. |
+
+CLI salvage: transaction composite/rollback fixtures, state no-clobber/load/
+replacement safeguards, malformed-reference fixtures, and bounded freshness
+scenarios move into library tests. Keep DAG SCC and typechecking scenarios.
+CLI locators, aliases, sidecar workflows, message namespace, and command/output
+snapshots retire. GraphViz rendering is frontend-specific; Stage 3 can reuse its
+escaping/deterministic-output scenarios from git history without keeping the CLI.
+
 No compatibility requirement should decide these questions. Historical analyzer
 reproducibility is a correctness concern within the selected design, not a reason
 to support every previous sketch format.
@@ -140,21 +172,21 @@ with unrelated formatting churn.
 
 ### Stage 0 — Establish the baseline and resolve contract differences
 
-- [ ] Run the existing active workspace tests and record actual failures and
+- [x] Run the existing active workspace tests and record actual failures and
   warnings. Historical reports from another checkout are not baseline evidence.
-- [ ] Map retained core behavior against SPEC: duplicate rules, endpoint
+- [x] Map retained core behavior against SPEC: duplicate rules, endpoint
   freshness, branching, contextual type resolution, transition permissions,
   field presence, metatype behavior, and transaction boundaries.
-- [ ] Turn reported flakiness into minimal reproducible cases. Separate a bug
+- [x] Turn reported flakiness into minimal reproducible cases. Separate a bug
   from an intentional contract difference before changing expectations.
-- [ ] Carry forward the two reproduced trait defects as witnesses:
+- [x] Carry forward the two reproduced trait defects as witnesses:
   `EntryContext::cmp` and `partial_cmp` disagree, and equal `OrderedSet` values
   can hash differently when inserted in different orders. Remove the former
   abstraction in Stage 2; choose the latter's semantics with the value model.
   Test the retained contracts rather than polishing types scheduled for removal.
-- [ ] Inventory useful CLI fixtures, persistence safeguards, and rendering code
+- [x] Inventory useful CLI fixtures, persistence safeguards, and rendering code
   before removing the package.
-- [ ] Resolve the value/schema and plan-persistence decisions above. Update
+- [x] Resolve the value/schema and plan-persistence decisions above. Update
   SPEC/FILES where needed and record the remaining advisory questions.
 
 Exit evidence: a concrete baseline and a list of intended semantic changes.
@@ -370,9 +402,8 @@ inspection remain required. Keep structural/type validation failures distinct
 from analyzer diagnostics in tests and presentation.
 
 This round is complete when the active stages have evidence, not when their code
-has only been written. Backlogged collections are not an exit requirement. This
-planning change itself runs documentation checks only; it does not claim a
-passing Rust baseline or implemented authoring features.
+has only been written. Backlogged collections are not an exit requirement. Completed-stage evidence is recorded above; TOML authoring is not implemented
+until Stage 5.
 
 ## 7. Backlog — Markdown document collections
 

@@ -547,3 +547,20 @@ fn apply_replaces_mock_after_computing_the_session_circumstance() {
         Circumstance::Session { .. }
     ));
 }
+
+#[test]
+#[ignore = "Stage 0 witness: replaced with bounded View in Stage 2"]
+fn entry_context_ordering_contract_witness() {
+    let a = EntryContext { thing: 0, end: 3 };
+    let b = EntryContext { thing: 1, end: 2 };
+    assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
+}
+
+#[test]
+#[ignore = "Stage 0 witness: ordered payload sets are removed in Stage 2"]
+fn equal_ordered_sets_hash_equally_witness() {
+    let a: crate::OrderedSet<i64> = [1, 2].into_iter().collect();
+    let b: crate::OrderedSet<i64> = [2, 1].into_iter().collect();
+    assert_eq!(a, b);
+    assert_eq!(hash(&a), hash(&b));
+}
