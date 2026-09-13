@@ -1,98 +1,64 @@
 # AGENTS.md
 
-This repository is a Rust workspace for `lifecore`, an experimental typed,
-versioned graph database. Nodes and edges are appended over time. A newer node
-can supersede an older node through a parent relationship. Type declarations are
-also graph nodes, so schema meaning can change across graph history.
+LifeCore is an experimental Rust database with an append-only, typed graph.
+The cleanup direction and open decisions are in [docs/PLAN.md](docs/PLAN.md).
+`docs/SPEC.md` and `docs/FILES.md` describe proposed contracts, not necessarily
+current behavior. Replace the old CLI and sidecars, simplify values and queries,
+replace `Context`/`EntryContext` with bounded `View`s, and implement TOML authoring.
+Document collections are backlogged.
 
-## Workspace
+## Compatibility
 
-- `lifecore`: graph model, validation, contexts, typing support, analyzer
-  traits, and `LifeCoreList`.
-- `lifecore-typecheck`: analyzer for checking graph contents against active
-  `Type` declarations.
-- `lifecore-test`: integration tests.
-- `lifecore-cli`: CLI and its support modules. Work in progress.
-- `lifecore-kman`, `lifecore-prod`: placeholder downstream crates. Work in
-  progress.
-- `lifecore-proc-macro`: placeholder for future typed-body derive helpers.
-  Deferred.
+This is a sketch. Backwards compatibility is not a concern at all: APIs, formats,
+persisted representations, and commands may change freely within the requested
+scope. Do not add compatibility shims, legacy readers, or migration machinery.
+Preserve historical correctness under the chosen model and unrelated user work.
 
-Several crates and interfaces are deliberately incomplete. Keep changes scoped
-unless the task explicitly calls for broader design work.
+## Checks
 
-## Commands
+Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
+and the old `lifecore-cli` pending removal.
 
-- Full test suite: `cargo test --workspace`
-- Package tests: `cargo test -p <package>`
-- CLI: `cargo run -p lifecore-cli -- <arguments>`
-- Formatting: `cargo +nightly fmt`
-- Formatting check: `cargo +nightly fmt --check -p <package>`
-- Strict CLI lint:
-  `cargo clippy -p lifecore-cli --all-targets --no-deps -- -D warnings`
+- Tests: `cargo test --workspace` or `cargo test -p <package>`.
+- Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.
+- Lint: `cargo clippy -p <package> --all-targets --no-deps`.
 
-Nightly is required for rustfmt features; the project otherwise targets stable
-Rust. The wider workspace has pre-existing warnings, so do not assume a
-workspace-wide `-D warnings` check is clean. In a dirty tree, prefer targeted
-formatting and checks that do not rewrite unrelated files.
+Rust targets stable; rustfmt requires nightly. Existing workspace warnings are
+not a clean strict-lint baseline. Keep checks and formatting scoped to the change.
 
-## Core Model
+## Invariants
 
-- `Context` is a graph-history window from the beginning of history to an
-  exclusive end.
-- `EntryContext` is a `Context` plus a mandatory `thing` identifying the node or
-  edge being inspected.
-- `EntryIndex::before_and_including()` creates the smallest pointed context
-  containing an entry.
-- Use the intended bounded context for inspection. Use `.absolute()` only when
-  comparing entry identity across windows.
-- `Node.e` and `Edge.e` are pointed contexts. `Node.parent` and edge endpoints
-  are absolute `EntryIndex` identities.
-- A node is stale when a newer child supersedes it within the chosen context. An
-  edge is stale when an endpoint is stale. Freshness is therefore contextual.
-- `Node.ty_name` is a stored name, not a permanently resolved type. Resolve its
-  active `typing::Type` in the inspection window.
-- Type meaning may shift over history. Do not cache a resolved type without its
-  inspection context.
+- Entry identity is separate from its interpretation in a bounded history view.
+  Freshness and active type declarations depend on that view; never inspect a
+  future suffix or cache resolved types without the source and boundary.
+- Edges retain exact endpoint identities. Superseding an endpoint makes an edge
+  stale in views containing the successor; it does not retarget the edge.
+- Test history-sensitive changes at multiple boundaries, including before and
+  after the relevant append.
+- Core mutation failures leave the receiver unchanged. Preserve atomic composite
+  writes and every-prefix checks through shared staging, validation, and
+  persistence paths.
+- Keep structural validation failures distinct from analyzer diagnostics.
+  Type checking currently runs as an analyzer; settle changes to enforcement
+  explicitly against the plan.
+- Preserve full-prefix analyzer execution, typed inner findings, normalization,
+  and third-party/dynamically dispatched implementations. Keep analyzers and
+  their private findings/factories together; shared orchestration uses traits.
+- Analyzer inspection is read-only and prefix-bounded. Initialization has no
+  database access. Results must be deterministic for fixed graph, implementation,
+  configuration, and evaluation inputs. Missing configured factories are errors.
+- Dismissal and display filtering cannot affect the inconsistency gate.
+  Non-emission or supersession alone does not establish resolution.
 
-Many subtle bugs here are context-window or off-by-one errors. When changing
-history traversal, test more than one window around the relevant entry.
+## Editing conventions
 
-## Validation And Analysis
-
-- `basic_validation` protects storage-level graph integrity.
-- Type checking is analyzer behavior, not core validation.
-- Analyzer diagnostics and validation failures have different semantics; do not
-  silently turn one into the other.
-- Core mutation helpers must leave the receiver unchanged on failure.
-- Provisional `Mock` entries form a suffix that `apply` turns into canonical
-  session entries.
-- `AnalysisRunner` constructs configured analyzers from registered factories and
-  analyzes historical prefixes. Missing factories are errors.
-- Validation and type checking currently favor correctness over performance and
-  may repeatedly scan history.
-
-Keep validation, analysis, and rollback behavior in shared staging paths.
-Command handlers and other front ends should not duplicate mutation pipelines.
-
-## Code And Comment Style
-
-- Add agent-authored tests only in a module matching `*::test::test2`: either
-  the root `test::test2` module or one nested under an internal module.
-- Prefix every agent-authored comment with `//A`. This reserves ordinary `//`
-  comments for reviewers and future editors. Longer comments may use multiple
-  consecutive `//A` lines; do not use `/* ... */`.
-- Separate logical blocks with blank lines when it improves readability.
-- Comment non-obvious reasoning: invariants, context choice, ordering
-  constraints, safety assumptions, workarounds, and intentionally rejected
-  alternatives.
-- Substantial new logic should normally contain comments at its important
-  reasoning boundaries. Comments are not required when the code is already
-  self-explanatory; usefulness matters more than comment count.
-- Do not add Rust doc comments (`///`, `//!`) or doctests unless requested. This
-  restriction does not discourage explanatory `//A` comments.
-- Use `//A TODO: ...` for concrete deferred work, stating what remains and why
-  it is deferred. Mention any material impact and recommended next step in the
-  final handoff.
-- Use `//A HACK: ...` for workarounds and explain why it is necessary.
-- Do not rewrite existing comments solely to enforce these conventions.
+- End every agent-authored commit message with
+  `Co-authored-by: Codex <codex@openai.com>`.
+- Add agent-authored tests only in a module matching `*::test::test2`.
+- Prefix agent-authored Rust comments with `//A`; do not add block comments,
+  Rust doc comments, or doctests unless requested. Leave existing comment styles
+  alone unless their content needs changing.
+- Explain non-obvious invariants, boundary choices, and ordering constraints;
+  avoid narrating self-explanatory code.
+- Use `//A TODO:` for concrete deferred work and `//A HACK:` for a necessary
+  workaround. Explain the impact and next step in the handoff when material.

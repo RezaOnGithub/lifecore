@@ -24,19 +24,6 @@ mod indexing_and_context {
         }
     }
 
-    // NOTE these operations throw away information! Commented out for now
-    // impl From<&EntryContext> for EntryIndex {
-    //     fn from(value: &EntryContext) -> Self {
-    //         Self(value.thing)
-    //     }
-    // }
-    // impl From<EntryContext> for EntryIndex {
-    //     fn from(value: EntryContext) -> Self {
-    //         (&value).into()
-    //     }
-    // }
-
-    // NOTE these operations make up information! Uncommented for now
     impl From<&EntryIndex> for EntryContext {
         fn from(value: &EntryIndex) -> Self {
             value.before_and_including()
@@ -536,7 +523,6 @@ impl Payload {
         }
     }
 
-    // Let's not implement FromStr because... something about parsing? TODO
     pub fn text(s: &str) -> Self {
         Payload::Text(s.to_string())
     }
@@ -594,7 +580,6 @@ impl<T: Eq + Hash> Hash for OrderedSet<T> {
     }
 }
 
-// TODO expand to other types
 impl Payload {
     pub fn as_number(&self) -> i64 {
         self.clone().try_as_number().unwrap()

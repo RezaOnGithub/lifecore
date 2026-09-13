@@ -3,24 +3,11 @@ resolver = "3"
 members = [
     "lifecore-cli",
     "lifecore-dag-check",
-    # "lifecore-kman",
-    # "lifecore-proc-macro",
-    # "lifecore-prod",
-    # "lifecore-test",
     "lifecore-typecheck"
 ]
 
 [workspace.package]
 edition = "2024"
-# TODO what is this
-# include = [
-#   "build.rs",
-#   "src/**/*",
-#   "Cargo.toml",
-#   "LICENSE*",
-#   "README.md",
-#   "examples/**/*"
-# ]
 
 [workspace.lints.rust]
 unused_must_use = "warn"
@@ -32,20 +19,12 @@ new_without_default = "allow"
 [profile.dev]
 panic = "abort"
 
-# Root Package: Base LifeCore Library
 [package]
 name = "lifecore"
 version = "0.0.1"
 description = "A graph personal database"
 lints = { workspace = true }
 edition.workspace = true
-
-# TODO what are these
-# repository.workspace = true
-# license.workspace = true
-# edition.workspace = true
-# rust-version.workspace = true
-# include.workspace = true
 
 [features]
 default = []
@@ -63,7 +42,7 @@ whoami = "2.1.2"
 thiserror = "2.0.18"
 log = "0.4.33"
 regex = "1.13.1"
-uuid = "1.24.0" # this is required for exactly one function
+uuid = "1.24.0"
 
 [dev-dependencies]
 env_logger = "0.11.11"

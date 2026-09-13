@@ -1,4 +1,0 @@
-interface:
-  display_name: "Very Wide Implementation"
-  short_description: "Drive broad work across fresh-agent stages"
-  default_prompt: "Use $very-wide-implementation to create a source-grounded implementation blueprint or execute its next eligible stage."

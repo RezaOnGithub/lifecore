@@ -9,10 +9,6 @@ use strum::{EnumIs, EnumTryAs};
 /// All LifeCore entries are ordered, and may build on top of each other.
 ///
 /// *Note:* `usize::MAX` is not a valid index.
-///
-/// *Note:* In the past, we tried really hard to hide the actual number
-/// representing the index. It is public now because someone realized they could
-/// dig it out from the serialized value.
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
 pub struct EntryIndex(pub usize);
 
@@ -21,9 +17,6 @@ pub struct EntryIndex(pub usize);
 /// (which can shift after a node has been added) but has uses in other systems.
 /// We consider `end` to be exclusive; i.e. the context is the range `0..end`
 /// (`0` inclusive, `end` exclusive)
-///
-/// *Note:* `Ord` is implemented manually to make sure `end` takes precedence
-/// when sorting.
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Clone, Copy, Hash, Debug)]
 pub struct EntryContext {
     pub(crate) thing: usize,
@@ -144,9 +137,6 @@ pub enum LifeCoreError {
     BasicValidationFailure(BasicValidationFailure),
     #[error("Unable to parse FieldQuery")]
     FieldQueryParsingError,
-    // TODO clean up this enum; removed funcionality
-    // TODO comeup with better error string; caller that got this value is responsible for adding
-    // more details.
     #[error("Unable to convert field payload to type")]
     NodeFieldDeserializationError {
         target_type: Option<String>,
@@ -183,18 +173,6 @@ pub enum BasicValidationFailureScenario {
     EdgeEndIsEdge,
 }
 
-/// Convenient Payload Type For Users
-///
-/// # Note
-///
-/// `PayloadExt::Serialized` should be the last resort for users. As time goes
-/// on, the list of primitve types will be expaneded to further minimize its
-/// use. Serialized LOBs are highly discouraged.
-
-// NOTE it is highly desirable for this to be `Eq` and `Hash` (namely, floating-point types would
-// not be `Eq`)
-
-// TODO add more time-related functionality
 #[derive(
     Serialize,
     Deserialize,
@@ -285,10 +263,6 @@ pub enum NodeQueryExpression {
 
 /// Basic Query kinds for the database. Queries are over the set of all
 /// nodes.
-///
-/// This is an ambitious feature that is now part of the core functionality due
-/// to user demand. Queries are deliberately divorced from higher-level concepts
-/// such as types to keep it simple.
 #[derive(EnumIs, EnumTryAs, Clone)]
 pub enum NodeQueryPredicate {
     // Field-related Query Primitives. All imply that such field path exists
@@ -301,9 +275,7 @@ pub enum NodeQueryPredicate {
     FieldIsOrderedSetAndContains(FieldQuery, Payload),
     FieldIsOrderedSetAndElementCountIs(FieldQuery, usize),
 
-    /// A weird one out of the bunch. If path does not contain a wildcard, the
-    /// count is either zero or one. I'm not even sure what its syntax could be
-    /// like!
+    //A Without a wildcard, the match count is zero or one.
     FieldQueryResultCount(FieldQuery, usize),
 
     // Related to Node itself
@@ -333,8 +305,6 @@ pub enum FieldQueryPathComponent {
     Index(usize),
 }
 
-// TODO this particular flavor of regex may not be compatible with a future
-// database backend
 pub use regex::Regex as QueryRegex;
 
 #[derive(PartialEq, Eq, EnumIs, EnumTryAs, Clone)]
@@ -350,12 +320,6 @@ pub enum QueryComparison {
 //A views. Methods must honor the context carried by their inputs.
 pub trait LifeCoreAccess: Send + Sync {
     /// Get the event selected by `e`. Preserves the context across invocations.
-    ///
-    /// *Note:* We used to also do type resolution for callers, but as typecheck
-    /// grew away from the main crate, it is no longer critical to get the
-    /// window exactly right; still, it is recommended that you use the best
-    /// context you can for the event to maintain consistency with Analyzers and
-    /// minimize confusion.
     fn get(&self, e: EntryContext) -> Option<Entry>;
     fn window<I>(&self, i: I) -> impl Iterator<Item = Entry>
     where
@@ -455,9 +419,7 @@ pub trait LifeCoreAccess: Send + Sync {
     /// *Note:* Only searches within the context.
     fn fresh_successors(&self, node: EntryContext) -> Vec<EntryContext>;
 
-    /// Find relative degree. Siblings (nodes that share a parent) have degree
-    /// 0. Note that the left sides of the contexts need to extend far back
-    /// enough in order to find the shared parent.
+    //A Siblings have relative degree zero; ancestry follows parent identities.
     fn relative_degree(&self, a: EntryContext, b: EntryContext) -> Option<usize>;
     fn are_siblings(&self, a: EntryContext, b: EntryContext) -> bool {
         self.relative_degree(a, b) == Some(0)
@@ -476,17 +438,10 @@ pub trait LifeCore: LifeCoreAccess {
 
     /// Total event count; no index for any event is larger than or equal to
     /// this number.
-    ///
-    /// *Note:* needing this count is almost always an anti-pattern, especially
-    /// in an Analyzer implementation. It is not removed because someone tried
-    /// to get this number by iterating over every single entry!
     #[deprecated]
     fn total_event_count(&self) -> usize;
 
     /// Check for the basic rules of LifeCore.
-    ///
-    /// # Rules
-    /// TODO
     fn basic_validation(&self) -> Result<(), BasicValidationFailure>;
 
     /// Add a provisional edge to the validated mock suffix.

@@ -203,7 +203,7 @@ pub fn list_types(
     view: &GraphView,
 ) -> Result<Vec<TypeListing>, AppError> {
     //A Malformed stored Type nodes remain analyzer concerns. Read-only listing
-    //A presents only the well-formed active declarations promised by SPEC.md.
+    //A presents only well-formed active declarations.
     let mut declarations = graph
         .fresh_nodes(view.context())
         .filter(|node| node.ty_name.as_str() == Type::TYPE_NAME)

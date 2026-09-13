@@ -21,8 +21,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use strum::{IntoDiscriminant, VariantNames};
 
-// TODO rename all X-prefixed names to more verbose names
-
 #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 struct ValueIndex(usize);
 
@@ -314,7 +312,6 @@ impl LifeCore for LifeCoreList {
         {
             // Payload and PayloadExt cover the same types
             {
-                // TTODO This should be a compile-time check instead, somehow
                 assert!(Payload::VARIANTS.to_vec() == Value::VARIANTS.to_vec())
             }
 
@@ -416,15 +413,6 @@ impl LifeCore for LifeCoreList {
                     if self.is_stale(newer_index.shrink_to_exclusive_left().look_at(*older_index))
                         == Some(true)
                     {
-                        // TODO move this Warning into its own analyzer
-                        // warn!(
-                        //     *newer_index,
-                        //     "Duplicate nodes, but older one was invalidated
-                        // before the new one was added (discouraged).
-                        // EntryIndex {} and {}",
-                        //     older_index,
-                        //     newer_index
-                        // );
                     } else {
                         return Err(BasicValidationFailure {
                             offending_event: (*newer_index).into(),
@@ -489,13 +477,11 @@ impl LifeCore for LifeCoreList {
         // Rule: after a node has been overriden (that is, a new "child" node has been
         // added) it cannot be a part of a new edge. "Stale Rule"
         for (edge_context, edge) in self.raw_edges(ctx()) {
-            // Throw away the loop context. Now we are looking at 0..edge_index
-            // (inclusive or exclusive doesn't matter in this particular case)
+            //A Endpoint eligibility is checked immediately before this edge.
             let ctx = edge_context.shrink_to_exclusive_left();
             if self.is_stale(ctx.look_at(edge.from.before_and_including())) == Some(true)
                 || self.is_stale(ctx.look_at(edge.to.before_and_including())) == Some(true)
             {
-                // SUS context
                 return Err(BasicValidationFailure {
                     offending_event: edge_context.into(),
                     reason: StaleRuleViolation,
@@ -534,7 +520,6 @@ impl LifeCore for LifeCoreList {
         self.circumstance_table.contains(&Circumstance::Mock)
     }
 
-    // SUS have a second look at "current circumstance actually pre-existed" case
     fn apply(&mut self) -> Result<(), crate::LifeCoreError> {
         if !self.is_mock() {
             return Ok(());
@@ -665,8 +650,6 @@ impl LifeCoreAccess for LifeCoreList {
             }
         }
         XEntry::Edge(XEdge { ty: _, from, to }) => {
-            // SUS
-            // TODO use is_some but it also has to be false
             if self.is_stale(e.look_at(from.absolute())).unwrap()
                 || self.is_stale(e.look_at(to.absolute())).unwrap()
             {
@@ -677,7 +660,6 @@ impl LifeCoreAccess for LifeCoreList {
         Some(false)
     }
 
-    // TODO don't resolve every value for every single entry!
     fn nodes(&self, ctx: crate::Context) -> impl Iterator<Item = crate::Node> {
         ctx.into_iter()
             .map_while(move |x| self.get(ctx.look_at(EntryIndex(x).before_and_including())))
@@ -820,10 +802,6 @@ impl NodeQueryPredicate {
             let Some(field_content) = x.field.0.get(&query_field_path.field_name).cloned() else {
                 return false;
             };
-            // SUS the conjunction here! I think it would make sense for it to be here but
-            // I'm not quite sure.
-
-            // TO_TEST find a scenario where `.is_some_and` would cause unexpected output
             field_content
                 .get(&query_field_path.path)
                 .iter()

@@ -195,7 +195,7 @@ pub fn resolve_entry(
     expectation: EntryExpectation,
     view_end: Option<usize>,
 ) -> Result<ResolvedEntry, AppError> {
-    //A Keep this order aligned with SPEC.md: an index and digest establish
+    //A An index and digest establish
     //A identity before callers may learn kind or selected-view membership.
     let context = EntryIndex(locator.index()).before_and_including();
     let Some((entry, circumstance)) = graph.get_with_circumstance(context) else {

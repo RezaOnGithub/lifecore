@@ -171,14 +171,6 @@ impl<LC: LifeCoreAccess> LifeCoreAccess for LifeCoreAnalysisHarness<'_, LC> {
 }
 
 /// A Message from an `Analyzer`
-///
-/// # "Relevance"
-/// Some `Message` variants have a field named `relevance`. Errors are always
-/// "relevant" of course but warnings and suggestions less, as they may have
-/// been resolved later. The UI may choose to ignore a message if N members of
-/// `relevance` are stale (for some sensible N) Additionally, UI may implement a
-/// `barklist` where messages of a certain hash are dismissed. (This led to
-/// needing a custom `Hash` implementation that specifically sorts this list)
 #[derive(PartialEq, Eq, Clone, EnumIs, EnumTryAs, Hash, EnumDiscriminants)]
 #[strum_discriminants(name(MessageType))]
 #[strum_discriminants(vis(pub))]
@@ -201,18 +193,7 @@ pub trait InnerOutput<MSG: InnerMessageType>: Clone + Sized {
     fn push(&mut self, v: MSG);
 }
 
-/// Type representing an Analyzer, a piece of code that goes over the database
-/// and generates messages `Analyzer` is bound by LifeCore trait implementor and
-/// `InnerOutput`. `InnerOutput` is actually not strictly necessary but it
-/// guides the implementor (or an AI agent) to create inner message types
-/// that communicate the issue, rather than blocks of text inside `Message`.
-/// `Into<Message>` is not feasible and only the Analyzer may have enough
-/// context to convert `InnerOutput` to the all-purpose `Message`; so `Analyzer`
-/// also has to implement conversion methods.
-///
-/// The idea behind `initialize` is that if some pre-condition is not quite
-/// correct, or if we are "done" in some sense, analyzer can disable itself and
-/// potentially issue a warning.
+//A Analyzers produce typed inner findings and normalize them at this boundary.
 //A Initialization intentionally has no database access; all inspection happens
 //A through a prefix-bounded harness during `analyze`.
 pub trait Analyzer<LC: LifeCoreAccess>: Send + Sync {
@@ -316,14 +297,6 @@ impl<LC: LifeCore> AnalysisRunner<LC> {
 
 impl Output {
     fn validate(&self) -> bool {
-        // TODO what could we be validating here, just in case? And `assert!` or
-        // `debug_assert!`?
-
-        // self.0.iter().all(|x| match x {
-        //     Message::Inconsistency(inconsistency) => todo!(),
-        //     Message::Warning(warning) => todo!(),
-        //     Message::Suggestion(suggestion) => todo!(),
-        // })
         true
     }
 

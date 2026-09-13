@@ -92,8 +92,6 @@ fn build_stage7(args: Stage7Args) -> Result<(), Box<dyn std::error::Error>> {
     let current_directory = env::current_dir()?;
     let path = StatePath::resolve(Some(args.path.into_os_string()), &current_directory)?;
     let store = StateStore::new(path);
-    //A Stage 7 walkthroughs need successful child transactions without also
-    //A taking ownership of the deferred type-editor bootstrap workflow.
     let mut graph = LifeCoreList::default();
     let original = graph.add_mock("Note", Body::default(), None)?;
     let task = graph.add_mock("Task", Body::default(), None)?;
@@ -216,7 +214,7 @@ fn build_stage3(args: Stage3Args) -> Result<(), Box<dyn std::error::Error>> {
     let edge = graph.connect_mock(revised.e, "Relates_To", task.e)?;
 
     //A Applying once makes the entire provisional suffix canonical without
-    //A changing the Stage 3 fingerprints, which intentionally omit circumstance.
+    //A changing fingerprints, which intentionally omit circumstance.
     graph.apply()?;
     let state = PersistedState::new(graph);
     store.initialize(&state)?;

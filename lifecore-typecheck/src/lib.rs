@@ -1,20 +1,4 @@
-//! "Type System" Constraint System
-//!
-//! This implements a basic type checking system that is compatible with the
-//! limited VCS capabilities. A "Node_Type" declares a new type with a unique
-//! name among non-stale types, and declares node fields, the edges that are
-//! allowed to connect to or from the node, and the node class: Toothpick (only
-//! a single edge that is outgoing), Hub (only incoming edges), Spike (only
-//! outgoing edges), Regular (no restrictions) EdgeNode (exactly one incoming
-//! and exactly one outgoing)
-//!
-//! The general idea is: at every event, all node must get typechecked against
-//! exactly one non-stale Node_Type that is older or the same age; That is, if a
-//! node type X is overriden at E, all non-stale X nodes by E must
-//! typecheck against the new type X' that overrode X.
-//!
-//! This can be terribly inefficient, and of course there is a streaming
-//! approach but correctness for now. NOTDO PERF
+//A Check fresh nodes against the Type declarations active in each supplied prefix.
 
 use itertools::Itertools;
 use lifecore::analysis::LifeCoreAnalysisHarness;
@@ -26,7 +10,6 @@ use lifecore::{
 use std::{collections::BTreeMap, marker::PhantomData};
 use strum::IntoDiscriminant;
 
-/// Describes a Field as a whole
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(strum::EnumDiscriminants))]
 #[cfg_attr(test, strum_discriminants(name(TypeCheckTest)))]
@@ -36,7 +19,7 @@ use strum::IntoDiscriminant;
     strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
 )]
 pub enum TypeCheckMessage {
-    //A Initialization diagnostics carry their inspection window so consumers
+    //A Bootstrap diagnostics carry their inspection window so consumers
     //A never need to reconstruct graph bounds from unrelated analyzer output.
     AddBootstrapNode {
         context: Context,
@@ -63,13 +46,11 @@ pub enum TypeCheckMessage {
         ty_name: String,
         field_name: String,
     },
-    // TODO add relevance
     ElidedEncouragedField {
         offending_event: EntryContext,
         ty_name: String,
         field_name: String,
     },
-    // TODO add relevance
     DeprecatedField {
         offending_event: EntryContext,
         ty_name: String,
@@ -129,8 +110,6 @@ pub struct TypeCheck<LC: LifeCoreAccess> {
     pub config: String,
     _lc: PhantomData<LC>,
 }
-
-// impl Analyzer
 
 impl InnerMessageType for TypeCheckMessage {
     fn ty(&self) -> lifecore::analysis::MessageType {
@@ -413,11 +392,8 @@ impl<LC: LifeCoreAccess> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
 
         let type_table = types(&lc, window).collect::<BTreeMap<_, _>>();
 
-        // Check that override types exist
-        // TODO I'm not sure whether this should be an error or not.
-        // What it's causing at the moment is that interrelated Node_Types have to
-        // complete a ritual to allow overriding each other. I'm demoting this to
-        // a warning for now.
+        //A Missing override targets are warnings so mutually referring declarations
+        //A can be authored as consecutive entries.
         for (ty_event, ty) in type_table.values() {
             for override_ty in ty.additional_override.iter() {
                 if !type_table.contains_key(override_ty) {
