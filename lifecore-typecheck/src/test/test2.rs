@@ -1,932 +1,530 @@
-//! TypeCheck analyzer regression tests.
-
-use std::marker::PhantomData;
-
+use crate::{TypeCheck, TypeCheckFactory, TypeCheckMessage};
 use lifecore::{
-    Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreList,
-    OrderedSet, Payload, PayloadKind,
-    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, LifeCoreAnalysisHarness},
-    serialize::{LifeCoreSerializeExt, NodeBody},
-    typing::{FieldStatus, Type, ValueType},
+    Body, EntryId, LifeCoreList, Payload,
+    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, InnerMessageType, MessageType},
+    transaction::{
+        Change,
+        Reference::{Added, Existing},
+        check,
+    },
+    typing::{FieldDecl, FieldIssueKind, FieldStatus, Type, TypeDefinition, ValueType},
 };
 
-use crate::{TypeCheck, TypeCheckFactory, TypeCheckMessage};
+fn ty(name: &str) -> Type {
+    Type::new(name, &[], &[], &[], &[])
+}
+fn declaration(ty: &Type, parent: Option<lifecore::transaction::Reference>) -> Change {
+    Change::AddNode {
+        ty_name: "Type".into(),
+        body: ty.to_body(),
+        parent,
+    }
+}
+fn node(name: &str, body: Body, parent: Option<lifecore::transaction::Reference>) -> Change {
+    Change::AddNode {
+        ty_name: name.into(),
+        body,
+        parent,
+    }
+}
+fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
+    let plan = check(graph, changes, &mut AnalysisRunner::default()).unwrap();
+    let ids = plan.added().to_vec();
+    plan.commit(graph).unwrap();
+    ids
+}
+fn findings(graph: &LifeCoreList, end: usize) -> Vec<TypeCheckMessage> {
+    TypeCheck::default()
+        .analyze_inner(graph.view().prefix(end).unwrap())
+        .0
+}
+fn has_error(findings: &[TypeCheckMessage]) -> bool {
+    findings
+        .iter()
+        .any(|f| f.ty() == MessageType::Inconsistency)
+}
+fn configure() -> Change {
+    Change::AddAnalyzer {
+        name: TypeCheckFactory::name().into(),
+        config: String::new(),
+    }
+}
+fn runner() -> AnalysisRunner {
+    let mut r = AnalysisRunner::default();
+    r.register_analyzer_kind(Box::new(TypeCheckFactory))
+        .unwrap();
+    r
+}
 
-fn analyzer() -> TypeCheck<LifeCoreList> {
-    TypeCheck {
-        config: "test2".to_string(),
-        _lc: PhantomData,
+#[test]
+fn builtin_metatype_needs_no_bootstrap_and_cannot_be_redeclared() {
+    let mut analyzer = TypeCheck::default();
+    assert!(analyzer.initialize().0.is_empty());
+    let mut graph = LifeCoreList::default();
+    assert!(findings(&graph, 0).is_empty());
+    assert_eq!(
+        graph.view().resolve_type("Type").unwrap(),
+        Some(TypeDefinition::Builtin)
+    );
+    append(&mut graph, &[declaration(&ty("Type"), None)]);
+    assert!(matches!(
+        findings(&graph, 1)[0],
+        TypeCheckMessage::ReservedTypeName { .. }
+    ));
+}
+
+#[test]
+fn malformed_declarations_return_typed_findings() {
+    let mut graph = LifeCoreList::default();
+    append(&mut graph, &[node("Type", Body::new(), None)]);
+    assert!(matches!(
+        findings(&graph, 1)[0],
+        TypeCheckMessage::MalformedDeclaration { .. }
+    ));
+}
+
+#[test]
+fn missing_and_duplicate_declarations_are_inconsistencies() {
+    let mut graph = LifeCoreList::default();
+    append(&mut graph, &[node("Missing", Body::new(), None)]);
+    assert!(matches!(
+        findings(&graph, 1)[0],
+        TypeCheckMessage::MissingType { .. }
+    ));
+    let mut a = ty("A");
+    let first = append(&mut graph, &[declaration(&a, None)])[0];
+    a.outgoing.insert("link".into());
+    append(&mut graph, &[declaration(&a, None)]);
+    assert!(findings(&graph,3).iter().any(|f| matches!(f,TypeCheckMessage::DuplicateType {location,..} if location.entry != Some(first))));
+}
+
+#[test]
+fn replacing_a_declaration_uses_the_builtin_metatype() {
+    let mut graph = LifeCoreList::default();
+    let mut a = ty("A");
+    let first = append(&mut graph, &[declaration(&a, None)])[0];
+    a.outgoing.insert("link".into());
+    append(&mut graph, &[declaration(&a, Some(Existing(first)))]);
+    assert!(!has_error(&findings(&graph, 2)));
+}
+
+#[test]
+fn unresolved_successor_types_are_advisory() {
+    let mut graph = LifeCoreList::default();
+    let mut a = ty("A");
+    a.additional_override.insert("Future".into());
+    append(&mut graph, &[declaration(&a, None)]);
+    let report = findings(&graph, 1);
+    assert!(!has_error(&report));
+    assert!(matches!(
+        report[0],
+        TypeCheckMessage::UnknownOverrideType { .. }
+    ));
+}
+
+#[test]
+fn field_policies_and_shape_failures_remain_typed_and_separate() {
+    let mut graph = LifeCoreList::default();
+    let schema = Type::new(
+        "A",
+        &[
+            ("must", (ValueType::Text, FieldStatus::Mandatory)),
+            ("advice", (ValueType::Text, FieldStatus::Encouraged)),
+            ("old", (ValueType::Text, FieldStatus::Deprecated)),
+            ("optional", (ValueType::Boolean, FieldStatus::Optional)),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&schema, None),
+            node(
+                "A",
+                Body::from([
+                    ("old".into(), "value".into()),
+                    ("optional".into(), 1.into()),
+                    ("extra".into(), true.into()),
+                ]),
+                None,
+            ),
+        ],
+    );
+    let issues = findings(&graph, 2)
+        .into_iter()
+        .filter_map(|f| {
+            if let TypeCheckMessage::Field { issue, .. } = f {
+                Some(issue.kind)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert!(issues.contains(&FieldIssueKind::MissingMandatory));
+    assert!(issues.contains(&FieldIssueKind::MissingEncouraged));
+    assert!(issues.contains(&FieldIssueKind::Deprecated));
+    assert!(issues.contains(&FieldIssueKind::UnexpectedField));
+    assert!(
+        issues
+            .iter()
+            .any(|f| matches!(f, FieldIssueKind::TypeMismatch { .. }))
+    );
+}
+
+#[test]
+fn correctly_shaped_empty_collections_count_as_present() {
+    let mut graph = LifeCoreList::default();
+    let schema = Type::new(
+        "A",
+        &[
+            (
+                "list",
+                (
+                    ValueType::List(Box::new(ValueType::Text)),
+                    FieldStatus::Mandatory,
+                ),
+            ),
+            (
+                "record",
+                (
+                    ValueType::Record(Default::default()),
+                    FieldStatus::Encouraged,
+                ),
+            ),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&schema, None),
+            node(
+                "A",
+                Body::from([
+                    ("list".into(), Payload::List(vec![])),
+                    ("record".into(), Payload::Record(Body::new())),
+                ]),
+                None,
+            ),
+        ],
+    );
+    assert!(findings(&graph, 2).is_empty());
+}
+
+#[test]
+fn wrong_empty_container_is_a_shape_error_not_a_missing_field() {
+    let mut graph = LifeCoreList::default();
+    let schema = Type::new(
+        "A",
+        &[(
+            "list",
+            (
+                ValueType::List(Box::new(ValueType::Text)),
+                FieldStatus::Mandatory,
+            ),
+        )],
+        &[],
+        &[],
+        &[],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&schema, None),
+            node(
+                "A",
+                Body::from([("list".into(), Payload::Record(Body::new()))]),
+                None,
+            ),
+        ],
+    );
+    let report = findings(&graph, 2);
+    assert_eq!(report.len(), 1);
+    assert!(matches!(
+        report[0],
+        TypeCheckMessage::Field {
+            issue: lifecore::typing::FieldIssue {
+                kind: FieldIssueKind::TypeMismatch { .. },
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn nested_records_and_scalar_lists_are_checked_recursively() {
+    let mut graph = LifeCoreList::default();
+    let shape = ValueType::Record(
+        [(
+            "flag".into(),
+            FieldDecl {
+                ty: ValueType::Boolean,
+                status: FieldStatus::Mandatory,
+            },
+        )]
+        .into(),
+    );
+    let schema = Type::new(
+        "A",
+        &[(
+            "rows",
+            (ValueType::List(Box::new(shape)), FieldStatus::Mandatory),
+        )],
+        &[],
+        &[],
+        &[],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&schema, None),
+            node(
+                "A",
+                Body::from([(
+                    "rows".into(),
+                    Payload::List(vec![Payload::Record(Body::from([(
+                        "flag".into(),
+                        false.into(),
+                    )]))]),
+                )]),
+                None,
+            ),
+        ],
+    );
+    assert!(findings(&graph, 2).is_empty());
+}
+
+#[test]
+fn active_type_changes_reinterpret_only_fresh_nodes_in_the_selected_view() {
+    let mut graph = LifeCoreList::default();
+    let original = ty("A");
+    let ids = append(
+        &mut graph,
+        &[declaration(&original, None), node("A", Body::new(), None)],
+    );
+    let changed = Type::new(
+        "A",
+        &[("required", (ValueType::Text, FieldStatus::Mandatory))],
+        &[],
+        &[],
+        &[],
+    );
+    append(&mut graph, &[declaration(&changed, Some(Existing(ids[0])))]);
+    assert!(!has_error(&findings(&graph, 2)));
+    assert!(has_error(&findings(&graph, 3)));
+    append(
+        &mut graph,
+        &[node(
+            "A",
+            Body::from([("required".into(), "value".into())]),
+            Some(Existing(ids[1])),
+        )],
+    );
+    assert!(!has_error(&findings(&graph, 4)));
+    assert!(has_error(&findings(&graph, 3)));
+}
+
+#[test]
+fn transition_permissions_are_checked_immediately_before_each_child() {
+    let mut graph = LifeCoreList::default();
+    let mut a = ty("A");
+    a.additional_override.insert("B".into());
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&a, None),
+            declaration(&ty("B"), None),
+            node("A", Body::new(), None),
+            node("B", Body::new(), Some(Added(2))),
+        ],
+    );
+    a.additional_override.clear();
+    append(&mut graph, &[declaration(&a, Some(Existing(ids[0])))]);
+    assert!(!has_error(&findings(&graph, 5)));
+    append(
+        &mut graph,
+        &[node(
+            "B",
+            Body::from([("different".into(), true.into())]),
+            Some(Existing(ids[2])),
+        )],
+    );
+    assert!(
+        findings(&graph, 6)
+            .iter()
+            .any(|f| matches!(f, TypeCheckMessage::BadOverride { .. }))
+    );
+    assert!(
+        !findings(&graph, 5)
+            .iter()
+            .any(|f| matches!(f, TypeCheckMessage::BadOverride { .. }))
+    );
+}
+
+#[test]
+fn branching_from_a_stale_parent_requires_its_type_to_still_resolve() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&ty("A"), None),
+            node("A", Body::new(), None),
+            node("A", Body::new(), Some(Added(1))),
+        ],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&ty("B"), Some(Existing(ids[0]))),
+            node(
+                "A",
+                Body::from([("new".into(), true.into())]),
+                Some(Existing(ids[1])),
+            ),
+        ],
+    );
+    assert!(findings(&graph,5).iter().any(|f| matches!(f,TypeCheckMessage::MissingType { location,.. } if location.entry == graph.view().at(4).map(|e|e.id()))));
+}
+
+#[test]
+fn both_endpoint_permissions_are_checked_in_the_selected_view() {
+    for (outgoing, incoming) in [(true, true), (false, true), (true, false)] {
+        let mut graph = LifeCoreList::default();
+        let a = Type::new("A", &[], if outgoing { &["link"] } else { &[] }, &[], &[]);
+        let b = Type::new("B", &[], &[], if incoming { &["link"] } else { &[] }, &[]);
+        append(
+            &mut graph,
+            &[
+                declaration(&a, None),
+                declaration(&b, None),
+                node("A", Body::new(), None),
+                node("B", Body::new(), None),
+                Change::AddEdge {
+                    from: Added(2),
+                    ty_name: "link".into(),
+                    to: Added(3),
+                },
+            ],
+        );
+        let report = findings(&graph, 5);
+        assert_eq!(has_error(&report), !(outgoing && incoming));
+        if !outgoing {
+            assert!(
+                report
+                    .iter()
+                    .any(|f| matches!(f, TypeCheckMessage::BadEdgeEndpoint { outgoing: true, .. }))
+            );
+        }
+        if !incoming {
+            assert!(report.iter().any(|f| matches!(
+                f,
+                TypeCheckMessage::BadEdgeEndpoint {
+                    outgoing: false,
+                    ..
+                }
+            )));
+        }
     }
 }
 
-fn analyze_at(lifecore: &LifeCoreList, window: Context) -> Vec<TypeCheckMessage> {
-    analyzer()
-        .analyze_inner(LifeCoreAnalysisHarness::new(lifecore, window), window)
-        .0
-}
-
-fn analyze_final(lifecore: &LifeCoreList) -> Vec<TypeCheckMessage> {
-    analyze_at(
-        lifecore,
-        lifecore.last().unwrap().shrink_to_inclusive_left(),
+#[test]
+fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
+    let mut graph = LifeCoreList::default();
+    let a = Type::new(
+        "A",
+        &[("field", (ValueType::Text, FieldStatus::Mandatory))],
+        &[],
+        &[],
+        &[],
+    );
+    let changes = [
+        declaration(&a, None),
+        node("A", Body::new(), None),
+        node(
+            "A",
+            Body::from([("field".into(), "value".into())]),
+            Some(Added(1)),
+        ),
+        configure(),
+    ];
+    assert!(check(&graph, &changes, &mut runner()).is_err());
+    assert!(graph.view().is_empty());
+    check(
+        &graph,
+        &[
+            declaration(&a, None),
+            node("A", Body::from([("field".into(), "value".into())]), None),
+            configure(),
+        ],
+        &mut runner(),
     )
-}
-
-fn runner() -> AnalysisRunner<LifeCoreList> {
-    let mut runner = AnalysisRunner::default();
-    runner
-        .register_analyzer_kind(Box::new(TypeCheckFactory::<LifeCoreList>::default()))
-        .unwrap();
-    runner
-}
-
-fn configure(lifecore: &mut LifeCoreList) {
-    lifecore.add_analyzer(TypeCheckFactory::<LifeCoreList>::name(), "test2");
-}
-
-fn add_bootstrap(lifecore: &mut LifeCoreList) -> EntryContext {
-    lifecore
-        .add_typed_mock(Type::describe_self(), None)
-        .unwrap()
-        .e
-}
-
-fn add_type(lifecore: &mut LifeCoreList, ty: Type) -> EntryContext {
-    lifecore.add_typed_mock(ty, None).unwrap().e
-}
-
-fn contains_message(
-    messages: &[TypeCheckMessage],
-    predicate: impl Fn(&TypeCheckMessage) -> bool,
-) -> bool {
-    messages.iter().any(predicate)
-}
-
-fn is_field_message(message: &TypeCheckMessage) -> bool {
-    matches!(
-        message,
-        TypeCheckMessage::ElidedMandatoryField { .. }
-            | TypeCheckMessage::ElidedEncouragedField { .. }
-            | TypeCheckMessage::DeprecatedField { .. }
-            | TypeCheckMessage::FieldTypeMismatch { .. }
-            | TypeCheckMessage::ExtraneousField { .. }
-    )
+    .unwrap()
+    .commit(&mut graph)
+    .unwrap();
+    assert_eq!(graph.view().len(), 2);
 }
 
 #[test]
-fn initialization_has_no_graph_output_and_empty_analysis_suggests_bootstrap() {
-    assert!(analyzer().initialize_inner().0.is_empty());
-
-    let mut lifecore = LifeCoreList::default();
-    configure(&mut lifecore);
-
-    let output = runner().run(&lifecore).unwrap();
-    let suggestion = output
-        .suggestions()
-        .into_iter()
-        .find(|message| message.message.contains("bootstrap"))
-        .unwrap();
-    assert_eq!(
-        suggestion.offending_event,
-        DiagnosticLocation::Context(EntryIndex(0).before())
-    );
-}
-
-#[test]
-fn malformed_type_body_is_an_inconsistency_without_panicking() {
-    let mut lifecore = LifeCoreList::default();
-    let malformed = lifecore
-        .add_mock(
-            Type::TYPE_NAME,
-            Body::from([("name", Payload::Number(1))]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::MalformedNodeTypeBody { offending_event }
-                if *offending_event == malformed.e
-        )
-    }));
-}
-
-#[test]
-fn missing_type_declaration_is_reported_on_the_node() {
-    let mut lifecore = LifeCoreList::default();
-    let node = lifecore.add_mock("Missing", Body::default(), None).unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::NodeTypeNonexistant {
-                offending_event,
-                ty_name,
-            } if *offending_event == node.e && ty_name == "Missing"
-        )
-    }));
-}
-
-#[test]
-fn duplicate_type_definition_points_at_the_newer_declaration() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(&mut lifecore, Type::new("Thing", &[], &[], &[], &[]));
-    let newer = add_type(
-        &mut lifecore,
-        Type::new(
-            "Thing",
-            &[("field", (ValueType::Text, FieldStatus::Optional))],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::DuplicateTypeDefinition {
-                offending_event,
-                name,
-            } if *offending_event == newer && name == "Thing"
-        )
-    }));
-}
-
-#[test]
-fn replacing_a_type_through_its_parent_is_not_a_duplicate() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    let older = add_type(&mut lifecore, Type::new("Thing", &[], &[], &[], &[]));
-    lifecore
-        .add_typed_mock(
-            Type::new(
-                "Thing",
-                &[("field", (ValueType::Text, FieldStatus::Optional))],
-                &[],
-                &[],
-                &[],
-            ),
-            Some(older),
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(!contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::DuplicateTypeDefinition { name, .. } if name == "Thing"
-        )
-    }));
-}
-
-#[test]
-fn unresolved_additional_override_type_remains_a_warning_message() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    let declaration = add_type(
-        &mut lifecore,
-        Type::new("Parent", &[], &[], &[], &["MissingChild"]),
-    );
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::NonexistantOverrideType {
-                offending_event,
-                base_ty_name,
-                override_ty_name,
-                ..
-            } if *offending_event == declaration
-                && base_ty_name == "Parent"
-                && override_ty_name == "MissingChild"
-        )
-    }));
-}
-
-#[test]
-fn disallowed_node_override_is_reported_at_the_child() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(&mut lifecore, Type::new("Parent", &[], &[], &[], &[]));
-    add_type(&mut lifecore, Type::new("Child", &[], &[], &[], &[]));
-    let parent = lifecore.add_mock("Parent", Body::default(), None).unwrap();
-    let child = lifecore
-        .add_mock("Child", Body::default(), Some(parent.e))
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::BadOverride {
-                offending_event,
-                parent_ty_name,
-                child_ty_name,
-            } if *offending_event == child.e
-                && parent_ty_name == "Parent"
-                && child_ty_name == "Child"
-        )
-    }));
-}
-
-#[test]
-fn declared_additional_node_override_is_accepted() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(
-        &mut lifecore,
-        Type::new("Parent", &[], &[], &[], &["Child"]),
-    );
-    add_type(&mut lifecore, Type::new("Child", &[], &[], &[], &[]));
-    let parent = lifecore.add_mock("Parent", Body::default(), None).unwrap();
-    lifecore
-        .add_mock("Child", Body::default(), Some(parent.e))
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(!contains_message(&messages, |message| {
-        matches!(message, TypeCheckMessage::BadOverride { .. })
-    }));
-}
-
-#[test]
-fn field_statuses_and_extraneous_fields_are_enforced() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(
-        &mut lifecore,
-        Type::new(
-            "Task",
-            &[
-                ("must", (ValueType::Text, FieldStatus::Mandatory)),
-                ("should", (ValueType::Text, FieldStatus::Encouraged)),
-                ("old", (ValueType::Text, FieldStatus::Deprecated)),
-                ("maybe", (ValueType::Number, FieldStatus::Optional)),
-            ],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let task = lifecore
-        .add_mock(
-            "Task",
-            Body::from([
-                ("old", Payload::text("legacy")),
-                ("extra", Payload::text("nope")),
-            ]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ElidedMandatoryField {
-                offending_event,
-                ty_name,
-                field_name,
-            } if *offending_event == task.e && ty_name == "Task" && field_name == "must"
-        )
-    }));
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ElidedEncouragedField {
-                offending_event,
-                field_name,
-                ..
-            } if *offending_event == task.e && field_name == "should"
-        )
-    }));
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::DeprecatedField {
-                offending_event,
-                field_name,
-                ..
-            } if *offending_event == task.e && field_name == "old"
-        )
-    }));
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ExtraneousField {
-                offending_event,
-                field_name,
-                ..
-            } if *offending_event == task.e && field_name == "extra"
-        )
-    }));
-    assert!(!contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ElidedMandatoryField { field_name, .. }
-                | TypeCheckMessage::ElidedEncouragedField { field_name, .. }
-                if field_name == "maybe"
-        )
-    }));
-}
-
-#[test]
-fn empty_matching_collections_are_unfilled_for_mandatory_and_encouraged_fields() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(
-        &mut lifecore,
-        Type::new(
-            "CollectionPolicy",
-            &[
-                (
-                    "mandatory_sequence",
-                    (
-                        ValueType::Sequence(Box::new(ValueType::Text)),
-                        FieldStatus::Mandatory,
-                    ),
-                ),
-                (
-                    "mandatory_set",
-                    (
-                        ValueType::OrderedSet(Box::new(ValueType::Text)),
-                        FieldStatus::Mandatory,
-                    ),
-                ),
-                (
-                    "encouraged_sequence",
-                    (
-                        ValueType::Sequence(Box::new(ValueType::Text)),
-                        FieldStatus::Encouraged,
-                    ),
-                ),
-                (
-                    "encouraged_set",
-                    (
-                        ValueType::OrderedSet(Box::new(ValueType::Text)),
-                        FieldStatus::Encouraged,
-                    ),
-                ),
-                (
-                    "optional_sequence",
-                    (
-                        ValueType::Sequence(Box::new(ValueType::Text)),
-                        FieldStatus::Optional,
-                    ),
-                ),
-                (
-                    "deprecated_set",
-                    (
-                        ValueType::OrderedSet(Box::new(ValueType::Text)),
-                        FieldStatus::Deprecated,
-                    ),
-                ),
-            ],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let node = lifecore
-        .add_mock(
-            "CollectionPolicy",
-            Body::from([
-                ("mandatory_sequence", Payload::Sequence(vec![])),
-                ("mandatory_set", Payload::OrderedSet(OrderedSet::default())),
-                ("encouraged_sequence", Payload::Sequence(vec![])),
-                ("encouraged_set", Payload::OrderedSet(OrderedSet::default())),
-                ("optional_sequence", Payload::Sequence(vec![])),
-                ("deprecated_set", Payload::OrderedSet(OrderedSet::default())),
-            ]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-    let mandatory = messages
-        .iter()
-        .filter_map(|message| match message {
-        TypeCheckMessage::ElidedMandatoryField {
-            offending_event,
-            field_name,
-            ..
-        } if *offending_event == node.e => Some(field_name.as_str()),
-        _ => None,
-        })
-        .collect::<Vec<_>>();
-    let encouraged = messages
-        .iter()
-        .filter_map(|message| match message {
-        TypeCheckMessage::ElidedEncouragedField {
-            offending_event,
-            field_name,
-            ..
-        } if *offending_event == node.e => Some(field_name.as_str()),
-        _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(mandatory, ["mandatory_sequence", "mandatory_set"]);
-    assert_eq!(encouraged, ["encouraged_sequence", "encouraged_set"]);
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::DeprecatedField {
-                offending_event,
-                field_name,
-                ..
-            } if *offending_event == node.e && field_name == "deprecated_set"
-        )
-    }));
-    assert!(!contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ElidedMandatoryField { field_name, .. }
-                | TypeCheckMessage::ElidedEncouragedField { field_name, .. }
-                if field_name == "optional_sequence"
-        )
-    }));
-    assert!(!contains_message(&messages, |message| {
-        matches!(message, TypeCheckMessage::FieldTypeMismatch { offending_event, .. }
-            if *offending_event == node.e)
-    }));
-
-    configure(&mut lifecore);
-    let output = runner().run(&lifecore).unwrap();
-    assert!(
-        output
-            .errors()
-            .iter()
-            .any(|message| message.message.contains("mandatory_sequence"))
-    );
-    assert!(
-        output
-            .warnings()
-            .iter()
-            .any(|message| message.message.contains("encouraged_sequence"))
-    );
-}
-
-#[test]
-fn empty_tuple_is_valid_for_a_mandatory_zero_arity_tuple() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(
-        &mut lifecore,
-        Type::new(
-            "EmptyTuple",
-            &[("unit", (ValueType::Tuple(vec![]), FieldStatus::Mandatory))],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let node = lifecore
-        .add_mock(
-            "EmptyTuple",
-            Body::from([("unit", Payload::Sequence(vec![]))]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(!messages.iter().any(|message| is_field_message(message)
-        && matches!(
-            message,
-            TypeCheckMessage::ElidedMandatoryField { offending_event, .. }
-                | TypeCheckMessage::FieldTypeMismatch { offending_event, .. }
-                if *offending_event == node.e
-        )));
-}
-
-#[test]
-fn incorrect_empty_container_is_only_a_type_mismatch() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    let expected = ValueType::OrderedSet(Box::new(ValueType::Text));
-    add_type(
-        &mut lifecore,
-        Type::new(
-            "WrongContainer",
-            &[("values", (expected.clone(), FieldStatus::Mandatory))],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let node = lifecore
-        .add_mock(
-            "WrongContainer",
-            Body::from([("values", Payload::Sequence(vec![]))]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::FieldTypeMismatch {
-                offending_event,
-                field_name,
-                expected_type,
-                present_type: PayloadKind::Sequence,
-                ..
-            } if *offending_event == node.e
-                && field_name == "values"
-                && expected_type == &expected
-        )
-    }));
-    assert!(!contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ElidedMandatoryField {
-                offending_event,
-                field_name,
-                ..
-            } if *offending_event == node.e && field_name == "values"
-        )
-    }));
-}
-
-#[test]
-fn rich_value_types_are_checked_recursively() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    let status_type = ValueType::OneOf(vec![
-        ValueType::TextLiteral("open".to_string()),
-        ValueType::TextLiteral("closed".to_string()),
-    ]);
-    let tuple_type = ValueType::Tuple(vec![ValueType::Text, ValueType::Number]);
-    let nested_type =
-        ValueType::Sequence(Box::new(ValueType::OrderedSet(Box::new(ValueType::Number))));
-    add_type(
-        &mut lifecore,
-        Type::new(
-            "Rich",
-            &[
-                ("status", (status_type.clone(), FieldStatus::Optional)),
-                ("tuple", (tuple_type.clone(), FieldStatus::Optional)),
-                ("nested", (nested_type.clone(), FieldStatus::Optional)),
-            ],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let node = lifecore
-        .add_mock(
-            "Rich",
-            Body::from([
-                ("status", Payload::text("pending")),
-                (
-                    "tuple",
-                    Payload::Sequence(vec![Payload::text("label"), Payload::text("wrong")]),
-                ),
-                (
-                    "nested",
-                    Payload::Sequence(vec![Payload::OrderedSet([Payload::text("wrong")].into())]),
-                ),
-            ]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-    let mismatches = messages
-        .iter()
-        .filter_map(|message| match message {
-        TypeCheckMessage::FieldTypeMismatch {
-            offending_event,
-            field_name,
-            expected_type,
-            present_type,
-            ..
-        } if *offending_event == node.e => Some((field_name.as_str(), expected_type, present_type)),
-        _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        mismatches,
-        [
-            ("status", &status_type, &PayloadKind::Text),
-            ("tuple", &tuple_type, &PayloadKind::Sequence),
-            ("nested", &nested_type, &PayloadKind::Sequence),
-        ]
-    );
-
-    configure(&mut lifecore);
-    let output = runner().run(&lifecore).unwrap();
-    assert!(output.errors().iter().any(|message| {
-        message
-            .message
-            .contains(r#"expected OneOf("open", "closed"), got Text"#)
-    }));
-}
-
-#[test]
-fn valid_rich_value_types_do_not_emit_field_diagnostics() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(
-        &mut lifecore,
-        Type::new(
-            "Rich",
-            &[
-                (
-                    "status",
-                    (
-                        ValueType::OneOf(vec![
-                            ValueType::TextLiteral("open".to_string()),
-                            ValueType::NumberLiteral(-1),
-                        ]),
-                        FieldStatus::Mandatory,
-                    ),
-                ),
-                (
-                    "nested",
-                    (
-                        ValueType::Sequence(Box::new(ValueType::Tuple(vec![
-                            ValueType::Text,
-                            ValueType::Number,
-                        ]))),
-                        FieldStatus::Optional,
-                    ),
-                ),
-            ],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let node = lifecore
-        .add_mock(
-            "Rich",
-            Body::from([
-                ("status", Payload::Number(-1)),
-                (
-                    "nested",
-                    Payload::Sequence(vec![Payload::Sequence(vec![
-                        Payload::text("answer"),
-                        Payload::Number(42),
-                    ])]),
-                ),
-            ]),
-            None,
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(!messages.iter().any(|message| {
-        is_field_message(message)
-            && match message {
-            TypeCheckMessage::ElidedMandatoryField {
-                offending_event, ..
-            }
-            | TypeCheckMessage::ElidedEncouragedField {
-                offending_event, ..
-            }
-            | TypeCheckMessage::DeprecatedField {
-                offending_event, ..
-            }
-            | TypeCheckMessage::FieldTypeMismatch {
-                offending_event, ..
-            }
-            | TypeCheckMessage::ExtraneousField {
-                offending_event, ..
-            } => *offending_event == node.e,
-            _ => false,
-            }
-    }));
-}
-
-#[test]
-fn fresh_old_node_is_rechecked_against_replacement_type() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    let old_type = add_type(
-        &mut lifecore,
-        Type::new(
-            "Task",
-            &[("old", (ValueType::Text, FieldStatus::Mandatory))],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let task = lifecore
-        .add_mock(
-            "Task",
-            Body::from([("old", Payload::text("valid then"))]),
-            None,
-        )
-        .unwrap();
-    let before_replacement = task.e.shrink_to_inclusive_left();
-    lifecore
-        .add_typed_mock(
-            Type::new(
-                "Task",
-                &[("new", (ValueType::Number, FieldStatus::Mandatory))],
-                &[],
-                &[],
-                &[],
-            ),
-            Some(old_type),
-        )
-        .unwrap();
-
-    let old_messages = analyze_at(&lifecore, before_replacement);
-    let new_messages = analyze_final(&lifecore);
-
-    assert!(!old_messages.iter().any(|message| {
-        is_field_message(message)
-            && matches!(
-                message,
-                TypeCheckMessage::ElidedMandatoryField { offending_event, .. }
-                    | TypeCheckMessage::ExtraneousField { offending_event, .. }
-                    if *offending_event == task.e
-            )
-    }));
-    assert!(contains_message(&new_messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ElidedMandatoryField {
-                offending_event,
-                field_name,
-                ..
-            } if offending_event.absolute() == task.e.absolute() && field_name == "new"
-        )
-    }));
-    assert!(contains_message(&new_messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::ExtraneousField {
-                offending_event,
-                field_name,
-                ..
-            } if offending_event.absolute() == task.e.absolute() && field_name == "old"
-        )
-    }));
-}
-
-#[test]
-fn stale_node_is_not_rechecked_against_replacement_type() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    let old_type = add_type(
-        &mut lifecore,
-        Type::new(
-            "Task",
-            &[("old", (ValueType::Text, FieldStatus::Mandatory))],
-            &[],
-            &[],
-            &[],
-        ),
-    );
-    let old_task = lifecore
-        .add_mock(
-            "Task",
-            Body::from([("old", Payload::text("valid then"))]),
-            None,
-        )
-        .unwrap();
-    lifecore
-        .add_typed_mock(
-            Type::new(
-                "Task",
-                &[("new", (ValueType::Number, FieldStatus::Mandatory))],
-                &[],
-                &[],
-                &[],
-            ),
-            Some(old_type),
-        )
-        .unwrap();
-    lifecore
-        .add_mock(
-            "Task",
-            Body::from([("new", Payload::Number(1))]),
-            Some(old_task.e),
-        )
-        .unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(!messages.iter().any(|message| {
-        is_field_message(message)
-            && match message {
-            TypeCheckMessage::ElidedMandatoryField {
-                offending_event, ..
-            }
-            | TypeCheckMessage::ElidedEncouragedField {
-                offending_event, ..
-            }
-            | TypeCheckMessage::DeprecatedField {
-                offending_event, ..
-            }
-            | TypeCheckMessage::FieldTypeMismatch {
-                offending_event, ..
-            }
-            | TypeCheckMessage::ExtraneousField {
-                offending_event, ..
-            } => offending_event.absolute() == old_task.e.absolute(),
-            _ => false,
-            }
-    }));
-}
-
-#[test]
-fn valid_typed_edge_is_accepted_across_all_historical_prefixes() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(&mut lifecore, Type::new("From", &[], &["link"], &[], &[]));
-    add_type(&mut lifecore, Type::new("To", &[], &[], &["link"], &[]));
-    let from = lifecore.add_mock("From", Body::default(), None).unwrap();
-    let to = lifecore.add_mock("To", Body::default(), None).unwrap();
-    lifecore.connect_mock(from.e, "link", to.e).unwrap();
-    configure(&mut lifecore);
-
-    let output = runner().run(&lifecore).unwrap();
-
-    assert!(!output.has_error(), "unexpected output: {output:?}");
-}
-
-#[test]
-fn disallowed_outgoing_edge_identifies_the_head_node() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(&mut lifecore, Type::new("From", &[], &[], &[], &[]));
-    add_type(&mut lifecore, Type::new("To", &[], &[], &["link"], &[]));
-    let from = lifecore.add_mock("From", Body::default(), None).unwrap();
-    let to = lifecore.add_mock("To", Body::default(), None).unwrap();
-    let edge = lifecore.connect_mock(from.e, "link", to.e).unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::BadEdgeEndpoint {
-                offending_event,
-                edge_ty_name,
-                bad_node_ty_name,
-                bad_node_is_head: true,
-            } if *offending_event == edge.e
-                && edge_ty_name == "link"
-                && bad_node_ty_name == "From"
-        )
-    }));
-}
-
-#[test]
-fn disallowed_incoming_edge_identifies_the_tail_node() {
-    let mut lifecore = LifeCoreList::default();
-    add_bootstrap(&mut lifecore);
-    add_type(&mut lifecore, Type::new("From", &[], &["link"], &[], &[]));
-    add_type(&mut lifecore, Type::new("To", &[], &[], &[], &[]));
-    let from = lifecore.add_mock("From", Body::default(), None).unwrap();
-    let to = lifecore.add_mock("To", Body::default(), None).unwrap();
-    let edge = lifecore.connect_mock(from.e, "link", to.e).unwrap();
-
-    let messages = analyze_final(&lifecore);
-
-    assert!(contains_message(&messages, |message| {
-        matches!(
-            message,
-            TypeCheckMessage::BadEdgeEndpoint {
-                offending_event,
-                edge_ty_name,
-                bad_node_ty_name,
-                bad_node_is_head: false,
-            } if *offending_event == edge.e
-                && edge_ty_name == "link"
-                && bad_node_ty_name == "To"
-        )
-    }));
-}
-
-#[test]
-fn factory_reports_its_stable_registered_name() {
-    let factory = TypeCheckFactory::<LifeCoreList>::default();
-
+fn factory_validates_configuration_and_keeps_its_name() {
+    let mut factory = TypeCheckFactory;
     assert_eq!(factory.analyzer_name(), "Type_Check");
+    assert!(factory.analyzer_with_config("unexpected").is_err());
+    assert!(factory.analyzer_with_config("{}").is_ok());
+}
+
+#[test]
+fn runner_combines_typed_warnings_and_inconsistencies_without_filtering() {
+    let mut graph = LifeCoreList::default();
+    let a = Type::new(
+        "A",
+        &[
+            ("required", (ValueType::Text, FieldStatus::Mandatory)),
+            ("advised", (ValueType::Text, FieldStatus::Encouraged)),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    append(
+        &mut graph,
+        &[declaration(&a, None), node("A", Body::new(), None)],
+    );
+    let suite = lifecore::analysis::SuiteConfig(vec![lifecore::analysis::Config {
+        name: TypeCheckFactory::name().into(),
+        config: String::new(),
+    }]);
+    let output = runner().run_view(graph.view(), &suite).unwrap();
+    assert_eq!(output.errors().count(), 1);
+    assert_eq!(output.warnings().count(), 1);
+    assert_eq!(output.errors().next().unwrap().offending_event.view.end, 2);
+}
+
+#[test]
+fn plan_local_references_count_operations_and_cannot_name_configuration_changes() {
+    let graph = LifeCoreList::default();
+    let changes = [
+        configure(),
+        declaration(&ty("A"), None),
+        node("A", Body::new(), None),
+        node("A", Body::new(), Some(Added(2))),
+    ];
+    let plan = check(&graph, &changes, &mut runner()).unwrap();
+    assert_eq!(plan.added().len(), 3);
+    assert_eq!(
+        plan.view().node(plan.added()[2]).unwrap().parent,
+        Some(plan.added()[1])
+    );
+    assert!(matches!(
+        check(
+            &graph,
+            &[configure(), node("A", Body::new(), Some(Added(0)))],
+            &mut runner()
+        ),
+        Err(lifecore::transaction::Error::InvalidPlanReference { operation: 0 })
+    ));
 }

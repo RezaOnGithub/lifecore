@@ -1,566 +1,356 @@
-//! Tests written and maintained by Agents
-
-use crate::{FieldQuery, FieldQueryPathComponent};
-
+use crate::{
+    Body, EntryId, LifeCoreList, Payload, ViewError,
+    analysis::AnalysisRunner,
+    transaction::{
+        Change,
+        Reference::{Added, Existing},
+        check,
+    },
+    typing::{
+        FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaErrorKind, Type, TypeDefinition,
+        ValueType,
+    },
+};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
 
-use crate::{
-    Body, Circumstance, Edge, EntryContext, LifeCore, LifeCoreAccess, LifeCoreList, Node,
-    analysis::{Suggestion, Warning},
-};
-
-use super::*;
-
-fn connected_graph() -> (LifeCoreList, Node, Node, Edge) {
-    let mut lc = LifeCoreList::default();
-    let from = lc.add_mock("From", Body::default(), None).unwrap();
-    let to = lc.add_mock("To", Body::default(), None).unwrap();
-    let edge = lc.connect_mock(from.e, "link", to.e).unwrap();
-    (lc, from, to, edge)
-}
-
-fn hash<T: Hash>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
-#[test]
-fn get_with_circumstance_follows_the_per_entry_mapping() {
-    let mut lc = LifeCoreList::default();
-    let first = lc.add_mock("First", Body::default(), None).unwrap();
-    let second = lc.add_mock("Second", Body::default(), None).unwrap();
-
-    assert!(matches!(
-        lc.get_with_circumstance(first.e).unwrap().1,
-        Circumstance::Mock
-    ));
-    assert!(matches!(
-        lc.get_with_circumstance(second.e).unwrap().1,
-        Circumstance::Mock
-    ));
-}
-
-#[test]
-fn fresh_edges_of_finds_an_edge_from_the_current_context() {
-    let (lc, from, _, edge) = connected_graph();
-
-    let edges = lc.fresh_edges_of(from.e.absolute()).collect::<Vec<_>>();
-
-    assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0].e.absolute(), edge.e.absolute());
-}
-
-#[test]
-fn fresh_outgoing_edges_of_finds_an_edge_from_the_current_context() {
-    let (lc, from, _, edge) = connected_graph();
-
-    let edges = lc
-        .fresh_outgoing_edges_of(from.e.absolute())
-        .collect::<Vec<_>>();
-
-    assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0].e.absolute(), edge.e.absolute());
-}
-
-#[test]
-fn fresh_incoming_edges_to_finds_an_edge_from_the_current_context() {
-    let (lc, _, to, edge) = connected_graph();
-
-    let edges = lc
-        .fresh_incoming_edges_to(to.e.absolute())
-        .collect::<Vec<_>>();
-
-    assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0].e.absolute(), edge.e.absolute());
-}
-
-#[test]
-fn fresh_edges_exclude_an_edge_with_a_stale_endpoint() {
-    let (mut lc, from, to, _) = connected_graph();
-    lc.add_mock("To", Body::default(), Some(to.e)).unwrap();
-
-    assert_eq!(lc.fresh_edges_of(from.e.absolute()).count(), 0);
-}
-
-#[test]
-fn node_parent_inherits_the_inspection_window() {
-    let mut lc = LifeCoreList::default();
-    let root = lc.add_mock("Root", Body::default(), None).unwrap();
-    let child = lc.add_mock("Child", Body::default(), Some(root.e)).unwrap();
-    let _later = lc.add_mock("Later", Body::default(), None).unwrap();
-    let child_at_end = lc.last().unwrap().look_at(child.e);
-
-    let child = lc.node(child_at_end).unwrap();
-
-    assert_eq!(child.parent, Some(root.e.index()));
-}
-
-// TODO revise
-#[cfg(never)]
-#[test]
-fn families_can_include_a_root_from_before_the_search_window() {
-    // let mut lc = LifeCoreList::new();
-    // let root = lc.add_mock("Root", NodeBodyExt::default(), None).unwrap();
-    // let child = lc
-    //     .add_mock("Child", NodeBodyExt::default(), Some(root.e))
-    //     .unwrap();
-    // let child_only_window = root.e.absolute().exclusive_right_context();
-
-    // let families = lc.non_solo_families(child_only_window);
-
-    // assert_eq!(families.len(), 1);
-    // assert_eq!(families[0].len(), 2);
-    // assert!(
-    //     families[0]
-    //         .iter()
-    //         .any(|event| event.absolute() == root.e.absolute())
-    // );
-    // assert!(
-    //     families[0]
-    //         .iter()
-    //         .any(|event| event.absolute() == child.e.absolute())
-    // );
-}
-
-#[cfg(revise)]
-#[test]
-fn warning_hash_is_independent_of_relevance_order_for_the_same_event() {
-    let wide = EntryContext { end: 4, thing: 1 };
-    let narrow = EntryContext { end: 3, thing: 1 };
-    let warning = |relevance| Warning {
-        offending_event: wide.into(),
-        system_name: "test".to_string(),
-        system_config: String::new(),
-        relevance,
-        message: "same warning".to_string(),
-    };
-
-    let forward = warning(vec![wide, narrow]);
-    let reverse = warning(vec![narrow, wide]);
-
-    assert_eq!(hash(&forward), hash(&reverse));
-}
-
-#[cfg(revise)]
-#[test]
-fn suggestion_hash_is_independent_of_relevance_order_for_the_same_event() {
-    let wide = EntryContext { end: 4, thing: 1 };
-    let narrow = EntryContext { end: 3, thing: 1 };
-    let suggestion = |relevance| Suggestion {
-        offending_event: wide.into(),
-        system_name: "test".to_string(),
-        system_config: String::new(),
-        relevance,
-        message: "same suggestion".to_string(),
-        action: vec![],
-    };
-
-    let forward = suggestion(vec![wide, narrow]);
-    let reverse = suggestion(vec![narrow, wide]);
-
-    assert_eq!(hash(&forward), hash(&reverse));
-}
-
-#[test]
-fn field_query_parser_and_display_round_trip() {
-    let cases = [
-        ("title", "title"),
-        ("  items [ 12 ] [ * ] [ last ]  ", "items[12][*][Last]"),
-        ("matrix[0][1][Last]", "matrix[0][1][Last]"),
-    ];
-
-    for (input, canonical) in cases {
-        let parsed = input.parse::<FieldQuery>().unwrap();
-        assert_eq!(parsed.to_string(), canonical);
-
-        let reparsed = parsed.to_string().parse::<FieldQuery>().unwrap();
-        assert_eq!(reparsed.field_name, parsed.field_name);
-        assert!(reparsed.path == parsed.path);
+fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
+    Change::AddNode {
+        ty_name: name.into(),
+        body: Body::default(),
+        parent,
     }
 }
+fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
+    let plan = check(graph, changes, &mut AnalysisRunner::default()).unwrap();
+    let ids = plan.added().to_vec();
+    plan.commit(graph).unwrap();
+    ids
+}
+fn hash(value: &impl Hash) -> u64 {
+    let mut state = DefaultHasher::new();
+    value.hash(&mut state);
+    state.finish()
+}
 
 #[test]
-fn field_query_parser_preserves_selector_kinds() {
-    let parsed = "values[0][*][last]".parse::<FieldQuery>().unwrap();
-
-    assert_eq!(parsed.field_name, "values");
+fn empty_view_has_builtin_type_and_cannot_expand() {
+    let graph = LifeCoreList::default();
+    let view = graph.view();
+    assert!(view.is_empty());
+    assert!(view.at(0).is_none());
+    assert_eq!(
+        view.resolve_type("Type").unwrap(),
+        Some(TypeDefinition::Builtin)
+    );
     assert!(matches!(
-        parsed.path.as_slice(),
-        [
-            FieldQueryPathComponent::Index(0),
-            FieldQueryPathComponent::Wildcard,
-            FieldQueryPathComponent::Last,
-        ]
+        view.prefix(1),
+        Err(ViewError::BeyondBoundary { .. })
     ));
 }
 
 #[test]
-fn field_query_parser_rejects_bad_names_keywords_and_selectors() {
-    for input in [
-        "",
-        "Items[0]",
-        "itemName[0]",
-        "_items[0]",
-        "items[]",
-        "items[-1]",
-        "items[LAST]",
-        "items[0]tail",
-    ] {
-        assert!(
-            input.parse::<FieldQuery>().is_err(),
-            "{input:?} unexpectedly parsed"
-        );
-    }
-}
-
-use crate::{
-    OrderedSet, PayloadKind, Timestamp,
-    serialize::{Error as SerializeError, LifeCoreSerializeExt, NodeBody, NodeField},
-    typing::{FieldDecl, FieldStatus, Type, ValueType},
-};
-
-#[test]
-fn body_facade_supports_map_operations_and_convertible_collection_building() {
-    let mut body = Body::new();
-    assert!(body.is_empty());
-    assert_eq!(body.insert("count", Payload::Number(1)), None);
-    assert!(body.contains_key("count"));
-    assert_eq!(body.get("count"), Some(&Payload::Number(1)));
-    *body.get_mut("count").unwrap() = Payload::Number(2);
-    assert_eq!(body.values().collect::<Vec<_>>(), vec![&Payload::Number(2)]);
-    assert_eq!(body.remove("count"), Some(Payload::Number(2)));
-
-    let body = Body::from([("title", Payload::text("Task"))]);
-    assert_eq!(
-        body.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["title"]
-    );
-}
-
-#[test]
-fn ordered_set_facade_preserves_order_without_exposing_its_backing_collection() {
-    let mut values = OrderedSet::from(["first".to_string(), "second".to_string()]);
-    assert_eq!(values.first().map(String::as_str), Some("first"));
-    assert_eq!(values.last().map(String::as_str), Some("second"));
-    assert_eq!(values.get(1).map(String::as_str), Some("second"));
-    assert!(!values.insert("second".to_string()));
-    assert!(values.remove(&"first".to_string()));
-    values.extend(["third".to_string(), "fourth".to_string()]);
-    values.retain(|value| value != "third");
-
-    assert_eq!(values.into_iter().collect::<Vec<_>>(), ["second", "fourth"]);
-}
-
-#[test]
-fn value_type_syntax_and_payload_checks_keep_the_existing_wire_language() {
-    let value_type =
-        r#"Sequence(Tuple(Text, OneOf("ready: now", -1)))"#.parse::<ValueType>().unwrap();
-    assert_eq!(
-        value_type.to_string(),
-        r#"Sequence(Tuple(Text, OneOf("ready: now", -1)))"#
-    );
-    assert!(
-        value_type
-            .check(&Payload::Sequence(vec![Payload::Sequence(vec![
-                Payload::text("task"),
-                Payload::text("ready: now"),
-            ])]))
-            .is_ok()
-    );
-    assert!(matches!(
-        value_type.check(&Payload::Number(1)),
-        Err(SerializeError::UnexpectedPayloadKind {
-            actual: PayloadKind::Number,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn field_declaration_uses_its_three_element_payload_tuple_and_accessors() {
-    let field = r#"status = OneOf("ready", "done", -1) : Encouraged"#
-        .parse::<FieldDecl>()
-        .unwrap();
-    let payload = field.clone().into_payload();
-
-    assert_eq!(field.name(), "status");
-    assert_eq!(field.status(), FieldStatus::Encouraged);
-    assert_eq!(
-        payload,
-        Payload::Sequence(vec![
-            Payload::text("status"),
-            Payload::text(r#"OneOf("ready", "done", -1)"#),
-            Payload::text("Encouraged"),
-        ])
-    );
-    assert_eq!(FieldDecl::try_from_payload(&payload).unwrap(), field);
-    assert!(FieldDecl::try_from_payload(&Payload::text("legacy")).is_err());
-
-    assert_eq!(
-        FieldStatus::try_from_payload(&Payload::text("mandatory")).unwrap(),
-        FieldStatus::Mandatory
-    );
-    assert_eq!(
-        FieldStatus::Mandatory.into_payload(),
-        Payload::text("Mandatory")
-    );
-}
-
-#[test]
-fn node_field_round_trips_primitives_and_nested_ordered_sets() {
-    let values = OrderedSet::from([OrderedSet::from([1_i64, 2_i64]), OrderedSet::from([3_i64])]);
-    let payload = values.clone().into_payload();
-
-    assert_eq!(
-        <OrderedSet<OrderedSet<i64>>>::try_from_payload(&payload).unwrap(),
-        values
-    );
-    assert!(matches!(
-        OrderedSet::<i64>::try_from_payload(&Payload::text("not a set")),
-        Err(SerializeError::UnexpectedPayloadKind { .. })
-    ));
-    assert!(matches!(
-        OrderedSet::<i64>::try_from_payload(&Payload::OrderedSet(
-            [Payload::Number(1), Payload::text("wrong")]
-                .into_iter()
-                .collect(),
-        )),
-        Err(SerializeError::InvalidCollectionElement { index: 1, .. })
-    ));
-
-    let strings = OrderedSet::from(["first".to_string(), "second".to_string()]);
-    assert_eq!(
-        OrderedSet::<String>::try_from_payload(&strings.clone().into_payload()).unwrap(),
-        strings
-    );
-
-    let times = OrderedSet::from([
-        "2026-07-23T00:00:00Z".parse::<Timestamp>().unwrap(),
-        "2026-07-24T00:00:00Z".parse::<Timestamp>().unwrap(),
-    ]);
-    assert_eq!(
-        OrderedSet::<Timestamp>::try_from_payload(&times.clone().into_payload()).unwrap(),
-        times
-    );
-}
-
-#[test]
-fn stored_type_body_round_trips_and_defaults_absent_optional_sets() {
-    let declaration = Type::new(
-        "Task",
-        &[("title", (ValueType::Text, FieldStatus::Mandatory))],
-        &["blocks"],
-        &["contains"],
-        &["ArchivedTask"],
-    );
-    assert_eq!(
-        Type::try_from_body(&declaration.clone().into_body()).unwrap(),
-        declaration
-    );
-
-    let empty = Body::from([("name", Payload::text("Empty"))]);
-    assert_eq!(
-        Type::try_from_body(&empty).unwrap(),
-        Type::new("Empty", &[], &[], &[], &[])
-    );
-    assert!(matches!(
-        Type::try_from_body(&Body::default()),
-        Err(SerializeError::MissingBodyField { field_name }) if field_name == "name"
-    ));
-    assert!(matches!(
-        Type::try_from_body(&Body::from([
-            ("name", Payload::text("Bad")),
-            ("outgoing", Payload::Sequence(vec![])),
-        ])),
-        Err(SerializeError::InvalidBodyField { field_name, .. }) if field_name == "outgoing"
-    ));
-}
-
-#[test]
-fn type_syntax_rejects_invalid_values_without_broadening_the_language() {
-    for input in [
-        "TEXT",
-        r#""unterminated"#,
-        "Sequence(Text, Number)",
-        "OneOf(Text,)",
-        "9223372036854775808",
-    ] {
-        assert!(
-            input.parse::<ValueType>().is_err(),
-            "{input:?} unexpectedly parsed"
-        );
-    }
-    for input in [
-        "Tags = Text : Mandatory",
-        "tagName = Text : Mandatory",
-        "tags = Text : MANDATORY",
-        "tags Text : Mandatory",
-    ] {
-        assert!(
-            input.parse::<FieldDecl>().is_err(),
-            "{input:?} unexpectedly parsed"
-        );
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct TaskBody {
-    title: String,
-}
-
-impl NodeBody for TaskBody {
-    const TYPE_NAME: &'static str = "Task";
-
-    fn describe_self() -> Type {
-        Type::new(
-            Self::TYPE_NAME,
-            &[("title", (ValueType::Text, FieldStatus::Mandatory))],
-            &[],
-            &[],
-            &[],
-        )
-    }
-
-    fn into_body(self) -> Body {
-        Body::from([("title", self.title.into_payload())])
-    }
-
-    fn try_from_body(value: &Body) -> Result<Self, SerializeError> {
-        let title = value
-            .get("title")
-            .ok_or_else(|| SerializeError::MissingBodyField {
-                field_name: "title".to_string(),
-            })
-            .and_then(String::try_from_payload)?;
-        Ok(Self { title })
-    }
-}
-
-#[test]
-fn typed_mock_extension_works_without_expanding_the_lifecore_trait() {
-    let mut lifecore = LifeCoreList::default();
-    let added = lifecore
-        .add_typed_mock(
-            TaskBody {
-                title: "Write tests".to_string(),
+fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            node("A", None),
+            node("B", None),
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "link".into(),
+                to: Added(1),
             },
-            None,
-        )
-        .unwrap();
-
-    assert_eq!(added.ty_name, TaskBody::TYPE_NAME);
-    assert_eq!(
-        TaskBody::try_from_body(&added.field).unwrap().title,
-        "Write tests"
+            node("A2", Some(Added(0))),
+            node("A3", Some(Added(0))),
+            Change::AddEdge {
+                from: Added(3),
+                ty_name: "link".into(),
+                to: Added(1),
+            },
+        ],
     );
+    let view = graph.view();
+    let before = view.prefix(3).unwrap();
+    assert_eq!(before.is_stale(ids[0]), Some(false));
+    assert_eq!(before.edges_of(ids[0]).count(), 1);
+    assert_eq!(before.fresh_edges().count(), 1);
+    assert!(before.get(ids[3]).is_none());
+    assert!(before.prefix(4).is_err());
+    let middle = view.prefix(4).unwrap();
+    assert_eq!(middle.is_stale(ids[2]), Some(true));
+    assert_eq!(middle.fresh_edges().count(), 0);
+    assert_eq!(middle.node(ids[3]).unwrap().parent, Some(ids[0]));
+    assert_eq!(
+        view.fresh_successors(ids[0])
+            .map(|n| n.id)
+            .collect::<Vec<_>>(),
+        vec![ids[3], ids[4]]
+    );
+    assert_eq!(view.relative_degree(ids[3], ids[4]), Some(0));
+    assert_eq!(view.relative_degree(ids[0], ids[3]), None);
+    assert_eq!(view.root_of(ids[4]), Some(ids[0]));
+    assert_eq!(
+        view.fresh_edges().map(|e| e.id).collect::<Vec<_>>(),
+        vec![ids[5]]
+    );
+    assert_eq!(view.edge(ids[2]).unwrap().from, ids[0]);
+    assert!(view.extends(before).is_ok());
 }
 
 #[test]
-fn node_query_empty_combinators_have_explicit_identities() {
-    use crate::{NodeQuery, NodeQueryExpression};
-
-    let mut lifecore = LifeCoreList::default();
-    lifecore
-        .add_mock("One", Body::from([("value", Payload::Number(1))]), None)
-        .unwrap();
-    lifecore
-        .add_mock("Two", Body::from([("value", Payload::Number(2))]), None)
-        .unwrap();
-    let context = lifecore.last().unwrap().context();
-
-    assert_eq!(
-        lifecore
-            .query(NodeQuery {
-                context,
-                expression: NodeQueryExpression::All(Vec::new()),
-            })
-            .len(),
-        2
-    );
+fn identities_reject_other_databases_and_independent_candidate_suffixes() {
+    let mut graph = LifeCoreList::default();
+    let base = append(&mut graph, &[node("A", None)])[0];
+    let first = check(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
+    let second = check(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
+    let a = first.added()[0];
+    let b = second.added()[0];
+    assert_eq!(a.position(), b.position());
+    assert_ne!(a, b);
+    assert!(first.view().node(base).is_some());
+    assert!(second.view().get(a).is_none());
+    assert_ne!(first.view().id(), second.view().id());
+    assert_eq!(first.view().common_prefix(second.view()).unwrap(), 1);
+    assert!(first.view().extends(second.view()).is_err());
+    let mut other = LifeCoreList::default();
+    let foreign = append(&mut other, &[node("A", None)])[0];
+    assert!(graph.view().get(foreign).is_none());
+    assert!(graph.view().common_prefix(other.view()).is_err());
     assert!(
-        lifecore
-            .query(NodeQuery {
-                context,
-                expression: NodeQueryExpression::Any(Vec::new()),
-            })
-            .is_empty()
-    );
-    assert_eq!(
-        lifecore
-            .query(NodeQuery {
-                context,
-                expression: NodeQueryExpression::None(Vec::new()),
-            })
-            .len(),
-        2
+        check(
+            &graph,
+            &[node("Child", Some(Existing(foreign)))],
+            &mut AnalysisRunner::default()
+        )
+        .is_err()
     );
 }
 
 #[test]
-fn node_query_explains_non_membership_without_reimplementing_predicates() {
-    use crate::{NodeQuery, NodeQueryExpression, NodeQueryPredicate};
+fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
+    let graph = LifeCoreList::default();
+    let cases = [
+        vec![node("A", None), node("A", None)],
+        vec![
+            node("A", None),
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "x".into(),
+                to: Added(0),
+            },
+        ],
+        vec![node("A", Some(Added(0)))],
+        vec![
+            node("A", None),
+            node("B", None),
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "x".into(),
+                to: Added(1),
+            },
+            node("Child", Some(Added(2))),
+        ],
+        vec![
+            node("A", None),
+            node("B", None),
+            node("A2", Some(Added(0))),
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "x".into(),
+                to: Added(1),
+            },
+        ],
+        vec![
+            node("A", None),
+            node("B", None),
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "x".into(),
+                to: Added(1),
+            },
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "x".into(),
+                to: Added(1),
+            },
+        ],
+    ];
+    for changes in cases {
+        assert!(check(&graph, &changes, &mut AnalysisRunner::default()).is_err());
+        assert!(graph.view().is_empty());
+    }
+}
 
-    let mut lifecore = LifeCoreList::default();
-    let node = lifecore
-        .add_mock("Thing", Body::from([("value", Payload::Number(1))]), None)
-        .unwrap();
-    let query = NodeQuery {
-        context: node.e.context(),
-        expression: NodeQueryExpression::All(vec![
-            NodeQueryPredicate::Fresh,
-            NodeQueryPredicate::NodeType("Other".to_string()),
-        ]),
+#[test]
+fn stale_duplicate_nodes_and_branching_from_old_parents_are_permitted() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[node("A", None), node("A", Some(Added(0))), node("A", None)],
+    );
+    assert_eq!(graph.view().fresh_nodes().count(), 2);
+    append(&mut graph, &[node("Branch", Some(Existing(ids[0])))]);
+    assert_eq!(graph.view().fresh_successors(ids[0]).count(), 2);
+}
+
+#[test]
+fn entry_identity_ordering_traits_agree() {
+    let graph = LifeCoreList::default();
+    let candidate = check(
+        &graph,
+        &[node("A", None), node("B", None)],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap();
+    let [a, b] = candidate.added() else {
+        unreachable!()
     };
-
-    let explanation = lifecore.explain_query(&query, node.e).unwrap();
-
-    assert_eq!(explanation.predicate_matches, vec![true, false]);
-    assert!(!explanation.matches);
+    assert_eq!(a.partial_cmp(b), Some(a.cmp(b)));
 }
 
 #[test]
-fn field_traversal_out_of_range_and_wrong_kind_return_no_values() {
-    let payload = Payload::Sequence(vec![Payload::Text("only".to_string())]);
-    let out_of_range = "field[9]".parse::<FieldQuery>().unwrap();
-    let nested_scalar = "field[0][0]".parse::<FieldQuery>().unwrap();
-
-    assert!(payload.get(&out_of_range.path).is_empty());
-    assert!(payload.get(&nested_scalar.path).is_empty());
-}
-
-#[test]
-fn apply_replaces_mock_after_computing_the_session_circumstance() {
-    let mut lifecore = LifeCoreList::default();
-    let node = lifecore
-        .add_mock("Thing", Body::from([("value", Payload::Number(1))]), None)
-        .unwrap();
-
-    lifecore.apply().unwrap();
-
-    assert!(!lifecore.is_mock());
-    assert!(matches!(
-        lifecore.get_with_circumstance(node.e).unwrap().1,
-        Circumstance::Session { .. }
-    ));
-}
-
-#[test]
-#[ignore = "Stage 0 witness: replaced with bounded View in Stage 2"]
-fn entry_context_ordering_contract_witness() {
-    let a = EntryContext { thing: 0, end: 3 };
-    let b = EntryContext { thing: 1, end: 2 };
-    assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
-}
-
-#[test]
-#[ignore = "Stage 0 witness: ordered payload sets are removed in Stage 2"]
-fn equal_ordered_sets_hash_equally_witness() {
-    let a: crate::OrderedSet<i64> = [1, 2].into_iter().collect();
-    let b: crate::OrderedSet<i64> = [2, 1].into_iter().collect();
+fn records_hash_independently_of_insertion_order_and_lists_retain_order() {
+    let a = Payload::Record(Body::from([
+        ("a".into(), 1.into()),
+        ("b".into(), true.into()),
+    ]));
+    let b = Payload::Record(Body::from([
+        ("b".into(), true.into()),
+        ("a".into(), 1.into()),
+    ]));
     assert_eq!(a, b);
     assert_eq!(hash(&a), hash(&b));
+    assert_eq!(
+        serde_json::to_vec(&a).unwrap(),
+        serde_json::to_vec(&b).unwrap()
+    );
+    assert_ne!(
+        Payload::List(vec![1.into(), 2.into()]),
+        Payload::List(vec![2.into(), 1.into()])
+    );
+    assert_ne!(Payload::Number(1), Payload::Boolean(true));
+}
+
+#[test]
+fn scalar_and_nested_payloads_round_trip_without_coercion() {
+    let time: crate::Timestamp = "2026-09-14T12:00:00Z".parse().unwrap();
+    let value = Payload::Record(Body::from([(
+        "values".into(),
+        Payload::List(vec![
+            "text".into(),
+            1.into(),
+            true.into(),
+            time.into(),
+            Payload::Record(Body::new()),
+        ]),
+    )]));
+    assert_eq!(
+        serde_json::from_slice::<Payload>(&serde_json::to_vec(&value).unwrap()).unwrap(),
+        value
+    );
+    assert!(serde_json::from_str::<Payload>(r#"{"kind":"number","value":1.5}"#).is_err());
+    assert!(serde_json::from_str::<Payload>(r#"{"kind":"float","value":1.0}"#).is_err());
+}
+
+#[test]
+fn schemas_round_trip_as_named_records_and_nested_shapes_report_precise_paths() {
+    let record = ValueType::Record(
+        [(
+            "label".into(),
+            FieldDecl {
+                ty: ValueType::Text,
+                status: FieldStatus::Mandatory,
+            },
+        )]
+        .into(),
+    );
+    let ty = Type::new(
+        "Thing",
+        &[(
+            "rows",
+            (ValueType::List(Box::new(record)), FieldStatus::Mandatory),
+        )],
+        &["link"],
+        &[],
+        &[],
+    );
+    assert_eq!(Type::from_body(&ty.to_body()).unwrap(), ty);
+    assert!(
+        ty.check(&Body::from([("rows".into(), Payload::List(vec![]))]))
+            .is_empty()
+    );
+    let issues = ty.check(&Body::from([(
+        "rows".into(),
+        Payload::List(vec![Payload::Record(Body::new())]),
+    )]));
+    assert_eq!(issues[0].kind, FieldIssueKind::MissingMandatory);
+    assert_eq!(
+        issues[0].path,
+        vec![
+            PathPart::Field("rows".into()),
+            PathPart::Index(0),
+            PathPart::Field("label".into())
+        ]
+    );
+    let mut malformed = ty.to_body();
+    malformed.insert("typo".into(), true.into());
+    assert_eq!(
+        Type::from_body(&malformed).unwrap_err().kind,
+        SchemaErrorKind::UnknownField
+    );
+}
+
+#[test]
+fn deserialization_rejects_cyclic_forward_and_mismatched_identities_before_inspection() {
+    let mut graph = LifeCoreList::default();
+    append(&mut graph, &[node("A", None), node("B", Some(Added(0)))]);
+    let original = serde_json::to_value(&graph).unwrap();
+    let mut cyclic = original.clone();
+    cyclic["entries"][0]["Node"]["parent"] = cyclic["entries"][0]["Node"]["id"].clone();
+    assert!(serde_json::from_value::<LifeCoreList>(cyclic).is_err());
+    let mut forward = original.clone();
+    forward["entries"][0]["Node"]["parent"] = forward["entries"][1]["Node"]["id"].clone();
+    assert!(serde_json::from_value::<LifeCoreList>(forward).is_err());
+    let mut wrong = original;
+    wrong["entries"][1]["Node"]["id"]["position"] = 99.into();
+    assert!(serde_json::from_value::<LifeCoreList>(wrong).is_err());
+}
+
+#[test]
+fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary() {
+    let mut full = LifeCoreList::default();
+    let ids = append(
+        &mut full,
+        &[
+            node("A", None),
+            node("B", None),
+            node("A2", Some(Added(0))),
+            node("A3", Some(Added(0))),
+        ],
+    );
+    for end in 0..=full.view().len() {
+        let mut truncated = full.clone();
+        truncated.entries.truncate(end);
+        let bounded = full.view().prefix(end).unwrap();
+        assert_eq!(bounded.id(), truncated.view().id());
+        for id in &ids {
+            assert_eq!(bounded.get(*id), truncated.view().get(*id));
+            assert_eq!(bounded.is_stale(*id), truncated.view().is_stale(*id));
+        }
+        assert_eq!(
+            bounded.fresh_nodes().collect::<Vec<_>>(),
+            truncated.view().fresh_nodes().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded.fresh_successors(ids[0]).collect::<Vec<_>>(),
+            truncated
+                .view()
+                .fresh_successors(ids[0])
+                .collect::<Vec<_>>()
+        );
+    }
 }

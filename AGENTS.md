@@ -3,9 +3,9 @@
 LifeCore is an experimental Rust database with an append-only, typed graph.
 The cleanup direction and open decisions are in [docs/PLAN.md](docs/PLAN.md).
 `docs/SPEC.md` and `docs/FILES.md` describe proposed contracts, not necessarily
-current behavior. Replace the old CLI and sidecars, simplify values and queries,
-replace `Context`/`EntryContext` with bounded `View`s, and implement TOML authoring.
-Document collections are backlogged.
+current behavior. Stages 0–2 are complete: the old CLI/sidecars and context
+wrappers are removed. Values are scalars, lists, and records. Next are inspection,
+analyzer presentation, and TOML authoring. Document collections are backlogged.
 
 ## Compatibility
 
@@ -24,11 +24,13 @@ Active workspace: `lifecore` (root), `lifecore-typecheck`, and
 - Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.
 - Lint: `cargo clippy -p <package> --all-targets --no-deps`.
 
-Rust targets stable; rustfmt requires nightly. Existing workspace warnings are
-not a clean strict-lint baseline. Keep checks and formatting scoped to the change.
+Rust targets stable; rustfmt requires nightly. The active workspace passes
+Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 
 ## Invariants
 
+- `LifeCoreList::view()` borrows immutable entries; `View::prefix(end)` only
+  narrows the exclusive boundary. Lookups require an `EntryId`, not a position.
 - Entry identity is separate from its interpretation in a bounded history view.
   Freshness and active type declarations depend on that view; never inspect a
   future suffix or cache resolved types without the source and boundary.
@@ -36,12 +38,15 @@ not a clean strict-lint baseline. Keep checks and formatting scoped to the chang
   stale in views containing the successor; it does not retarget the edge.
 - Test history-sensitive changes at multiple boundaries, including before and
   after the relevant append.
+- All mutations go through `transaction::check` and a `CheckedPlan` commit.
+  `Reference::Added(n)` addresses an earlier operation within that plan;
+  `Reference::Existing(id)` retains exact identity across views.
 - Core mutation failures leave the receiver unchanged. Preserve atomic composite
   writes and every-prefix checks through shared staging, validation, and
   persistence paths.
 - Keep structural validation failures distinct from analyzer diagnostics.
-  Type checking currently runs as an analyzer; settle changes to enforcement
-  explicitly against the plan.
+  TypeCheck remains a configured analyzer. Its metatype is fixed and built in;
+  no bootstrap node is needed. Empty correctly shaped collections are present.
 - Preserve full-prefix analyzer execution, typed inner findings, normalization,
   and third-party/dynamically dispatched implementations. Keep analyzers and
   their private findings/factories together; shared orchestration uses traits.

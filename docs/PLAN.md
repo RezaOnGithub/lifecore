@@ -1,6 +1,6 @@
 # Rust Sketch 02 Cleanup Plan
 
-Status: Stages 0–1 complete. Stage 2 authorized; later stages remain planned.
+Status: Stages 0–2 complete. Stages 3–6 remain planned.
 
 ## 1. Outcome
 
@@ -74,10 +74,10 @@ Independent cleanup can proceed while an unrelated decision remains open.
 
 | Decision | Current situation | Proposed direction / required evidence |
 | --- | --- | --- |
-| Scalar and aggregate shapes | Rust has time, text, integers, recursive sequences and ordered sets; schemas add tuples, literals, and unions. FILES additionally proposes booleans, floats, and maps. | Select one small model. Remove general tuple/union machinery unless an actual schema needs it. Decide nesting, homogeneous lists, maps, and scalar allowed-values constraints explicitly. |
-| Schema representation | Type declarations themselves use nested collections of field descriptions. | Demonstrate readable authoring and deterministic checking of `Type` under the reduced value model. Avoid parallel arrays or opaque encodings merely to satisfy a depth limit. |
-| Type enforcement and metatype | Existing code treats typechecking as analyzer behavior; SPEC requires mandatory typing and a fixed built-in metatype. | Decide the enforcement boundary and bootstrap behavior. Preserve typed diagnostics and distinguish them from structural failures. Do not silently make typing optional. |
-| Plan persistence | The existing CLI already checks and persists composite additions atomically. FILES proposes independently committed entries; SPEC permits future atomic persistence with prefix checks. | Prefer preserving and extracting the existing atomic plan path, with every-prefix checks. Explicitly reconcile SPEC/FILES before implementing their persistence contract; atomic batching is not a missing capability to rebuild. |
+| Scalar and aggregate shapes | Decided in Stage 0; implemented in Stage 2. | Text, signed integers, booleans, timestamps, nested lists and string-keyed records. No floats, sets, tuples, or unions. |
+| Schema representation | Implemented in Stage 2. | Named field records carry `shape` and `presence`; shapes use `kind`, `element` for lists, and `fields` for records. No textual type-expression parser. |
+| Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
+| Plan persistence | Atomic plans retained and extracted in Stage 1. | Stage 2 uses one owned candidate, validates every prefix, and keeps writer exclusion through publication. Durable plan receipts remain Stage 5. |
 | Finding identity | Existing identity includes boundary, rendered text, raw configuration, and actions. | Specify a typed semantic key, its normalization, and which changes should invalidate a dismissal. Hashing must not define equality or silently merge collisions. |
 | Advisory presentation | Historical replay, current applicability, and user dismissal are distinct. | Exercise state warnings, transition suggestions, and splits. Decide the default report without treating non-emission or supersession as proof of resolution. |
 
@@ -223,46 +223,46 @@ for retries after uncertain acknowledgment remain Stage 5 work.
 
 ### Stage 2 — Replace contexts, then simplify values and core operations
 
-- [ ] Make `View` replacement the first structural change after CLI extraction.
+- [x] Make `View` replacement the first structural change after CLI extraction.
   Delete `Context`, `EntryContext`, their ordering/conversion machinery, and
   context-bearing node/edge representations. Retain a simple entry identity and
   an explicit exclusive boundary; implement the view contract above.
-- [ ] Move lookup, freshness, relationship, and type-resolution operations onto
+- [x] Move lookup, freshness, relationship, and type-resolution operations onto
   `View`. Update validation, analyzer callers, and retained tests in the same
   buildable change; do not leave an old-context compatibility layer.
-- [ ] Exercise before/after validation and base/candidate comparison before
+- [x] Exercise before/after validation and base/candidate comparison before
   spreading the API. Update AGENTS' Core Model instructions when the replacement
   actually lands.
-- [ ] Implement the selected scalar/aggregate model and its schema encoding.
+- [x] Implement the selected scalar/aggregate model and its schema encoding.
   Update parsing, equality, hashing, typechecking, and serialization together.
-- [ ] Decide whether aggregate order participates in equality. Remove
+- [x] Decide whether aggregate order participates in equality. Remove
   `OrderedSet` if unnecessary; otherwise make equality, hashing, and encoding
   obey the selected semantics. Equal values must hash equally. Do not use a
   Rust collection hash as a durable finding identity.
-- [ ] Remove obsolete type constructors, recursive field-conversion helpers,
+- [x] Remove obsolete type constructors, recursive field-conversion helpers,
   and payload kinds instead of carrying unused variants forward.
-- [ ] Evaluate replacing interned string/value/sequence/set tables with directly
+- [x] Evaluate replacing interned string/value/sequence/set tables with directly
   owned entry payloads. Prefer the direct representation unless a measured need
   justifies an indirection. Preserve entry identity independently of equality.
-- [ ] Consolidate repeated enum inspection and conversion through borrowing,
+- [x] Consolidate repeated enum inspection and conversion through borrowing,
   pattern matching, standard collection operations, and small shared helpers.
   Prefer borrowed node/edge accessors and direct variant checks over cloning
   merely to inspect an entry. Return slices or iterators when ownership is not
   needed; remove pass-through iterator wrapper types.
-- [ ] If any intern tables remain, replace repeated membership tests and
+- [x] If any intern tables remain, replace repeated membership tests and
   insert/index bookkeeping with the collection's insertion/entry APIs. Do not
   optimize interning code that the chosen representation deletes.
-- [ ] Make the selected type/metatype behavior and failed-append guarantees
+- [x] Make the selected type/metatype behavior and failed-append guarantees
   explicit in one mutation path.
-- [ ] Consolidate nested transaction/add/connect/apply cloning around one
+- [x] Consolidate nested transaction/add/connect/apply cloning around one
   isolated candidate per atomic operation. Perform private mutations and
   required prefix checks there, then publish once. Keep public mutation
   failure-atomic; do not introduce public unchecked appends or a rollback journal
   where discarding the candidate suffices.
-- [ ] Separate provisional state from incidental session metadata where this
+- [x] Separate provisional state from incidental session metadata where this
   removes `Mock` bookkeeping. Keep any metadata whose purpose is demonstrated;
   avoid gathering environment information merely to perform a graph operation.
-- [ ] Colocate substantive implementations with their types and responsibilities
+- [x] Colocate substantive implementations with their types and responsibilities
   instead of leaving ordering, hashing, and traversal hidden in `boilerplate.rs`.
   Keep the module split small: entries/values, views, validation, analysis, and
   persistence as justified by actual code. Keep root exports easy to inspect.
@@ -273,11 +273,38 @@ views retain their original meanings. Reviewers can trace an append without
 following multiple representation-conversion layers. The old context types are
 gone, and explicit cross-view checks prevent accidental source/boundary mixing.
 
+Stage 2 evidence: `cargo test --workspace` passes 47 unit tests with no ignored
+cases; `cargo +nightly fmt --check` and strict workspace Clippy pass. The old
+context/hash witnesses are replaced by identity-ordering and record-equality
+regressions. Prefix/source isolation, before/after schema and permission changes,
+empty-field presence, typed findings, malformed imports, atomic rollback, and
+competing writers are covered. Dormant `lifecore-test` scenarios now live in the
+active core/typechecker tests; placeholder application crates remain untouched.
+
+The public path is `LifeCoreList::view()` / `View::prefix(end)` for inspection,
+and `transaction::check` followed by memory or `Store` commit for mutation.
+Entry handles include an origin plus a position. Independent plans receive
+separate suffix identities; committed handles survive reload unchanged.
+`Reference::Added(n)` identifies an earlier operation, including through mixed
+node/edge/analyzer plans. No implicit session or machine metadata is collected.
+
+The context-bound query representation and type-expression parser retired with
+their obsolete models. Stage 3 still owns richer selection, comparison reports,
+and exports. Migrating the runner also removed its placeholder validation,
+panicking output conversion, redundant factory lookups, and diagnostic clones;
+Stage 4 still owns finding/observation identity, dismissal, and presentation.
+The reusable SCC algorithm and typed analyzer/factory boundary remain.
+
+File publication syncs the file and directory. A directory-sync failure after
+rename is reported as `transaction::Error::Published`, because the new state may
+already be visible. Receipt-based retries after uncertain acknowledgment remain
+Stage 5 work. TypeCheck remains opt-in as agreed; no TOML executable is claimed.
+
 ### Stage 3 — Build inspection and simplify queries over View
 
 - [ ] Use the Stage 2 view API throughout inspection. Avoid parallel query
   contexts or a second freshness/type-resolution implementation.
-- [ ] Remove the old textual query language and field-path syntax that no longer
+- [x] Remove the old textual query language and field-path syntax that no longer
   serve the reduced value model.
 - [ ] Provide direct selection by type/currentness, simple field filtering,
   text search, relationship traversal, revision traversal, and view comparison.
@@ -295,14 +322,14 @@ deterministic ordering. Draft errors do not disable committed-data inspection.
 - [ ] Centralize the typed-to-normalized wrapper methods if doing so removes
   duplication from real implementations; do not make the adapter a project in
   its own right.
-- [ ] Simplify runner registration/lookups with collection entry/get APIs and
+- [x] Simplify runner registration/lookups with collection entry/get APIs and
   accumulate initialization output directly. Preserve initialization and replay
   ordering unless an explicit contract change is justified. Missing factories
   remain errors; exercise the empty-history boundary deliberately.
-- [ ] Expose borrowed diagnostic iterators rather than cloning outputs into
+- [x] Expose borrowed diagnostic iterators rather than cloning outputs into
   fresh vectors for each category. Keep owning conversions at actual ownership
   boundaries and retain typed analyzer-specific variants and `dyn` support.
-- [ ] Remove the always-true `Output::validate` placeholder, or replace it with
+- [x] Remove the always-true `Output::validate` placeholder, or replace it with
   concrete invariant checking where required. Replace the assertion-bearing
   `Into<LifeCoreError>` conversion with an explicit fallible/result-producing
   operation. Expected invalid input must not panic through an infallible API.
@@ -322,7 +349,7 @@ deterministic ordering. Draft errors do not disable committed-data inspection.
 - [ ] Route an explicitly requested suggested repair into a newly checked TOML
   plan. Document-aware connection redistribution is backlogged with collections.
 
-Working proposal, pending the Stage 0 examples: identity uses analyzer
+Working proposal for the remaining Stage 4 examples: identity uses analyzer
 identity/version, normalized configuration, and typed distinguishing facts;
 ordinary evaluation boundaries, wording, and repair payloads do not automatically
 define finding identity. Repeated observations of one dismissed finding stay

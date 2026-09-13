@@ -1,13 +1,10 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    marker::PhantomData,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use lifecore::{
-    Context, DiagnosticLocation, EntryIndex, LifeCoreAccess, LifeCoreError,
+    DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, Inconsistency, InnerMessageType, InnerOutput,
-        LifeCoreAnalysisHarness, MessageType, Output, Warning,
+        Analyzer, AnalyzerFactory, Inconsistency, InnerMessageType, InnerOutput, MessageType,
+        Output, Warning,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -40,8 +37,8 @@ impl DagCheckConfig {
         Ok(())
     }
 
-    fn applies_to(&self, latest: Option<EntryIndex>) -> bool {
-        let Some(latest) = latest.map(|entry| entry.0) else {
+    fn applies_to(&self, latest: Option<EntryId>) -> bool {
+        let Some(latest) = latest.map(|entry| entry.position()) else {
             return false;
         };
         let Some(range) = &self.range else {
@@ -108,28 +105,19 @@ pub struct DagCheckReport {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CyclicComponent {
-    pub nodes: Vec<EntryIndex>,
-    pub edges: Vec<EntryIndex>,
+    pub nodes: Vec<EntryId>,
+    pub edges: Vec<EntryId>,
 }
 
 #[derive(Clone)]
 struct SelectedEdge {
-    index: EntryIndex,
-    from: EntryIndex,
-    to: EntryIndex,
+    index: EntryId,
+    from: EntryId,
+    to: EntryId,
 }
 
-pub fn check_dag<LC: LifeCoreAccess>(
-    lifecore: &LC,
-    window: Context,
-    config: &DagCheckConfig,
-) -> DagCheckReport {
-    //A Contexts may extend past the stored graph, so range selection uses the
-    //A latest entry actually visible through the supplied access boundary.
-    let latest = lifecore
-        .window(window.items())
-        .last()
-        .map(|entry| entry.entry_context().index());
+pub fn check_dag(view: View<'_>, config: &DagCheckConfig) -> DagCheckReport {
+    let latest = view.entries().next_back().map(|entry| entry.id());
     if !config.applies_to(latest) {
         return DagCheckReport {
             checked: false,
@@ -138,20 +126,20 @@ pub fn check_dag<LC: LifeCoreAccess>(
     }
 
     let filter = config.filter.as_ref().cloned().unwrap_or_default();
-    let nodes = lifecore
-        .fresh_nodes(window)
+    let nodes = view
+        .fresh_nodes()
         .filter(|node| filter.includes_node(&node.ty_name))
-        .map(|node| node.e.index())
+        .map(|node| node.id)
         .collect::<BTreeSet<_>>();
-    let edges = lifecore
-        .fresh_edges(window)
+    let edges = view
+        .fresh_edges()
         .filter(|edge| {
             filter.includes_edge(&edge.ty_name)
                 && nodes.contains(&edge.from)
                 && nodes.contains(&edge.to)
         })
         .map(|edge| SelectedEdge {
-            index: edge.e.index(),
+            index: edge.id,
             from: edge.from,
             to: edge.to,
         })
@@ -163,7 +151,7 @@ pub fn check_dag<LC: LifeCoreAccess>(
     }
 }
 
-fn cyclic_components(nodes: &BTreeSet<EntryIndex>, edges: &[SelectedEdge]) -> Vec<CyclicComponent> {
+fn cyclic_components(nodes: &BTreeSet<EntryId>, edges: &[SelectedEdge]) -> Vec<CyclicComponent> {
     let mut outgoing = nodes
         .iter()
         .copied()
@@ -207,7 +195,7 @@ fn cyclic_components(nodes: &BTreeSet<EntryIndex>, edges: &[SelectedEdge]) -> Ve
     }
 
     let mut assigned = BTreeSet::new();
-    let mut raw_components = Vec::<Vec<EntryIndex>>::new();
+    let mut raw_components = Vec::<Vec<EntryId>>::new();
     for start in finish_order.into_iter().rev() {
         if !assigned.insert(start) {
             continue;
@@ -269,7 +257,7 @@ fn cyclic_components(nodes: &BTreeSet<EntryIndex>, edges: &[SelectedEdge]) -> Ve
 pub struct DagCheckMessage {
     disposition: CycleDisposition,
     location: DiagnosticLocation,
-    relevance: Vec<EntryIndex>,
+    relevance: Vec<EntryId>,
     component: CyclicComponent,
 }
 
@@ -291,35 +279,34 @@ impl InnerOutput<DagCheckMessage> for DagCheckOutput {
     }
 }
 
-pub struct DagCheck<LC: LifeCoreAccess> {
+pub struct DagCheck {
     config: DagCheckConfig,
     raw_config: String,
-    _lc: PhantomData<LC>,
 }
 
-impl<LC: LifeCoreAccess> DagCheck<LC> {
+impl DagCheck {
     fn warning_location(
-        window: Context,
+        view: View<'_>,
         component: &CyclicComponent,
-        latest_node: Option<EntryIndex>,
+        latest_node: Option<EntryId>,
     ) -> DiagnosticLocation {
         let location = latest_node
             .filter(|latest| component.nodes.binary_search(latest).is_ok())
             .unwrap_or(component.nodes[0]);
-        DiagnosticLocation::Entry(window.look_at(location.absolute()))
+        view.location(Some(location)).expect("visible cycle member")
     }
 
     fn message_text(component: &CyclicComponent) -> String {
         let nodes = component
             .nodes
             .iter()
-            .map(|entry| entry.0.to_string())
+            .map(|entry| entry.position().to_string())
             .collect::<Vec<_>>()
             .join(", ");
         let edges = component
             .edges
             .iter()
-            .map(|entry| entry.0.to_string())
+            .map(|entry| entry.position().to_string())
             .collect::<Vec<_>>()
             .join(", ");
         format!(
@@ -332,14 +319,14 @@ impl<LC: LifeCoreAccess> DagCheck<LC> {
         match message.disposition {
         CycleDisposition::Inconsistency => Inconsistency {
             offending_event: message.location,
-            system_name: DagCheckFactory::<LC>::name().to_string(),
+            system_name: DagCheckFactory::name().to_string(),
             system_config: self.raw_config.clone(),
             message: text,
         }
         .into(),
         CycleDisposition::Warning => Warning {
             offending_event: message.location,
-            system_name: DagCheckFactory::<LC>::name().to_string(),
+            system_name: DagCheckFactory::name().to_string(),
             system_config: self.raw_config.clone(),
             relevance: message.relevance,
             message: text,
@@ -349,7 +336,7 @@ impl<LC: LifeCoreAccess> DagCheck<LC> {
     }
 }
 
-impl<LC: LifeCoreAccess> Analyzer<LC> for DagCheck<LC> {
+impl Analyzer for DagCheck {
     type MSG = DagCheckMessage;
     type OUTPUT = DagCheckOutput;
 
@@ -357,29 +344,26 @@ impl<LC: LifeCoreAccess> Analyzer<LC> for DagCheck<LC> {
         DagCheckOutput(Vec::new())
     }
 
-    fn analyze_inner(
-        &self,
-        lifecore: LifeCoreAnalysisHarness<'_, LC>,
-        window: Context,
-    ) -> Self::OUTPUT {
-        let report = check_dag(&lifecore, window, &self.config);
+    fn analyze_inner(&self, view: View<'_>) -> Self::OUTPUT {
+        let report = check_dag(view, &self.config);
         if !report.checked {
             return DagCheckOutput(Vec::new());
         }
 
-        let latest_node = window
-            .last()
-            .and_then(|latest| lifecore.node(latest))
-            .map(|node| node.e.index());
+        let latest_node = view
+            .entries()
+            .next_back()
+            .and_then(|e| e.as_node())
+            .map(|n| n.id);
         DagCheckOutput(
             report
                 .components
                 .into_iter()
                 .map(|component| {
                     let location = match self.config.on_cycle {
-                    CycleDisposition::Inconsistency => DiagnosticLocation::Context(window),
+                    CycleDisposition::Inconsistency => view.location(None).expect("view location"),
                     CycleDisposition::Warning => {
-                        Self::warning_location(window, &component, latest_node)
+                        Self::warning_location(view, &component, latest_node)
                     }
                     };
                     let mut relevance = component
@@ -416,32 +400,22 @@ impl<LC: LifeCoreAccess> Analyzer<LC> for DagCheck<LC> {
         self.convert_report(report)
     }
 
-    fn analyze(&self, lifecore: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> Output {
-        self.convert_report(self.analyze_inner(lifecore, window))
+    fn analyze(&self, view: View<'_>) -> Output {
+        self.convert_report(self.analyze_inner(view))
     }
 }
 
-pub struct DagCheckFactory<LC: LifeCoreAccess> {
-    _lc: PhantomData<LC>,
-}
+#[derive(Default)]
+pub struct DagCheckFactory;
 
-impl<LC: LifeCoreAccess> DagCheckFactory<LC> {
+impl DagCheckFactory {
     pub fn name() -> &'static str {
         "DAG_Check"
     }
 }
 
-impl<LC: LifeCoreAccess> Default for DagCheckFactory<LC> {
-    fn default() -> Self {
-        Self { _lc: PhantomData }
-    }
-}
-
-impl<LC: LifeCoreAccess + 'static> AnalyzerFactory<LC> for DagCheckFactory<LC> {
-    fn analyzer_with_config(
-        &mut self,
-        config: &str,
-    ) -> Result<Box<dyn Analyzer<LC>>, LifeCoreError> {
+impl AnalyzerFactory for DagCheckFactory {
+    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
         let parsed = DagCheckConfig::from_json(config).map_err(|error| {
             LifeCoreError::InvalidAnalyzerConfiguration {
                 analyzer_name: Self::name().to_string(),
@@ -451,7 +425,6 @@ impl<LC: LifeCoreAccess + 'static> AnalyzerFactory<LC> for DagCheckFactory<LC> {
         Ok(Box::new(DagCheck {
             config: parsed,
             raw_config: config.to_string(),
-            _lc: PhantomData,
         }))
     }
 

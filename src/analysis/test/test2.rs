@@ -1,219 +1,216 @@
 use crate::{
-    Body, Context, DiagnosticLocation, EntryContext, EntryIndex, LifeCore, LifeCoreAccess,
-    LifeCoreError, LifeCoreList, NodeQuery, NodeQueryExpression, NodeQueryPredicate,
+    Body, DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
     analysis::{
-        AnalysisRunner, Analyzer, AnalyzerFactory, Inconsistency, InnerMessageType, InnerOutput,
-        LifeCoreAnalysisHarness, MessageType, Output,
+        AnalysisRunner, Analyzer, AnalyzerFactory, Config, Inconsistency, InnerMessageType,
+        InnerOutput, MessageType, Output, SuiteConfig,
     },
+    transaction::{Change, check},
 };
+use std::sync::{Arc, Mutex};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct LookaheadMessage {
-    offending_event: EntryContext,
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Finding {
+    location: DiagnosticLocation,
 }
-
-impl InnerMessageType for LookaheadMessage {
+impl InnerMessageType for Finding {
     fn ty(&self) -> MessageType {
         MessageType::Inconsistency
     }
 }
-
 #[derive(Clone)]
-struct LookaheadOutput(Vec<LookaheadMessage>);
-
-impl InnerOutput<LookaheadMessage> for LookaheadOutput {
-    fn push(&mut self, value: LookaheadMessage) {
+struct Report(Vec<Finding>);
+impl InnerOutput<Finding> for Report {
+    fn push(&mut self, value: Finding) {
         self.0.push(value);
     }
 }
 
-struct LookaheadAnalyzer;
-
-impl Analyzer<LifeCoreList> for LookaheadAnalyzer {
-    type MSG = LookaheadMessage;
-    type OUTPUT = LookaheadOutput;
-
-    fn initialize_inner(&mut self) -> Self::OUTPUT {
-        LookaheadOutput(vec![])
+struct Probe {
+    observed: Arc<Mutex<Vec<ViewId>>>,
+    future: EntryId,
+    reject: Option<usize>,
+}
+impl Analyzer for Probe {
+    type MSG = Finding;
+    type OUTPUT = Report;
+    fn initialize_inner(&mut self) -> Report {
+        Report(vec![])
     }
-
-    fn analyze_inner(
-        &self,
-        lifecore: LifeCoreAnalysisHarness<'_, LifeCoreList>,
-        window: Context,
-    ) -> Self::OUTPUT {
-        let last = window.last().unwrap();
-        let next = EntryIndex(last.index().0 + 1).absolute();
-        let leaked = lifecore.get(next).is_some()
-            || lifecore
-                .nodes(Context::universe())
-                .any(|node| node.e.index() > last.index());
-
-        LookaheadOutput(if leaked {
-            vec![LookaheadMessage {
-                offending_event: last,
+    fn analyze_inner(&self, view: View<'_>) -> Report {
+        self.observed.lock().unwrap().push(view.id());
+        assert!(view.prefix(view.len() + 1).is_err());
+        if self.future.position() >= view.len() {
+            assert!(view.get(self.future).is_none());
+        }
+        assert_eq!(view.entries().count(), view.len());
+        assert!(view.entries().all(|e| e.id().position() < view.len()));
+        Report(if self.reject == Some(view.len()) {
+            vec![Finding {
+                location: view.location(None).unwrap(),
             }]
         } else {
             vec![]
         })
     }
-
-    fn convert_report(&self, report: Self::OUTPUT) -> Output {
+    fn convert_report(&self, report: Report) -> Output {
         Output(
             report
                 .0
                 .into_iter()
-                .map(|message| {
+                .map(|finding| {
                     Inconsistency {
-                        offending_event: DiagnosticLocation::Entry(message.offending_event),
-                        system_name: "Lookahead".to_string(),
-                        system_config: String::new(),
-                        message: "Analyzer observed an entry beyond its bound".to_string(),
+                        offending_event: finding.location,
+                        system_name: "Probe".into(),
+                        system_config: "".into(),
+                        message: "rejected prefix".into(),
                     }
                     .into()
                 })
                 .collect(),
         )
     }
-
     fn initialize(&mut self) -> Output {
         let report = self.initialize_inner();
         self.convert_report(report)
     }
-
-    fn analyze(
-        &self,
-        lifecore: LifeCoreAnalysisHarness<'_, LifeCoreList>,
-        window: Context,
-    ) -> Output {
-        self.convert_report(self.analyze_inner(lifecore, window))
+    fn analyze(&self, view: View<'_>) -> Output {
+        self.convert_report(self.analyze_inner(view))
     }
 }
-
-struct LookaheadFactory;
-
-impl AnalyzerFactory<LifeCoreList> for LookaheadFactory {
-    fn analyzer_with_config(
-        &mut self,
-        _config: &str,
-    ) -> Result<Box<dyn Analyzer<LifeCoreList>>, LifeCoreError> {
-        Ok(Box::new(LookaheadAnalyzer))
-    }
-
+struct Factory {
+    observed: Arc<Mutex<Vec<ViewId>>>,
+    future: EntryId,
+}
+impl AnalyzerFactory for Factory {
     fn analyzer_name(&self) -> &'static str {
-        "Lookahead"
+        "Probe"
+    }
+    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        let reject = if config.is_empty() {
+            None
+        } else {
+            Some(
+                config
+                    .parse()
+                    .map_err(|_| LifeCoreError::InvalidAnalyzerConfiguration {
+                        analyzer_name: "Probe".into(),
+                        message: "expected a boundary".into(),
+                    })?,
+            )
+        };
+        Ok(Box::new(Probe {
+            observed: self.observed.clone(),
+            future: self.future,
+            reject,
+        }))
     }
 }
-
-fn family_indexes(lifecore: &impl LifeCoreAccess, context: Context) -> Vec<Vec<EntryIndex>> {
-    lifecore
-        .families(context)
-        .into_iter()
-        .map(|family| family.iter().map(|entry| entry.index()).collect())
-        .collect()
+fn fixture() -> (LifeCoreList, EntryId) {
+    let mut graph = LifeCoreList::default();
+    let changes = ["A", "B", "C"].map(|name| Change::AddNode {
+        ty_name: name.into(),
+        body: Body::new(),
+        parent: None,
+    });
+    let plan = check(&graph, &changes, &mut AnalysisRunner::default()).unwrap();
+    let future = plan.added()[2];
+    plan.commit(&mut graph).unwrap();
+    (graph, future)
+}
+fn suite(config: &str) -> SuiteConfig {
+    SuiteConfig(vec![Config {
+        name: "Probe".into(),
+        config: config.into(),
+    }])
 }
 
 #[test]
-fn bounded_harness_matches_a_database_truncated_at_the_same_prefix() {
-    let mut prefix = LifeCoreList::default();
-    let ancestor = prefix.add_mock("Ancestor", Body::default(), None).unwrap();
-    let left = prefix
-        .add_mock("Left", Body::default(), Some(ancestor.e))
-        .unwrap();
-    let right = prefix
-        .add_mock("Right", Body::default(), Some(ancestor.e))
-        .unwrap();
-    let peer = prefix.add_mock("Peer", Body::default(), None).unwrap();
-    let edge = prefix.connect_mock(left.e, "Related", peer.e).unwrap();
-    let bound = edge.e.context();
-
-    let mut full = prefix.clone();
-    let future_left = full
-        .add_mock("Future_Left", Body::default(), Some(left.e))
-        .unwrap();
-    full.add_mock("Future_Peer", Body::default(), Some(peer.e))
-        .unwrap();
-
-    let harness = LifeCoreAnalysisHarness::new(&full, bound);
-    let left_at_bound = bound.look_at(left.e);
-    let left_unbounded = Context::universe().look_at(left.e);
-    let edge_unbounded = Context::universe().look_at(edge.e);
-
-    assert_eq!(harness.get(left_unbounded), prefix.get(left_at_bound));
-    assert!(harness.get(future_left.e.absolute()).is_none());
-    assert_eq!(
-        harness
-            .window(Context::universe().items())
-            .collect::<Vec<_>>(),
-        prefix.window(bound.items()).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        harness.nodes(Context::universe()).collect::<Vec<_>>(),
-        prefix.nodes(bound).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        harness.edges(Context::universe()).collect::<Vec<_>>(),
-        prefix.edges(bound).collect::<Vec<_>>()
-    );
-    assert_eq!(harness.is_stale(left_unbounded), Some(false));
-    assert_eq!(full.is_stale(left_unbounded), Some(true));
-    assert_eq!(harness.is_stale(edge_unbounded), Some(false));
-    assert_eq!(full.is_stale(edge_unbounded), Some(true));
-    assert_eq!(
-        harness.fresh_nodes(Context::universe()).collect::<Vec<_>>(),
-        prefix.fresh_nodes(bound).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        harness.fresh_edges(Context::universe()).collect::<Vec<_>>(),
-        prefix.fresh_edges(bound).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        harness.fresh_edges_of(left_unbounded).collect::<Vec<_>>(),
-        prefix.fresh_edges_of(left_at_bound).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        harness.root_of(left_unbounded),
-        prefix.root_of(left_at_bound)
-    );
-    assert_eq!(
-        harness.fresh_successors(Context::universe().look_at(ancestor.e)),
-        prefix.fresh_successors(bound.look_at(ancestor.e))
-    );
-    assert_eq!(
-        harness.relative_degree(left_unbounded, Context::universe().look_at(right.e)),
-        prefix.relative_degree(left_at_bound, bound.look_at(right.e))
-    );
-    assert_eq!(
-        family_indexes(&harness, Context::universe()),
-        family_indexes(&prefix, bound)
-    );
-
-    let query = || NodeQuery {
-        context: Context::universe(),
-        expression: NodeQueryExpression::All(vec![
-            NodeQueryPredicate::Fresh,
-            NodeQueryPredicate::HasFreshOutgoingEdgeOfType("Related".to_string()),
-        ]),
-    };
-    assert_eq!(
-        harness.query(query()),
-        prefix.query(NodeQuery {
-            context: bound,
-            ..query()
-        })
-    );
-}
-
-#[test]
-fn analysis_runner_prevents_analyzers_from_looking_into_later_prefixes() {
-    let mut lifecore = LifeCoreList::default();
-    lifecore.add_mock("First", Body::default(), None).unwrap();
-    lifecore.add_mock("Second", Body::default(), None).unwrap();
-    lifecore.add_analyzer("Lookahead", "");
-    let mut runner = AnalysisRunner::<LifeCoreList>::default();
+fn every_prefix_including_empty_is_read_only_and_cannot_expand() {
+    let (graph, future) = fixture();
+    let observed = Arc::new(Mutex::new(vec![]));
+    let mut runner = AnalysisRunner::default();
     runner
-        .register_analyzer_kind(Box::new(LookaheadFactory))
+        .register_analyzer_kind(Box::new(Factory {
+            observed: observed.clone(),
+            future,
+        }))
         .unwrap();
+    assert!(
+        runner
+            .run_view(graph.view(), &suite(""))
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    assert_eq!(
+        observed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| v.end)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    observed.lock().unwrap().clear();
+    runner
+        .run_view(graph.view().prefix(1).unwrap(), &suite(""))
+        .unwrap();
+    assert_eq!(
+        observed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| v.end)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+}
 
-    assert!(runner.run(&lifecore).unwrap().0.is_empty());
+#[test]
+fn changed_analyzer_rejects_an_old_prefix_and_does_not_only_check_the_head() {
+    let (graph, future) = fixture();
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(Factory {
+            observed: Arc::default(),
+            future,
+        }))
+        .unwrap();
+    let report = runner.run_view(graph.view(), &suite("1")).unwrap();
+    assert_eq!(
+        report
+            .errors()
+            .map(|e| e.offending_event.view.end)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert!(report.into_result().is_err());
+    assert!(Output::default().into_result().is_ok());
+}
+
+#[test]
+fn missing_duplicate_and_invalid_factories_are_typed_errors() {
+    let (graph, future) = fixture();
+    let mut runner = AnalysisRunner::default();
+    assert!(matches!(
+        runner.run_view(graph.view(), &suite("")),
+        Err(LifeCoreError::AnalyzerNotFound { .. })
+    ));
+    runner
+        .register_analyzer_kind(Box::new(Factory {
+            observed: Arc::default(),
+            future,
+        }))
+        .unwrap();
+    assert!(matches!(
+        runner.register_analyzer_kind(Box::new(Factory {
+            observed: Arc::default(),
+            future
+        })),
+        Err(LifeCoreError::DuplicateAnalyzer { .. })
+    ));
+    assert!(matches!(
+        runner.run_view(graph.view(), &suite("bad")),
+        Err(LifeCoreError::InvalidAnalyzerConfiguration { .. })
+    ));
 }

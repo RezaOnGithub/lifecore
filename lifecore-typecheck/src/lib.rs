@@ -1,640 +1,309 @@
-//A Check fresh nodes against the Type declarations active in each supplied prefix.
-
-use itertools::Itertools;
-use lifecore::analysis::LifeCoreAnalysisHarness;
-use lifecore::typing::{FieldStatus, ValueType};
 use lifecore::{
-    Context, EntryContext, EntryIndex, LifeCoreAccess, LifeCoreError, PayloadKind,
-    analysis::InnerMessageType, serialize::NodeBody, typing::Type,
+    DiagnosticLocation, EntryId, LifeCoreError, View,
+    analysis::{
+        Analyzer, AnalyzerFactory, Inconsistency, InnerMessageType, InnerOutput, Message,
+        MessageType, Output, Warning,
+    },
+    typing::{FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition},
 };
-use std::{collections::BTreeMap, marker::PhantomData};
-use strum::IntoDiscriminant;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(test, derive(strum::EnumDiscriminants))]
-#[cfg_attr(test, strum_discriminants(name(TypeCheckTest)))]
-#[cfg_attr(test, strum_discriminants(vis(pub(crate))))]
-#[cfg_attr(
-    test,
-    strum_discriminants(derive(strum::EnumIter, strum::VariantArray))
-)]
 pub enum TypeCheckMessage {
-    //A Bootstrap diagnostics carry their inspection window so consumers
-    //A never need to reconstruct graph bounds from unrelated analyzer output.
-    AddBootstrapNode {
-        context: Context,
+    MalformedDeclaration {
+        location: DiagnosticLocation,
+        error: SchemaError,
     },
-    MalformedNodeTypeBody {
-        offending_event: EntryContext,
+    ReservedTypeName {
+        location: DiagnosticLocation,
     },
-    DuplicateTypeDefinition {
-        offending_event: EntryContext,
+    DuplicateType {
+        location: DiagnosticLocation,
         name: String,
     },
-    NonexistantOverrideType {
-        offending_event: EntryContext,
-        base_ty_name: String,
-        override_ty_name: String,
-        relevance: Vec<EntryIndex>,
+    MissingType {
+        location: DiagnosticLocation,
+        name: String,
     },
-    NodeTypeNonexistant {
-        offending_event: EntryContext,
-        ty_name: String,
+    UnknownOverrideType {
+        location: DiagnosticLocation,
+        name: String,
     },
-    ElidedMandatoryField {
-        offending_event: EntryContext,
-        ty_name: String,
-        field_name: String,
-    },
-    ElidedEncouragedField {
-        offending_event: EntryContext,
-        ty_name: String,
-        field_name: String,
-    },
-    DeprecatedField {
-        offending_event: EntryContext,
-        ty_name: String,
-        field_name: String,
-    },
-    FieldTypeMismatch {
-        offending_event: EntryContext,
-        ty_name: String,
-        field_name: String,
-        expected_type: ValueType,
-        present_type: PayloadKind,
-    },
-    ExtraneousField {
-        offending_event: EntryContext,
-        ty_name: String,
-        field_name: String,
+    Field {
+        location: DiagnosticLocation,
+        issue: FieldIssue,
     },
     BadEdgeEndpoint {
-        offending_event: EntryContext,
-        edge_ty_name: String,
-        bad_node_ty_name: String,
-        bad_node_is_head: bool,
+        location: DiagnosticLocation,
+        edge_type: String,
+        node_type: String,
+        outgoing: bool,
     },
     BadOverride {
-        offending_event: EntryContext,
-        parent_ty_name: String,
-        child_ty_name: String,
+        location: DiagnosticLocation,
+        parent_type: String,
+        child_type: String,
     },
-}
-
-pub fn types<LC: LifeCoreAccess>(
-    lc: &LC,
-    ctx: Context,
-) -> impl Iterator<Item = (String, (EntryContext, Type))> {
-    lc.fresh_nodes(ctx)
-        .filter(|n| n.ty_name.as_str() == Type::TYPE_NAME)
-        .filter_map(|n| {
-            let ty = Type::try_from_body(&n.field).ok()?;
-            Some((ty.name.clone(), (n.e, ty)))
-        })
-}
-
-#[derive(Clone)]
-pub struct TypeCheckOutput(pub Vec<TypeCheckMessage>);
-
-pub struct TypeCheckFactory<LC: LifeCoreAccess> {
-    _x: PhantomData<LC>,
-}
-
-impl<LC: LifeCoreAccess> TypeCheckFactory<LC> {
-    pub fn name() -> &'static str {
-        "Type_Check"
-    }
-}
-
-pub struct TypeCheck<LC: LifeCoreAccess> {
-    pub config: String,
-    _lc: PhantomData<LC>,
 }
 
 impl InnerMessageType for TypeCheckMessage {
-    fn ty(&self) -> lifecore::analysis::MessageType {
-        use lifecore::analysis::MessageType::*;
+    fn ty(&self) -> MessageType {
         match self {
-        TypeCheckMessage::AddBootstrapNode { .. } => Suggestion,
-        TypeCheckMessage::MalformedNodeTypeBody { .. } => Inconsistency,
-        TypeCheckMessage::DuplicateTypeDefinition { .. } => Inconsistency,
-        TypeCheckMessage::NonexistantOverrideType { .. } => Warning,
-        TypeCheckMessage::NodeTypeNonexistant { .. } => Inconsistency,
-        TypeCheckMessage::ElidedMandatoryField { .. } => Inconsistency,
-        TypeCheckMessage::ElidedEncouragedField { .. } => Warning,
-        TypeCheckMessage::DeprecatedField { .. } => Warning,
-        TypeCheckMessage::FieldTypeMismatch { .. } => Inconsistency,
-        TypeCheckMessage::ExtraneousField { .. } => Inconsistency,
-        TypeCheckMessage::BadEdgeEndpoint { .. } => Inconsistency,
-        TypeCheckMessage::BadOverride { .. } => Inconsistency,
+        Self::UnknownOverrideType { .. } => MessageType::Warning,
+        Self::Field { issue, .. }
+            if matches!(
+                issue.kind,
+                FieldIssueKind::MissingEncouraged | FieldIssueKind::Deprecated
+            ) =>
+        {
+            MessageType::Warning
+        }
+        _ => MessageType::Inconsistency,
         }
     }
 }
 
-impl<LC: LifeCoreAccess> TypeCheck<LC> {
-    fn convert_message(&self, x: TypeCheckMessage) -> lifecore::analysis::Message {
-        use lifecore::analysis::{Inconsistency, SuggestedAction::*, Suggestion, Warning};
-        let system_name = TypeCheckFactory::<LC>::name().to_string();
-        let system_config = self.config.to_string();
-        let r: lifecore::analysis::Message = match x.clone() {
-        TypeCheckMessage::AddBootstrapNode { context } => Suggestion {
-            offending_event: context.into(),
-            system_name: TypeCheckFactory::<LC>::name().to_string(),
-            system_config: self.config.to_string(),
-            relevance: vec![],
-            message: "Consider adding the bootstrap node for TypeCheck to work".to_string(),
-            action: vec![AddNode {
-                ty_name: Type::TYPE_NAME.to_string(),
-                payload: Type::describe_self().into_body(),
-                parent: None,
-            }],
+impl TypeCheckMessage {
+    fn location(&self) -> DiagnosticLocation {
+        match self {
+        Self::MalformedDeclaration { location, .. }
+        | Self::ReservedTypeName { location }
+        | Self::DuplicateType { location, .. }
+        | Self::MissingType { location, .. }
+        | Self::UnknownOverrideType { location, .. }
+        | Self::Field { location, .. }
+        | Self::BadEdgeEndpoint { location, .. }
+        | Self::BadOverride { location, .. } => *location,
         }
-        .into(),
-        TypeCheckMessage::MalformedNodeTypeBody { offending_event } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: "Unable to parse NodeType body".to_string(),
+    }
+    fn description(&self) -> String {
+        match self {
+        Self::MalformedDeclaration { error, .. } => error.to_string(),
+        Self::ReservedTypeName { .. } => {
+            "Type is a fixed built-in metatype and cannot be declared".into()
         }
-        .into(),
-        TypeCheckMessage::DuplicateTypeDefinition {
-            offending_event,
-            name,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Type {} is defined multiple times within the same window",
-                name.as_str()
-            ),
+        Self::DuplicateType { name, .. } => {
+            format!("More than one active declaration names {name:?}")
         }
-        .into(),
-        TypeCheckMessage::NonexistantOverrideType {
-            offending_event,
-            base_ty_name,
-            override_ty_name,
-            relevance,
-        } => Warning {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            relevance,
-            message: format!(
-                "Override type {} (referred to in {}) does not (yet) exist.",
-                override_ty_name.as_str(),
-                base_ty_name.as_str()
-            ),
+        Self::MissingType { name, .. } => format!("Type {name:?} is not declared in this view"),
+        Self::UnknownOverrideType { name, .. } => {
+            format!("Permitted successor type {name:?} is not declared")
         }
-        .into(),
-        TypeCheckMessage::NodeTypeNonexistant {
-            offending_event,
-            ty_name,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Type {} couldn't be resolved within the window.",
-                ty_name.as_str()
-            ),
+        Self::Field { issue, .. } => format!("Field {:?}: {:?}", issue.path, issue.kind),
+        Self::BadEdgeEndpoint {
+            edge_type,
+            node_type,
+            outgoing,
+            ..
+        } => format!(
+            "Type {node_type:?} does not permit {} edge {edge_type:?}",
+            if *outgoing { "outgoing" } else { "incoming" }
+        ),
+        Self::BadOverride {
+            parent_type,
+            child_type,
+            ..
+        } => format!("Type {parent_type:?} does not permit successor {child_type:?}"),
         }
-        .into(),
-        TypeCheckMessage::ElidedMandatoryField {
-            offending_event,
-            ty_name,
-            field_name,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Mandatory field {} on a node of type {} is not present.",
-                field_name.as_str(),
-                ty_name.as_str()
-            ),
-        }
-        .into(),
-        TypeCheckMessage::ElidedEncouragedField {
-            offending_event,
-            ty_name,
-            field_name,
-        } => Warning {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            relevance: vec![],
-            message: format!(
-                "Field {} on a node of type {} is empty; you are encouraged to fill it out.",
-                field_name.as_str(),
-                ty_name.as_str()
-            ),
-        }
-        .into(),
-        TypeCheckMessage::DeprecatedField {
-            offending_event,
-            ty_name,
-            field_name,
-        } => Warning {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            relevance: vec![],
-            message: format!(
-                "Field {} on node type {} is deprecated; consider clearing it.",
-                field_name.as_str(),
-                ty_name.as_str()
-            ),
-        }
-        .into(),
-        TypeCheckMessage::FieldTypeMismatch {
-            offending_event,
-            ty_name,
-            field_name,
-            expected_type,
-            present_type,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Field {} on a node of type {} has the wrong type; expected {}, got {}.",
-                field_name.as_str(),
-                ty_name.as_str(),
-                expected_type,
-                present_type
-            ),
-        }
-        .into(),
-        TypeCheckMessage::ExtraneousField {
-            offending_event,
-            ty_name,
-            field_name,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Field {} on node type {} does not exist.",
-                field_name.as_str(),
-                ty_name.as_str()
-            ),
-        }
-        .into(),
-        TypeCheckMessage::BadEdgeEndpoint {
-            offending_event,
-            edge_ty_name,
-            bad_node_ty_name,
-            bad_node_is_head,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Edge of type {} has incompatible {} type {}",
-                edge_ty_name.as_str(),
-                { if bad_node_is_head { " head" } else { "tail" } },
-                bad_node_ty_name.as_str()
-            ),
-        }
-        .into(),
-        TypeCheckMessage::BadOverride {
-            offending_event,
-            parent_ty_name,
-            child_ty_name,
-        } => Inconsistency {
-            offending_event: offending_event.into(),
-            system_name,
-            system_config,
-            message: format!(
-                "Parent of type {} does not allow a child of type {}.",
-                parent_ty_name.as_str(),
-                child_ty_name.as_str()
-            ),
-        }
-        .into(),
-        };
-        assert!(r.discriminant() == x.ty());
-        r
     }
 }
 
-impl lifecore::analysis::InnerOutput<TypeCheckMessage> for TypeCheckOutput {
+#[derive(Clone, Debug, Default)]
+pub struct TypeCheckOutput(pub Vec<TypeCheckMessage>);
+impl InnerOutput<TypeCheckMessage> for TypeCheckOutput {
     fn push(&mut self, v: TypeCheckMessage) {
         self.0.push(v);
     }
 }
 
-impl<LC: LifeCoreAccess> lifecore::analysis::Analyzer<LC> for TypeCheck<LC> {
-    type MSG
-        = TypeCheckMessage
-    where
-        Self: Sized;
+#[derive(Default)]
+pub struct TypeCheck {
+    config: String,
+}
 
-    type OUTPUT
-        = TypeCheckOutput
-    where
-        Self: Sized;
-    fn initialize_inner(&mut self) -> TypeCheckOutput
-    where
-        Self: Sized,
-    {
-        //A Database-dependent setup belongs to bounded analysis.
-        TypeCheckOutput(vec![])
+impl Analyzer for TypeCheck {
+    type MSG = TypeCheckMessage;
+    type OUTPUT = TypeCheckOutput;
+    fn initialize_inner(&mut self) -> Self::OUTPUT {
+        TypeCheckOutput::default()
     }
-
-    fn analyze_inner(&self, lc: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> TypeCheckOutput
-    where
-        Self: Sized,
-    {
+    fn analyze_inner(&self, view: View<'_>) -> Self::OUTPUT {
         use TypeCheckMessage::*;
-        let mut r = TypeCheckOutput(vec![]);
-        if window.is_empty() {
-            r.push(AddBootstrapNode { context: window });
-            return r;
+        let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
+        let mut output = TypeCheckOutput::default();
+        let mut types = BTreeMap::<String, (EntryId, Type)>::new();
+        for node in view.fresh_nodes().filter(|n| n.ty_name == Type::TYPE_NAME) {
+            match Type::from_body(&node.body) {
+            Err(error) => output.push(MalformedDeclaration {
+                location: location(node.id),
+                error,
+            }),
+            Ok(ty) if ty.name == Type::TYPE_NAME => output.push(ReservedTypeName {
+                location: location(node.id),
+            }),
+            Ok(ty) => {
+                if types.contains_key(&ty.name) {
+                    output.push(DuplicateType {
+                        location: location(node.id),
+                        name: ty.name.clone(),
+                    });
+                }
+                types.insert(ty.name.clone(), (node.id, ty));
+            }
+            }
         }
-
-        // check whether a Node_Type declaring some type X is not clashing with an older
-        // but non-stale Node_Type declaring a type of the same name.
-        for some_type_at_some_point_node in lc
-            .nodes(window)
-            .filter(|node| node.ty_name.as_str() == Type::TYPE_NAME)
-        {
-            let type_table = types(
-                &lc,
-                some_type_at_some_point_node.e.shrink_to_exclusive_left(),
-            )
-            .collect::<BTreeMap<_, _>>();
-
-            let Ok(some_type_at_some_point) =
-                Type::try_from_body(&some_type_at_some_point_node.field)
-            else {
-                r.push(MalformedNodeTypeBody {
-                    offending_event: some_type_at_some_point_node.e,
+        for (id, ty) in types.values() {
+            for name in &ty.additional_override {
+                if name != Type::TYPE_NAME && !types.contains_key(name) {
+                    output.push(UnknownOverrideType {
+                        location: location(*id),
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        for node in view.fresh_nodes().filter(|n| n.ty_name != Type::TYPE_NAME) {
+            let Some((_, ty)) = types.get(&node.ty_name) else {
+                output.push(MissingType {
+                    location: location(node.id),
+                    name: node.ty_name.clone(),
                 });
                 continue;
             };
-            if let Some((older_type_index, _older_type)) =
-                type_table.get(some_type_at_some_point.name.as_str())
-            {
-                // The only scenario this is valid is if the new node override the old one
-                if some_type_at_some_point_node
-                    .parent
-                    .is_none_or(|x| x.absolute() != older_type_index.absolute())
-                {
-                    r.push(DuplicateTypeDefinition {
-                        name: some_type_at_some_point.name.to_string(),
-                        offending_event: some_type_at_some_point_node.e,
-                    });
-                }
-            }
-        }
-
-        let type_table = types(&lc, window).collect::<BTreeMap<_, _>>();
-
-        //A Missing override targets are warnings so mutually referring declarations
-        //A can be authored as consecutive entries.
-        for (ty_event, ty) in type_table.values() {
-            for override_ty in ty.additional_override.iter() {
-                if !type_table.contains_key(override_ty) {
-                    r.push(NonexistantOverrideType {
-                        offending_event: *ty_event,
-                        base_ty_name: ty.name.to_string(),
-                        override_ty_name: override_ty.to_string(),
-                        relevance: vec![ty_event.index()],
-                    })
-                }
-            }
-        }
-
-        // Check nodes for their fields
-        for pointed_context in window
-            .items()
-            .filter(|e| !lc.is_stale(*e).unwrap() && lc.get(*e).is_some_and(|x| x.is_node()))
-        {
-            let node = lc.node(pointed_context).unwrap();
-            let Some((_, node_type)) = type_table.get(node.ty_name.as_str()) else {
-                r.push(NodeTypeNonexistant {
-                    offending_event: pointed_context,
-                    ty_name: node.ty_name.to_string(),
-                });
-                continue;
-            };
-
-            for field in node_type.body.iter() {
-                let field_name = field.name();
-                let field_payload = node.field.0.get(field_name);
-                let is_empty_collection = matches!(
-                    (field.value_type(), field_payload),
-                    (
-                        ValueType::Sequence(_),
-                        Some(lifecore::Payload::Sequence(values))
-                    ) if values.is_empty()
-                ) || matches!(
-                    (field.value_type(), field_payload),
-                    (
-                        ValueType::OrderedSet(_),
-                        Some(lifecore::Payload::OrderedSet(values))
-                    ) if values.is_empty()
-                );
-
-                match field.status() {
-                FieldStatus::Mandatory if field_payload.is_none() || is_empty_collection => {
-                    r.push(ElidedMandatoryField {
-                        offending_event: pointed_context,
-                        ty_name: node_type.name.to_string(),
-                        field_name: field_name.to_string(),
-                    });
-                }
-                FieldStatus::Encouraged if field_payload.is_none() || is_empty_collection => {
-                    r.push(ElidedEncouragedField {
-                        offending_event: pointed_context,
-                        ty_name: node_type.name.to_string(),
-                        field_name: field_name.to_string(),
-                    });
-                }
-                FieldStatus::Deprecated if field_payload.is_some() => {
-                    r.push(DeprecatedField {
-                        offending_event: pointed_context,
-                        ty_name: node_type.name.to_string(),
-                        field_name: field_name.to_string(),
-                    });
-                }
-                FieldStatus::Mandatory
-                | FieldStatus::Encouraged
-                | FieldStatus::Deprecated
-                | FieldStatus::Optional => {}
-                }
-
-                if let Some(field_payload) = field_payload
-                    && field.value_type().check(field_payload).is_err()
-                {
-                    r.push(FieldTypeMismatch {
-                        offending_event: pointed_context,
-                        ty_name: node_type.name.to_string(),
-                        field_name: field_name.to_string(),
-                        expected_type: field.value_type().clone(),
-                        present_type: field_payload.discriminant(),
-                    });
-                }
-            }
-
-            for extra_field in node
-                .field
+            output
                 .0
-                .keys()
-                .filter(|body_field| !node_type.body.iter().any(|x| x.name() == *body_field))
-            {
-                r.push(ExtraneousField {
-                    offending_event: pointed_context,
-                    ty_name: node_type.name.to_string(),
-                    field_name: extra_field.to_string(),
-                });
-            }
-        }
-
-        // Check edges ends so that they allow for that edge
-        for pointed_context in window
-            .items()
-            .filter(|e| !lc.is_stale(*e).unwrap() && lc.get(*e).is_some_and(|x| x.is_edge()))
-        {
-            // from end -> "outgoing" relative to that node
-            // to end -> "incoming" relative to that node
-            let edge = lc.edge(pointed_context).unwrap();
-            let outgoing_node = lc.node(edge.e.look_at(edge.from.absolute())).unwrap();
-            let incoming_node = lc.node(edge.e.look_at(edge.to.absolute())).unwrap();
-
-            if !(type_table.contains_key(outgoing_node.ty_name.as_str())
-                && type_table.contains_key(incoming_node.ty_name.as_str()))
-            {
-                // We have bigger problems
-                assert!(r.0.iter().any(|x| {
-                    match x {
-                    NodeTypeNonexistant { ty_name, .. } => [
-                        outgoing_node.ty_name.as_str(),
-                        incoming_node.ty_name.as_str(),
-                    ]
-                    .contains(&ty_name.as_str()),
-                    _ => false,
-                    }
+                .extend(ty.check(&node.body).into_iter().map(|issue| Field {
+                    location: location(node.id),
+                    issue,
                 }));
-                continue;
-            }
-
-            if !type_table
-                .get(outgoing_node.ty_name.as_str())
-                .unwrap()
-                .1
-                .outgoing
-                .iter()
-                .map(String::as_str)
-                .contains(edge.ty_name.as_str())
-            {
-                r.push(BadEdgeEndpoint {
-                    offending_event: edge.e,
-                    edge_ty_name: edge.ty_name.to_string(),
-                    bad_node_ty_name: outgoing_node.ty_name.to_string(),
-                    bad_node_is_head: true,
-                });
-            }
-            // COPY_PASTE
-            if !type_table
-                .get(incoming_node.ty_name.as_str())
-                .unwrap()
-                .1
-                .incoming
-                .iter()
-                .map(String::as_str)
-                .contains(edge.ty_name.as_str())
-            {
-                r.push(BadEdgeEndpoint {
-                    offending_event: edge.e,
-                    edge_ty_name: edge.ty_name.to_string(),
-                    bad_node_ty_name: incoming_node.ty_name.to_string(),
-                    bad_node_is_head: false,
-                });
+        }
+        for edge in view.fresh_edges() {
+            for (endpoint, outgoing) in [(edge.from, true), (edge.to, false)] {
+                let node = view.node(endpoint).expect("validated endpoint");
+                //A Built-in Type has no ordinary edge permissions. Missing declarations
+                //A already have diagnostics.
+                let allowed = if node.ty_name == Type::TYPE_NAME {
+                    false
+                } else if let Some((_, ty)) = types.get(&node.ty_name) {
+                    (if outgoing { &ty.outgoing } else { &ty.incoming }).contains(&edge.ty_name)
+                } else {
+                    continue;
+                };
+                if !allowed {
+                    output.push(BadEdgeEndpoint {
+                        location: location(edge.id),
+                        edge_type: edge.ty_name.clone(),
+                        node_type: node.ty_name.clone(),
+                        outgoing,
+                    });
+                }
             }
         }
-
-        // Check whether a child is allowed to override parent at the point of override
-        for last_event_in_context in lc.window(window.items()) {
-            let entry_context = last_event_in_context.entry_context();
-            let preceding = entry_context.shrink_to_exclusive_left();
-            if last_event_in_context.is_edge()
-                || last_event_in_context.is_node_and(|x| x.parent.is_none())
-            {
+        for child in view.nodes().filter(|n| n.parent.is_some()) {
+            //A A later schema cannot revoke a past transition; each child is judged
+            //A immediately before its append.
+            let before = view
+                .prefix(child.id.position())
+                .expect("child is inside view");
+            let parent = before
+                .node(child.parent.expect("selected child"))
+                .expect("validated parent");
+            let allowed = match before.resolve_type(&parent.ty_name) {
+            Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
+            Ok(Some(TypeDefinition::Declared { schema, .. })) => {
+                child.ty_name == schema.name || schema.additional_override.contains(&child.ty_name)
+            }
+            Ok(None) => {
+                output.push(MissingType {
+                    location: location(child.id),
+                    name: parent.ty_name.clone(),
+                });
                 continue;
             }
-
-            let child_type_name = last_event_in_context.as_node().ty_name.clone();
-            let parent_in_context =
-                preceding.look_at(last_event_in_context.as_node().parent.unwrap().absolute());
-            let parent_node = lc.node(parent_in_context).unwrap();
-            let preceding_type_table = types(&lc, preceding).collect::<BTreeMap<_, _>>();
-            let Some((_type_event, parent_type)) =
-                preceding_type_table.get(parent_node.ty_name.as_str())
-            else {
-                // We have bigger problems.
+            Err(ResolutionError::Malformed { error, .. }) => {
+                output.push(MalformedDeclaration {
+                    location: location(child.id),
+                    error,
+                });
                 continue;
+            }
+            Err(ResolutionError::Ambiguous { name, .. }) => {
+                output.push(DuplicateType {
+                    location: location(child.id),
+                    name,
+                });
+                continue;
+            }
             };
-
-            if child_type_name.as_str() != parent_type.name.as_str()
-                && !parent_type.additional_override.contains(&child_type_name)
-            {
-                r.push(BadOverride {
-                    offending_event: entry_context,
-                    parent_ty_name: parent_type.name.to_string(),
-                    child_ty_name: child_type_name.to_string(),
+            if !allowed {
+                output.push(BadOverride {
+                    location: location(child.id),
+                    parent_type: parent.ty_name.clone(),
+                    child_type: child.ty_name.clone(),
                 });
             }
         }
-
-        r
+        output
     }
-
-    fn convert_report(&self, r: TypeCheckOutput) -> lifecore::analysis::Output
-    where
-        Self: Sized,
-    {
-        lifecore::analysis::Output(
-            r.0.into_iter()
-                .map(|x| self.convert_message(x))
-                .collect_vec(),
+    fn convert_report(&self, report: Self::OUTPUT) -> Output {
+        Output(
+            report
+                .0
+                .into_iter()
+                .map(|finding| {
+                    let location = finding.location();
+                    let message = finding.description();
+                    match finding.ty() {
+                    MessageType::Warning => Message::Warning(Warning {
+                        offending_event: location,
+                        system_name: TypeCheckFactory::name().into(),
+                        system_config: self.config.clone(),
+                        relevance: location.entry.into_iter().collect(),
+                        message,
+                    }),
+                    _ => Message::Inconsistency(Inconsistency {
+                        offending_event: location,
+                        system_name: TypeCheckFactory::name().into(),
+                        system_config: self.config.clone(),
+                        message,
+                    }),
+                    }
+                })
+                .collect(),
         )
     }
-
-    fn initialize(&mut self) -> lifecore::analysis::Output {
-        let x = self.initialize_inner();
-        self.convert_report(x)
+    fn initialize(&mut self) -> Output {
+        let report = self.initialize_inner();
+        self.convert_report(report)
     }
-
-    fn analyze(
-        &self,
-        lc: LifeCoreAnalysisHarness<'_, LC>,
-        window: Context,
-    ) -> lifecore::analysis::Output {
-        self.convert_report(self.analyze_inner(lc, window))
+    fn analyze(&self, view: View<'_>) -> Output {
+        self.convert_report(self.analyze_inner(view))
     }
 }
 
-impl<LC: LifeCoreAccess + 'static> lifecore::analysis::AnalyzerFactory<LC>
-    for TypeCheckFactory<LC>
-{
-    fn analyzer_with_config(
-        &mut self,
-        config: &str,
-    ) -> Result<Box<dyn lifecore::analysis::Analyzer<LC>>, LifeCoreError> {
-        Ok(Box::new(TypeCheck {
-            config: config.to_string(),
-            _lc: PhantomData,
-        }))
+#[derive(Default)]
+pub struct TypeCheckFactory;
+impl TypeCheckFactory {
+    pub fn name() -> &'static str {
+        "Type_Check"
     }
-
+}
+impl AnalyzerFactory for TypeCheckFactory {
     fn analyzer_name(&self) -> &'static str {
         Self::name()
     }
+    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        if !matches!(config.trim(), "" | "{}") {
+            return Err(LifeCoreError::InvalidAnalyzerConfiguration {
+                analyzer_name: Self::name().into(),
+                message: "TypeCheck accepts only an empty configuration".into(),
+            });
+        }
+        Ok(Box::new(TypeCheck {
+            config: config.into(),
+        }))
+    }
 }
 
-mod boilerplate;
 #[cfg(test)]
 mod test;

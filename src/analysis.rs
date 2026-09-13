@@ -1,20 +1,11 @@
-use std::collections::BTreeMap;
-use std::fmt::Debug as DebugTrait;
-use std::hash::Hash;
-
-use itertools::Itertools;
+use crate::{Body, DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View};
 use serde::{Deserialize, Serialize};
-use strum::{EnumDiscriminants, EnumIs, EnumTryAs};
+use std::{collections::BTreeMap, fmt::Debug, hash::Hash};
 
-use crate::{
-    Body, Context, DiagnosticLocation, Edge, Entry, EntryContext, EntryIndex, LifeCore,
-    LifeCoreAccess, LifeCoreError, LifeCoreFamily, Node, NodeQuery,
-};
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct Config {
     pub name: String,
     pub config: String,
@@ -33,7 +24,7 @@ pub struct Warning {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
-    pub relevance: Vec<EntryIndex>,
+    pub relevance: Vec<EntryId>,
     pub message: String,
 }
 
@@ -42,7 +33,7 @@ pub struct Suggestion {
     pub offending_event: DiagnosticLocation,
     pub system_name: String,
     pub system_config: String,
-    pub relevance: Vec<EntryIndex>,
+    pub relevance: Vec<EntryId>,
     pub message: String,
     pub action: Vec<SuggestedAction>,
 }
@@ -52,151 +43,41 @@ pub enum SuggestedAction {
     AddNode {
         ty_name: String,
         payload: Body,
-        parent: Option<EntryIndex>,
+        parent: Option<EntryId>,
     },
     AddEdge {
-        from: EntryIndex,
+        from: EntryId,
         ty_name: String,
-        to: EntryIndex,
+        to: EntryId,
     },
 }
 
-//A The harness exposes only read access.
-//A Every context is capped at the runner's historical prefix.
-pub struct LifeCoreAnalysisHarness<'a, LC: LifeCoreAccess> {
-    lc: &'a LC,
-    bounds: Context,
-}
-
-impl<'a, LC: LifeCoreAccess> LifeCoreAnalysisHarness<'a, LC> {
-    pub fn new(lc: &'a LC, bounds: Context) -> Self {
-        Self { lc, bounds }
-    }
-
-    fn valid_index(&self, e: EntryIndex) -> bool {
-        self.bounds.end > e.0
-    }
-
-    fn constrain_context(&self, c: Context) -> Context {
-        if self.bounds.end >= c.end {
-            c
-        } else {
-            self.bounds
-        }
-    }
-
-    fn constrain_entry_context(&self, e: EntryContext) -> Option<EntryContext> {
-        if self.valid_index(e.index()) {
-            Some(self.constrain_context(e.context()).look_at(e))
-        } else {
-            None
-        }
-    }
-}
-
-impl<LC: LifeCoreAccess> LifeCoreAccess for LifeCoreAnalysisHarness<'_, LC> {
-    fn get(&self, e: EntryContext) -> Option<Entry> {
-        self.lc.get(self.constrain_entry_context(e)?)
-    }
-
-    fn window<I>(&self, i: I) -> impl Iterator<Item = Entry>
-    where
-        I: IntoIterator<Item = EntryContext>,
-    {
-        i.into_iter().map_while(|x| self.get(x))
-    }
-
-    fn is_stale(&self, e: EntryContext) -> Option<bool> {
-        self.lc.is_stale(self.constrain_entry_context(e)?)
-    }
-
-    fn query(&self, query: NodeQuery) -> Vec<Node> {
-        self.lc
-            .query(NodeQuery {
-                context: self.constrain_context(query.context),
-                expression: query.expression,
-            })
-            .into_iter()
-            .filter_map(|mut node| {
-                node.e = self.constrain_entry_context(node.e)?;
-                Some(node)
-            })
-            .collect()
-    }
-
-    fn nodes(&self, ctx: Context) -> impl Iterator<Item = Node> {
-        self.lc
-            .nodes(self.constrain_context(ctx))
-            .filter_map(|mut node| {
-                node.e = self.constrain_entry_context(node.e)?;
-                Some(node)
-            })
-    }
-
-    fn edges(&self, ctx: Context) -> impl Iterator<Item = Edge> {
-        self.lc
-            .edges(self.constrain_context(ctx))
-            .filter_map(|mut edge| {
-                edge.e = self.constrain_entry_context(edge.e)?;
-                Some(edge)
-            })
-    }
-
-    fn root_of(&self, e: EntryContext) -> Option<EntryContext> {
-        let root = self.lc.root_of(self.constrain_entry_context(e)?)?;
-        self.constrain_entry_context(root)
-    }
-
-    fn fresh_successors(&self, node: EntryContext) -> Vec<EntryContext> {
-        let Some(node) = self.constrain_entry_context(node) else {
-            return vec![];
-        };
-        self.lc
-            .fresh_successors(node)
-            .into_iter()
-            .filter_map(|successor| self.constrain_entry_context(successor))
-            .collect()
-    }
-
-    fn relative_degree(&self, a: EntryContext, b: EntryContext) -> Option<usize> {
-        self.lc.relative_degree(
-            self.constrain_entry_context(a)?,
-            self.constrain_entry_context(b)?,
-        )
-    }
-
-    fn families(&self, ctx: Context) -> Vec<LifeCoreFamily> {
-        self.lc.families(self.constrain_context(ctx))
-    }
-}
-
-/// A Message from an `Analyzer`
-#[derive(PartialEq, Eq, Clone, EnumIs, EnumTryAs, Hash, EnumDiscriminants)]
-#[strum_discriminants(name(MessageType))]
-#[strum_discriminants(vis(pub))]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Message {
     Inconsistency(Inconsistency),
     Warning(Warning),
     Suggestion(Suggestion),
 }
-
-#[derive(PartialEq, Eq, Clone)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MessageType {
+    Inconsistency,
+    Warning,
+    Suggestion,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Output(pub Vec<Message>);
 
-pub trait InnerMessageType: Clone + DebugTrait + PartialEq + Eq + Hash + Sized {
+pub trait InnerMessageType: Clone + Debug + PartialEq + Eq + Hash {
     fn ty(&self) -> MessageType;
 }
-
-pub trait InnerOutput<MSG: InnerMessageType>: Clone + Sized {
+pub trait InnerOutput<MSG: InnerMessageType>: Clone {
     fn push(&mut self, v: MSG);
 }
 
-//A Analyzers produce typed inner findings and normalize them at this boundary.
-//A Initialization intentionally has no database access; all inspection happens
-//A through a prefix-bounded harness during `analyze`.
-pub trait Analyzer<LC: LifeCoreAccess>: Send + Sync {
+//A Typed findings remain private to an analyzer until its explicit
+//A normalization boundary. Views provide all graph access; setup cannot
+//A observe the database or a future suffix.
+pub trait Analyzer: Send + Sync {
     type MSG: InnerMessageType
     where
         Self: Sized;
@@ -206,170 +87,124 @@ pub trait Analyzer<LC: LifeCoreAccess>: Send + Sync {
     fn initialize_inner(&mut self) -> Self::OUTPUT
     where
         Self: Sized;
-    fn analyze_inner(&self, lc: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> Self::OUTPUT
+    fn analyze_inner(&self, view: View<'_>) -> Self::OUTPUT
     where
         Self: Sized;
-    fn convert_report(&self, r: Self::OUTPUT) -> Output
+    fn convert_report(&self, report: Self::OUTPUT) -> Output
     where
         Self: Sized;
     fn initialize(&mut self) -> Output;
-    fn analyze(&self, lc: LifeCoreAnalysisHarness<'_, LC>, window: Context) -> Output;
+    fn analyze(&self, view: View<'_>) -> Output;
 }
 
-pub trait AnalyzerFactory<LC: LifeCoreAccess> {
-    fn analyzer_with_config(
-        &mut self,
-        config: &str,
-    ) -> Result<Box<dyn Analyzer<LC>>, LifeCoreError>;
+pub trait AnalyzerFactory {
+    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError>;
     fn analyzer_name(&self) -> &'static str;
 }
 
 #[derive(Default)]
-pub struct AnalysisRunner<LC: LifeCore> {
-    factory: BTreeMap<String, Box<dyn AnalyzerFactory<LC>>>,
+pub struct AnalysisRunner {
+    factory: BTreeMap<String, Box<dyn AnalyzerFactory>>,
 }
 
-impl<LC: LifeCore> AnalysisRunner<LC> {
+impl AnalysisRunner {
     pub fn register_analyzer_kind(
         &mut self,
-        factory: Box<dyn AnalyzerFactory<LC>>,
+        factory: Box<dyn AnalyzerFactory>,
     ) -> Result<(), LifeCoreError> {
-        if self.factory.contains_key(factory.analyzer_name()) {
-            return Err(LifeCoreError::DuplicateAnalyzer {
-                dupe_name: factory.analyzer_name().to_string(),
-            });
+        use std::collections::btree_map::Entry;
+        match self.factory.entry(factory.analyzer_name().into()) {
+        Entry::Vacant(slot) => {
+            slot.insert(factory);
+            Ok(())
         }
-        self.factory
-            .insert(factory.analyzer_name().to_string(), factory);
-        Ok(())
+        Entry::Occupied(slot) => Err(LifeCoreError::DuplicateAnalyzer {
+            dupe_name: slot.key().clone(),
+        }),
+        }
     }
-
-    pub fn run(&mut self, lc: &LC) -> Result<Output, LifeCoreError> {
-        let mut analyzer: Vec<Box<dyn Analyzer<LC>>> = vec![];
-        for x in lc.current_analysis_suite().0.iter() {
-            if self.factory.contains_key(&x.name) {
-                analyzer.push(
-                    self.factory
-                        .get_mut(&x.name)
-                        .unwrap()
-                        .analyzer_with_config(&x.config)?,
+    pub fn run(&mut self, graph: &LifeCoreList) -> Result<Output, LifeCoreError> {
+        self.run_view(graph.view(), graph.analysis_suite())
+    }
+    pub fn run_view(
+        &mut self,
+        view: View<'_>,
+        suite: &SuiteConfig,
+    ) -> Result<Output, LifeCoreError> {
+        let mut analyzers = vec![];
+        for config in &suite.0 {
+            let factory = self.factory.get_mut(&config.name).ok_or_else(|| {
+                LifeCoreError::AnalyzerNotFound {
+                    name: config.name.clone(),
+                }
+            })?;
+            analyzers.push(factory.analyzer_with_config(&config.config)?);
+        }
+        let mut output = Output::default();
+        for analyzer in &mut analyzers {
+            output.0.extend(analyzer.initialize().0);
+        }
+        //A Preserve analyzer/configuration order and include the empty prefix even in
+        //A a nonempty history.
+        for analyzer in &analyzers {
+            for end in 0..=view.len() {
+                output.0.extend(
+                    analyzer
+                        .analyze(view.prefix(end).expect("bounded replay prefix"))
+                        .0,
                 );
-            } else {
-                return Err(LifeCoreError::AnalyzerNotFound {
-                    name: x.name.clone(),
-                });
             }
         }
-        let mut r: Vec<Message> =
-            analyzer
-                .iter_mut()
-                .map(|x| x.initialize().0)
-                .fold(vec![], |acc, x| {
-                    let mut t = vec![];
-                    t.extend(acc);
-                    t.extend(x);
-                    t
-                });
-        let mut windows = lc
-            .window(Context::universe().items())
-            .map(|x| x.entry_context().shrink_to_inclusive_left())
-            .collect_vec();
-        if windows.is_empty() {
-            //A An empty database still has one bounded historical prefix.
-            windows.push(EntryIndex(0).before());
-        }
-        r.extend(
-            analyzer
-                .iter()
-                .cartesian_product(&windows)
-                .map(|(a, window)| {
-                    a.analyze(LifeCoreAnalysisHarness::new(lc, *window), *window)
-                        .0
-                })
-                .fold(vec![], |mut acc, x| {
-                    acc.extend(x);
-                    acc
-                }),
-        );
-        Ok(Output(r))
+        Ok(output)
     }
 }
 
 impl Output {
-    fn validate(&self) -> bool {
-        true
-    }
-
     pub fn has_error(&self) -> bool {
-        debug_assert!(self.validate());
-        self.0.iter().any(|x| x.is_inconsistency())
+        self.errors().next().is_some()
     }
-
-    pub fn has_warning(&self) -> bool {
-        debug_assert!(self.validate());
-        self.0.iter().any(|x| x.is_warning())
+    pub fn errors(&self) -> impl Iterator<Item = &Inconsistency> {
+        self.0.iter().filter_map(|m| match m {
+        Message::Inconsistency(e) => Some(e),
+        _ => None,
+        })
     }
-
-    pub fn has_suggestion(&self) -> bool {
-        debug_assert!(self.validate());
-        self.0.iter().any(|x| x.is_suggestion())
+    pub fn warnings(&self) -> impl Iterator<Item = &Warning> {
+        self.0.iter().filter_map(|m| match m {
+        Message::Warning(w) => Some(w),
+        _ => None,
+        })
     }
-
-    pub fn errors(&self) -> Vec<Inconsistency> {
-        debug_assert!(self.validate());
-        self.0
-            .iter()
-            .cloned()
-            .flat_map(|x| x.try_as_inconsistency())
-            .collect_vec()
+    pub fn suggestions(&self) -> impl Iterator<Item = &Suggestion> {
+        self.0.iter().filter_map(|m| match m {
+        Message::Suggestion(s) => Some(s),
+        _ => None,
+        })
     }
-
-    pub fn warnings(&self) -> Vec<Warning> {
-        debug_assert!(self.validate());
-        self.0
-            .iter()
-            .cloned()
-            .flat_map(|x| x.try_as_warning())
-            .collect_vec()
-    }
-
-    pub fn suggestions(&self) -> Vec<Suggestion> {
-        debug_assert!(self.validate());
-        self.0
-            .iter()
-            .cloned()
-            .flat_map(|x| x.try_as_suggestion())
-            .collect_vec()
-    }
-}
-
-impl From<Suggestion> for Message {
-    fn from(value: Suggestion) -> Self {
-        Self::Suggestion(value)
-    }
-}
-
-impl From<Warning> for Message {
-    fn from(value: Warning) -> Self {
-        Self::Warning(value)
+    pub fn into_result(self) -> Result<Self, LifeCoreError> {
+        if self.has_error() {
+            Err(LifeCoreError::SystemsError(
+                self.errors().cloned().collect(),
+            ))
+        } else {
+            Ok(self)
+        }
     }
 }
 
 impl From<Inconsistency> for Message {
-    fn from(value: Inconsistency) -> Self {
-        Self::Inconsistency(value)
+    fn from(v: Inconsistency) -> Self {
+        Self::Inconsistency(v)
     }
 }
-
-impl Into<LifeCoreError> for Output {
-    fn into(self) -> LifeCoreError {
-        assert!(self.has_error());
-        LifeCoreError::SystemsError(
-            self.0
-                .into_iter()
-                .flat_map(|x| x.try_as_inconsistency())
-                .collect_vec(),
-        )
+impl From<Warning> for Message {
+    fn from(v: Warning) -> Self {
+        Self::Warning(v)
+    }
+}
+impl From<Suggestion> for Message {
+    fn from(v: Suggestion) -> Self {
+        Self::Suggestion(v)
     }
 }
 

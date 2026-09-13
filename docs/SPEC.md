@@ -22,7 +22,8 @@ The model has two structures:
   directed edges.
 
 Replacement determines which revisions are current. A historical view determines
-which replacements and type declarations apply. Type checking is configured explicitly for this cleanup.
+which replacements and type declarations apply. Type checking is configured
+explicitly for this cleanup.
 Optional analyzers express rules beyond typing.
 
 ## 2. History, entries, and transactions
@@ -259,7 +260,8 @@ not assumed to be captured by that hash.
 
 Validation has two responsibilities: checking an append against the preceding
 committed view and checking the resulting candidate view. Both must succeed
-before the containing plan commits.
+before the containing plan commits. Type rules in this section apply when
+TypeCheck is configured.
 
 ### 7.1 Append checks
 
@@ -331,9 +333,11 @@ invalid endpoint permissions at its creation.
 
 ### 7.4 Failure and persistence
 
-Any failed append, type check, analyzer run, or commit discards the proposed
-ordered plan without changing committed history. Staged
-objects must not expose mutable aliases capable of changing committed payloads.
+A failure before publication discards the proposed ordered plan without changing
+committed history. A failure after atomic replacement can leave publication or
+durability uncertain; report that distinction and recover from stored state and
+plan receipts rather than blindly repeating appends. Staged objects must not
+expose mutable aliases capable of changing committed payloads.
 
 Hooks, database constraints, and in-process staging are possible enforcement
 mechanisms. None changes the validity contract. An implementation must not
