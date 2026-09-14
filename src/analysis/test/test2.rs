@@ -4,7 +4,7 @@ use crate::{
         AnalysisRunner, Analyzer, AnalyzerFactory, Config, Inconsistency, InnerMessageType,
         InnerOutput, MessageType, Output, SuiteConfig,
     },
-    transaction::{Change, check},
+    transaction::{Change, prepare},
 };
 use std::sync::{Arc, Mutex};
 
@@ -112,7 +112,7 @@ fn fixture() -> (LifeCoreList, EntryId) {
         body: Body::new(),
         parent: None,
     });
-    let plan = check(&graph, &changes, &mut AnalysisRunner::default()).unwrap();
+    let plan = prepare(&graph, &changes, &mut AnalysisRunner::default()).unwrap();
     let future = plan.added()[2];
     plan.commit(&mut graph).unwrap();
     (graph, future)

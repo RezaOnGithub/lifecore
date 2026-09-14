@@ -5,7 +5,7 @@ use lifecore::{
     transaction::{
         Change,
         Reference::{Added, Existing},
-        check,
+        prepare,
     },
     typing::{FieldDecl, FieldIssueKind, FieldStatus, Type, TypeDefinition, ValueType},
 };
@@ -28,7 +28,7 @@ fn node(name: &str, body: Body, parent: Option<lifecore::transaction::Reference>
     }
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
-    let plan = check(graph, changes, &mut AnalysisRunner::default()).unwrap();
+    let plan = prepare(graph, changes, &mut AnalysisRunner::default()).unwrap();
     let ids = plan.added().to_vec();
     plan.commit(graph).unwrap();
     ids
@@ -452,9 +452,9 @@ fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
         ),
         configure(),
     ];
-    assert!(check(&graph, &changes, &mut runner()).is_err());
+    assert!(prepare(&graph, &changes, &mut runner()).is_err());
     assert!(graph.view().is_empty());
-    check(
+    prepare(
         &graph,
         &[
             declaration(&a, None),
@@ -513,14 +513,14 @@ fn plan_local_references_count_operations_and_cannot_name_configuration_changes(
         node("A", Body::new(), None),
         node("A", Body::new(), Some(Added(2))),
     ];
-    let plan = check(&graph, &changes, &mut runner()).unwrap();
+    let plan = prepare(&graph, &changes, &mut runner()).unwrap();
     assert_eq!(plan.added().len(), 3);
     assert_eq!(
         plan.view().node(plan.added()[2]).unwrap().parent,
         Some(plan.added()[1])
     );
     assert!(matches!(
-        check(
+        prepare(
             &graph,
             &[configure(), node("A", Body::new(), Some(Added(0)))],
             &mut runner()

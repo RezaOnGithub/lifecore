@@ -148,6 +148,10 @@ impl Analyzer for TypeCheck {
                         name: ty.name.clone(),
                     });
                 }
+                //A NOTDO: No ambiguity tracking here yet. DuplicateType rejects the
+                //A candidate, but retaining the last declaration makes subsequent body
+                //A and edge findings depend on declaration order. Track ambiguous names
+                //A separately to suppress dependent checks without reporting MissingType.
                 types.insert(ty.name.clone(), (node.id, ty));
             }
             }

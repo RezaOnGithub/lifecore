@@ -4,7 +4,7 @@ use crate::{
     transaction::{
         Change,
         Reference::{Added, Existing},
-        check,
+        prepare,
     },
     typing::{
         FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaErrorKind, Type, TypeDefinition,
@@ -24,7 +24,7 @@ fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
     }
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
-    let plan = check(graph, changes, &mut AnalysisRunner::default()).unwrap();
+    let plan = prepare(graph, changes, &mut AnalysisRunner::default()).unwrap();
     let ids = plan.added().to_vec();
     plan.commit(graph).unwrap();
     ids
@@ -105,8 +105,8 @@ fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
 fn identities_reject_other_databases_and_independent_candidate_suffixes() {
     let mut graph = LifeCoreList::default();
     let base = append(&mut graph, &[node("A", None)])[0];
-    let first = check(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
-    let second = check(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
+    let first = prepare(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
+    let second = prepare(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
     let a = first.added()[0];
     let b = second.added()[0];
     assert_eq!(a.position(), b.position());
@@ -121,7 +121,7 @@ fn identities_reject_other_databases_and_independent_candidate_suffixes() {
     assert!(graph.view().get(foreign).is_none());
     assert!(graph.view().common_prefix(other.view()).is_err());
     assert!(
-        check(
+        prepare(
             &graph,
             &[node("Child", Some(Existing(foreign)))],
             &mut AnalysisRunner::default()
@@ -180,7 +180,7 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
         ],
     ];
     for changes in cases {
-        assert!(check(&graph, &changes, &mut AnalysisRunner::default()).is_err());
+        assert!(prepare(&graph, &changes, &mut AnalysisRunner::default()).is_err());
         assert!(graph.view().is_empty());
     }
 }
@@ -200,7 +200,7 @@ fn stale_duplicate_nodes_and_branching_from_old_parents_are_permitted() {
 #[test]
 fn entry_identity_ordering_traits_agree() {
     let graph = LifeCoreList::default();
-    let candidate = check(
+    let candidate = prepare(
         &graph,
         &[node("A", None), node("B", None)],
         &mut AnalysisRunner::default(),

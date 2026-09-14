@@ -65,6 +65,65 @@ This profile specifies values, not the schema language. A concrete
 implementation must additionally version its schema representation and retain
 the interpreters needed for historical validation, as required by SPEC.md.
 
+#### Timestamp conversion contract
+
+Native TOML offset datetimes and `jiff::Timestamp` overlap, but neither can
+represent every value of the other. The following authoring restrictions are
+proposed for `toml-basic-v1`; the TOML adapter is not implemented yet.
+
+- Require a complete date and time with `Z` or a numeric offset. Local dates,
+  local times, and local datetimes cannot supply an instant without additional
+  information and are rejected.
+- Accept zero to nine fractional-second digits (no decimal point when there
+  are zero). Reject longer fractions, even trailing zeros, before a TOML parser
+  can discard digits. This is an application restriction on otherwise valid
+  TOML, not a claim that TOML limits precision to nanoseconds.
+- Reject leap-second notation (`60` in the seconds component) before conversion
+  to Jiff. Do not silently clamp it to `59`.
+- Require the converted instant to fit Jiff's range and its UTC year to fall
+  within `0000..=9999`. Check after applying the input offset, including at year
+  boundaries.
+- Export accepted instants as native TOML offset datetimes in UTC with `Z`,
+  retaining all nanosecond precision. Reject export of a core timestamp outside
+  this profile; do not silently substitute a string or truncate the value.
+
+These rules guarantee an exact instant round trip through our adapter for
+accepted values, not preservation of the original text. Offset spelling and
+fractional-digit count are not stored. For example, `2026-09-14T15:00:00+03:00`
+and `2026-09-14T12:00:00Z` become equal timestamps. The RFC 3339 `-00:00`
+convention supplies a known UTC instant with an unknown local offset; it is
+accepted as that instant, but its unknown-offset metadata is not retained.
+
+The restrictions address concrete representation differences:
+
+- TOML uses RFC 3339's four-digit unsigned year syntax. Jiff also represents
+  negative years, which cannot generally be exported as native TOML datetimes.
+  In the currently locked Jiff 0.2.33, `Timestamp::MAX` is
+  `9999-12-30T22:00:00.999999999Z`; the valid TOML datetime
+  `9999-12-31T23:59:59Z` is therefore outside Jiff's range.
+- TOML requires only millisecond precision and requires truncation of precision
+  beyond an implementation's capability. Our adapter must preserve nanoseconds
+  and inspect fractional digits before such truncation. A parsed datetime that
+  has already lost digits cannot enforce this contract.
+- Jiff represents Unix instants without distinct leap seconds. Its timestamp
+  parser accepts second `60` by constraining it to `59`, so relying on that
+  parser alone would lose information.
+
+Jiff's default Serde implementation serializes a string and deserializes a
+string; it is not a native TOML datetime adapter. The importer/exporter must
+explicitly bridge TOML datetime values and `Timestamp`. A quoted datetime in a
+payload remains ordinary text. Existing tagged JSON persistence uses Jiff's
+string representation under `kind = "precise_time"` and can retain timestamps
+outside the TOML profile. The core `PreciseTime(Timestamp)` variant currently
+does not enforce the narrower authoring range. Supporting every core timestamp
+in change files would require an additional explicit encoding or a decision to
+restrict core values; neither is implemented by this proposal.
+
+References: [TOML 1.0 offset datetimes](https://toml.io/en/v1.0.0#offset-date-time),
+[RFC 3339 grammar](https://www.rfc-editor.org/rfc/rfc3339.html#section-5.6),
+[unknown local offsets](https://www.rfc-editor.org/rfc/rfc3339.html#section-4.3),
+and [Jiff Timestamp](https://docs.rs/jiff/0.2.33/jiff/struct.Timestamp.html).
+
 ### 2.2 Envelope and ordered entries
 
 Examples assume the named declarations and referenced current nodes already
@@ -609,6 +668,10 @@ exceptions to the core contract.
 
 | Scenario | Required outcome |
 | --- | --- |
+| Timestamp has more than nine fractional digits or second `60` | Reject before parser truncation or Jiff leap-second clamping can erase the evidence. |
+| Offset conversion crosses the supported UTC range, or export receives an out-of-profile core timestamp | Reject explicitly; no string fallback, rounding, or clamping. |
+| Nanosecond timestamp is exported and imported with a different offset spelling | Preserve the exact instant and equality; spelling need not survive. |
+| Quoted timestamp text or local datetime appears in a payload | Keep quoted text as text; reject the local datetime without assuming a timezone. |
 | Database identity differs despite matching IDs/count | Reject before mutation. |
 | Head advances between planning and apply | Reject stale base; require refresh/replan. |
 | Writer advances the base during checking | Reject under writer exclusion before publishing any operation. |

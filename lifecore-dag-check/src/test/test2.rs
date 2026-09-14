@@ -8,7 +8,7 @@ use lifecore::{
     transaction::{
         Change,
         Reference::{Added, Existing},
-        check,
+        prepare,
     },
 };
 use std::collections::BTreeSet;
@@ -36,7 +36,7 @@ fn edge(a: usize, b: usize) -> Change {
 }
 fn graph() -> (LifeCoreList, Vec<EntryId>) {
     let mut graph = LifeCoreList::default();
-    let plan = check(
+    let plan = prepare(
         &graph,
         &[
             node("A"),
@@ -114,7 +114,7 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
         edge_types: Some(BTreeSet::new()),
     });
     assert!(check_dag(graph.view(), &filtered).components.is_empty());
-    check(
+    prepare(
         &graph,
         &[Change::AddNode {
             ty_name: "A2".into(),
@@ -212,6 +212,6 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
             config: r#"{"on_cycle":"inconsistency"}"#.into(),
         },
     ];
-    assert!(check(&graph, &changes, &mut runner).is_err());
+    assert!(prepare(&graph, &changes, &mut runner).is_err());
     assert!(graph.view().is_empty());
 }

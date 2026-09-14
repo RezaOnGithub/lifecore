@@ -38,7 +38,7 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
   stale in views containing the successor; it does not retarget the edge.
 - Test history-sensitive changes at multiple boundaries, including before and
   after the relevant append.
-- All mutations go through `transaction::check` and a `CheckedPlan` commit.
+- All mutations go through `transaction::prepare` and a `PreparedTransaction` commit.
   `Reference::Added(n)` addresses an earlier operation within that plan;
   `Reference::Existing(id)` retains exact identity across views.
 - Core mutation failures leave the receiver unchanged. Preserve atomic composite

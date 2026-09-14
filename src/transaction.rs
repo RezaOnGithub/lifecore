@@ -45,7 +45,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Encoding(#[from] serde_json::Error),
-    #[error("the database changed since this plan was checked")]
+    #[error("the database changed since this transaction was prepared")]
     StaleBase,
     #[error("state was published but directory synchronization failed: {0}")]
     Published(#[source] std::io::Error),
@@ -53,14 +53,31 @@ pub enum Error {
     InvalidPlanReference { operation: usize },
 }
 
-pub struct CheckedPlan {
-    base: Vec<u8>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StateFingerprint(blake3::Hash);
+
+impl StateFingerprint {
+    fn of(graph: &LifeCoreList) -> Result<Self, Error> {
+        //A Hash the loaded state, including database/entry identities and the ordered
+        //A analyzer suite. Deterministic serialization ignores file formatting; stream
+        //A it to avoid retaining a second full database buffer. This is an ephemeral
+        //A stale-state guard, not a durable receipt or analyzer certificate.
+        let mut hasher = blake3::Hasher::new();
+        serde_json::to_writer(&mut hasher, graph)?;
+        Ok(Self(hasher.finalize()))
+    }
+}
+
+pub struct PreparedTransaction {
+    //A Commit requires the receiver to match the original state, preventing a
+    //A concurrently prepared candidate from overwriting intervening changes.
+    base_fingerprint: StateFingerprint,
     candidate: LifeCoreList,
     pub diagnostics: Output,
     added: Vec<EntryId>,
 }
 
-impl CheckedPlan {
+impl PreparedTransaction {
     pub fn view(&self) -> View<'_> {
         self.candidate.view()
     }
@@ -69,7 +86,7 @@ impl CheckedPlan {
     }
 
     pub fn commit(self, receiver: &mut LifeCoreList) -> Result<(), Error> {
-        if serde_json::to_vec(receiver)? != self.base {
+        if StateFingerprint::of(receiver)? != self.base_fingerprint {
             return Err(Error::StaleBase);
         }
         *receiver = self.candidate;
@@ -77,15 +94,15 @@ impl CheckedPlan {
     }
 }
 
-pub fn check(
+pub fn prepare(
     graph: &LifeCoreList,
     changes: &[Change],
     runner: &mut AnalysisRunner,
-) -> Result<CheckedPlan, Error> {
+) -> Result<PreparedTransaction, Error> {
     graph
         .basic_validation()
         .map_err(LifeCoreError::BasicValidationFailure)?;
-    let base = serde_json::to_vec(graph)?;
+    let base_fingerprint = StateFingerprint::of(graph)?;
     let mut candidate = graph.clone();
     let origin = uuid::Uuid::new_v4();
     let mut operations = Vec::<Option<EntryId>>::new();
@@ -144,8 +161,8 @@ pub fn check(
     //A Full replay certifies old history and every candidate prefix under the
     //A resulting suite.
     let diagnostics = runner.run(&candidate)?.into_result()?;
-    Ok(CheckedPlan {
-        base,
+    Ok(PreparedTransaction {
+        base_fingerprint,
         candidate,
         diagnostics,
         added,
@@ -192,11 +209,11 @@ impl Store {
         Ok(())
     }
 
-    pub fn commit(&self, plan: CheckedPlan) -> Result<LifeCoreList, Error> {
+    pub fn commit(&self, plan: PreparedTransaction) -> Result<LifeCoreList, Error> {
         //A All cooperating writers hold this lock from base verification through
         //A rename.
         let _lock = self.lock()?;
-        if serde_json::to_vec(&self.load()?)? != plan.base {
+        if StateFingerprint::of(&self.load()?)? != plan.base_fingerprint {
             return Err(Error::StaleBase);
         }
         Self::validate(&plan.candidate)?;

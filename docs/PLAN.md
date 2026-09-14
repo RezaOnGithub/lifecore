@@ -282,7 +282,7 @@ competing writers are covered. Dormant `lifecore-test` scenarios now live in the
 active core/typechecker tests; placeholder application crates remain untouched.
 
 The public path is `LifeCoreList::view()` / `View::prefix(end)` for inspection,
-and `transaction::check` followed by memory or `Store` commit for mutation.
+and `transaction::prepare` followed by memory or `Store` commit for mutation.
 Entry handles include an origin plus a position. Independent plans receive
 separate suffix identities; committed handles survive reload unchanged.
 `Reference::Added(n)` identifies an earlier operation, including through mixed
@@ -365,6 +365,11 @@ chosen default and any limitations for event-oriented analyzers.
 
 - [ ] Implement the reduced FILES envelope, complete node payloads, ordered
   entries, existing references, local aliases, and revision/branch intent.
+- [ ] Implement the explicit [timestamp adapter](FILES.md#timestamp-conversion-contract):
+  preserve nanoseconds, reject excess precision and leap seconds before lossy
+  parsing, check the converted UTC range, and export native UTC datetimes.
+  Verify boundary failures and exact instant round trips; Jiff's default Serde
+  string encoding and unrestricted core range do not provide this contract.
 - [ ] Provide a small new executable over shared library operations for checking,
   applying, and inspecting files and bounded views. No persistent draft attachment.
 - [ ] Freeze inputs and expose the concrete ordered plan, including affected
