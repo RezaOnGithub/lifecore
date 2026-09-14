@@ -3,10 +3,12 @@
 LifeCore is an experimental Rust database with an append-only, typed graph.
 The cleanup direction and open decisions are in [docs/PLAN.md](docs/PLAN.md).
 `docs/SPEC.md` and `docs/FILES.md` describe proposed contracts, not necessarily
-current behavior. Stages 0–3 are complete: the old CLI/sidecars and context
+current behavior. Stages 0–4 are complete: the old CLI/sidecars and context
 wrappers are removed. Values are scalars, lists, and records. Bounded inspection,
-comparison, and Graphviz export are available through `View`. Next are analyzer
-presentation and TOML authoring. Document collections are backlogged.
+comparison, and Graphviz export are available through `View`. Analyzer reports
+separate semantic findings from observations, with persistent dismissal and
+checked suggested-repair TOML export. General TOML authoring and receipts are
+next. Document collections are backlogged.
 
 ## Compatibility
 
@@ -56,6 +58,10 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
   configuration, and evaluation inputs. Missing configured factories are errors.
 - Dismissal and display filtering cannot affect the inconsistency gate.
   Non-emission or supersession alone does not establish resolution.
+- Finding equality uses the complete typed semantic key, never a digest alone.
+  Normalize analyzer configuration and distinguishing facts explicitly. Ordinary
+  boundaries, wording, and suggested actions belong to observations. Event
+  retention does not assert current applicability or resolution.
 
 ## Editing conventions
 

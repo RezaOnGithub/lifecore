@@ -9,10 +9,10 @@ use tempfile::NamedTempFile;
 
 use crate::{
     Body, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, View,
-    analysis::{AnalysisRunner, Output},
+    analysis::{AnalysisRunner, Report},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Reference {
     Existing(EntryId),
     //A Zero-based operation index within this plan, resolved only after that operation succeeds.
@@ -73,7 +73,7 @@ pub struct PreparedTransaction {
     //A concurrently prepared candidate from overwriting intervening changes.
     base_fingerprint: StateFingerprint,
     candidate: LifeCoreList,
-    pub diagnostics: Output,
+    pub diagnostics: Report,
     added: Vec<EntryId>,
 }
 

@@ -1,6 +1,7 @@
 # LifeCore Lite Authoring Files
 
-Status: proposed authoring contract; no implementation is implied.
+Status: proposed authoring contract. Stage 4 implements checked suggested-repair
+export; general TOML input, the executable, and durable receipts remain Stage 5.
 
 Current cleanup scope is TOML change files and bounded inspection. Markdown
 document collections are backlogged in [PLAN.md](PLAN.md#7-backlog--markdown-document-collections).
@@ -69,7 +70,8 @@ the interpreters needed for historical validation, as required by SPEC.md.
 
 Native TOML offset datetimes and `jiff::Timestamp` overlap, but neither can
 represent every value of the other. The following authoring restrictions are
-proposed for `toml-basic-v1`; the TOML adapter is not implemented yet.
+proposed for `toml-basic-v1`. Suggested-repair export implements the output half;
+the lossless input adapter remains Stage 5 work.
 
 - Require a complete date and time with `Z` or a numeric offset. Local dates,
   local times, and local datetimes cannot supply an instant without additional
@@ -198,6 +200,12 @@ the author.
 There is no implicit lookup by title, root, path, or "latest descendant" in a
 change file. Search and selection helpers must materialize exact references.
 
+Stage 4's repair exporter writes existing handles as `@<origin-uuid>:<position>`
+and uses `$repair_<operation-index>` for earlier proposed nodes. The envelope's
+database is the actual UUID and `base` is the exclusive committed entry count.
+These spellings preserve exact identity across reloads and independent
+candidates; positions alone are not a reference identity in the Rust model.
+
 ### 2.4 Node and edge operations
 
 A node entry requires `name`, `kind = "node"`, `type`, and `payload`. It may
@@ -230,6 +238,15 @@ silently skip them. A collection planner may coalesce repeated link occurrences
 into one proposed edge before producing the file.
 
 ## 3. Planning, checking, and applying
+
+Stage 4 provides `lifecore::analysis::repair::check` for an explicitly selected
+suggestion. It returns a newly checked `PreparedTransaction` and deterministic
+TOML describing the same ordered actions, complete payloads, and revision intent.
+The caller can inspect each candidate prefix, save the TOML for review, or
+explicitly commit the prepared transaction through the existing memory/Store
+path. Checking does not apply the repair. Editing or later loading that TOML
+requires the general parser and a new check, implemented in Stage 5. The
+exported `plan_id` is not yet a durable application receipt or retry guarantee.
 
 The basic workflows are:
 

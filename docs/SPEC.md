@@ -368,8 +368,119 @@ and explicit evaluation inputs. Time-dependent rules should receive an
 evaluation time instead of reading an implicit wall clock. Missing configured
 analyzers or analyzer execution failures are errors, not successful checks.
 
-Diagnostic identity, dismissal persistence, and presentation are frontend
-concerns outside this specification. Dismissal must not change graph validity.
+### 8.1 Execution and normalization
+
+The Stage 4 API separates `TypedAnalyzer` from the object-safe `Analyzer`.
+A shared adapter runs typed initialization/analysis and calls the implementation's
+explicit `convert_report`; direct third-party `dyn Analyzer` implementations are
+also supported. Factories and domain findings remain in their analyzer packages.
+The normalized output is a `Message` with a typed `MessageKind`, semantic finding,
+optional diagnostic location, relevance set, text, and observation scope.
+
+`AnalysisRunner::new(EvaluationInputs)` freezes evaluation inputs for a run;
+the default supplies an empty record. Inputs can include a timestamp, and are
+supplied to both initialization and each bounded invocation. All configured
+implementations are constructed first, then initialized in suite order, then
+each replays boundaries `0..=end` in suite order. Empty histories still execute
+initialization and boundary zero. Missing factories, invalid configuration,
+execution failures, and malformed normalized output are errors. Execution
+failures carry implementation identity, evaluation inputs, and invocation.
+
+Initialization has no graph access or graph diagnostic location. Every location
+in replay output must identify an actual prefix of that invocation, with its
+subject visible there. Finding subjects and relevance entries must be visible
+within the invocation. TypeCheck and DAG Check use implementation version `1`;
+semantic or normalization changes that should invalidate existing dismissals
+must change that version.
+
+### 8.2 Finding identity and observations
+
+`FindingKey` consists of database identity, analyzer name/version, normalized
+configuration, message category, finding code, exact subject identities, and
+typed distinguishing facts. `Fact` retains nulls, booleans, exact integers,
+text, ordered lists, and sorted string-keyed records. Serialized domain enum
+tags remain facts, rather than rendered descriptions. Analyzers normalize their
+domain sets explicitly; subjects and relevance are sets of exact entry IDs.
+
+TypeCheck normalizes empty text and empty JSON objects to the same empty
+configuration. Its finding facts retain the typed variant, path, issue kind,
+and other variant details; the exact diagnostic subject is in the subject set.
+Its ordinary diagnostic boundary is excluded. DAG Check normalizes parsed
+configuration, including set order/duplicates and empty filter/range records.
+Cycle facts contain the sorted exact node and edge identities of the component.
+A change in that component or configured filter produces a different key.
+
+An ordinary evaluation boundary, evaluation time, wording, relevance ordering,
+or repair payload does not by itself change finding identity. When a boundary,
+time threshold, or transition distinguishes the actual issue, the analyzer
+must deliberately include it in the facts. Different subjects, distinguishing
+facts, versions, or normalized configurations stay distinct. Repeated
+observations of a dismissed key remain dismissed.
+
+`FindingKey::encoding` is the UTF-8 prefix `lifecore.finding.v1` followed by a
+NUL byte and compact Serde JSON of the typed key. Struct/variant field order,
+record key order, integer encoding, subject ordering, and list order are part
+of this encoding. BLAKE3 digests are display/index aids, never equality or
+dismissal authority. Grouping compares full keys even when hashes collide.
+
+An `Observation` records the key, frozen evaluation inputs, initialization or
+prefix invocation, and complete normalized diagnostic, including its location,
+wording, scope, and ordered repair actions. Equality of this entire observation
+controls deduplication; grouping by key is separate and retains all distinct
+boundaries and observations. Duplicate configurations still execute in full.
+`Report` retains the selected view and ordered implementation identities even
+when no messages were emitted. Reports can be serialized for later inspection;
+reloading one is not a substitute for checking a new transaction.
+
+### 8.3 Presentation and dismissal
+
+The default report selects current state observations, initialization output,
+and retained event advisories. A state observation is current only when emitted
+at the report's selected boundary. `ObservationScope::Event` preserves a
+transition advisory in the default report after unrelated appends; rendering
+labels it as historical with current applicability unconfirmed. An event
+analyzer must choose that scope explicitly. History mode selects observations
+at every replayed boundary. Groups expose both all observations and the selected
+ones, in deterministic first-emission order.
+
+No generic resolution status is inferred. A missing-field warning that is no
+longer emitted remains in history. Superseding a subject does not erase its
+observations. Reconnecting one split branch does not establish that the other
+branch should receive the same connection or that the split advisory is fixed.
+Retained events remain until dismissed or excluded by report selection; a
+domain-specific assessment of current applicability is not implemented. Rules
+requiring that assessment should emit state findings with their own semantics.
+
+`analysis::presentation` groups findings, joins exact-key dismissal records,
+selects reports, and renders text or serializable groups. `Dismissals` supports
+listing and restoring stored keys without requiring current emission.
+`DismissalStore` persists this separate frontend state as JSON, rereads under
+writer exclusion, and atomically replaces a synced file. It reports a directory
+sync failure after publication distinctly. No abbreviation namespace, attached
+draft, or persistent issue lifecycle is maintained.
+
+All inconsistencies remain visible across history, regardless of advisory
+filters, current/history selection, or even imported dismissal records.
+Dismiss operations reject inconsistency keys. Transaction acceptance uses only
+the raw report's inconsistencies and execution errors, before presentation.
+
+### 8.4 Explicit suggested repairs
+
+`analysis::repair::check` takes a selected suggestion observation, a current
+base, a nonempty plan ID, and a runner. It freezes the observation's ordered
+actions and checks them anew with `transaction::prepare` under the runner's
+evaluation inputs, including historical and intermediate prefixes. Observation
+source identity must match the base history. Revision actions specify `revise`
+or `branch`; `revise` requires a current predecessor immediately before that
+operation. Exact existing references and earlier-operation references are kept.
+
+The result contains deterministic TOML for the checked actions and a
+`PreparedTransaction` with inspectable intermediate views. Checking does not
+commit, infer reconnections, or dismiss the finding. The TOML exporter supports
+all core value shapes, native UTC timestamps within the authoring profile,
+and explicit aliases. General handwritten TOML parsing, the executable, and
+durable plan receipts remain Stage 5 work. See FILES for the generated envelope
+and timestamp boundary.
 
 ## 9. Inspection and queries
 

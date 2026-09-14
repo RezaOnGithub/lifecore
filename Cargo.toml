@@ -38,3 +38,4 @@ thiserror = "2.0.18"
 uuid = { version = "1.24.0", features = ["serde", "v4"] }
 tempfile = "3.24.0"
 blake3 = "1.8.7"
+toml = "0.9.12"

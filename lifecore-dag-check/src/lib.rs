@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, Inconsistency, InnerMessageType, InnerOutput, MessageType,
-        Output, Warning,
+        Analyzer, AnalyzerFactory, AnalyzerIdentity, EvaluationInputs, Fact, Finding,
+        InnerMessageType, InnerOutput, Message, MessageKind, MessageType, ObservationScope, Output,
+        TypedAnalyzer,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -21,8 +22,14 @@ pub struct DagCheckConfig {
 
 impl DagCheckConfig {
     pub fn from_json(value: &str) -> Result<Self, DagCheckConfigError> {
-        let config = serde_json::from_str::<Self>(value)?;
+        let mut config = serde_json::from_str::<Self>(value)?;
         config.validate()?;
+        if config.filter.as_ref() == Some(&SubgraphFilter::default()) {
+            config.filter = None;
+        }
+        if config.range.as_ref() == Some(&IndexRange::default()) {
+            config.range = None;
+        }
         Ok(config)
     }
 
@@ -103,7 +110,7 @@ pub struct DagCheckReport {
     pub components: Vec<CyclicComponent>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 pub struct CyclicComponent {
     pub nodes: Vec<EntryId>,
     pub edges: Vec<EntryId>,
@@ -281,7 +288,6 @@ impl InnerOutput<DagCheckMessage> for DagCheckOutput {
 
 pub struct DagCheck {
     config: DagCheckConfig,
-    raw_config: String,
 }
 
 impl DagCheck {
@@ -316,38 +322,47 @@ impl DagCheck {
 
     fn convert_message(&self, message: DagCheckMessage) -> lifecore::analysis::Message {
         let text = Self::message_text(&message.component);
-        match message.disposition {
-        CycleDisposition::Inconsistency => Inconsistency {
-            offending_event: message.location,
-            system_name: DagCheckFactory::name().to_string(),
-            system_config: self.raw_config.clone(),
+        Message {
+            finding: Finding {
+                code: "cyclic_component".into(),
+                subjects: message.relevance.iter().copied().collect(),
+                facts: Fact::from_typed(&message.component).expect("typed cycle facts"),
+            },
+            offending_event: Some(message.location),
+            relevance: message.relevance.into_iter().collect(),
             message: text,
-        }
-        .into(),
-        CycleDisposition::Warning => Warning {
-            offending_event: message.location,
-            system_name: DagCheckFactory::name().to_string(),
-            system_config: self.raw_config.clone(),
-            relevance: message.relevance,
-            message: text,
-        }
-        .into(),
+            kind: match message.disposition {
+            CycleDisposition::Inconsistency => MessageKind::Inconsistency,
+            CycleDisposition::Warning => MessageKind::Warning,
+            },
+            scope: ObservationScope::State,
         }
     }
 }
 
-impl Analyzer for DagCheck {
+impl TypedAnalyzer for DagCheck {
     type MSG = DagCheckMessage;
     type OUTPUT = DagCheckOutput;
 
-    fn initialize_inner(&mut self) -> Self::OUTPUT {
-        DagCheckOutput(Vec::new())
+    fn identity(&self) -> AnalyzerIdentity {
+        AnalyzerIdentity {
+            name: DagCheckFactory::name().into(),
+            version: "1".into(),
+            configuration: Fact::from_typed(&self.config).expect("normalized DAG configuration"),
+        }
+    }
+    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String> {
+        Ok(DagCheckOutput(Vec::new()))
     }
 
-    fn analyze_inner(&self, view: View<'_>) -> Self::OUTPUT {
+    fn analyze_inner(
+        &self,
+        view: View<'_>,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Self::OUTPUT, String> {
         let report = check_dag(view, &self.config);
         if !report.checked {
-            return DagCheckOutput(Vec::new());
+            return Ok(DagCheckOutput(Vec::new()));
         }
 
         let latest_node = view
@@ -355,7 +370,7 @@ impl Analyzer for DagCheck {
             .next_back()
             .and_then(|e| e.as_node())
             .map(|n| n.id);
-        DagCheckOutput(
+        Ok(DagCheckOutput(
             report
                 .components
                 .into_iter()
@@ -382,7 +397,7 @@ impl Analyzer for DagCheck {
                     }
                 })
                 .collect(),
-        )
+        ))
     }
 
     fn convert_report(&self, report: Self::OUTPUT) -> Output {
@@ -393,15 +408,6 @@ impl Analyzer for DagCheck {
                 .map(|message| self.convert_message(message))
                 .collect(),
         )
-    }
-
-    fn initialize(&mut self) -> Output {
-        let report = self.initialize_inner();
-        self.convert_report(report)
-    }
-
-    fn analyze(&self, view: View<'_>) -> Output {
-        self.convert_report(self.analyze_inner(view))
     }
 }
 
@@ -422,10 +428,7 @@ impl AnalyzerFactory for DagCheckFactory {
                 message: error.to_string(),
             }
         })?;
-        Ok(Box::new(DagCheck {
-            config: parsed,
-            raw_config: config.to_string(),
-        }))
+        Ok(Box::new(DagCheck { config: parsed }))
     }
 
     fn analyzer_name(&self) -> &'static str {

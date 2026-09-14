@@ -9,7 +9,7 @@ pub struct ViewId {
     pub head: Option<EntryId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DiagnosticLocation {
     pub view: ViewId,
     pub entry: Option<EntryId>,

@@ -1,7 +1,9 @@
 use crate::{TypeCheck, TypeCheckFactory, TypeCheckMessage};
 use lifecore::{
     Body, EntryId, LifeCoreList, Payload,
-    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, InnerMessageType, MessageType},
+    analysis::{
+        AnalysisRunner, Analyzer, AnalyzerFactory, InnerMessageType, MessageType, TypedAnalyzer,
+    },
     transaction::{
         Change,
         Reference::{Added, Existing},
@@ -35,7 +37,8 @@ fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
 }
 fn findings(graph: &LifeCoreList, end: usize) -> Vec<TypeCheckMessage> {
     TypeCheck::default()
-        .analyze_inner(graph.view().prefix(end).unwrap())
+        .analyze_inner(graph.view().prefix(end).unwrap(), &Default::default())
+        .unwrap()
         .0
 }
 fn has_error(findings: &[TypeCheckMessage]) -> bool {
@@ -59,7 +62,13 @@ fn runner() -> AnalysisRunner {
 #[test]
 fn builtin_metatype_needs_no_bootstrap_and_cannot_be_redeclared() {
     let mut analyzer = TypeCheck::default();
-    assert!(analyzer.initialize().0.is_empty());
+    assert!(
+        analyzer
+            .initialize(&Default::default())
+            .unwrap()
+            .0
+            .is_empty()
+    );
     let mut graph = LifeCoreList::default();
     assert!(findings(&graph, 0).is_empty());
     assert_eq!(
@@ -501,7 +510,18 @@ fn runner_combines_typed_warnings_and_inconsistencies_without_filtering() {
     let output = runner().run_view(graph.view(), &suite).unwrap();
     assert_eq!(output.errors().count(), 1);
     assert_eq!(output.warnings().count(), 1);
-    assert_eq!(output.errors().next().unwrap().offending_event.view.end, 2);
+    assert_eq!(
+        output
+            .errors()
+            .next()
+            .unwrap()
+            .diagnostic
+            .offending_event
+            .unwrap()
+            .view
+            .end,
+        2
+    );
 }
 
 #[test]
@@ -527,4 +547,94 @@ fn plan_local_references_count_operations_and_cannot_name_configuration_changes(
         ),
         Err(lifecore::transaction::Error::InvalidPlanReference { operation: 0 })
     ));
+}
+
+#[test]
+fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_replay() {
+    use lifecore::analysis::{
+        Config, Fact, SuiteConfig,
+        presentation::{Dismissals, ReportOptions, ReportSelection},
+    };
+    let mut graph = LifeCoreList::default();
+    let schema = Type::new(
+        "A",
+        &[
+            ("first", (ValueType::Text, FieldStatus::Encouraged)),
+            ("second", (ValueType::Text, FieldStatus::Encouraged)),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&schema, None),
+            node("A", Body::new(), None),
+            declaration(&ty("Other"), None),
+        ],
+    );
+    let config = |raw: &str| {
+        SuiteConfig(vec![Config {
+            name: TypeCheckFactory::name().into(),
+            config: raw.into(),
+        }])
+    };
+    let report = runner().run_view(graph.view(), &config(" ")).unwrap();
+    let mut dismissals = Dismissals::default();
+    let groups = report.groups(&dismissals, ReportOptions::default());
+    assert_eq!(groups.len(), 2);
+    assert!(
+        groups
+            .iter()
+            .all(|g| g.observations.len() == 2 && g.selected.len() == 1)
+    );
+    let key = groups[0].key.clone();
+    let Fact::Record(variants) = &key.finding.facts else {
+        panic!("typed enum facts")
+    };
+    assert!(variants.contains_key("Field"));
+    assert!(!variants.contains_key("location"));
+    assert_ne!(key, *groups[1].key);
+    dismissals
+        .dismiss(key.clone(), "known field".into())
+        .unwrap();
+    let replay = runner().run_view(graph.view(), &config(" { } ")).unwrap();
+    assert_eq!(report, replay);
+    assert_eq!(
+        replay.groups(&dismissals, ReportOptions::default()).len(),
+        1
+    );
+    append(
+        &mut graph,
+        &[node(
+            "A",
+            Body::from([
+                ("first".into(), "done".into()),
+                ("second".into(), "done".into()),
+            ]),
+            Some(Existing(ids[1])),
+        )],
+    );
+    let after = runner().run_view(graph.view(), &config("{}")).unwrap();
+    assert!(
+        after
+            .groups(&dismissals, ReportOptions::default())
+            .is_empty()
+    );
+    assert_eq!(
+        after
+            .groups(
+                &dismissals,
+                ReportOptions {
+                    selection: ReportSelection::History,
+                    include_dismissed: true,
+                    ..Default::default()
+                }
+            )
+            .len(),
+        2
+    );
+    assert!(dismissals.restore(&key));
+    assert_eq!(after.warnings().count(), 4);
 }

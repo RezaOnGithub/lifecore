@@ -151,23 +151,24 @@ fn index_range_selects_prefixes_without_cropping_membership() {
 #[test]
 fn normalized_diagnostics_retain_boundaries_severity_and_relevance() {
     let (graph, ids) = graph();
-    let analyzer = DagCheck {
-        config: config(),
-        raw_config: "{}".into(),
-    };
-    let output = analyzer.analyze(graph.view());
+    let analyzer = DagCheck { config: config() };
+    let output = analyzer.analyze(graph.view(), &Default::default()).unwrap();
     let warning = output.warnings().next().unwrap();
-    assert_eq!(warning.offending_event.view.end, 6);
-    assert_eq!(warning.offending_event.entry, Some(ids[0]));
-    assert_eq!(warning.relevance, ids);
+    assert_eq!(warning.offending_event.unwrap().view.end, 6);
+    assert_eq!(warning.offending_event.unwrap().entry, Some(ids[0]));
+    assert_eq!(warning.relevance, ids.into_iter().collect());
     let analyzer = DagCheck {
         config: DagCheckConfig {
             on_cycle: CycleDisposition::Inconsistency,
             ..config()
         },
-        raw_config: "{}".into(),
     };
-    assert!(analyzer.analyze(graph.view()).has_error());
+    assert!(
+        analyzer
+            .analyze(graph.view(), &Default::default())
+            .unwrap()
+            .has_error()
+    );
 }
 
 #[test]
@@ -214,4 +215,99 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
     ];
     assert!(prepare(&graph, &changes, &mut runner).is_err());
     assert!(graph.view().is_empty());
+}
+
+#[test]
+fn cycle_keys_normalize_configuration_and_group_state_observations_without_inventing_resolution() {
+    use lifecore::analysis::presentation::{Dismissals, ReportOptions, ReportSelection};
+    let (mut graph, ids) = graph();
+    prepare(&graph, &[node("Unrelated")], &mut AnalysisRunner::default())
+        .unwrap()
+        .commit(&mut graph)
+        .unwrap();
+    let config = |raw: &str| {
+        SuiteConfig(vec![Config {
+            name: DagCheckFactory::name().into(),
+            config: raw.into(),
+        }])
+    };
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(DagCheckFactory))
+        .unwrap();
+    let plain = runner
+        .run_view(graph.view(), &config(r#"{"on_cycle":"warning"}"#))
+        .unwrap();
+    let normalized = runner
+        .run_view(
+            graph.view(),
+            &config(r#"{ "range": {}, "filter": {}, "on_cycle": "warning" }"#),
+        )
+        .unwrap();
+    assert_eq!(plain, normalized);
+    let mut dismissals = Dismissals::default();
+    let groups = plain.groups(&dismissals, ReportOptions::default());
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].observations.len(), 2);
+    assert_eq!(
+        groups[0].key.finding.subjects,
+        ids.iter().copied().collect()
+    );
+    let key = groups[0].key.clone();
+    dismissals
+        .dismiss(key.clone(), "expected loop".into())
+        .unwrap();
+    assert!(
+        normalized
+            .groups(&dismissals, ReportOptions::default())
+            .is_empty()
+    );
+    let filtered = runner
+        .run_view(
+            graph.view(),
+            &config(r#"{"on_cycle":"warning","filter":{"node_types":["C","A","B","A"]}}"#),
+        )
+        .unwrap();
+    let filtered_again = runner
+        .run_view(
+            graph.view(),
+            &config(r#"{"filter":{"node_types":["A","B","C"]},"on_cycle":"warning"}"#),
+        )
+        .unwrap();
+    assert_eq!(filtered, filtered_again);
+    assert_ne!(filtered.warnings().next().unwrap().key, key);
+    prepare(
+        &graph,
+        &[Change::AddNode {
+            ty_name: "A2".into(),
+            body: Body::new(),
+            parent: Some(Existing(ids[0])),
+        }],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap()
+    .commit(&mut graph)
+    .unwrap();
+    let after = runner
+        .run_view(graph.view(), &config(r#"{"on_cycle":"warning"}"#))
+        .unwrap();
+    assert!(dismissals.restore(&key));
+    assert!(
+        after
+            .groups(&dismissals, ReportOptions::default())
+            .is_empty()
+    );
+    assert_eq!(
+        after
+            .groups(
+                &dismissals,
+                ReportOptions {
+                    selection: ReportSelection::History,
+                    ..Default::default()
+                }
+            )
+            .len(),
+        1
+    );
+    assert_eq!(after.warnings().count(), 2);
 }

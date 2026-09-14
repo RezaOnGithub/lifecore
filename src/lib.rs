@@ -28,7 +28,11 @@ pub enum LifeCoreError {
         message: String,
     },
     #[error("analysis emitted blocking inconsistencies")]
-    SystemsError(Vec<analysis::Inconsistency>),
+    SystemsError(Vec<analysis::Observation>),
+    #[error(transparent)]
+    AnalyzerExecution(Box<analysis::ExecutionFailure>),
+    #[error("invalid output from analyzer {analyzer:?}: {message}")]
+    InvalidAnalyzerOutput { analyzer: String, message: String },
 }
 
 #[cfg(test)]

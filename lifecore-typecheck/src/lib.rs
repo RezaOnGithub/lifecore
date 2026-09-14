@@ -1,45 +1,55 @@
 use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, Inconsistency, InnerMessageType, InnerOutput, Message,
-        MessageType, Output, Warning,
+        Analyzer, AnalyzerFactory, AnalyzerIdentity, EvaluationInputs, Fact, Finding,
+        InnerMessageType, InnerOutput, Message, MessageKind, MessageType, ObservationScope, Output,
+        TypedAnalyzer,
     },
     typing::{FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition},
 };
+use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum TypeCheckMessage {
     MalformedDeclaration {
+        #[serde(skip)]
         location: DiagnosticLocation,
         error: SchemaError,
     },
     ReservedTypeName {
+        #[serde(skip)]
         location: DiagnosticLocation,
     },
     DuplicateType {
+        #[serde(skip)]
         location: DiagnosticLocation,
         name: String,
     },
     MissingType {
+        #[serde(skip)]
         location: DiagnosticLocation,
         name: String,
     },
     UnknownOverrideType {
+        #[serde(skip)]
         location: DiagnosticLocation,
         name: String,
     },
     Field {
+        #[serde(skip)]
         location: DiagnosticLocation,
         issue: FieldIssue,
     },
     BadEdgeEndpoint {
+        #[serde(skip)]
         location: DiagnosticLocation,
         edge_type: String,
         node_type: String,
         outgoing: bool,
     },
     BadOverride {
+        #[serde(skip)]
         location: DiagnosticLocation,
         parent_type: String,
         child_type: String,
@@ -117,17 +127,26 @@ impl InnerOutput<TypeCheckMessage> for TypeCheckOutput {
 }
 
 #[derive(Default)]
-pub struct TypeCheck {
-    config: String,
-}
+pub struct TypeCheck {}
 
-impl Analyzer for TypeCheck {
+impl TypedAnalyzer for TypeCheck {
     type MSG = TypeCheckMessage;
     type OUTPUT = TypeCheckOutput;
-    fn initialize_inner(&mut self) -> Self::OUTPUT {
-        TypeCheckOutput::default()
+    fn identity(&self) -> AnalyzerIdentity {
+        AnalyzerIdentity {
+            name: TypeCheckFactory::name().into(),
+            version: "1".into(),
+            configuration: Fact::Record(BTreeMap::new()),
+        }
     }
-    fn analyze_inner(&self, view: View<'_>) -> Self::OUTPUT {
+    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String> {
+        Ok(TypeCheckOutput::default())
+    }
+    fn analyze_inner(
+        &self,
+        view: View<'_>,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Self::OUTPUT, String> {
         use TypeCheckMessage::*;
         let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
         let mut output = TypeCheckOutput::default();
@@ -247,7 +266,7 @@ impl Analyzer for TypeCheck {
                 });
             }
         }
-        output
+        Ok(output)
     }
     fn convert_report(&self, report: Self::OUTPUT) -> Output {
         Output(
@@ -257,31 +276,24 @@ impl Analyzer for TypeCheck {
                 .map(|finding| {
                     let location = finding.location();
                     let message = finding.description();
-                    match finding.ty() {
-                    MessageType::Warning => Message::Warning(Warning {
-                        offending_event: location,
-                        system_name: TypeCheckFactory::name().into(),
-                        system_config: self.config.clone(),
+                    Message {
+                        finding: Finding {
+                            code: "type_check".into(),
+                            subjects: location.entry.into_iter().collect(),
+                            facts: Fact::from_typed(&finding).expect("typed TypeCheck facts"),
+                        },
+                        offending_event: Some(location),
                         relevance: location.entry.into_iter().collect(),
                         message,
-                    }),
-                    _ => Message::Inconsistency(Inconsistency {
-                        offending_event: location,
-                        system_name: TypeCheckFactory::name().into(),
-                        system_config: self.config.clone(),
-                        message,
-                    }),
+                        kind: match finding.ty() {
+                        MessageType::Warning => MessageKind::Warning,
+                        _ => MessageKind::Inconsistency,
+                        },
+                        scope: ObservationScope::State,
                     }
                 })
                 .collect(),
         )
-    }
-    fn initialize(&mut self) -> Output {
-        let report = self.initialize_inner();
-        self.convert_report(report)
-    }
-    fn analyze(&self, view: View<'_>) -> Output {
-        self.convert_report(self.analyze_inner(view))
     }
 }
 
@@ -297,15 +309,16 @@ impl AnalyzerFactory for TypeCheckFactory {
         Self::name()
     }
     fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
-        if !matches!(config.trim(), "" | "{}") {
+        if !config.trim().is_empty()
+            && !serde_json::from_str::<BTreeMap<String, serde_json::Value>>(config)
+                .is_ok_and(|fields| fields.is_empty())
+        {
             return Err(LifeCoreError::InvalidAnalyzerConfiguration {
                 analyzer_name: Self::name().into(),
                 message: "TypeCheck accepts only an empty configuration".into(),
             });
         }
-        Ok(Box::new(TypeCheck {
-            config: config.into(),
-        }))
+        Ok(Box::new(TypeCheck::default()))
     }
 }
 

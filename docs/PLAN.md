@@ -1,6 +1,6 @@
 # Rust Sketch 02 Cleanup Plan
 
-Status: Stages 0–3 complete. Stages 4–6 remain planned.
+Status: Stages 0–4 complete. Stages 5–6 remain planned.
 
 ## 1. Outcome
 
@@ -78,8 +78,8 @@ Independent cleanup can proceed while an unrelated decision remains open.
 | Schema representation | Implemented in Stage 2. | Named field records carry `shape` and `presence`; shapes use `kind`, `element` for lists, and `fields` for records. No textual type-expression parser. |
 | Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
 | Plan persistence | Atomic plans retained and extracted in Stage 1. | Stage 2 uses one owned candidate, validates every prefix, and keeps writer exclusion through publication. Durable plan receipts remain Stage 5. |
-| Finding identity | Existing identity includes boundary, rendered text, raw configuration, and actions. | Specify a typed semantic key, its normalization, and which changes should invalidate a dismissal. Hashing must not define equality or silently merge collisions. |
-| Advisory presentation | Historical replay, current applicability, and user dismissal are distinct. | Exercise state warnings, transition suggestions, and splits. Decide the default report without treating non-emission or supersession as proof of resolution. |
+| Finding identity | Implemented in Stage 4; SPEC section 8. | Database, analyzer name/version, normalized configuration, category, code, exact subjects, and typed distinguishing facts. Ordinary boundaries, wording, inputs, and actions belong to observations; digests never define equality. |
+| Advisory presentation | Implemented in Stage 4; SPEC section 8. | Current state observations plus retained event advisories by default; full history is selectable. Persistent dismissal is separate. Retained events have unconfirmed current applicability; no generic resolution inference. |
 
 Stage 0 decisions: text, signed integers, booleans, and timestamps; nested lists
 and string-keyed records; no floats, sets, tuples, or unions. Lists have a declared
@@ -89,7 +89,7 @@ the fixed metatype decoder checks that vocabulary without a second schema DSL.
 TypeCheck remains configured, with its fixed built-in metatype available in an
 empty graph. Correctly shaped empty collections count as present. Plans persist
 atomically; every prefix remains checked and inspectable. SPEC/FILES reflect
-these choices. Finding identity and advisory defaults remain for Stage 4.
+these choices. Stage 4 subsequently settled finding identity and advisory defaults in SPEC section 8.
 
 Baseline at `5dbb719`: `cargo test --workspace` passed 119 unit tests and one
 doctest. Warnings include disabled `cfg(revise)`/`cfg(never)` tests, unused
@@ -292,7 +292,7 @@ The context-bound query representation and type-expression parser retired with
 their obsolete models. Stage 3 adds richer selection, comparison reports,
 and exports. Migrating the runner also removed its placeholder validation,
 panicking output conversion, redundant factory lookups, and diagnostic clones;
-Stage 4 still owns finding/observation identity, dismissal, and presentation.
+Stage 4 adds finding/observation identity, dismissal, and presentation.
 The reusable SCC algorithm and typed analyzer/factory boundary remain.
 
 File publication syncs the file and directory. A directory-sync failure after
@@ -328,9 +328,9 @@ semantics.
 
 ### Stage 4 — Simplify analyzer output and MessageUniverse
 
-- [ ] Preserve full-prefix execution, typed inner reports, explicit
+- [x] Preserve full-prefix execution, typed inner reports, explicit
   normalization, and dynamically dispatched analyzer implementations.
-- [ ] Centralize the typed-to-normalized wrapper methods if doing so removes
+- [x] Centralize the typed-to-normalized wrapper methods if doing so removes
   duplication from real implementations; do not make the adapter a project in
   its own right.
 - [x] Simplify runner registration/lookups with collection entry/get APIs and
@@ -344,33 +344,59 @@ semantics.
   concrete invariant checking where required. Replace the assertion-bearing
   `Into<LifeCoreError>` conversion with an explicit fallible/result-producing
   operation. Expected invalid input must not panic through an infallible API.
-- [ ] Separate a finding from the observations of it at particular boundaries.
+- [x] Separate a finding from the observations of it at particular boundaries.
   Record the evaluation context needed to interpret an observation.
-- [ ] Implement the chosen finding key and deterministic encoding. Deduplicate
+- [x] Implement the chosen finding key and deterministic encoding. Deduplicate
   identical observations separately from grouping a finding across boundaries.
   Retain semantic equality checks when hashes coincide.
-- [ ] Keep the acceptance gate on unfiltered inconsistencies and execution
+- [x] Keep the acceptance gate on unfiltered inconsistencies and execution
   errors. Dismissal and display filters must never affect it.
-- [ ] Replace generic staleness-based automatic resolution with explicit
+- [x] Replace generic staleness-based automatic resolution with explicit
   observation/report semantics. A historical finding is not "fixed" merely
   because an entry is superseded or the newest invocation does not emit it.
-- [ ] Reduce frontend behavior to grouping, joining dismissal records, report
+- [x] Reduce frontend behavior to grouping, joining dismissal records, report
   selection, and rendering. Keep restore usable for dismissals whose finding is
   not currently emitted; avoid carrying the old abbreviation namespace forward.
-- [ ] Route an explicitly requested suggested repair into a newly checked TOML
+- [x] Route an explicitly requested suggested repair into a newly checked TOML
   plan. Document-aware connection redistribution is backlogged with collections.
 
-Working proposal for the remaining Stage 4 examples: identity uses analyzer
-identity/version, normalized configuration, and typed distinguishing facts;
-ordinary evaluation boundaries, wording, and repair payloads do not automatically
-define finding identity. Repeated observations of one dismissed finding stay
-dismissed. A materially different finding must remain visible. Boundary-specific
-facts must include the relevant boundary deliberately.
+Stage 4 decisions: identity uses database/analyzer identity and version,
+normalized configuration, category, code, exact subjects, and typed facts.
+Boundaries, wording, evaluation inputs, and repair payloads belong to observations
+unless deliberately included as distinguishing facts. TypeCheck retains its typed
+variant/path/issue facts; DAG Check uses exact cyclic components and normalized
+configuration. Complete key equality controls grouping and dismissal, including
+on hash collisions. The default report shows current state observations and
+retained events with unconfirmed current applicability. No generic resolution
+state is inferred. SPEC section 8 and FILES record the full contract.
 
 Exit evidence: repeated historical observations can be grouped without losing
 their boundaries; dismiss/restore survives reload and cannot hide an
 inconsistency. Current and historical reports are distinguishable. Document the
 chosen default and any limitations for event-oriented analyzers.
+
+Stage 4 evidence: `cargo test --workspace` passes 70 unit tests. Scoped nightly
+formatting and strict Clippy pass for all three active packages. Regression
+coverage includes dynamic and typed analyzers, initialization plus empty-prefix
+execution order, fixed evaluation inputs and contextual execution failures,
+invalid future/foreign diagnostics, expected TypeCheck and DAG output,
+normalized configuration and finding keys, repeated observations, forced hash
+collisions, historical/current selection, dismissal file reload/restore and
+concurrent edits, unfiltered historical inconsistencies, and retained split
+advisories after reconnecting only one branch.
+
+The old message category wrappers and duplicate typed adapters are replaced by
+`MessageKind`, a shared `TypedAnalyzer` adapter, and explicit `Report` /
+`Observation` records. There is no revived MessageUniverse lifecycle or namespace.
+`analysis::presentation` supplies grouping, filtering, rendering, and atomic
+standalone dismissal storage. `analysis::repair::check` exports freshly checked
+ordered actions as TOML, preserving exact references, explicit revision intent,
+nested payloads, and nanosecond timestamps. It rejects stale revise intent,
+invalid aliases, foreign sources, out-of-profile timestamps, and historical
+analyzer failures without publication. The general TOML input adapter, executable,
+and durable plan receipts remain Stage 5; generated repair exports already cover
+the output side of the timestamp contract. Event applicability assessment remains
+an analyzer responsibility, not an automatic issue-resolution subsystem.
 
 ### Stage 5 — Implement explicit TOML check/apply and plan inspection
 
