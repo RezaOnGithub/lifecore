@@ -394,6 +394,36 @@ Querying a historical node does not make it current and does not redirect its ID
 to a descendant. An unavailable entry is reported as absent from the view, even
 if it exists later in the database.
 
+Stage 3 implements these operations on `View`, with selection and structured
+reports in `lifecore::inspection`. `NodeSelection` combines an optional exact
+type name, currentness, top-level field presence/absence/equality predicates,
+and a case-sensitive substring search across text values (including nested
+lists and records). Predicates are ANDed. Keys and type names are not searched;
+there is no field-path or textual query language. Empty collections are present.
+`EdgeSelection` selects an exact relationship type and currentness.
+Both selections default to current entries; `Historical` selects only stale
+entries and `All` includes both. Relationships retain direction and exact
+endpoints. Descendants exclude the starting revision; `ancestors` and
+`fresh_successors` include it when eligible. Entry collections use append order;
+ancestors run from the subject toward its root.
+
+`inspect` returns absence for unavailable identities. `inspection` produces a
+serializable, ordered snapshot with source/boundary, borrowed entries,
+currentness, and node type resolution, including typed resolution errors.
+An old node's type is interpreted in the requested view, just as with a direct
+`resolve_type` call; this does not assert that TypeCheck checks stale nodes.
+`before.compare(after)` requires the later view to extend the entire earlier
+history and reports appended entries plus changes to existing entries'
+currentness or type interpretation. It supports committed base/candidate
+comparisons and rejects unrelated sources, reversed boundaries, and divergent
+candidate suffixes. No freshness or resolved-type cache is retained.
+
+`View::to_dot` exports all visible history as deterministic Graphviz text.
+Revision links are dashed blue; ordinary directed edges are solid. Stale nodes
+and edges are gray. Labels contain positions, types, and node payloads with
+escaped text; position-based Graphviz names are local to the exported view.
+Inspection and export require neither a valid draft nor installed analyzers.
+
 ## 10. Examples
 
 ### 10.1 Revision

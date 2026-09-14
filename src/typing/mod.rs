@@ -1,7 +1,8 @@
 use crate::{Body, EntryId, Payload, PayloadKind, View};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FieldStatus {
     Mandatory,
     Encouraged,
@@ -9,7 +10,7 @@ pub enum FieldStatus {
     Optional,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ValueType {
     Text,
     Number,
@@ -19,13 +20,13 @@ pub enum ValueType {
     Record(BTreeMap<String, FieldDecl>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FieldDecl {
     pub ty: ValueType,
     pub status: FieldStatus,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Type {
     pub name: String,
     pub body: BTreeMap<String, FieldDecl>,
@@ -34,13 +35,13 @@ pub struct Type {
     pub additional_override: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PathPart {
     Field(String),
     Index(usize),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FieldIssueKind {
     MissingMandatory,
     MissingEncouraged,
@@ -52,20 +53,20 @@ pub enum FieldIssueKind {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FieldIssue {
     pub path: Vec<PathPart>,
     pub kind: FieldIssueKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, thiserror::Error)]
 #[error("invalid schema at {path:?}: {kind:?}")]
 pub struct SchemaError {
     pub path: Vec<PathPart>,
     pub kind: SchemaErrorKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SchemaErrorKind {
     MissingField,
     UnknownField,
@@ -92,13 +93,13 @@ impl SchemaError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeDefinition {
     Builtin,
     Declared { id: EntryId, schema: Type },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum ResolutionError {
     #[error("type {name:?} has multiple active declarations")]
     Ambiguous { name: String, entries: Vec<EntryId> },

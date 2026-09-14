@@ -4,6 +4,7 @@ mod values;
 mod view;
 
 pub mod analysis;
+pub mod inspection;
 pub mod transaction;
 pub mod typing;
 

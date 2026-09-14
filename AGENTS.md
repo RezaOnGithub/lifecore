@@ -3,9 +3,10 @@
 LifeCore is an experimental Rust database with an append-only, typed graph.
 The cleanup direction and open decisions are in [docs/PLAN.md](docs/PLAN.md).
 `docs/SPEC.md` and `docs/FILES.md` describe proposed contracts, not necessarily
-current behavior. Stages 0–2 are complete: the old CLI/sidecars and context
-wrappers are removed. Values are scalars, lists, and records. Next are inspection,
-analyzer presentation, and TOML authoring. Document collections are backlogged.
+current behavior. Stages 0–3 are complete: the old CLI/sidecars and context
+wrappers are removed. Values are scalars, lists, and records. Bounded inspection,
+comparison, and Graphviz export are available through `View`. Next are analyzer
+presentation and TOML authoring. Document collections are backlogged.
 
 ## Compatibility
 

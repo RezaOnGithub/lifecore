@@ -1,6 +1,6 @@
 # Rust Sketch 02 Cleanup Plan
 
-Status: Stages 0–2 complete. Stages 3–6 remain planned.
+Status: Stages 0–3 complete. Stages 4–6 remain planned.
 
 ## 1. Outcome
 
@@ -289,7 +289,7 @@ separate suffix identities; committed handles survive reload unchanged.
 node/edge/analyzer plans. No implicit session or machine metadata is collected.
 
 The context-bound query representation and type-expression parser retired with
-their obsolete models. Stage 3 still owns richer selection, comparison reports,
+their obsolete models. Stage 3 adds richer selection, comparison reports,
 and exports. Migrating the runner also removed its placeholder validation,
 panicking output conversion, redundant factory lookups, and diagnostic clones;
 Stage 4 still owns finding/observation identity, dismissal, and presentation.
@@ -302,18 +302,29 @@ Stage 5 work. TypeCheck remains opt-in as agreed; no TOML executable is claimed.
 
 ### Stage 3 — Build inspection and simplify queries over View
 
-- [ ] Use the Stage 2 view API throughout inspection. Avoid parallel query
+- [x] Use the Stage 2 view API throughout inspection. Avoid parallel query
   contexts or a second freshness/type-resolution implementation.
 - [x] Remove the old textual query language and field-path syntax that no longer
   serve the reduced value model.
-- [ ] Provide direct selection by type/currentness, simple field filtering,
+- [x] Provide direct selection by type/currentness, simple field filtering,
   text search, relationship traversal, revision traversal, and view comparison.
-- [ ] Produce structured inspection output and a small graph export or viewer
+- [x] Produce structured inspection output and a small graph export or viewer
   that distinguishes revision relationships from ordinary edges.
 
 Exit evidence: a revision/split can be inspected at boundaries before, between,
 and after its appends. Missing future entries remain absent. Results have
 deterministic ordering. Draft errors do not disable committed-data inspection.
+
+Stage 3 evidence: `cargo test --workspace` passes 56 unit tests. Nightly
+formatting and strict core Clippy pass. Six inspection regressions cover
+before/between/after revision and split boundaries, exact relationship direction,
+literal field filtering and recursive text search, type reinterpretation,
+base/candidate comparisons, rejection of divergent sources, deterministic JSON
+and escaped Graphviz output, reloads, and inspection after draft/check failures.
+The implementation is `lifecore::inspection` plus methods on `View`; there is
+no inspection context, query parser, or frontend dependency. SPEC section 9
+records selection defaults, traversal ordering, comparison direction, and export
+semantics.
 
 ### Stage 4 — Simplify analyzer output and MessageUniverse
 
