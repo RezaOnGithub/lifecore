@@ -3,11 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, AnalyzerIdentity, EvaluationInputs, Fact, Finding,
-        InnerMessageType, InnerOutput, Message, MessageKind, MessageType, ObservationScope, Output,
-        TypedAnalyzer,
+        Analyzer, AnalyzerFactory, EvaluationInputs, InnerMessageType, InnerOutput, Message,
+        MessageKind, MessageType, Output, TypedAnalyzer,
     },
 };
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -286,6 +286,11 @@ impl InnerOutput<DagCheckMessage> for DagCheckOutput {
     }
 }
 
+#[derive(Serialize)]
+enum DagFinding<'a> {
+    CyclicComponent(&'a CyclicComponent),
+}
+
 pub struct DagCheck {
     config: DagCheckConfig,
 }
@@ -323,11 +328,9 @@ impl DagCheck {
     fn convert_message(&self, message: DagCheckMessage) -> lifecore::analysis::Message {
         let text = Self::message_text(&message.component);
         Message {
-            finding: Finding {
-                code: "cyclic_component".into(),
-                subjects: message.relevance.iter().copied().collect(),
-                facts: Fact::from_typed(&message.component).expect("typed cycle facts"),
-            },
+            analyzer_key: serde_json::to_string(&DagFinding::CyclicComponent(&message.component))
+                .expect("typed cycle finding"),
+            subjects: message.relevance.iter().copied().collect(),
             offending_event: Some(message.location),
             relevance: message.relevance.into_iter().collect(),
             message: text,
@@ -335,7 +338,7 @@ impl DagCheck {
             CycleDisposition::Inconsistency => MessageKind::Inconsistency,
             CycleDisposition::Warning => MessageKind::Warning,
             },
-            scope: ObservationScope::State,
+            retain_in_current_report: false,
         }
     }
 }
@@ -344,12 +347,8 @@ impl TypedAnalyzer for DagCheck {
     type MSG = DagCheckMessage;
     type OUTPUT = DagCheckOutput;
 
-    fn identity(&self) -> AnalyzerIdentity {
-        AnalyzerIdentity {
-            name: DagCheckFactory::name().into(),
-            version: "1".into(),
-            configuration: Fact::from_typed(&self.config).expect("normalized DAG configuration"),
-        }
+    fn version(&self) -> Version {
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
     }
     fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String> {
         Ok(DagCheckOutput(Vec::new()))

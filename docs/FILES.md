@@ -1,7 +1,10 @@
 # LifeCore Lite Authoring Files
 
-Status: proposed authoring contract. Stage 4 implements checked suggested-repair
-export; general TOML input, the executable, and durable receipts remain Stage 5.
+Status: proposed authoring contract. Stages 0–4 and the review checkpoint before
+stage 5 are complete. Libraries provide serialization and checked in-memory
+suggestions. Stage 5 creates `lifecore-cli` for all file envelopes, persistence,
+TOML import/export, timestamp conversion, and durable application receipts.
+Concrete storage layout remains a stage 5 decision.
 
 Current cleanup scope is TOML change files and bounded inspection. Markdown
 document collections are backlogged in [PLAN.md](PLAN.md#7-backlog--markdown-document-collections).
@@ -70,8 +73,9 @@ the interpreters needed for historical validation, as required by SPEC.md.
 
 Native TOML offset datetimes and `jiff::Timestamp` overlap, but neither can
 represent every value of the other. The following authoring restrictions are
-proposed for `toml-basic-v1`. Suggested-repair export implements the output half;
-the lossless input adapter remains Stage 5 work.
+proposed for `toml-basic-v1`. Both input and output adapters belong to stage 5's
+CLI. The review checkpoint removed the stage 4 library exporter; its earlier
+tests are historical evidence, not a current export API.
 
 - Require a complete date and time with `Z` or a numeric offset. Local dates,
   local times, and local datetimes cannot supply an instant without additional
@@ -114,7 +118,7 @@ The restrictions address concrete representation differences:
 Jiff's default Serde implementation serializes a string and deserializes a
 string; it is not a native TOML datetime adapter. The importer/exporter must
 explicitly bridge TOML datetime values and `Timestamp`. A quoted datetime in a
-payload remains ordinary text. Existing tagged JSON persistence uses Jiff's
+payload remains ordinary text. The library's tagged JSON serialization uses Jiff's
 string representation under `kind = "precise_time"` and can retain timestamps
 outside the TOML profile. The core `PreciseTime(Timestamp)` variant currently
 does not enforce the narrower authoring range. Supporting every core timestamp
@@ -200,11 +204,13 @@ the author.
 There is no implicit lookup by title, root, path, or "latest descendant" in a
 change file. Search and selection helpers must materialize exact references.
 
-Stage 4's repair exporter writes existing handles as `@<origin-uuid>:<position>`
-and uses `$repair_<operation-index>` for earlier proposed nodes. The envelope's
-database is the actual UUID and `base` is the exclusive committed entry count.
-These spellings preserve exact identity across reloads and independent
-candidates; positions alone are not a reference identity in the Rust model.
+The Rust model uses an origin UUID plus a position for exact entry identity;
+positions alone cannot identify independently prepared suffixes. The stage 4
+exporter used `@<origin-uuid>:<position>` and `$repair_<operation-index>`, with the
+actual database UUID and exclusive entry count in the envelope. That exporter
+was removed at the review checkpoint. Stage 5 must preserve exact identities
+when selecting the CLI encoding; these spellings remain a possible choice,
+not an implemented library file contract.
 
 ### 2.4 Node and edge operations
 
@@ -239,14 +245,19 @@ into one proposed edge before producing the file.
 
 ## 3. Planning, checking, and applying
 
-Stage 4 provides `lifecore::analysis::repair::check` for an explicitly selected
-suggestion. It returns a newly checked `PreparedTransaction` and deterministic
-TOML describing the same ordered actions, complete payloads, and revision intent.
-The caller can inspect each candidate prefix, save the TOML for review, or
-explicitly commit the prepared transaction through the existing memory/Store
-path. Checking does not apply the repair. Editing or later loading that TOML
-requires the general parser and a new check, implemented in Stage 5. The
-exported `plan_id` is not yet a durable application receipt or retry guarantee.
+The library provides
+`lifecore::analysis::repair::prepare_suggestion(graph, observation, runner)` for
+an explicitly selected suggestion. It returns a freshly checked
+`PreparedTransaction`; callers inspect candidate prefixes and explicitly commit
+in memory. Source identity, exact references, revision intent, and every-prefix
+checking remain library responsibilities. There is no plan ID, file envelope,
+TOML string, or export-specific timestamp restriction in this API.
+
+Stage 5's `lifecore-cli` owns authoring envelopes and graph/report/dismissal
+persistence, imports and exports TOML, converts timestamps, and publishes durable
+receipts. It uses the shared preparation and validation paths. No compatibility
+reader or migration from earlier sketch formats is required. The concrete
+storage layout is deliberately left to that stage.
 
 The basic workflows are:
 
@@ -274,14 +285,30 @@ The report must include:
 - Type-presence warnings and analyzer diagnostics without treating them as
   implicit repairs.
 
-Analyzer identities/versions, configuration, explicit evaluation inputs such as
-time, format/schema interpreters, and plan content are part of the check
-context. A check receipt must record this context. An old successful check is
-not authorization to ignore changes to it.
+Analyzer identities, exact `semver::Version` values, original configuration
+strings, ordered suite, explicit evaluation inputs, format/schema interpreters,
+and plan content are part of the check context. `EvaluationInputs` contains
+`evaluation_time: Option<jiff::Timestamp>` and defaults to `None`. A frontend may
+explicitly choose a time before checking; the library runner and analyzers never
+read a clock implicitly. Freeze the inputs across initialization and every
+replayed prefix. An analyzer requiring time errors when it is absent. A receipt
+records this context; an old check cannot authorize ignoring changes to it.
+
+Stored reports retain `evaluated_view: None` for initialization and `Some` for
+an exact prefix, including empty prefix zero. Views cover `[0, end_exclusive)`.
+Finding keys compare database identity, registered analyzer name, exact version,
+original configuration string, category, and complete opaque analyzer key.
+Behaviorally equivalent configuration spellings remain distinct identities.
+Ordinary boundaries, wording, time, and suggested actions belong to observations.
+Dismissal records retain their exact key, reason (`Acknowledged`, `FalsePositive`,
+or `NoLongerRelevant`), and optional note. Persistence must not normalize these
+identities or turn dismissal into resolution or a transaction-acceptance rule.
 
 `apply` freezes the file, verifies the database identity and expected base, and
 repeats a full preflight before appending. The default rejects a changed head;
-there is no implicit rebase. A newer evaluation context requires a new check
+there is no implicit rebase. Matching boundary/head numbers alone are insufficient:
+also reject changed original entry contents and changed ordered analyzer suites.
+A newer evaluation context requires a new check
 result to be presented, rather than claiming the earlier result still applies.
 During application the selected context remains fixed.
 
@@ -625,6 +652,25 @@ branches from historical predecessors.
 
 ### 8.1 Receipts and atomic publication
 
+These requirements belong to stage 5's CLI, including the safeguards previously
+exercised by library stores in stages 1–4. The libraries now expose only in-memory
+transactions and Serde support. Storage layout and envelope encoding are open.
+
+- Exclude cooperating writers from exact base verification through publication;
+  two candidates prepared against one base cannot both replace it.
+- Initialize without clobbering an existing database, and run structural plus
+  configured analyzer checks before publishing an imported graph.
+- Publish a whole checked plan atomically. Failures before publication preserve
+  the previous stored state. Flush/synchronize required data before publication
+  and synchronize the containing storage after publication.
+- Distinguish post-publication synchronization failure from rollback: the new
+  state may already be visible, so acknowledgment can be uncertain.
+- Reload graph, report, and dismissal data without changing exact identities.
+  Dismiss/restore survives reload and absent current emission. Concurrent dismissal
+  edits reread under writer exclusion and preserve other writers' records.
+- Recover retries after uncertain acknowledgment using a durable application
+  receipt; never append the same plan twice or accept a reused ID with changed content.
+
 Persist the frozen plan identity, check context, and assigned operation IDs in
 the same atomic publication as the graph. A workspace-only journal written after
 commit cannot close the crash window. Receipts are auxiliary persistence
@@ -636,7 +682,7 @@ Retrying an identical completed plan returns its receipt without appending again
 reusing its identity with different content is an error. Verify identity/content
 and look up the receipt before checking the original expected base, since a
 successful application has itself advanced that base. Safe retries and receipts
-are implemented with TOML authoring in Stage 5.
+are required of `lifecore-cli` in stage 5 and are not implemented yet.
 
 ### 8.2 Source edits and file writeback
 
@@ -690,7 +736,11 @@ exceptions to the core contract.
 | Nanosecond timestamp is exported and imported with a different offset spelling | Preserve the exact instant and equality; spelling need not survive. |
 | Quoted timestamp text or local datetime appears in a payload | Keep quoted text as text; reject the local datetime without assuming a timezone. |
 | Database identity differs despite matching IDs/count | Reject before mutation. |
-| Head advances between planning and apply | Reject stale base; require refresh/replan. |
+| Head advances between planning and apply, or entries/suite change without an append | Reject the exact stale base; require refresh/replan. |
+| Initialization targets an existing database | Refuse without clobbering it. |
+| Publication fails before replacement | Leave prior state intact. |
+| Synchronization fails after publication | Report possible publication and recover through receipts. |
+| Dismissal is saved, reloaded, restored, or edited by concurrent frontends | Retain exact keys/reasons/notes and preserve each writer's update; never affect acceptance. |
 | Writer advances the base during checking | Reject under writer exclusion before publishing any operation. |
 | Analyzer changes, disappears, fails, or receives a new evaluation time | Invalidate the old check; never silently skip it. |
 | Schema migration is valid only at the final view | Reject the first invalid prefix. |
@@ -727,8 +777,9 @@ ordinary and typed/incoming links, and authority reconciliation are backlogged.
 When collection work resumes, collection mutation should not ship with silent
 fallback behavior for unfinished recovery cases.
 
-This proposal deliberately leaves the storage engine, concrete schema language,
-workspace/manifest physical encoding, and UI toolkit open. Those choices must
-implement the contracts above. Optional future conveniences include patch-based
+Stage 5 selects the CLI storage envelopes and concrete layout; the library has
+no persistence machinery. Collection workspace/manifest layout and UI choices
+remain open for the later collection round. These choices must implement the
+contracts above. Optional future conveniences include patch-based
 draft generators, interactive ordering, and merge assistance. They must not change exact endpoints, invent an automatic
 winner after a split, or hide invalid intermediate views.

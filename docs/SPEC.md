@@ -40,7 +40,9 @@ checks pass, or committed history remains unchanged. Existing entries cannot be
 edited or deleted through the mutation interface.
 
 The empty history and every entry prefix are inspection boundaries, including
-prefixes inside a committed plan. A view fixes one exclusive boundary and source.
+prefixes inside a committed plan. A view fixes a source and `end_exclusive`,
+containing positions `[0, end_exclusive)`. Prefix zero is an empty graph view;
+`View::prefix(end_exclusive)` only narrows the visible boundary.
 Every proposed prefix passes structural validation. The configured analyzers,
 including TypeCheck when installed, replay every historical prefix under fixed
 evaluation inputs. Checking only the final graph is insufficient.
@@ -333,18 +335,29 @@ invalid endpoint permissions at its creation.
 
 ### 7.4 Failure and persistence
 
-A failure before publication discards the proposed ordered plan without changing
-committed history. A failure after atomic replacement can leave publication or
-durability uncertain; report that distinction and recover from stored state and
-plan receipts rather than blindly repeating appends. Staged objects must not
-expose mutable aliases capable of changing committed payloads.
+The libraries own structural validation, analysis, serialization, and atomic
+in-memory transactions. `transaction::prepare` stages one candidate and checks
+every prefix. `PreparedTransaction::commit` replaces the receiver only when its
+database identity, original entry count and contents, and original ordered
+analyzer suite exactly match the prepared base. The candidate already retains
+the original entry prefix; only the original suite needs a separate snapshot.
+There is no serialized-state fingerprint or digest-based acceptance guard.
+Every failed core mutation leaves its receiver unchanged.
 
-Hooks, database constraints, and in-process staging are possible enforcement
-mechanisms. None changes the validity contract. An implementation must not
-assume imported or externally modified history is valid merely because its
-normal write path runs validation. Checking only the final current graph does
-not establish the validity of all historical prefixes. Import and integrity
-checking must preserve the same prefix and transition rules.
+Graph deserialization validates structural integrity before exposing traversal.
+A structurally valid import remains inspectable without installed analyzers;
+preparing any transaction still requires the configured analyzers and full replay.
+Deserializing a report does not certify a new transaction.
+
+The libraries have no filesystem stores, storage envelopes, publication errors,
+or TOML adapters. Stage 5 introduces `lifecore-cli` to own graph/report/dismissal
+persistence and durable receipts. It must preserve writer exclusion, exact
+stale-base rejection, no-clobber initialization, and atomic publication. Failures
+before publication leave stored state unchanged; synchronization failures after
+publication must report that state may already be visible. Safe retries after
+uncertain acknowledgment require receipts published atomically with the graph.
+The concrete storage layout is a stage 5 decision; FILES records acceptance
+requirements without implementing them in the libraries.
 
 ## 8. Analyzers
 
@@ -364,123 +377,135 @@ Diagnostics distinguish:
   separate transaction subject to the same checks.
 
 An analyzer must give deterministic results for the same view, configuration,
-and explicit evaluation inputs. Time-dependent rules should receive an
-evaluation time instead of reading an implicit wall clock. Missing configured
+and explicit evaluation inputs. Time-dependent rules must receive an
+explicit evaluation time and return an error when it is absent. Neither an analyzer
+nor the runner may implicitly read the clock. Missing configured
 analyzers or analyzer execution failures are errors, not successful checks.
 
 ### 8.1 Execution and normalization
 
-The Stage 4 API separates `TypedAnalyzer` from the object-safe `Analyzer`.
-A shared adapter runs typed initialization/analysis and calls the implementation's
-explicit `convert_report`; direct third-party `dyn Analyzer` implementations are
-also supported. Factories and domain findings remain in their analyzer packages.
-The normalized output is a `Message` with a typed `MessageKind`, semantic finding,
-optional diagnostic location, relevance set, text, and observation scope.
+`TypedAnalyzer` retains analyzer-specific typed findings and reports. A shared
+adapter calls the implementation's explicit `convert_report`; direct third-party
+`dyn Analyzer` implementations are also supported. Factories and domain findings
+remain in their analyzer packages. Shared `Message` output contains an opaque
+`analyzer_key: String`, exact subjects, optional diagnostic location, relevance
+set, text, `MessageKind`, and `retain_in_current_report: bool`.
 
-`AnalysisRunner::new(EvaluationInputs)` freezes evaluation inputs for a run;
-the default supplies an empty record. Inputs can include a timestamp, and are
-supplied to both initialization and each bounded invocation. All configured
-implementations are constructed first, then initialized in suite order, then
-each replays boundaries `0..=end` in suite order. Empty histories still execute
-initialization and boundary zero. Missing factories, invalid configuration,
-execution failures, and malformed normalized output are errors. Execution
-failures carry implementation identity, evaluation inputs, and invocation.
+Both analyzer traits return `version() -> semver::Version`. The runner constructs
+`AnalyzerIdentity` from the registered name, returned version, and original
+configuration string supplied to the factory unchanged. Version equality is
+exact, including prerelease and build metadata; it is not version-requirement
+matching. TypeCheck and DAG Check parse their own `CARGO_PKG_VERSION`. Semantic
+or encoding changes intended to invalidate earlier dismissals require a version
+change.
 
-Initialization has no graph access or graph diagnostic location. Every location
-in replay output must identify an actual prefix of that invocation, with its
-subject visible there. Finding subjects and relevance entries must be visible
-within the invocation. TypeCheck and DAG Check use implementation version `1`;
-semantic or normalization changes that should invalidate existing dismissals
-must change that version.
+`AnalysisRunner::new(EvaluationInputs)` freezes one input value for initialization
+and every replayed prefix. Its complete shape is:
+
+```rust
+pub struct EvaluationInputs {
+    pub evaluation_time: Option<jiff::Timestamp>,
+}
+```
+
+The default is `None`. No clock is read implicitly; a time-dependent analyzer
+must error when the required time is absent. All configured implementations are
+constructed first, initialized in suite order, then each replays boundaries
+`0..=end_exclusive` in suite order. Empty histories execute both initialization
+and prefix zero. Missing factories, invalid configuration, execution failures,
+and malformed subject/location output are errors.
+
+An observation or execution failure records `evaluated_view: Option<ViewId>`.
+`None` means initialization; `Some(view)` identifies the exact evaluated prefix,
+including zero. Failures also retain analyzer identity and frozen inputs.
+Initialization has no graph access or graph diagnostic location. Every replay
+location must identify an actual prefix of the evaluated view, with its subject
+visible there. Message subjects and relevance must be visible in the evaluated
+view. Initialization therefore cannot name graph entries.
 
 ### 8.2 Finding identity and observations
 
-`FindingKey` consists of database identity, analyzer name/version, normalized
-configuration, message category, finding code, exact subject identities, and
-typed distinguishing facts. `Fact` retains nulls, booleans, exact integers,
-text, ordered lists, and sorted string-keyed records. Serialized domain enum
-tags remain facts, rather than rendered descriptions. Analyzers normalize their
-domain sets explicitly; subjects and relevance are sets of exact entry IDs.
+`FindingKey` has four fields: database identity, `AnalyzerIdentity`, message
+category, and `analyzer_key: String`. The string is the complete analyzer-owned
+finding identity, opaque to shared orchestration. There is no shared `Fact`,
+nested `Finding`, versioned key envelope, or digest helper. Grouping and dismissal
+compare complete keys, including the entire string; hashes are only collection
+implementation details and collisions do not establish equality.
 
-TypeCheck normalizes empty text and empty JSON objects to the same empty
-configuration. Its finding facts retain the typed variant, path, issue kind,
-and other variant details; the exact diagnostic subject is in the subject set.
-Its ordinary diagnostic boundary is excluded. DAG Check normalizes parsed
-configuration, including set order/duplicates and empty filter/range records.
-Cycle facts contain the sorted exact node and edge identities of the component.
-A change in that component or configured filter produces a different key.
+Configuration identity preserves exact original spelling. TypeCheck may accept
+empty text and empty JSON objects as equivalent behavior, but `""`, `" "`, and
+`"{}"` identify different configurations. DAG Check may normalize its parsed sets
+and empty filter/range records internally; order, duplicate, or whitespace
+changes in the original string still produce distinct analyzer identities.
 
-An ordinary evaluation boundary, evaluation time, wording, relevance ordering,
-or repair payload does not by itself change finding identity. When a boundary,
-time threshold, or transition distinguishes the actual issue, the analyzer
-must deliberately include it in the facts. Different subjects, distinguishing
-facts, versions, or normalized configurations stay distinct. Repeated
-observations of a dismissed key remain dismissed.
+Built-ins deterministically JSON-encode their typed variants and distinguishing
+details. TypeCheck includes the variant, typed path/issue or schema details, and
+exact diagnostic subject while skipping the ordinary location boundary. DAG
+Check includes the cyclic-component variant and sorted exact node/edge identities.
+Typed domain data stays inside each analyzer; presentation wording is not a key.
 
-`FindingKey::encoding` is the UTF-8 prefix `lifecore.finding.v1` followed by a
-NUL byte and compact Serde JSON of the typed key. Struct/variant field order,
-record key order, integer encoding, subject ordering, and list order are part
-of this encoding. BLAKE3 digests are display/index aids, never equality or
-dismissal authority. Grouping compares full keys even when hashes collide.
+Ordinary evaluation boundaries, evaluation time, wording, relevance ordering,
+and suggested actions do not by themselves change finding identity. When a time
+threshold or transition distinguishes an issue, the analyzer must deliberately
+include that detail in its local key. Different subjects, distinguishing details,
+versions, original configuration strings, categories, or databases stay distinct.
+Repeated observations of a dismissed key remain dismissed.
 
-An `Observation` records the key, frozen evaluation inputs, initialization or
-prefix invocation, and complete normalized diagnostic, including its location,
-wording, scope, and ordered repair actions. Equality of this entire observation
-controls deduplication; grouping by key is separate and retains all distinct
-boundaries and observations. Duplicate configurations still execute in full.
-`Report` retains the selected view and ordered implementation identities even
-when no messages were emitted. Reports can be serialized for later inspection;
-reloading one is not a substitute for checking a new transaction.
+The runner consumes each `Message`, moves its local key into `FindingKey`, and
+stores occurrence and presentation fields directly on `Observation`: frozen
+inputs, evaluated view, subjects, location, relevance, wording, kind/actions, and
+retention flag. It retains no second nested diagnostic containing the same key.
+Whole-observation equality controls deduplication; grouping by finding key is
+separate and retains distinct boundaries and presentation. Duplicate suite entries
+still execute in full. `Report` retains the selected view, inputs, and ordered
+implementation identities even when no messages were emitted. Reports support
+Serde round trips; their persistence belongs to the CLI.
 
 ### 8.3 Presentation and dismissal
 
-The default report selects current state observations, initialization output,
-and retained event advisories. A state observation is current only when emitted
-at the report's selected boundary. `ObservationScope::Event` preserves a
-transition advisory in the default report after unrelated appends; rendering
-labels it as historical with current applicability unconfirmed. An event
-analyzer must choose that scope explicitly. History mode selects observations
-at every replayed boundary. Groups expose both all observations and the selected
-ones, in deterministic first-emission order.
+The default report selects initialization output, observations emitted at the
+selected boundary, and advisories with `retain_in_current_report = true`.
+Retained advisories from earlier prefixes are labeled historical with current
+applicability unconfirmed. The flag does not mean that a finding still applies,
+has been resolved, or should be automatically repaired. History mode selects all
+replayed observations. Groups expose all observations and the selected subset in
+deterministic first-emission order.
 
-No generic resolution status is inferred. A missing-field warning that is no
-longer emitted remains in history. Superseding a subject does not erase its
-observations. Reconnecting one split branch does not establish that the other
-branch should receive the same connection or that the split advisory is fixed.
-Retained events remain until dismissed or excluded by report selection; a
-domain-specific assessment of current applicability is not implemented. Rules
-requiring that assessment should emit state findings with their own semantics.
+No generic resolution status is inferred. Non-emission, subject supersession,
+or reconnecting only one split branch cannot establish resolution. Historical
+observations remain available. An analyzer requiring a current-applicability
+assessment must express that assessment through its own domain semantics.
 
-`analysis::presentation` groups findings, joins exact-key dismissal records,
-selects reports, and renders text or serializable groups. `Dismissals` supports
-listing and restoring stored keys without requiring current emission.
-`DismissalStore` persists this separate frontend state as JSON, rereads under
-writer exclusion, and atomically replaces a synced file. It reports a directory
-sync failure after publication distinctly. No abbreviation namespace, attached
-draft, or persistent issue lifecycle is maintained.
+`analysis::presentation` groups, filters, and renders reports. `Dismissals` is
+serializable display state, with exact-key listing, lookup, dismissal, and restore
+even when the finding is not currently emitted. Each record has a
+`DismissalReason` (`Acknowledged`, `FalsePositive`, or `NoLongerRelevant`) and
+`note: Option<String>`. Updating a record replaces its reason and note. No reason
+establishes resolution. Dismissal file loading, writer exclusion, and atomic
+publication belong to `lifecore-cli` in stage 5; the library provides no store.
 
-All inconsistencies remain visible across history, regardless of advisory
-filters, current/history selection, or even imported dismissal records.
-Dismiss operations reject inconsistency keys. Transaction acceptance uses only
-the raw report's inconsistencies and execution errors, before presentation.
+All inconsistencies remain visible across history regardless of advisory filters,
+report selection, or imported dismissal records. Dismiss operations reject
+inconsistency keys. Transaction acceptance uses the unfiltered report and execution
+errors, independently of dismissal reasons, notes, or presentation.
 
 ### 8.4 Explicit suggested repairs
 
-`analysis::repair::check` takes a selected suggestion observation, a current
-base, a nonempty plan ID, and a runner. It freezes the observation's ordered
-actions and checks them anew with `transaction::prepare` under the runner's
-evaluation inputs, including historical and intermediate prefixes. Observation
-source identity must match the base history. Revision actions specify `revise`
-or `branch`; `revise` requires a current predecessor immediately before that
-operation. Exact existing references and earlier-operation references are kept.
+`analysis::repair::prepare_suggestion(graph, observation, runner)` returns
+`Result<PreparedTransaction, Error>` for an explicitly selected suggestion.
+Its ordered actions are checked anew with `transaction::prepare` under the
+runner's frozen evaluation inputs, including historical and intermediate prefixes.
+The observation source must match the supplied history. Exact existing references
+and earlier-operation references retain their meaning.
 
-The result contains deterministic TOML for the checked actions and a
-`PreparedTransaction` with inspectable intermediate views. Checking does not
-commit, infer reconnections, or dismiss the finding. The TOML exporter supports
-all core value shapes, native UTC timestamps within the authoring profile,
-and explicit aliases. General handwritten TOML parsing, the executable, and
-durable plan receipts remain Stage 5 work. See FILES for the generated envelope
-and timestamp boundary.
+Revision actions specify `revise` or `branch`; `revise` requires a current
+predecessor immediately before that action, including earlier actions in the
+same suggestion. A predecessor requires an intent and a root must omit it.
+The returned candidate and its prefixes can be inspected before explicit commit.
+Preparation neither applies the repair nor dismisses a finding or infers
+reconnections. All core values, including the full timestamp range, remain
+available. Plan IDs, TOML envelopes, timestamp conversion, persistence, and
+receipts belong to stage 5's CLI; there is no library export wrapper.
 
 ## 9. Inspection and queries
 
@@ -519,15 +544,20 @@ endpoints. Descendants exclude the starting revision; `ancestors` and
 ancestors run from the subject toward its root.
 
 `inspect` returns absence for unavailable identities. `inspection` produces a
-serializable, ordered snapshot with source/boundary, borrowed entries,
-currentness, and node type resolution, including typed resolution errors.
+serializable, ordered snapshot with source/boundary and `InspectedEntry` values.
+Each inspected entry directly holds its borrowed entry, `stale`, and the existing
+type-resolution result, including typed errors; there is no interpretation wrapper.
 An old node's type is interpreted in the requested view, just as with a direct
 `resolve_type` call; this does not assert that TypeCheck checks stale nodes.
-`before.compare(after)` requires the later view to extend the entire earlier
-history and reports appended entries plus changes to existing entries'
-currentness or type interpretation. It supports committed base/candidate
-comparisons and rejects unrelated sources, reversed boundaries, and divergent
-candidate suffixes. No freshness or resolved-type cache is retained.
+`base.compare(target)` requires the target to extend the entire base history,
+comparing exact entry identities and contents. `Comparison` exposes `base_view`
+and `target_view`. Added entries occupy
+`[base_view.end_exclusive, target_view.end_exclusive)`: comparing prefixes 3 and 5
+adds positions 3 and 4. Existing freshness or type changes are `EntryChange`
+values holding complete inspected entries as `at_base` and `at_target`.
+Comparisons support committed base/candidate views and reject unrelated sources,
+reversed boundaries, and divergent histories, even if boundary/head IDs match.
+No freshness or resolved-type cache is retained.
 
 `View::to_dot` exports all visible history as deterministic Graphviz text.
 Revision links are dashed blue; ordinary directed edges are solid. Stale nodes

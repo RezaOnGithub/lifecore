@@ -53,7 +53,7 @@ fn fixture() -> (LifeCoreList, Vec<EntryId>) {
 fn selection_and_exact_relationships_follow_each_split_boundary() {
     let (graph, ids) = fixture();
     let view = graph.view();
-    for (end, current, historical, descendants) in [
+    for (end_exclusive, current, historical, descendants) in [
         (3, vec![ids[0], ids[1]], vec![], vec![]),
         (4, vec![ids[1], ids[3]], vec![ids[0]], vec![ids[3]]),
         (
@@ -69,7 +69,7 @@ fn selection_and_exact_relationships_follow_each_split_boundary() {
             vec![ids[3], ids[4]],
         ),
     ] {
-        let at = view.prefix(end).unwrap();
+        let at = view.prefix(end_exclusive).unwrap();
         assert_eq!(
             at.select_nodes(&NodeSelection::default())
                 .map(|n| n.id)
@@ -95,7 +95,7 @@ fn selection_and_exact_relationships_follow_each_split_boundary() {
             .collect::<Vec<_>>();
         assert_eq!(
             incoming,
-            match end {
+            match end_exclusive {
             3 => vec![ids[2]],
             6 => vec![ids[5]],
             _ => vec![],
@@ -114,7 +114,7 @@ fn selection_and_exact_relationships_follow_each_split_boundary() {
             .collect::<Vec<_>>(),
             vec![ids[1]]
         );
-        assert_eq!(at.inspect(ids[4]).is_some(), end >= 5);
+        assert_eq!(at.inspect(ids[4]).is_some(), end_exclusive >= 5);
     }
     assert!(view.prefix(3).unwrap().descendants(ids[3]).next().is_none());
     assert!(
@@ -211,7 +211,7 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
         comparison
             .changed
             .iter()
-            .map(|c| c.entry)
+            .map(|c| c.at_base.entry.id())
             .collect::<Vec<_>>(),
         vec![ids[0], ids[2]]
     );
@@ -219,7 +219,7 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
         comparison
             .changed
             .iter()
-            .all(|c| !c.before.stale && c.after.stale)
+            .all(|c| !c.at_base.stale && c.at_target.stale)
     );
     assert!(middle.compare(before).is_err());
     let ty = Type::new(
@@ -243,9 +243,9 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     let comparison = graph.view().compare(plan.view()).unwrap();
     assert_eq!(comparison.changed.len(), 4);
     for change in comparison.changed {
-        assert_eq!(change.before.type_definition, Some(Ok(None)));
+        assert_eq!(change.at_base.type_definition, Some(Ok(None)));
         assert!(
-            matches!(change.after.type_definition, Some(Ok(Some(TypeDefinition::Declared {id, ..}))) if id == declaration)
+            matches!(change.at_target.type_definition, Some(Ok(Some(TypeDefinition::Declared {id, ..}))) if id == declaration)
         );
     }
     plan.commit(&mut graph).unwrap();
@@ -269,7 +269,6 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
             .unwrap()
             .inspect(ids[0])
             .unwrap()
-            .interpretation
             .type_definition,
         Some(Ok(None))
     );
@@ -332,10 +331,10 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
     assert!(dot.contains("quote\\\\\\\" slash\\\\\\\\ line\\\\n<angle>"));
     assert_eq!(dot, graph.view().to_dot());
     let json = serde_json::to_value(before.inspection()).unwrap();
-    assert_eq!(json["view"]["end"], 3);
+    assert_eq!(json["view"]["end_exclusive"], 3);
     assert_eq!(json["entries"].as_array().unwrap().len(), 3);
-    assert!(!before.inspect(ids[2]).unwrap().interpretation.stale);
-    assert!(graph.view().inspect(ids[2]).unwrap().interpretation.stale);
+    assert!(!before.inspect(ids[2]).unwrap().stale);
+    assert!(graph.view().inspect(ids[2]).unwrap().stale);
     let reload: LifeCoreList =
         serde_json::from_slice(&serde_json::to_vec(&graph).unwrap()).unwrap();
     assert_eq!(
@@ -379,5 +378,49 @@ fn failed_drafts_and_missing_analyzers_leave_committed_inspection_available() {
             .inspection()
             .entries
             .is_empty()
+    );
+}
+
+#[test]
+fn comparisons_use_exclusive_boundaries_and_retain_both_inspected_entries() {
+    let (graph, ids) = fixture();
+    let base = graph.view().prefix(3).unwrap();
+    let target = graph.view().prefix(5).unwrap();
+    let comparison = base.compare(target).unwrap();
+    assert_eq!(comparison.base_view, base.id());
+    assert_eq!(comparison.target_view, target.id());
+    assert_eq!(comparison.base_view.end_exclusive, 3);
+    assert_eq!(comparison.target_view.end_exclusive, 5);
+    assert_eq!(
+        comparison
+            .added
+            .iter()
+            .map(|entry| entry.entry.id())
+            .collect::<Vec<_>>(),
+        ids[3..5]
+    );
+    for change in &comparison.changed {
+        assert_eq!(
+            change.at_base,
+            base.inspect(change.at_base.entry.id()).unwrap()
+        );
+        assert_eq!(
+            change.at_target,
+            target.inspect(change.at_base.entry.id()).unwrap()
+        );
+        assert_eq!(change.at_base.entry, change.at_target.entry);
+    }
+    let same = base.compare(base).unwrap();
+    assert!(same.added.is_empty());
+    assert!(same.changed.is_empty());
+    let empty = graph.view().prefix(0).unwrap();
+    assert_eq!(empty.compare(base).unwrap().added.len(), 3);
+    let mut encoded = serde_json::to_value(&graph).unwrap();
+    encoded["entries"][0]["Node"]["ty_name"] = serde_json::json!("Different");
+    let divergent: LifeCoreList = serde_json::from_value(encoded).unwrap();
+    assert_eq!(base.id(), divergent.view().prefix(3).unwrap().id());
+    assert_eq!(
+        base.compare(divergent.view()),
+        Err(ViewError::DifferentHistory)
     );
 }

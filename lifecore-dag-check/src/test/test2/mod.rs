@@ -154,7 +154,7 @@ fn normalized_diagnostics_retain_boundaries_severity_and_relevance() {
     let analyzer = DagCheck { config: config() };
     let output = analyzer.analyze(graph.view(), &Default::default()).unwrap();
     let warning = output.warnings().next().unwrap();
-    assert_eq!(warning.offending_event.unwrap().view.end, 6);
+    assert_eq!(warning.offending_event.unwrap().view.end_exclusive, 6);
     assert_eq!(warning.offending_event.unwrap().entry, Some(ids[0]));
     assert_eq!(warning.relevance, ids.into_iter().collect());
     let analyzer = DagCheck {
@@ -218,8 +218,10 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
 }
 
 #[test]
-fn cycle_keys_normalize_configuration_and_group_state_observations_without_inventing_resolution() {
-    use lifecore::analysis::presentation::{Dismissals, ReportOptions, ReportSelection};
+fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_resolution() {
+    use lifecore::analysis::presentation::{
+        DismissalReason, Dismissals, ReportOptions, ReportSelection,
+    };
     let (mut graph, ids) = graph();
     prepare(&graph, &[node("Unrelated")], &mut AnalysisRunner::default())
         .unwrap()
@@ -244,21 +246,45 @@ fn cycle_keys_normalize_configuration_and_group_state_observations_without_inven
             &config(r#"{ "range": {}, "filter": {}, "on_cycle": "warning" }"#),
         )
         .unwrap();
-    assert_eq!(plain, normalized);
+    assert_ne!(plain, normalized);
+    assert_eq!(
+        plain.warnings().next().unwrap().key.analyzer_key,
+        normalized.warnings().next().unwrap().key.analyzer_key
+    );
+    assert_eq!(
+        plain.implementations[0].version,
+        env!("CARGO_PKG_VERSION")
+            .parse::<semver::Version>()
+            .unwrap()
+    );
+    assert_eq!(
+        normalized.implementations[0].configuration,
+        r#"{ "range": {}, "filter": {}, "on_cycle": "warning" }"#
+    );
     let mut dismissals = Dismissals::default();
     let groups = plain.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].observations.len(), 2);
     assert_eq!(
-        groups[0].key.finding.subjects,
+        groups[0].observations[0].subjects,
         ids.iter().copied().collect()
     );
     let key = groups[0].key.clone();
     dismissals
-        .dismiss(key.clone(), "expected loop".into())
+        .dismiss(
+            key.clone(),
+            DismissalReason::Acknowledged,
+            Some("expected loop".into()),
+        )
         .unwrap();
-    assert!(
+    assert_eq!(
         normalized
+            .groups(&dismissals, ReportOptions::default())
+            .len(),
+        1
+    );
+    assert!(
+        plain
             .groups(&dismissals, ReportOptions::default())
             .is_empty()
     );
@@ -274,7 +300,11 @@ fn cycle_keys_normalize_configuration_and_group_state_observations_without_inven
             &config(r#"{"filter":{"node_types":["A","B","C"]},"on_cycle":"warning"}"#),
         )
         .unwrap();
-    assert_eq!(filtered, filtered_again);
+    assert_ne!(filtered, filtered_again);
+    assert_eq!(
+        filtered.warnings().next().unwrap().key.analyzer_key,
+        filtered_again.warnings().next().unwrap().key.analyzer_key
+    );
     assert_ne!(filtered.warnings().next().unwrap().key, key);
     prepare(
         &graph,

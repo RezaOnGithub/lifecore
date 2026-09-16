@@ -5,7 +5,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ViewId {
     pub database: Uuid,
-    pub end: usize,
+    pub end_exclusive: usize,
     pub head: Option<EntryId>,
 }
 
@@ -37,7 +37,7 @@ impl<'a> View<'a> {
     pub fn id(self) -> ViewId {
         ViewId {
             database: self.database,
-            end: self.len(),
+            end_exclusive: self.len(),
             head: self.entries.last().map(Entry::id),
         }
     }
@@ -47,11 +47,15 @@ impl<'a> View<'a> {
     pub fn is_empty(self) -> bool {
         self.entries.is_empty()
     }
-    pub fn prefix(self, end: usize) -> Result<Self, ViewError> {
-        let entries = self.entries.get(..end).ok_or(ViewError::BeyondBoundary {
-            requested: end,
-            visible: self.len(),
-        })?;
+    //A A view contains positions [0, end_exclusive); a prefix can only narrow it.
+    pub fn prefix(self, end_exclusive: usize) -> Result<Self, ViewError> {
+        let entries = self
+            .entries
+            .get(..end_exclusive)
+            .ok_or(ViewError::BeyondBoundary {
+                requested: end_exclusive,
+                visible: self.len(),
+            })?;
         Ok(Self::new(self.database, entries))
     }
     pub fn location(self, entry: Option<EntryId>) -> Option<DiagnosticLocation> {

@@ -1,4 +1,5 @@
 use crate::{DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -9,7 +10,7 @@ use std::{
 mod identity;
 pub mod presentation;
 pub mod repair;
-pub use identity::{AnalyzerIdentity, EvaluationInputs, Fact, Finding, FindingKey};
+pub use identity::{AnalyzerIdentity, EvaluationInputs, FindingKey};
 pub use repair::{RevisionIntent, SuggestedAction};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
@@ -35,32 +36,33 @@ pub enum MessageKind {
     Suggestion(Vec<SuggestedAction>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ObservationScope {
-    State,
-    //A Event retention makes no claim about current applicability or resolution.
-    Event,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Message {
-    pub finding: Finding,
+    pub analyzer_key: String,
+    pub subjects: BTreeSet<EntryId>,
     //A Setup has no graph location. Replay can describe an earlier transition,
     //A but never a location outside the invocation prefix.
     pub offending_event: Option<DiagnosticLocation>,
     pub relevance: BTreeSet<EntryId>,
     pub message: String,
     pub kind: MessageKind,
-    pub scope: ObservationScope,
+    //A Retention never establishes current applicability or resolution.
+    pub retain_in_current_report: bool,
 }
 
 impl Message {
     pub fn ty(&self) -> MessageType {
-        match self.kind {
-        MessageKind::Inconsistency => MessageType::Inconsistency,
-        MessageKind::Warning => MessageType::Warning,
-        MessageKind::Suggestion(_) => MessageType::Suggestion,
+        self.kind.ty()
+    }
+}
+
+impl MessageKind {
+    pub fn ty(&self) -> MessageType {
+        match self {
+        Self::Inconsistency => MessageType::Inconsistency,
+        Self::Warning => MessageType::Warning,
+        Self::Suggestion(_) => MessageType::Suggestion,
         }
     }
 }
@@ -78,7 +80,7 @@ pub trait InnerOutput<MSG: InnerMessageType>: Clone {
 pub trait TypedAnalyzer: Send + Sync {
     type MSG: InnerMessageType;
     type OUTPUT: InnerOutput<Self::MSG>;
-    fn identity(&self) -> AnalyzerIdentity;
+    fn version(&self) -> Version;
     fn initialize_inner(&mut self, inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String>;
     fn analyze_inner(
         &self,
@@ -91,14 +93,14 @@ pub trait TypedAnalyzer: Send + Sync {
 //A Direct object-safe implementations are supported alongside the typed adapter.
 //A Setup receives only frozen inputs; all graph access is through View.
 pub trait Analyzer: Send + Sync {
-    fn identity(&self) -> AnalyzerIdentity;
+    fn version(&self) -> Version;
     fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Output, String>;
     fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String>;
 }
 
 impl<T: TypedAnalyzer> Analyzer for T {
-    fn identity(&self) -> AnalyzerIdentity {
-        TypedAnalyzer::identity(self)
+    fn version(&self) -> Version {
+        TypedAnalyzer::version(self)
     }
     fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Output, String> {
         let report = self.initialize_inner(inputs)?;
@@ -114,18 +116,12 @@ pub trait AnalyzerFactory {
     fn analyzer_name(&self) -> &'static str;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Invocation {
-    Initialization,
-    Prefix(ViewId),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("analyzer {analyzer:?} failed at {invocation:?}: {message}")]
+#[error("analyzer {analyzer:?} failed at {evaluated_view:?}: {message}")]
 pub struct ExecutionFailure {
     pub analyzer: AnalyzerIdentity,
     pub inputs: EvaluationInputs,
-    pub invocation: Invocation,
+    pub evaluated_view: Option<ViewId>,
     pub message: String,
 }
 
@@ -134,8 +130,13 @@ pub struct ExecutionFailure {
 pub struct Observation {
     pub key: FindingKey,
     pub inputs: EvaluationInputs,
-    pub invocation: Invocation,
-    pub diagnostic: Message,
+    pub evaluated_view: Option<ViewId>,
+    pub subjects: BTreeSet<EntryId>,
+    pub offending_event: Option<DiagnosticLocation>,
+    pub relevance: BTreeSet<EntryId>,
+    pub message: String,
+    pub kind: MessageKind,
+    pub retain_in_current_report: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,14 +196,11 @@ impl AnalysisRunner {
                 }
             })?;
             let analyzer = factory.analyzer_with_config(&config.config)?;
-            let identity = analyzer.identity();
-            if identity.name != config.name || identity.version.is_empty() {
-                return Err(LifeCoreError::InvalidAnalyzerOutput {
-                    analyzer: config.name.clone(),
-                    message: "implementation identity must match registration and have a version"
-                        .into(),
-                });
-            }
+            let identity = AnalyzerIdentity {
+                name: config.name.clone(),
+                version: analyzer.version(),
+                configuration: config.config.clone(),
+            };
             identities.push(identity);
             analyzers.push(analyzer);
         }
@@ -214,12 +212,12 @@ impl AnalysisRunner {
         };
         let mut seen = HashMap::new();
         for (analyzer, identity) in analyzers.iter_mut().zip(&report.implementations) {
-            let invocation = Invocation::Initialization;
+            let evaluated_view = None;
             let output = analyzer.initialize(&self.inputs).map_err(|message| {
                 LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
                     analyzer: identity.clone(),
                     inputs: self.inputs.clone(),
-                    invocation,
+                    evaluated_view,
                     message,
                 }))
             })?;
@@ -229,21 +227,21 @@ impl AnalysisRunner {
                 identity,
                 &self.inputs,
                 view.prefix(0).expect("empty prefix"),
-                invocation,
+                evaluated_view,
                 output,
             )?;
         }
         //A Preserve suite order and full replay, including the empty prefix.
         //A Deduplication never skips an invocation or the inconsistency gate.
         for (analyzer, identity) in analyzers.iter().zip(&report.implementations) {
-            for end in 0..=view.len() {
-                let prefix = view.prefix(end).expect("bounded replay prefix");
-                let invocation = Invocation::Prefix(prefix.id());
+            for end_exclusive in 0..=view.len() {
+                let prefix = view.prefix(end_exclusive).expect("bounded replay prefix");
+                let evaluated_view = Some(prefix.id());
                 let output = analyzer.analyze(prefix, &self.inputs).map_err(|message| {
                     LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
                         analyzer: identity.clone(),
                         inputs: self.inputs.clone(),
-                        invocation,
+                        evaluated_view,
                         message,
                     }))
                 })?;
@@ -253,7 +251,7 @@ impl AnalysisRunner {
                     identity,
                     &self.inputs,
                     prefix,
-                    invocation,
+                    evaluated_view,
                     output,
                 )?;
             }
@@ -268,7 +266,7 @@ fn record(
     identity: &AnalyzerIdentity,
     inputs: &EvaluationInputs,
     view: View<'_>,
-    invocation: Invocation,
+    evaluated_view: Option<ViewId>,
     output: Output,
 ) -> Result<(), LifeCoreError> {
     for diagnostic in output.0 {
@@ -276,15 +274,12 @@ fn record(
             analyzer: identity.name.clone(),
             message: message.into(),
         };
-        if diagnostic.finding.code.is_empty() {
-            return Err(invalid("finding code is empty"));
-        }
         if let Some(location) = diagnostic.offending_event {
-            if invocation == Invocation::Initialization {
+            if evaluated_view.is_none() {
                 return Err(invalid("initialization cannot have a graph location"));
             }
             let prefix = view
-                .prefix(location.view.end)
+                .prefix(location.view.end_exclusive)
                 .map_err(|_| invalid("diagnostic location exceeds invocation"))?;
             if prefix.location(location.entry) != Some(location) {
                 return Err(invalid(
@@ -293,7 +288,6 @@ fn record(
             }
         }
         if diagnostic
-            .finding
             .subjects
             .iter()
             .chain(&diagnostic.relevance)
@@ -308,11 +302,16 @@ fn record(
                 database: view.id().database,
                 analyzer: identity.clone(),
                 kind: diagnostic.ty(),
-                finding: diagnostic.finding.clone(),
+                analyzer_key: diagnostic.analyzer_key,
             },
             inputs: inputs.clone(),
-            invocation,
-            diagnostic,
+            evaluated_view,
+            subjects: diagnostic.subjects,
+            offending_event: diagnostic.offending_event,
+            relevance: diagnostic.relevance,
+            message: diagnostic.message,
+            kind: diagnostic.kind,
+            retain_in_current_report: diagnostic.retain_in_current_report,
         };
         //A Keep indices instead of a second owned copy of every diagnostic.
         //A A hash collision still compares the complete observation.
@@ -353,15 +352,15 @@ impl Report {
     }
     pub fn errors(&self) -> impl Iterator<Item = &Observation> {
         self.observations()
-            .filter(|o| o.diagnostic.ty() == MessageType::Inconsistency)
+            .filter(|o| o.kind.ty() == MessageType::Inconsistency)
     }
     pub fn warnings(&self) -> impl Iterator<Item = &Observation> {
         self.observations()
-            .filter(|o| o.diagnostic.ty() == MessageType::Warning)
+            .filter(|o| o.kind.ty() == MessageType::Warning)
     }
     pub fn suggestions(&self) -> impl Iterator<Item = &Observation> {
         self.observations()
-            .filter(|o| o.diagnostic.ty() == MessageType::Suggestion)
+            .filter(|o| o.kind.ty() == MessageType::Suggestion)
     }
     pub fn into_result(self) -> Result<Self, LifeCoreError> {
         if self.has_error() {

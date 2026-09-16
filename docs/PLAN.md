@@ -1,6 +1,7 @@
 # Rust Sketch 02 Cleanup Plan
 
-Status: Stages 0–4 complete. Stages 5–6 remain planned.
+Status: Stages 0–4 and the review checkpoint before stage 5 are complete.
+Stages 5–6 remain planned.
 
 ## 1. Outcome
 
@@ -30,9 +31,9 @@ weakening historical correctness under the chosen model.
 
 - Immutable entry history, explicit revision forests, exact edge endpoints, and
   bounded type/freshness interpretation.
-- Validity at every entry prefix. The existing CLI already persists composite
-  additions atomically; preserve this capability while reconciling the proposed
-  file contract. Atomic persistence does not permit invalid intermediate views.
+- Validity at every entry prefix. The retired CLI persisted composite additions
+  atomically; stage 5's new CLI must preserve that guarantee. The libraries retain
+  atomic in-memory commit. Atomic publication never permits invalid prefixes.
 - Full-prefix analyzer execution as a robustness and historical compatibility
   check, with explicit implementation/configuration/evaluation context.
 - Analyzer-specific typed findings, normalization, and third-party analyzer
@@ -53,7 +54,9 @@ weakening historical correctness under the chosen model.
   operations through a bounded library interface.
 - Simplify ownership, borrowing, iteration, and conversion code where this makes
   the invariants easier to review.
-- Build authoring around explicit TOML plans.
+- Build authoring around explicit TOML plans in a new `lifecore-cli`, which owns
+  storage envelopes and persistence. Keep libraries focused on graph operations,
+  analysis, in-memory transactions, and serialization.
 - Simplify MessageUniverse responsibilities rather than relocating the whole
   subsystem into the core.
 
@@ -77,9 +80,10 @@ Independent cleanup can proceed while an unrelated decision remains open.
 | Scalar and aggregate shapes | Decided in Stage 0; implemented in Stage 2. | Text, signed integers, booleans, timestamps, nested lists and string-keyed records. No floats, sets, tuples, or unions. |
 | Schema representation | Implemented in Stage 2. | Named field records carry `shape` and `presence`; shapes use `kind`, `element` for lists, and `fields` for records. No textual type-expression parser. |
 | Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
-| Plan persistence | Atomic plans retained and extracted in Stage 1. | Stage 2 uses one owned candidate, validates every prefix, and keeps writer exclusion through publication. Durable plan receipts remain Stage 5. |
-| Finding identity | Implemented in Stage 4; SPEC section 8. | Database, analyzer name/version, normalized configuration, category, code, exact subjects, and typed distinguishing facts. Ordinary boundaries, wording, inputs, and actions belong to observations; digests never define equality. |
-| Advisory presentation | Implemented in Stage 4; SPEC section 8. | Current state observations plus retained event advisories by default; full history is selectable. Persistent dismissal is separate. Retained events have unconfirmed current applicability; no generic resolution inference. |
+| Plan persistence | Atomic staging retained; library persistence removed at the review checkpoint. | Libraries compare exact original graph/suite state before in-memory commit. Stage 5's `lifecore-cli` owns publication, writer exclusion, stale-base rejection, no-clobber initialization, and receipts. Concrete layout remains open. |
+| Finding identity | Revised at the review checkpoint; SPEC section 8. | Database, registered analyzer name, exact `semver::Version`, original configuration string, category, and complete opaque analyzer key. Built-ins encode typed variants, exact subjects, and details as deterministic JSON. Ordinary boundaries, wording, inputs, and actions belong to observations. |
+| Advisory presentation | Stage 4, simplified at review; SPEC section 8. | Current observations plus explicit `retain_in_current_report` advisories; full history selectable. Serializable dismissal has a reason and optional note; persistence belongs to stage 5. Retention and dismissal never establish applicability or resolution. |
+| Evaluation context | Explicit at review. | `EvaluationInputs { evaluation_time: Option<jiff::Timestamp> }`, default `None`, frozen through initialization and replay. Missing required time is an error; no implicit clock. `evaluated_view: None` identifies initialization and `Some` includes prefix zero. |
 
 Stage 0 decisions: text, signed integers, booleans, and timestamps; nested lists
 and string-keyed records; no floats, sets, tuples, or unions. Lists have a declared
@@ -89,7 +93,9 @@ the fixed metatype decoder checks that vocabulary without a second schema DSL.
 TypeCheck remains configured, with its fixed built-in metatype available in an
 empty graph. Correctly shaped empty collections count as present. Plans persist
 atomically; every prefix remains checked and inspectable. SPEC/FILES reflect
-these choices. Stage 4 subsequently settled finding identity and advisory defaults in SPEC section 8.
+these choices. Stage 4 settled finding identity and advisory defaults; the review
+checkpoint below supersedes its shared facts, normalized configuration identity,
+and library persistence choices in SPEC section 8.
 
 Baseline at `5dbb719`: `cargo test --workspace` passed 119 unit tests and one
 doctest. Warnings include disabled `cfg(revise)`/`cfg(never)` tests, unused
@@ -119,7 +125,12 @@ to support every previous sketch format.
 
 ### View contract and operations involving multiple views
 
-Use one `View` for one immutable history snapshot and exclusive end boundary.
+Use one `View` for one immutable history snapshot and `end_exclusive` boundary:
+its entries occupy `[0, end_exclusive)`. Comparison exposes `base_view` and
+`target_view`; added positions occupy
+`[base_view.end_exclusive, target_view.end_exclusive)`. Comparing prefixes 3 and 5
+adds positions 3 and 4. Changed entries contain complete `at_base` and `at_target`
+inspections, with `stale` and type resolution directly on each inspected entry.
 Keep entry identity separate from inspection: `view.node(id)`, freshness,
 relationship traversal, and type resolution all use that view's boundary.
 Stored nodes and edges carry identities and payloads, not inspection contexts.
@@ -166,6 +177,10 @@ pointed contexts under another name:
 ## 4. Execution sequence
 
 Keep stages reviewable and leave the active workspace buildable after each.
+Stages 0–4 below retain their historical decisions and exit evidence. Their
+library stores, normalized configuration identity, shared facts, and repair TOML
+export are superseded by the review checkpoint before stage 5; completion of the
+earlier stages is not revoked and later stages are not renumbered.
 Do not keep obsolete layers solely to avoid updating their callers. Record the
 tests run and any known failures at each stage; avoid mixing behavior changes
 with unrelated formatting churn.
@@ -281,7 +296,8 @@ empty-field presence, typed findings, malformed imports, atomic rollback, and
 competing writers are covered. Dormant `lifecore-test` scenarios now live in the
 active core/typechecker tests; placeholder application crates remain untouched.
 
-The public path is `LifeCoreList::view()` / `View::prefix(end)` for inspection,
+At the stage 2 exit, the public path was `LifeCoreList::view()` /
+`View::prefix(end)` for inspection,
 and `transaction::prepare` followed by memory or `Store` commit for mutation.
 Entry handles include an origin plus a position. Independent plans receive
 separate suffix identities; committed handles survive reload unchanged.
@@ -295,9 +311,10 @@ panicking output conversion, redundant factory lookups, and diagnostic clones;
 Stage 4 adds finding/observation identity, dismissal, and presentation.
 The reusable SCC algorithm and typed analyzer/factory boundary remain.
 
-File publication syncs the file and directory. A directory-sync failure after
-rename is reported as `transaction::Error::Published`, because the new state may
-already be visible. Receipt-based retries after uncertain acknowledgment remain
+At the stage 2 exit, file publication synced the file and directory. A directory-sync
+failure after rename was reported as `transaction::Error::Published`, because the
+new state might already be visible. The review checkpoint removes this library
+API and carries the safeguard into stage 5. Receipt-based retries after uncertain acknowledgment remain
 Stage 5 work. TypeCheck remains opt-in as agreed; no TOML executable is claimed.
 
 ### Stage 3 — Build inspection and simplify queries over View
@@ -360,8 +377,9 @@ semantics.
 - [x] Route an explicitly requested suggested repair into a newly checked TOML
   plan. Document-aware connection redistribution is backlogged with collections.
 
-Stage 4 decisions: identity uses database/analyzer identity and version,
-normalized configuration, category, code, exact subjects, and typed facts.
+Historical stage 4 decisions (superseded where noted at review): identity uses
+database/analyzer identity and version, normalized configuration, category, code,
+exact subjects, and typed facts.
 Boundaries, wording, evaluation inputs, and repair payloads belong to observations
 unless deliberately included as distinguishing facts. TypeCheck retains its typed
 variant/path/issue facts; DAG Check uses exact cyclic components and normalized
@@ -388,40 +406,112 @@ advisories after reconnecting only one branch.
 The old message category wrappers and duplicate typed adapters are replaced by
 `MessageKind`, a shared `TypedAnalyzer` adapter, and explicit `Report` /
 `Observation` records. There is no revived MessageUniverse lifecycle or namespace.
-`analysis::presentation` supplies grouping, filtering, rendering, and atomic
-standalone dismissal storage. `analysis::repair::check` exports freshly checked
-ordered actions as TOML, preserving exact references, explicit revision intent,
-nested payloads, and nanosecond timestamps. It rejects stale revise intent,
-invalid aliases, foreign sources, out-of-profile timestamps, and historical
-analyzer failures without publication. The general TOML input adapter, executable,
-and durable plan receipts remain Stage 5; generated repair exports already cover
-the output side of the timestamp contract. Event applicability assessment remains
+At the stage 4 exit, `analysis::presentation` supplied grouping, filtering,
+rendering, and atomic standalone dismissal storage. `analysis::repair::check`
+exported freshly checked ordered actions as TOML, preserving exact references,
+explicit revision intent, nested payloads, and nanosecond timestamps. It rejected
+stale revise intent, invalid aliases, foreign sources, out-of-profile timestamps,
+and historical analyzer failures without publication. These exports covered the
+output side of the timestamp contract at that exit. The review checkpoint below
+removes the stores and TOML exporter; both input and output adapters, the executable,
+and durable receipts now belong to stage 5. Event applicability assessment remains
 an analyzer responsibility, not an automatic issue-resolution subsystem.
 
-### Stage 5 — Implement explicit TOML check/apply and plan inspection
+### Review checkpoint — Simplify contracts between stages 4 and 5
 
-- [ ] Implement the reduced FILES envelope, complete node payloads, ordered
-  entries, existing references, local aliases, and revision/branch intent.
+- [x] Keep typed findings in each analyzer and replace shared `Fact`/`Finding`
+  machinery with a complete opaque `analyzer_key: String`. Built-ins use
+  deterministic JSON for typed variants, exact subjects, and distinguishing details.
+  Compare full keys for grouping/dismissal; remove versioned key encoding and
+  digest helpers.
+- [x] Construct analyzer identity in the runner from registered name, exact
+  `semver::Version`, and original configuration string passed unchanged to the
+  factory. Equivalent spellings can behave identically but have distinct identities.
+  Built-ins parse their own package versions; version equality is exact.
+- [x] Use explicit optional evaluation time, frozen for initialization and every
+  prefix. Missing required time errors. Replace invocation/scope wrappers with
+  `evaluated_view: Option<ViewId>` and `retain_in_current_report: bool`; flatten
+  observations and preserve typed/dynamic execution, ordering, and validation.
+- [x] Add dismissal reasons and optional notes as serializable display state.
+  No dismissal or historical retention establishes resolution or affects acceptance.
+- [x] Name exclusive view boundaries `end_exclusive`; flatten inspected entries
+  and retain both complete inspections in `EntryChange { at_base, at_target }`.
+  Expose comparison views and precise appended ranges; preserve shared-history checks.
+- [x] Convert every file-backed module in the active crates to `<module>/mod.rs`,
+  keeping `lib.rs` roots and `*::test::test2` paths. Extract inline test scaffolding.
+- [x] Remove library stores and publication machinery. Retain structural validation
+  on graph deserialization and atomic in-memory preparation/commit. Compare exact
+  database identity, original entries/count, and original ordered suite; reuse the
+  candidate's original prefix and snapshot only the original suite separately.
+- [x] Replace repair export with `prepare_suggestion` returning a checked transaction.
+  Preserve source checks, exact references, intent, all-prefix checks, and explicit
+  commit. Remove plan IDs, TOML envelopes, and timestamp export restrictions.
+- [x] Remove `tempfile`, `toml`, and `blake3`; update SPEC, FILES, and contributor
+  guidance together. Replace filesystem-dependent library tests with in-memory
+  serialization tests and carry publication acceptance into stage 5.
+
+The libraries now provide graph operations, bounded inspection, analysis,
+in-memory transactions, and Serde support. No file envelopes or persistence API
+remain. Earlier stage 1–4 publication and export tests are historical evidence;
+stage 5 must restore those safeguards in the CLI alongside durable receipts.
+No CLI implementation, compatibility adapters, or migrations belong to this checkpoint.
+
+Review evidence: `cargo test --workspace` passes 73 unit tests (47 core,
+18 TypeCheck, 8 DAG Check), with no failures or ignored tests. These checks pass:
+
+```sh
+cargo +nightly fmt --check -p lifecore -p lifecore-typecheck -p lifecore-dag-check
+cargo clippy -p lifecore -p lifecore-typecheck -p lifecore-dag-check --all-targets --no-deps -- -D warnings
+```
+
+Coverage includes exact configuration strings and package versions, complete
+opaque keys under forced hash collisions, explicit time and deterministic replay,
+initialization versus prefix zero, contextual failures, dismissal reasons/notes
+and round trips, unfiltered inconsistencies, exclusive comparisons, revision/type
+changes, foreign/divergent histories, exact stale bases including suite-only
+changes, rollback, malformed deserialization, and explicitly checked suggestions.
+Publication-specific cases are carried forward below as stage 5 requirements.
+
+### Stage 5 — Create lifecore-cli for persistence and TOML authoring
+
+- [ ] Create `lifecore-cli` over shared library operations for checking, applying,
+  and inspecting TOML and bounded views. No persistent draft attachment.
+- [ ] Select concrete storage layout and envelopes here. The CLI owns graph,
+  report, and dismissal persistence; libraries retain serialization and validation.
+- [ ] Implement the FILES authoring envelope, complete node payloads, ordered
+  entries, exact existing references, local aliases, revision/branch intent,
+  and TOML import/export, including explicitly selected checked suggestions.
 - [ ] Implement the explicit [timestamp adapter](FILES.md#timestamp-conversion-contract):
   preserve nanoseconds, reject excess precision and leap seconds before lossy
   parsing, check the converted UTC range, and export native UTC datetimes.
-  Verify boundary failures and exact instant round trips; Jiff's default Serde
-  string encoding and unrestricted core range do not provide this contract.
-- [ ] Provide a small new executable over shared library operations for checking,
-  applying, and inspecting files and bounded views. No persistent draft attachment.
-- [ ] Freeze inputs and expose the concrete ordered plan, including affected
-  relationships and source-local diagnostics.
-- [ ] Validate every proposed prefix and perform the retained historical analyzer
-  certification under a fixed evaluation context.
-- [ ] Implement the selected persistence policy, database/head checks, and
-  durable application identity. A retry must not duplicate an acknowledged or
-  ambiguously acknowledged commit.
+  Restore export boundary regressions and verify exact instant round trips.
+- [ ] Freeze evaluation inputs and expose the concrete ordered plan, affected
+  relationships, and source-local diagnostics. Record original configuration
+  strings and exact versions; never implicitly read time in library analysis.
+- [ ] Validate every proposed prefix and replay historical prefixes under the
+  fixed evaluation context. Deserialization alone cannot certify a transaction.
+- [ ] Preserve writer exclusion from exact stale-base verification through
+  atomic publication; reject changed database identity, entries/count, and suite,
+  including suite-only changes. Two writers against one base cannot both commit.
+- [ ] Initialize without clobbering an existing database. Failures before
+  publication preserve prior state; synchronize publication and distinguish
+  post-publication synchronization failures from rollback.
+- [ ] Persist reports and dismissals with exact keys, all reasons, and optional
+  notes. Dismiss/restore survives reload and absent current emission; concurrent
+  dismissal edits preserve each writer's records under writer exclusion.
+- [ ] Publish durable application receipts atomically with the graph. After
+  uncertain acknowledgment, an identical retry returns the receipt without
+  appending; a reused identity with different content fails. Receipt lookup
+  precedes stale-base rejection for an already committed plan.
 - [ ] Expose each proposed boundary through the same view operations used for
   committed history, with provisional status clearly shown.
 
 Exit evidence: handwritten TOML can create, revise, split, and connect nodes;
-failed checks leave persistence untouched. An interrupted apply has a documented
-recoverable state. Identical checked inputs produce identical semantic plans.
+failed checks leave persistence untouched. No-clobber initialization, competing
+writers, stale bases, failed replacement, post-publication synchronization
+failure, dismissal reload, and safe retries all have executable coverage.
+Interrupted apply has a documented recoverable state. Identical checked inputs
+produce identical semantic plans. Collection workflows remain backlogged.
 
 ### Stage 6 — Finish the round and remove leftovers
 
@@ -458,7 +548,10 @@ recoverable state. Identical checked inputs produce identical semantic plans.
 | A TOML plan revises B, then revises A without reconnecting their old edge | Execute the listed order and show the historical edge at the intermediate boundary. |
 | A TOML plan explicitly reconnects unchanged A to a successor of B | Show the replacement edge and the intermediate view where the old edge is historical. |
 | An edge references a superseded revision or an ambiguous target | Reject the invalid reference; never implicitly select a successor. |
-| A stale base, concurrent writer, or commit interruption occurs | Fail or recover according to the selected atomicity contract; never duplicate entries on retry. |
+| A stale base, concurrent writer, or commit interruption occurs | Stage 5 rejects or recovers under the atomic contract; never duplicate entries on retry. |
+| A suite changes without any entry append | In-memory commit rejects the exact stale base; stage 5 preserves this in storage. |
+| Initialization would overwrite a database, or publication fails before/after replacement | Stage 5 verifies no-clobber and pre-publication rollback, and distinguishes post-publication synchronization failure. |
+| Dismissals are reloaded or concurrently edited | Stage 5 retains exact keys, reasons, and notes and preserves both writers' edits. |
 | A draft is malformed or a configured analyzer is unavailable | Checking/application fails appropriately; committed-data inspection remains available. |
 
 ## 6. Verification discipline
@@ -471,8 +564,9 @@ CLI is removed and the new authoring package is introduced.
 
 Use targeted `cargo +nightly fmt --check -p <changed-package>` and appropriate
 package lint checks. Add agent-authored Rust tests only under `*::test::test2`,
-and follow AGENTS for comments. Include meaningful failure and historical-window
-cases rather than tests that merely duplicate implementation steps.
+using `test/test2/mod.rs`; all file-backed modules use `<module>/mod.rs` except
+crate-root `lib.rs`. Follow AGENTS for comments. Include meaningful failure and
+historical-window cases rather than tests that merely duplicate implementation steps.
 
 New stored formats can be incompatible with old sketches. Within a selected
 format, reloads, deterministic interpretation, safe writes, and exact historical

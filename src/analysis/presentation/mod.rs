@@ -1,21 +1,24 @@
-use super::{FindingKey, Invocation, MessageType, Observation, ObservationScope, Report};
+use super::{FindingKey, MessageType, Observation, Report};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::Write,
     hash::{BuildHasher, RandomState},
 };
-use std::{
-    fs::{File, OpenOptions},
-    io::Write as IoWrite,
-    path::{Path, PathBuf},
-};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DismissalReason {
+    Acknowledged,
+    FalsePositive,
+    NoLongerRelevant,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dismissal {
     pub key: FindingKey,
-    pub reason: String,
+    pub reason: DismissalReason,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,15 +41,17 @@ impl Dismissals {
     pub fn dismiss(
         &mut self,
         key: FindingKey,
-        reason: String,
+        reason: DismissalReason,
+        note: Option<String>,
     ) -> Result<(), CannotDismissInconsistency> {
         if key.kind == MessageType::Inconsistency {
             return Err(CannotDismissInconsistency);
         }
         if let Some(record) = self.records.iter_mut().find(|record| record.key == key) {
             record.reason = reason;
+            record.note = note;
         } else {
-            self.records.push(Dismissal { key, reason });
+            self.records.push(Dismissal { key, reason, note });
         }
         Ok(())
     }
@@ -55,79 +60,6 @@ impl Dismissals {
         let before = self.records.len();
         self.records.retain(|record| record.key != *key);
         before != self.records.len()
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum StoreError {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Encoding(#[from] serde_json::Error),
-    #[error(transparent)]
-    Inconsistency(#[from] CannotDismissInconsistency),
-    #[error("dismissals were published but directory synchronization failed: {0}")]
-    Published(std::io::Error),
-}
-
-pub struct DismissalStore {
-    path: PathBuf,
-}
-
-impl DismissalStore {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
-    }
-    pub fn load(&self) -> Result<Dismissals, StoreError> {
-        match File::open(&self.path) {
-        Ok(file) => Ok(serde_json::from_reader(file)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Dismissals::default()),
-        Err(error) => Err(error.into()),
-        }
-    }
-    pub fn dismiss(&self, key: FindingKey, reason: String) -> Result<(), StoreError> {
-        let _lock = self.lock()?;
-        let mut state = self.load()?;
-        state.dismiss(key, reason)?;
-        self.save(&state)
-    }
-    pub fn restore(&self, key: &FindingKey) -> Result<bool, StoreError> {
-        let _lock = self.lock()?;
-        let mut state = self.load()?;
-        let restored = state.restore(key);
-        if restored {
-            self.save(&state)?;
-        }
-        Ok(restored)
-    }
-    fn lock(&self) -> Result<File, StoreError> {
-        //A Dismissal edits reread under writer exclusion, independent of graph
-        //A publication. Two frontends must not overwrite each other's records.
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(".lock");
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(name)?;
-        file.lock()?;
-        Ok(file)
-    }
-    fn save(&self, state: &Dismissals) -> Result<(), StoreError> {
-        let directory = self
-            .path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-        serde_json::to_writer_pretty(temporary.as_file_mut(), state)?;
-        temporary.write_all(b"\n")?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(&self.path).map_err(|e| e.error)?;
-        File::open(directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(StoreError::Published)
     }
 }
 
@@ -194,17 +126,17 @@ impl Report {
             });
             let group = &mut groups[position];
             group.observations.push(observation);
-            let inconsistency = observation.diagnostic.ty() == MessageType::Inconsistency;
+            let inconsistency = observation.kind.ty() == MessageType::Inconsistency;
             let category = match options.advisories {
             AdvisoryFilter::All => true,
-            AdvisoryFilter::Warnings => observation.diagnostic.ty() == MessageType::Warning,
-            AdvisoryFilter::Suggestions => observation.diagnostic.ty() == MessageType::Suggestion,
+            AdvisoryFilter::Warnings => observation.kind.ty() == MessageType::Warning,
+            AdvisoryFilter::Suggestions => observation.kind.ty() == MessageType::Suggestion,
             AdvisoryFilter::None => false,
             };
             let boundary = options.selection == ReportSelection::History
-                || observation.invocation == Invocation::Initialization
-                || observation.invocation == Invocation::Prefix(self.view)
-                || observation.diagnostic.scope == ObservationScope::Event;
+                || observation.evaluated_view.is_none()
+                || observation.evaluated_view == Some(self.view)
+                || observation.retain_in_current_report;
             if inconsistency
                 || (category
                     && boundary
@@ -220,15 +152,15 @@ impl Report {
     pub fn render(&self, dismissals: &Dismissals, options: ReportOptions) -> String {
         let mut text = format!(
             "{:?} report at boundary {} ({})\n",
-            options.selection, self.view.end, self.view.database
+            options.selection, self.view.end_exclusive, self.view.database
         );
         for group in self.groups(dismissals, options) {
             writeln!(
                 text,
-                "{:?} {} [{}]{}",
+                "{:?} {} {:?}{}",
                 group.key.kind,
-                group.key.finding.code,
-                group.key.digest(),
+                group.key.analyzer.name,
+                group.key.analyzer_key,
                 if group.dismissal.is_some() && group.key.kind != MessageType::Inconsistency {
                     " (dismissed)"
                 } else {
@@ -237,18 +169,20 @@ impl Report {
             )
             .unwrap();
             for observation in group.selected {
-                let at = match observation.invocation {
-                Invocation::Initialization => "initialization".to_string(),
-                Invocation::Prefix(view) => format!("boundary {}", view.end),
+                let at = match observation.evaluated_view {
+                None => "initialization".to_string(),
+                Some(view) => format!("boundary {}", view.end_exclusive),
                 };
-                let retained = if observation.diagnostic.scope == ObservationScope::Event
-                    && observation.invocation != Invocation::Prefix(self.view)
+                let retained = if observation.retain_in_current_report
+                    && observation
+                        .evaluated_view
+                        .is_some_and(|view| view != self.view)
                 {
-                    " (historical event; current applicability unconfirmed)"
+                    " (historical advisory; current applicability unconfirmed)"
                 } else {
                     ""
                 };
-                writeln!(text, "  {at}{retained}: {}", observation.diagnostic.message).unwrap();
+                writeln!(text, "  {at}{retained}: {}", observation.message).unwrap();
             }
         }
         text

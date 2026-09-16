@@ -1,12 +1,12 @@
 use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, AnalyzerIdentity, EvaluationInputs, Fact, Finding,
-        InnerMessageType, InnerOutput, Message, MessageKind, MessageType, ObservationScope, Output,
-        TypedAnalyzer,
+        Analyzer, AnalyzerFactory, EvaluationInputs, InnerMessageType, InnerOutput, Message,
+        MessageKind, MessageType, Output, TypedAnalyzer,
     },
     typing::{FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition},
 };
+use semver::Version;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -132,12 +132,8 @@ pub struct TypeCheck {}
 impl TypedAnalyzer for TypeCheck {
     type MSG = TypeCheckMessage;
     type OUTPUT = TypeCheckOutput;
-    fn identity(&self) -> AnalyzerIdentity {
-        AnalyzerIdentity {
-            name: TypeCheckFactory::name().into(),
-            version: "1".into(),
-            configuration: Fact::Record(BTreeMap::new()),
-        }
+    fn version(&self) -> Version {
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
     }
     fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String> {
         Ok(TypeCheckOutput::default())
@@ -277,11 +273,11 @@ impl TypedAnalyzer for TypeCheck {
                     let location = finding.location();
                     let message = finding.description();
                     Message {
-                        finding: Finding {
-                            code: "type_check".into(),
-                            subjects: location.entry.into_iter().collect(),
-                            facts: Fact::from_typed(&finding).expect("typed TypeCheck facts"),
-                        },
+                        //A The typed variant skips its ordinary boundary; the exact
+                        //A subject and distinguishing details still define identity.
+                        analyzer_key: serde_json::to_string(&(&finding, location.entry))
+                            .expect("typed TypeCheck finding"),
+                        subjects: location.entry.into_iter().collect(),
                         offending_event: Some(location),
                         relevance: location.entry.into_iter().collect(),
                         message,
@@ -289,7 +285,7 @@ impl TypedAnalyzer for TypeCheck {
                         MessageType::Warning => MessageKind::Warning,
                         _ => MessageKind::Inconsistency,
                         },
-                        scope: ObservationScope::State,
+                        retain_in_current_report: false,
                     }
                 })
                 .collect(),

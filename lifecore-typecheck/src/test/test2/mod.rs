@@ -35,9 +35,12 @@ fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     plan.commit(graph).unwrap();
     ids
 }
-fn findings(graph: &LifeCoreList, end: usize) -> Vec<TypeCheckMessage> {
+fn findings(graph: &LifeCoreList, end_exclusive: usize) -> Vec<TypeCheckMessage> {
     TypeCheck::default()
-        .analyze_inner(graph.view().prefix(end).unwrap(), &Default::default())
+        .analyze_inner(
+            graph.view().prefix(end_exclusive).unwrap(),
+            &Default::default(),
+        )
         .unwrap()
         .0
 }
@@ -515,11 +518,10 @@ fn runner_combines_typed_warnings_and_inconsistencies_without_filtering() {
             .errors()
             .next()
             .unwrap()
-            .diagnostic
             .offending_event
             .unwrap()
             .view
-            .end,
+            .end_exclusive,
         2
     );
 }
@@ -552,8 +554,8 @@ fn plan_local_references_count_operations_and_cannot_name_configuration_changes(
 #[test]
 fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_replay() {
     use lifecore::analysis::{
-        Config, Fact, SuiteConfig,
-        presentation::{Dismissals, ReportOptions, ReportSelection},
+        Config, SuiteConfig,
+        presentation::{DismissalReason, Dismissals, ReportOptions, ReportSelection},
     };
     let mut graph = LifeCoreList::default();
     let schema = Type::new(
@@ -590,16 +592,42 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             .all(|g| g.observations.len() == 2 && g.selected.len() == 1)
     );
     let key = groups[0].key.clone();
-    let Fact::Record(variants) = &key.finding.facts else {
-        panic!("typed enum facts")
-    };
-    assert!(variants.contains_key("Field"));
-    assert!(!variants.contains_key("location"));
+    let encoded: serde_json::Value = serde_json::from_str(&key.analyzer_key).unwrap();
+    assert_eq!(
+        encoded[0]["Field"]["issue"]["path"],
+        serde_json::json!([{ "Field": "first" }])
+    );
+    assert_eq!(encoded[0]["Field"]["issue"]["kind"], "MissingEncouraged");
+    assert!(encoded[0]["Field"].get("location").is_none());
+    assert_eq!(encoded[1], serde_json::to_value(ids[1]).unwrap());
+    assert_eq!(
+        key.analyzer.version,
+        env!("CARGO_PKG_VERSION")
+            .parse::<semver::Version>()
+            .unwrap()
+    );
+    assert_eq!(key.analyzer.configuration, " ");
     assert_ne!(key, *groups[1].key);
     dismissals
-        .dismiss(key.clone(), "known field".into())
+        .dismiss(
+            key.clone(),
+            DismissalReason::Acknowledged,
+            Some("known field".into()),
+        )
         .unwrap();
-    let replay = runner().run_view(graph.view(), &config(" { } ")).unwrap();
+    let equivalent = runner().run_view(graph.view(), &config(" { } ")).unwrap();
+    assert_ne!(report, equivalent);
+    assert_eq!(
+        report.warnings().next().unwrap().key.analyzer_key,
+        equivalent.warnings().next().unwrap().key.analyzer_key
+    );
+    assert_eq!(
+        equivalent
+            .groups(&dismissals, ReportOptions::default())
+            .len(),
+        2
+    );
+    let replay = runner().run_view(graph.view(), &config(" ")).unwrap();
     assert_eq!(report, replay);
     assert_eq!(
         replay.groups(&dismissals, ReportOptions::default()).len(),
@@ -616,7 +644,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             Some(Existing(ids[1])),
         )],
     );
-    let after = runner().run_view(graph.view(), &config("{}")).unwrap();
+    let after = runner().run_view(graph.view(), &config(" ")).unwrap();
     assert!(
         after
             .groups(&dismissals, ReportOptions::default())

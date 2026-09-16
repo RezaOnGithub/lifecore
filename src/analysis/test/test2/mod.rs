@@ -2,11 +2,12 @@ use crate::{
     Body, DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
     analysis::{
         AnalysisRunner, Analyzer, AnalyzerFactory, AnalyzerIdentity, Config, EvaluationInputs,
-        Fact, InnerMessageType, InnerOutput, Message, MessageKind, MessageType, ObservationScope,
-        Output, SuiteConfig, TypedAnalyzer,
+        InnerMessageType, InnerOutput, Message, MessageKind, MessageType, Output, SuiteConfig,
+        TypedAnalyzer,
     },
     transaction::{Change, prepare},
 };
+use semver::Version;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -34,12 +35,8 @@ struct Probe {
 impl TypedAnalyzer for Probe {
     type MSG = Finding;
     type OUTPUT = Report;
-    fn identity(&self) -> AnalyzerIdentity {
-        AnalyzerIdentity {
-            name: "Probe".into(),
-            version: "1".into(),
-            configuration: Fact::from_typed(&self.reject).unwrap(),
-        }
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
     }
     fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Report, String> {
         Ok(Report(vec![]))
@@ -66,16 +63,13 @@ impl TypedAnalyzer for Probe {
                 .0
                 .into_iter()
                 .map(|finding| Message {
-                    finding: crate::analysis::Finding {
-                        code: "rejected_prefix".into(),
-                        subjects: Default::default(),
-                        facts: Fact::from_typed(&finding.location.view).unwrap(),
-                    },
+                    analyzer_key: "rejected_prefix".into(),
+                    subjects: Default::default(),
                     offending_event: Some(finding.location),
                     relevance: Default::default(),
                     message: "rejected prefix".into(),
                     kind: MessageKind::Inconsistency,
-                    scope: ObservationScope::State,
+                    retain_in_current_report: false,
                 })
                 .collect(),
         )
@@ -152,7 +146,7 @@ fn every_prefix_including_empty_is_read_only_and_cannot_expand() {
             .lock()
             .unwrap()
             .iter()
-            .map(|v| v.end)
+            .map(|v| v.end_exclusive)
             .collect::<Vec<_>>(),
         vec![0, 1, 2, 3]
     );
@@ -165,7 +159,7 @@ fn every_prefix_including_empty_is_read_only_and_cannot_expand() {
             .lock()
             .unwrap()
             .iter()
-            .map(|v| v.end)
+            .map(|v| v.end_exclusive)
             .collect::<Vec<_>>(),
         vec![0, 1]
     );
@@ -185,7 +179,7 @@ fn changed_analyzer_rejects_an_old_prefix_and_does_not_only_check_the_head() {
     assert_eq!(
         report
             .errors()
-            .map(|e| e.diagnostic.offending_event.unwrap().view.end)
+            .map(|e| e.offending_event.unwrap().view.end_exclusive)
             .collect::<Vec<_>>(),
         vec![1]
     );
@@ -227,22 +221,21 @@ fn missing_duplicate_and_invalid_factories_are_typed_errors() {
 }
 
 use crate::analysis::presentation::{
-    AdvisoryFilter, DismissalStore, Dismissals, ReportOptions, ReportSelection,
+    AdvisoryFilter, DismissalReason, Dismissals, ReportOptions, ReportSelection,
 };
-use crate::analysis::{
-    Finding as SemanticFinding, Invocation, Observation, RevisionIntent, SuggestedAction,
-};
+use crate::analysis::{FindingKey, Observation, RevisionIntent, SuggestedAction};
 use crate::transaction::Reference::{Added, Existing};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 type InvocationLog = Arc<Mutex<Vec<(i64, Option<usize>)>>>;
 
 #[derive(Clone)]
 struct AdvisoryFactory {
     version: &'static str,
-    fail: Option<Invocation>,
+    fail: Option<Option<ViewId>>,
     invalid: Option<DiagnosticLocation>,
     log: InvocationLog,
+    received_configs: Arc<Mutex<Vec<String>>>,
 }
 
 struct Advisories {
@@ -255,6 +248,7 @@ impl AnalyzerFactory for AdvisoryFactory {
         "Advisories"
     }
     fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        self.received_configs.lock().unwrap().push(config.into());
         let config =
             config
                 .trim()
@@ -271,29 +265,22 @@ impl AnalyzerFactory for AdvisoryFactory {
 }
 
 impl Analyzer for Advisories {
-    fn identity(&self) -> AnalyzerIdentity {
-        AnalyzerIdentity {
-            name: "Advisories".into(),
-            version: self.factory.version.into(),
-            configuration: Fact::Integer(self.config),
-        }
+    fn version(&self) -> Version {
+        self.factory.version.parse().unwrap()
     }
     fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Output, String> {
         self.factory.log.lock().unwrap().push((self.config, None));
-        if self.factory.fail == Some(Invocation::Initialization) {
+        if self.factory.fail == Some(None) {
             return Err("setup failed".into());
         }
         Ok(Output(vec![Message {
-            finding: SemanticFinding {
-                code: "setup".into(),
-                subjects: BTreeSet::new(),
-                facts: Fact::Null,
-            },
+            analyzer_key: local_key("setup", &[], ""),
+            subjects: BTreeSet::new(),
             offending_event: self.factory.invalid,
             relevance: BTreeSet::new(),
             message: "configured".into(),
             kind: MessageKind::Warning,
-            scope: ObservationScope::State,
+            retain_in_current_report: false,
         }]))
     }
     fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String> {
@@ -302,7 +289,7 @@ impl Analyzer for Advisories {
             .lock()
             .unwrap()
             .push((self.config, Some(view.len())));
-        if self.factory.fail == Some(Invocation::Prefix(view.id())) {
+        if self.factory.fail == Some(Some(view.id())) {
             return Err("prefix failed".into());
         }
         let mut output = Output::default();
@@ -310,19 +297,17 @@ impl Analyzer for Advisories {
             && view.is_stale(node.id) == Some(false)
         {
             let message = Message {
-                finding: SemanticFinding {
-                    code: "missing_summary".into(),
-                    subjects: BTreeSet::from([node.id]),
-                    facts: Fact::Record(BTreeMap::from([(
-                        "field".into(),
-                        Fact::Text("summary".into()),
-                    )])),
-                },
+                analyzer_key: local_key("missing_summary", &[node.id], "summary"),
+                subjects: BTreeSet::from([node.id]),
                 offending_event: view.location(Some(node.id)),
                 relevance: BTreeSet::from([node.id]),
-                message: format!("Missing summary at {} with {:?}", view.len(), inputs.values),
+                message: format!(
+                    "Missing summary at {} with {:?}",
+                    view.len(),
+                    inputs.evaluation_time
+                ),
                 kind: MessageKind::Warning,
-                scope: ObservationScope::State,
+                retain_in_current_report: false,
             };
             output.0.extend([message.clone(), message]);
         }
@@ -330,11 +315,8 @@ impl Analyzer for Advisories {
             && let Some(parent) = child.parent
         {
             output.0.push(Message {
-                finding: SemanticFinding {
-                    code: "review_connections".into(),
-                    subjects: BTreeSet::from([parent, child.id]),
-                    facts: Fact::Null,
-                },
+                analyzer_key: local_key("review_connections", &[parent, child.id], ""),
+                subjects: BTreeSet::from([parent, child.id]),
                 offending_event: view.location(Some(child.id)),
                 relevance: BTreeSet::from([parent, child.id]),
                 message: "Decide which relationships this successor should retain".into(),
@@ -344,7 +326,7 @@ impl Analyzer for Advisories {
                     parent: None,
                     intent: None,
                 }]),
-                scope: ObservationScope::Event,
+                retain_in_current_report: true,
             });
         }
         Ok(output)
@@ -353,10 +335,11 @@ impl Analyzer for Advisories {
 
 fn advisory_factory() -> AdvisoryFactory {
     AdvisoryFactory {
-        version: "1",
+        version: "1.0.0",
         fail: None,
         invalid: None,
         log: Arc::default(),
+        received_configs: Arc::default(),
     }
 }
 fn advisory_suite(configs: &[&str]) -> SuiteConfig {
@@ -387,9 +370,10 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
     let (graph, _) = fixture();
     let factory = advisory_factory();
     let log = factory.log.clone();
+    let received = factory.received_configs.clone();
     let mut runner = advisory_runner(factory, EvaluationInputs::default());
     let report = runner
-        .run_view(graph.view(), &advisory_suite(&["7", " 007 "]))
+        .run_view(graph.view(), &advisory_suite(&["7", "7"]))
         .unwrap();
     assert_eq!(report.observations().count(), 4);
     let dismissals = Dismissals::default();
@@ -397,14 +381,11 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
     assert_eq!(groups.len(), 2);
     let warning = groups
         .iter()
-        .find(|g| g.key.finding.code == "missing_summary")
+        .find(|g| g.key.analyzer_key.contains("missing_summary"))
         .unwrap();
     assert_eq!(warning.observations.len(), 3);
     assert_eq!(warning.selected.len(), 1);
-    assert_eq!(
-        warning.selected[0].invocation,
-        Invocation::Prefix(graph.view().id())
-    );
+    assert_eq!(warning.selected[0].evaluated_view, Some(graph.view().id()));
     assert_eq!(
         log.lock().unwrap().as_slice(),
         &[
@@ -417,9 +398,22 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
             (7, Some(0)),
             (7, Some(1)),
             (7, Some(2)),
-            (7, Some(3))
+            (7, Some(3)),
         ]
     );
+    assert_eq!(*received.lock().unwrap(), ["7", "7"]);
+    let different_spelling = runner
+        .run_view(graph.view(), &advisory_suite(&["7", " 007 "]))
+        .unwrap();
+    assert_eq!(different_spelling.observations().count(), 8);
+    assert_eq!(
+        different_spelling
+            .groups(&dismissals, ReportOptions::default())
+            .len(),
+        4
+    );
+    assert_eq!(*received.lock().unwrap(), ["7", "7", "7", " 007 "]);
+    assert_eq!(different_spelling.implementations[1].configuration, " 007 ");
     let reloaded: crate::analysis::Report =
         serde_json::from_slice(&serde_json::to_vec(&report).unwrap()).unwrap();
     assert_eq!(reloaded, report);
@@ -427,93 +421,103 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
         reloaded.render(&dismissals, history_options()),
         report.render(&dismissals, history_options())
     );
+    let encoded = serde_json::to_value(&report).unwrap();
+    let observation = &encoded["observations"][0];
+    assert!(observation.get("diagnostic").is_none());
+    assert!(observation.get("analyzer_key").is_none());
+    assert!(observation["key"].get("finding").is_none());
+    assert!(observation["key"]["analyzer_key"].is_string());
 }
 
 #[test]
-fn dismissal_identity_ignores_wording_and_ordinary_evaluation_inputs_but_distinguishes_semantic_changes()
- {
+fn dismissal_identity_ignores_observation_details_but_distinguishes_complete_keys() {
     let (graph, _) = fixture();
     let mut runner = advisory_runner(advisory_factory(), EvaluationInputs::default());
     let report = runner
         .run_view(graph.view(), &advisory_suite(&["7"]))
         .unwrap();
-    let key = report
+    let original = report
         .warnings()
-        .find(|o| o.key.finding.code == "missing_summary")
-        .unwrap()
-        .key
-        .clone();
+        .find(|o| o.key.analyzer_key.contains("missing_summary"))
+        .unwrap();
+    let key = original.key.clone();
     let mut dismissals = Dismissals::default();
     dismissals
-        .dismiss(key.clone(), "intentional".into())
+        .dismiss(
+            key.clone(),
+            DismissalReason::Acknowledged,
+            Some("intentional".into()),
+        )
         .unwrap();
-    let inputs = EvaluationInputs {
-        values: Body::from([(
-            "evaluation_time".into(),
-            "2026-09-14T12:00:00.123456789Z"
-                .parse::<crate::Timestamp>()
-                .unwrap()
-                .into(),
-        )]),
-    };
+    let inputs = timed_inputs();
     let mut runner = advisory_runner(advisory_factory(), inputs.clone());
     let replay = runner
-        .run_view(graph.view(), &advisory_suite(&[" 007 "]))
+        .run_view(graph.view(), &advisory_suite(&["7"]))
         .unwrap();
     let observation = replay
         .warnings()
-        .find(|o| o.key.finding.code == "missing_summary")
+        .find(|o| o.key.analyzer_key.contains("missing_summary"))
         .unwrap();
     assert_eq!(observation.key, key);
     assert_eq!(observation.inputs, inputs);
-    assert_ne!(
-        observation.diagnostic.message,
-        report
-            .warnings()
-            .find(|o| o.key == key)
-            .unwrap()
-            .diagnostic
-            .message
-    );
+    assert_ne!(observation.message, original.message);
     assert!(
         replay
             .groups(&dismissals, history_options())
             .iter()
             .all(|g| g.key != &key)
     );
-    let altered = runner
-        .run_view(graph.view(), &advisory_suite(&["8"]))
-        .unwrap();
-    assert!(
-        altered
-            .groups(&dismissals, ReportOptions::default())
-            .iter()
-            .any(|g| g.key.finding.code == "missing_summary")
-    );
-    let mut factory = advisory_factory();
-    factory.version = "2";
-    let newer = advisory_runner(factory, inputs)
-        .run_view(graph.view(), &advisory_suite(&["7"]))
-        .unwrap();
-    assert!(
-        newer
-            .groups(&dismissals, ReportOptions::default())
-            .iter()
-            .any(|g| g.key.finding.code == "missing_summary")
-    );
+    for raw in [" 007 ", "8"] {
+        let altered = runner
+            .run_view(graph.view(), &advisory_suite(&[raw]))
+            .unwrap();
+        assert!(
+            altered
+                .groups(&dismissals, ReportOptions::default())
+                .iter()
+                .any(|g| g.key.analyzer_key == key.analyzer_key)
+        );
+    }
+    for version in ["2.0.0", "1.0.0+build.1", "1.0.0-alpha"] {
+        let mut factory = advisory_factory();
+        factory.version = version;
+        let newer = advisory_runner(factory, inputs.clone())
+            .run_view(graph.view(), &advisory_suite(&["7"]))
+            .unwrap();
+        let changed = &newer
+            .warnings()
+            .find(|o| o.key.analyzer_key == key.analyzer_key)
+            .unwrap()
+            .key;
+        assert_ne!(changed, &key);
+        assert!(dismissals.get(changed).is_none());
+    }
     let mut subject = key.clone();
-    subject.finding.subjects = BTreeSet::from([graph.view().at(1).unwrap().id()]);
-    let mut facts = key.clone();
-    facts.finding.facts = Fact::Text("different field".into());
-    assert!(dismissals.get(&subject).is_none());
-    assert!(dismissals.get(&facts).is_none());
-    for different in [subject, facts] {
-        assert_ne!(different.encoding(), key.encoding());
+    subject.analyzer_key = local_key(
+        "missing_summary",
+        &[graph.view().at(1).unwrap().id()],
+        "summary",
+    );
+    let mut detail = key.clone();
+    detail.analyzer_key = local_key(
+        "missing_summary",
+        &[graph.view().at(0).unwrap().id()],
+        "other field",
+    );
+    let mut database = key.clone();
+    database.database = uuid::Uuid::new_v4();
+    let mut analyzer = key.clone();
+    analyzer.analyzer.name = "OtherAnalyzer".into();
+    let mut category = key.clone();
+    category.kind = MessageType::Suggestion;
+    for changed in [subject, detail, database, analyzer, category] {
+        assert_ne!(changed, key);
+        assert!(dismissals.get(&changed).is_none());
     }
 }
 
 #[test]
-fn dismiss_restore_survives_files_reload_and_absent_current_emission() {
+fn dismiss_restore_round_trips_all_reasons_and_notes_without_current_emission() {
     let (mut graph, _) = fixture();
     let mut runner = advisory_runner(advisory_factory(), EvaluationInputs::default());
     let report = runner
@@ -521,14 +525,45 @@ fn dismiss_restore_survives_files_reload_and_absent_current_emission() {
         .unwrap();
     let key = report
         .warnings()
-        .find(|o| o.key.finding.code == "missing_summary")
+        .find(|o| o.key.analyzer_key.contains("missing_summary"))
         .unwrap()
         .key
         .clone();
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("dismissals.json");
-    let store = DismissalStore::new(&path);
-    store.dismiss(key.clone(), "known".into()).unwrap();
+    let mut dismissals = Dismissals::default();
+    for reason in [
+        DismissalReason::Acknowledged,
+        DismissalReason::FalsePositive,
+        DismissalReason::NoLongerRelevant,
+    ] {
+        for note in [None, Some("known issue".into())] {
+            dismissals
+                .dismiss(key.clone(), reason, note.clone())
+                .unwrap();
+            let reloaded: Dismissals =
+                serde_json::from_slice(&serde_json::to_vec(&dismissals).unwrap()).unwrap();
+            assert_eq!(dismissals, reloaded);
+            assert_eq!(reloaded.records().count(), 1);
+            assert_eq!(reloaded.get(&key).unwrap().reason, reason);
+            assert_eq!(reloaded.get(&key).unwrap().note, note);
+            assert!(
+                report
+                    .groups(&reloaded, history_options())
+                    .iter()
+                    .all(|g| g.key != &key)
+            );
+            assert!(
+                !report
+                    .render(
+                        &reloaded,
+                        ReportOptions {
+                            include_dismissed: true,
+                            ..history_options()
+                        }
+                    )
+                    .contains("resolved")
+            );
+        }
+    }
     let root = graph.view().nodes().next().unwrap().id;
     prepare(
         &graph,
@@ -545,27 +580,19 @@ fn dismiss_restore_survives_files_reload_and_absent_current_emission() {
     let report = runner
         .run_view(graph.view(), &advisory_suite(&["7"]))
         .unwrap();
-    let restored_store = DismissalStore::new(&path);
-    let dismissals = restored_store.load().unwrap();
-    assert_eq!(dismissals.get(&key).unwrap().reason, "known");
+    let mut reloaded: Dismissals =
+        serde_json::from_slice(&serde_json::to_vec(&dismissals).unwrap()).unwrap();
+    assert!(reloaded.restore(&key));
+    assert!(!reloaded.restore(&key));
     assert!(
         report
-            .groups(&dismissals, history_options())
-            .iter()
-            .all(|g| g.key != &key)
-    );
-    assert!(restored_store.restore(&key).unwrap());
-    assert!(!restored_store.restore(&key).unwrap());
-    let dismissals = store.load().unwrap();
-    assert!(
-        report
-            .groups(&dismissals, ReportOptions::default())
+            .groups(&reloaded, ReportOptions::default())
             .iter()
             .all(|g| g.key != &key)
     );
     assert_eq!(
         report
-            .groups(&dismissals, history_options())
+            .groups(&reloaded, history_options())
             .iter()
             .find(|g| g.key == &key)
             .unwrap()
@@ -573,16 +600,15 @@ fn dismiss_restore_survives_files_reload_and_absent_current_emission() {
             .len(),
         3
     );
-    assert!(
-        !report
-            .render(&dismissals, history_options())
-            .contains("resolved")
-    );
-    let snapshot = std::fs::read(&path).unwrap();
+    let before = reloaded.clone();
     let mut blocking = key;
     blocking.kind = MessageType::Inconsistency;
-    assert!(store.dismiss(blocking, "cannot hide".into()).is_err());
-    assert_eq!(std::fs::read(&path).unwrap(), snapshot);
+    assert!(
+        reloaded
+            .dismiss(blocking, DismissalReason::FalsePositive, None)
+            .is_err()
+    );
+    assert_eq!(reloaded, before);
 }
 
 #[test]
@@ -618,8 +644,8 @@ fn transition_events_remain_visible_after_unrelated_appends_and_partial_split_re
     let ids = plan.added().to_vec();
     plan.commit(&mut graph).unwrap();
     let mut runner = advisory_runner(advisory_factory(), EvaluationInputs::default());
-    for end in [4, 5, 6, 7] {
-        let at = graph.view().prefix(end).unwrap();
+    for end_exclusive in [4, 5, 6, 7] {
+        let at = graph.view().prefix(end_exclusive).unwrap();
         let report = runner.run_view(at, &advisory_suite(&["7"])).unwrap();
         let dismissals = Dismissals::default();
         let groups = report.groups(&dismissals, ReportOptions::default());
@@ -627,12 +653,12 @@ fn transition_events_remain_visible_after_unrelated_appends_and_partial_split_re
             .iter()
             .filter(|g| g.key.kind == MessageType::Suggestion)
             .collect();
-        assert_eq!(events.len(), if end == 4 { 1 } else { 2 });
+        assert_eq!(events.len(), if end_exclusive == 4 { 1 } else { 2 });
         assert_eq!(
-            events[0].observations[0].invocation,
-            Invocation::Prefix(graph.view().prefix(4).unwrap().id())
+            events[0].observations[0].evaluated_view,
+            Some(graph.view().prefix(4).unwrap().id())
         );
-        if end > 4 {
+        if end_exclusive > 4 {
             assert!(
                 report
                     .render(&dismissals, ReportOptions::default())
@@ -664,35 +690,41 @@ fn display_and_even_imported_dismissals_cannot_hide_historical_inconsistencies()
     let report = runner.run_view(graph.view(), &suite("1")).unwrap();
     let key = report.errors().next().unwrap().key.clone();
     let mut dismissals = Dismissals::default();
-    assert!(dismissals.dismiss(key.clone(), "no".into()).is_err());
-    let imported: Dismissals = serde_json::from_value(
-        serde_json::json!({"records": [{"key": key, "reason": "invalid imported dismissal"}]}),
-    )
-    .unwrap();
-    let groups = report.groups(
-        &imported,
-        ReportOptions {
-            advisories: AdvisoryFilter::None,
-            ..Default::default()
-        },
-    );
-    assert_eq!(groups.len(), 1);
-    assert_eq!(
-        groups[0].selected[0].invocation,
-        Invocation::Prefix(graph.view().prefix(1).unwrap().id())
-    );
-    assert!(report.into_result().is_err());
+    for reason in [
+        DismissalReason::Acknowledged,
+        DismissalReason::FalsePositive,
+        DismissalReason::NoLongerRelevant,
+    ] {
+        assert!(dismissals.dismiss(key.clone(), reason, None).is_err());
+        let imported: Dismissals = serde_json::from_value(serde_json::json!({
+            "records": [{ "key": key, "reason": reason, "note": "invalid imported dismissal" }]
+        }))
+        .unwrap();
+        let groups = report.groups(
+            &imported,
+            ReportOptions {
+                advisories: AdvisoryFilter::None,
+                ..Default::default()
+            },
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].selected[0].evaluated_view,
+            Some(graph.view().prefix(1).unwrap().id())
+        );
+        assert!(report.clone().into_result().is_err());
+    }
+    assert_eq!(dismissals.records().count(), 0);
 }
 
 #[test]
 fn execution_failures_record_inputs_and_prefix_and_never_publish_a_candidate() {
     let (graph, _) = fixture();
-    let inputs = EvaluationInputs {
-        values: Body::from([("rule_time".into(), 99.into())]),
-    };
+    let inputs = timed_inputs();
     for at in [
-        Invocation::Initialization,
-        Invocation::Prefix(graph.view().prefix(1).unwrap().id()),
+        None,
+        Some(graph.view().prefix(0).unwrap().id()),
+        Some(graph.view().prefix(1).unwrap().id()),
     ] {
         let mut factory = advisory_factory();
         factory.fail = Some(at);
@@ -716,9 +748,9 @@ fn execution_failures_record_inputs_and_prefix_and_never_publish_a_candidate() {
         Err(crate::transaction::Error::Core(LifeCoreError::AnalyzerExecution(error))) => error,
         Err(error) => panic!("unexpected error: {error}"),
         };
-        assert_eq!(error.invocation, at);
+        assert_eq!(error.evaluated_view, at);
         assert_eq!(error.inputs, inputs);
-        assert_eq!(error.analyzer.version, "1");
+        assert_eq!(error.analyzer.version, Version::new(1, 0, 0));
         assert_eq!(graph.view().len(), 3);
     }
 }
@@ -753,73 +785,67 @@ impl std::hash::Hasher for CollidingHasher {
 }
 
 #[test]
-fn hash_collisions_do_not_merge_findings_and_key_encoding_is_deterministic() {
+fn hash_collisions_do_not_merge_complete_opaque_keys_or_dismiss_other_findings() {
     let (graph, _) = fixture();
-    let report = advisory_runner(advisory_factory(), EvaluationInputs::default())
-        .run_view(graph.view(), &advisory_suite(&["7", "8"]))
+    let mut report = advisory_runner(advisory_factory(), EvaluationInputs::default())
+        .run_view(graph.view(), &advisory_suite(&["7"]))
         .unwrap();
-    let dismissals = Dismissals::default();
-    let groups = report.groups_with_hasher(
-        &dismissals,
-        history_options(),
-        std::hash::BuildHasherDefault::<CollidingHasher>::default(),
-    );
-    assert_eq!(groups.len(), 4);
-    let key = groups[1].key;
-    let decoded = serde_json::from_slice::<crate::analysis::FindingKey>(
-        &key.encoding()[b"lifecore.finding.v1\0".len()..],
-    )
-    .unwrap();
-    assert_eq!(key, &decoded);
-    assert_eq!(key.encoding(), decoded.encoding());
-    assert_eq!(key.digest(), decoded.digest());
-    let one = Fact::from_typed(&BTreeMap::from([("a", 1), ("b", 2)])).unwrap();
-    let two = Fact::from_typed(&BTreeMap::from([("b", 2), ("a", 1)])).unwrap();
-    assert_eq!(one, two);
-    assert!(Fact::from_typed(&1.5).is_err());
+    let mut different = report.observations[0].clone();
+    different
+        .key
+        .analyzer_key
+        .push_str(" opaque, not JSON \u{0}");
+    report.observations.push(different.clone());
+    let mut dismissals = Dismissals::default();
+    let hasher = std::hash::BuildHasherDefault::<CollidingHasher>::default();
+    let groups = report.groups_with_hasher(&dismissals, history_options(), hasher.clone());
+    assert_eq!(groups.len(), 3);
+    for group in groups {
+        let encoded = serde_json::to_vec(group.key).unwrap();
+        let decoded: FindingKey = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(group.key, &decoded);
+        assert_eq!(encoded, serde_json::to_vec(&decoded).unwrap());
+    }
+    dismissals
+        .dismiss(different.key.clone(), DismissalReason::Acknowledged, None)
+        .unwrap();
+    let groups = report.groups_with_hasher(&dismissals, history_options(), hasher);
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().all(|g| g.key != &different.key));
 }
 
 fn repair_observation(view: View<'_>, actions: Vec<SuggestedAction>) -> Observation {
-    let finding = SemanticFinding {
-        code: "explicit_repair".into(),
-        subjects: BTreeSet::new(),
-        facts: Fact::Null,
-    };
     Observation {
-        key: crate::analysis::FindingKey {
+        key: FindingKey {
             database: view.id().database,
             analyzer: AnalyzerIdentity {
                 name: "RepairFixture".into(),
-                version: "1".into(),
-                configuration: Fact::Null,
+                version: Version::new(1, 0, 0),
+                configuration: String::new(),
             },
             kind: MessageType::Suggestion,
-            finding: finding.clone(),
+            analyzer_key: "explicit_repair".into(),
         },
         inputs: EvaluationInputs::default(),
-        invocation: Invocation::Prefix(view.id()),
-        diagnostic: Message {
-            finding,
-            offending_event: view.location(None),
-            relevance: BTreeSet::new(),
-            message: "Explicit repair".into(),
-            kind: MessageKind::Suggestion(actions),
-            scope: ObservationScope::Event,
-        },
+        evaluated_view: Some(view.id()),
+        subjects: BTreeSet::new(),
+        offending_event: view.location(None),
+        relevance: BTreeSet::new(),
+        message: "Explicit repair".into(),
+        kind: MessageKind::Suggestion(actions),
+        retain_in_current_report: true,
     }
 }
 
 #[test]
-fn explicit_repair_exports_the_checked_order_payloads_and_exact_references_as_toml() {
-    use crate::analysis::repair;
+fn explicit_suggestion_preserves_order_payloads_exact_references_and_requires_commit() {
+    use crate::analysis::repair::prepare_suggestion;
     let (graph, _) = fixture();
     let root = graph.view().at(0).unwrap().id();
     let target = graph.view().at(1).unwrap().id();
-    let timestamp: crate::Timestamp = "2026-09-14T15:00:00.123456789+03:00".parse().unwrap();
     let body = Body::from([
-        ("title".into(), "quote\" slash\\ newline\n".into()),
-        ("at".into(), timestamp.into()),
-        ("literal".into(), "2026-09-14T12:00:00Z".into()),
+        ("title".into(), "quoted text".into()),
+        ("at".into(), crate::Timestamp::MIN.into()),
         ("count".into(), (-99).into()),
         ("done".into(), false.into()),
         (
@@ -843,69 +869,19 @@ fn explicit_repair_exports_the_checked_order_payloads_and_exact_references_as_to
             },
         ],
     );
-    let mut runner = AnalysisRunner::new(EvaluationInputs {
-        values: Body::from([("time".into(), timestamp.into())]),
-    });
-    let checked = repair::check(&graph, &observation, "repair-001", &mut runner).unwrap();
+    let mut runner = AnalysisRunner::new(timed_inputs());
+    let checked = prepare_suggestion(&graph, &observation, &mut runner).unwrap();
     assert_eq!(graph.view().len(), 3);
-    let document = toml::from_str::<toml::Table>(checked.toml()).unwrap();
-    assert_eq!(
-        document["database"].as_str(),
-        Some(graph.view().id().database.to_string().as_str())
-    );
-    assert_eq!(document["base"].as_integer(), Some(3));
-    assert_eq!(document["plan_id"].as_str(), Some("repair-001"));
-    let entries = document["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["intent"].as_str(), Some("revise"));
-    assert_eq!(
-        entries[0]["predecessor"].as_str(),
-        Some(format!("@{}:{}", root.origin, root.position()).as_str())
-    );
-    assert_eq!(entries[1]["from"].as_str(), Some("$repair_0"));
-    assert_eq!(
-        entries[1]["to"].as_str(),
-        Some(format!("@{}:{}", target.origin, target.position()).as_str())
-    );
-    assert_eq!(
-        entries[0]["payload"]["at"]
-            .as_datetime()
-            .unwrap()
-            .to_string()
-            .parse::<crate::Timestamp>()
-            .unwrap(),
-        timestamp
-    );
-    assert_eq!(
-        entries[0]["payload"]["literal"].as_str(),
-        Some("2026-09-14T12:00:00Z")
-    );
-    assert_eq!(
-        entries[0]["payload"]["title"].as_str(),
-        Some("quote\" slash\\ newline\n")
-    );
-    assert_eq!(
-        entries[0]["payload"]["rows"][0].as_table().unwrap().len(),
-        0
-    );
-    let ids = checked.transaction().added();
-    assert_eq!(
-        checked.transaction().view().node(ids[0]).unwrap().body,
-        body
-    );
-    assert_eq!(
-        checked.transaction().view().edge(ids[1]).unwrap().from,
-        ids[0]
-    );
-    assert_eq!(checked.transaction().diagnostics.inputs, *runner.inputs());
-    assert_eq!(
-        checked.toml(),
-        repair::check(&graph, &observation, "repair-001", &mut runner)
-            .unwrap()
-            .toml()
-    );
+    let ids = checked.added().to_vec();
+    assert_eq!(checked.view().node(ids[0]).unwrap().body, body);
+    assert_eq!(checked.view().node(ids[0]).unwrap().parent, Some(root));
+    assert_eq!(checked.view().edge(ids[1]).unwrap().from, ids[0]);
+    assert_eq!(checked.view().edge(ids[1]).unwrap().to, target);
+    assert_eq!(checked.view().prefix(4).unwrap().is_stale(root), Some(true));
+    assert!(checked.view().prefix(4).unwrap().get(ids[1]).is_none());
+    assert_eq!(checked.diagnostics.inputs, *runner.inputs());
     let mut receiver = graph.clone();
-    checked.into_transaction().commit(&mut receiver).unwrap();
+    checked.commit(&mut receiver).unwrap();
     assert_eq!(receiver.view().len(), 5);
 }
 
@@ -937,28 +913,23 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     .unwrap();
     let snapshot = serde_json::to_vec(&graph).unwrap();
     assert!(matches!(
-        repair::check(
-            &graph,
-            &stale_repair,
-            "stale",
-            &mut AnalysisRunner::default()
-        ),
+        repair::prepare_suggestion(&graph, &stale_repair, &mut AnalysisRunner::default()),
         Err(repair::Error::Intent { operation: 0 })
     ));
     let mut branch = stale_repair.clone();
-    let MessageKind::Suggestion(actions) = &mut branch.diagnostic.kind else {
+    let MessageKind::Suggestion(actions) = &mut branch.kind else {
         unreachable!()
     };
     let SuggestedAction::AddNode { intent, .. } = &mut actions[0] else {
         unreachable!()
     };
     *intent = Some(RevisionIntent::Branch);
-    assert!(repair::check(&graph, &branch, "branch", &mut AnalysisRunner::default()).is_ok());
+    assert!(repair::prepare_suggestion(&graph, &branch, &mut AnalysisRunner::default()).is_ok());
     assert_eq!(branch.key, stale_repair.key);
     assert_ne!(branch, stale_repair);
     let foreign = LifeCoreList::default();
     assert!(matches!(
-        repair::check(&foreign, &branch, "foreign", &mut AnalysisRunner::default()),
+        repair::prepare_suggestion(&foreign, &branch, &mut AnalysisRunner::default()),
         Err(repair::Error::View(_))
     ));
     let forward = repair_observation(
@@ -970,7 +941,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
         }],
     );
     assert!(matches!(
-        repair::check(&graph, &forward, "forward", &mut AnalysisRunner::default()),
+        repair::prepare_suggestion(&graph, &forward, &mut AnalysisRunner::default()),
         Err(repair::Error::Check(
             crate::transaction::Error::InvalidPlanReference { .. }
         ))
@@ -984,15 +955,9 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
             intent: None,
         }],
     );
-    assert!(matches!(
-        repair::check(
-            &graph,
-            &out_of_profile,
-            "time",
-            &mut AnalysisRunner::default()
-        ),
-        Err(repair::Error::TimestampRange)
-    ));
+    assert!(
+        repair::prepare_suggestion(&graph, &out_of_profile, &mut AnalysisRunner::default()).is_ok()
+    );
     assert_eq!(snapshot, serde_json::to_vec(&graph).unwrap());
     let mut stored = serde_json::to_value(&graph).unwrap();
     stored["suite"] = serde_json::to_value(suite("1")).unwrap();
@@ -1006,42 +971,11 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
         }))
         .unwrap();
     assert!(matches!(
-        repair::check(&configured, &branch, "recheck", &mut runner),
+        repair::prepare_suggestion(&configured, &branch, &mut runner),
         Err(repair::Error::Check(crate::transaction::Error::Core(
             LifeCoreError::SystemsError(_)
         )))
     ));
-}
-
-#[test]
-fn concurrent_dismissal_updates_preserve_both_frontends_records() {
-    let (graph, _) = fixture();
-    let report = advisory_runner(advisory_factory(), EvaluationInputs::default())
-        .run_view(graph.view(), &advisory_suite(&["7"]))
-        .unwrap();
-    let keys: Vec<_> = report
-        .groups(&Dismissals::default(), history_options())
-        .into_iter()
-        .map(|g| g.key.clone())
-        .collect();
-    let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("dismissals.json");
-    let barrier = Arc::new(std::sync::Barrier::new(2));
-    std::thread::scope(|scope| {
-        for key in keys.clone() {
-            let path = &path;
-            let barrier = barrier.clone();
-            scope.spawn(move || {
-                barrier.wait();
-                DismissalStore::new(path)
-                    .dismiss(key, "parallel".into())
-                    .unwrap();
-            });
-        }
-    });
-    let state = DismissalStore::new(path).load().unwrap();
-    assert_eq!(state.records().count(), 2);
-    assert!(keys.iter().all(|key| state.get(key).is_some()));
 }
 
 #[derive(Clone)]
@@ -1055,12 +989,8 @@ impl AnalyzerFactory for InvalidOutputFactory {
     }
 }
 impl Analyzer for InvalidOutputFactory {
-    fn identity(&self) -> AnalyzerIdentity {
-        AnalyzerIdentity {
-            name: "InvalidOutput".into(),
-            version: "1".into(),
-            configuration: Fact::Null,
-        }
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
     }
     fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Output, String> {
         Ok(Output::default())
@@ -1074,14 +1004,22 @@ impl Analyzer for InvalidOutputFactory {
 fn normalization_rejects_future_and_foreign_locations_subjects_and_relevance() {
     let (graph, future) = fixture();
     let foreign = LifeCoreList::default();
-    let base = repair_observation(graph.view(), vec![]).diagnostic;
+    let base = Message {
+        analyzer_key: "opaque key".into(),
+        subjects: BTreeSet::new(),
+        offending_event: None,
+        relevance: BTreeSet::new(),
+        message: "invalid output".into(),
+        kind: MessageKind::Warning,
+        retain_in_current_report: false,
+    };
     let mut bad_location = base.clone();
     bad_location.offending_event = graph.view().location(Some(future));
     let mut foreign_location = base.clone();
     foreign_location.offending_event = foreign.view().location(None);
     let mut bad_subject = base.clone();
     bad_subject.offending_event = None;
-    bad_subject.finding.subjects.insert(future);
+    bad_subject.subjects.insert(future);
     let mut bad_relevance = base;
     bad_relevance.offending_event = None;
     bad_relevance.relevance.insert(future);
@@ -1101,4 +1039,230 @@ fn normalization_rejects_future_and_foreign_locations_subjects_and_relevance() {
             Err(LifeCoreError::InvalidAnalyzerOutput { .. })
         ));
     }
+}
+
+fn local_key(code: &str, subjects: &[EntryId], detail: &str) -> String {
+    serde_json::to_string(&(code, subjects, detail)).unwrap()
+}
+
+fn timed_inputs() -> EvaluationInputs {
+    EvaluationInputs {
+        evaluation_time: Some("2026-09-14T12:00:00.123456789Z".parse().unwrap()),
+    }
+}
+
+#[derive(Clone, Default)]
+struct TimedAnalyzer {
+    initialization_time: Option<crate::Timestamp>,
+}
+impl AnalyzerFactory for TimedAnalyzer {
+    fn analyzer_name(&self) -> &'static str {
+        "Timed"
+    }
+    fn analyzer_with_config(&mut self, _config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        Ok(Box::new(Self::default()))
+    }
+}
+impl TimedAnalyzer {
+    fn output(inputs: &EvaluationInputs) -> Result<Output, String> {
+        let time = inputs
+            .evaluation_time
+            .ok_or("evaluation time is required")?;
+        Ok(Output(vec![Message {
+            analyzer_key: "time advisory".into(),
+            subjects: BTreeSet::new(),
+            offending_event: None,
+            relevance: BTreeSet::new(),
+            message: format!("Evaluated at {time}"),
+            kind: MessageKind::Warning,
+            retain_in_current_report: false,
+        }]))
+    }
+}
+impl Analyzer for TimedAnalyzer {
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
+    }
+    fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Output, String> {
+        self.initialization_time = inputs.evaluation_time;
+        Self::output(inputs)
+    }
+    fn analyze(&self, _view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String> {
+        assert_eq!(inputs.evaluation_time, self.initialization_time);
+        Self::output(inputs)
+    }
+}
+
+#[test]
+fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_prefix_zero() {
+    let (graph, _) = fixture();
+    let suite = SuiteConfig(vec![Config {
+        name: "Timed".into(),
+        config: "".into(),
+    }]);
+    let make_runner = |inputs| {
+        let mut runner = AnalysisRunner::new(inputs);
+        runner
+            .register_analyzer_kind(Box::new(TimedAnalyzer::default()))
+            .unwrap();
+        runner
+    };
+    let mut missing = make_runner(EvaluationInputs::default());
+    let Err(LifeCoreError::AnalyzerExecution(error)) = missing.run_view(graph.view(), &suite)
+    else {
+        panic!("missing time must fail initialization")
+    };
+    assert_eq!(error.evaluated_view, None);
+    assert_eq!(error.inputs.evaluation_time, None);
+    assert_eq!(error.message, "evaluation time is required");
+    assert!(
+        TimedAnalyzer::default()
+            .analyze(graph.view(), &EvaluationInputs::default())
+            .is_err()
+    );
+    let inputs = timed_inputs();
+    let mut runner = make_runner(inputs.clone());
+    let report = runner.run_view(graph.view(), &suite).unwrap();
+    assert_eq!(report, runner.run_view(graph.view(), &suite).unwrap());
+    assert_eq!(
+        report,
+        make_runner(inputs.clone())
+            .run_view(graph.view(), &suite)
+            .unwrap()
+    );
+    let observations: Vec<_> = report.observations().collect();
+    assert_eq!(observations.len(), 5);
+    assert_eq!(observations[0].evaluated_view, None);
+    assert_eq!(
+        observations[1].evaluated_view,
+        Some(graph.view().prefix(0).unwrap().id())
+    );
+    assert_eq!(observations[0].key, observations[1].key);
+    assert_ne!(observations[0], observations[1]);
+    assert!(observations.iter().all(|o| o.inputs == inputs));
+    assert_eq!(report.inputs, inputs);
+    let reloaded: crate::analysis::Report =
+        serde_json::from_slice(&serde_json::to_vec(&report).unwrap()).unwrap();
+    assert_eq!(reloaded, report);
+    let empty = runner
+        .run_view(graph.view().prefix(0).unwrap(), &suite)
+        .unwrap();
+    let dismissals = Dismissals::default();
+    assert_eq!(
+        empty.groups(&dismissals, ReportOptions::default())[0]
+            .selected
+            .len(),
+        2
+    );
+    assert_eq!(
+        report.groups(&dismissals, ReportOptions::default())[0]
+            .selected
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent() {
+    use crate::analysis::repair::{Error, prepare_suggestion};
+    let (graph, _) = fixture();
+    let root = graph.view().at(0).unwrap().id();
+    let mut runner = AnalysisRunner::default();
+    let node = |parent, intent| SuggestedAction::AddNode {
+        ty_name: "Repair".into(),
+        payload: Body::new(),
+        parent,
+        intent,
+    };
+    for action in [
+        node(None, Some(RevisionIntent::Revise)),
+        node(Some(Existing(root)), None),
+    ] {
+        let observation = repair_observation(graph.view(), vec![action]);
+        assert!(matches!(
+            prepare_suggestion(&graph, &observation, &mut runner),
+            Err(Error::Intent { operation: 0 })
+        ));
+    }
+    let two_revisions = repair_observation(
+        graph.view(),
+        vec![
+            node(Some(Existing(root)), Some(RevisionIntent::Revise)),
+            SuggestedAction::AddNode {
+                ty_name: "Second repair".into(),
+                payload: Body::new(),
+                parent: Some(Existing(root)),
+                intent: Some(RevisionIntent::Revise),
+            },
+        ],
+    );
+    assert!(matches!(
+        prepare_suggestion(&graph, &two_revisions, &mut runner),
+        Err(Error::Intent { operation: 1 })
+    ));
+    let change = [Change::AddNode {
+        ty_name: "Candidate".into(),
+        body: Body::new(),
+        parent: None,
+    }];
+    let first = prepare(&graph, &change, &mut runner).unwrap();
+    let second = prepare(&graph, &change, &mut runner).unwrap();
+    let observation = repair_observation(first.view(), vec![node(None, None)]);
+    let mut receiver = graph.clone();
+    second.commit(&mut receiver).unwrap();
+    let before = receiver.clone();
+    assert!(matches!(
+        prepare_suggestion(&receiver, &observation, &mut runner),
+        Err(Error::View(_))
+    ));
+    assert_eq!(receiver, before);
+    let mut ordinary_warning = repair_observation(graph.view(), vec![]);
+    ordinary_warning.kind = MessageKind::Warning;
+    ordinary_warning.key.kind = MessageType::Warning;
+    assert!(matches!(
+        prepare_suggestion(&graph, &ordinary_warning, &mut runner),
+        Err(Error::NotSuggestion)
+    ));
+}
+
+#[test]
+fn suggestion_checks_an_invalid_intermediate_prefix_even_with_a_valid_final_view() {
+    use crate::analysis::repair::{Error, prepare_suggestion};
+    let (graph, future) = fixture();
+    let mut stored = serde_json::to_value(&graph).unwrap();
+    stored["suite"] = serde_json::to_value(suite("4")).unwrap();
+    let graph: LifeCoreList = serde_json::from_value(stored).unwrap();
+    let observation = repair_observation(
+        graph.view(),
+        vec![
+            SuggestedAction::AddNode {
+                ty_name: "Intermediate".into(),
+                payload: Body::new(),
+                parent: None,
+                intent: None,
+            },
+            SuggestedAction::AddNode {
+                ty_name: "Final".into(),
+                payload: Body::new(),
+                parent: Some(Added(0)),
+                intent: Some(RevisionIntent::Revise),
+            },
+        ],
+    );
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(Factory {
+            observed: Arc::default(),
+            future,
+        }))
+        .unwrap();
+    let before = graph.clone();
+    let Err(Error::Check(crate::transaction::Error::Core(LifeCoreError::SystemsError(errors)))) =
+        prepare_suggestion(&graph, &observation, &mut runner)
+    else {
+        panic!("the invalid intermediate prefix must reject preparation")
+    };
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].evaluated_view.unwrap().end_exclusive, 4);
+    assert_eq!(graph, before);
 }

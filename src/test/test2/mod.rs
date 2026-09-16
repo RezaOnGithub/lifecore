@@ -332,10 +332,10 @@ fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary(
             node("A3", Some(Added(0))),
         ],
     );
-    for end in 0..=full.view().len() {
+    for end_exclusive in 0..=full.view().len() {
         let mut truncated = full.clone();
-        truncated.entries.truncate(end);
-        let bounded = full.view().prefix(end).unwrap();
+        truncated.entries.truncate(end_exclusive);
+        let bounded = full.view().prefix(end_exclusive).unwrap();
         assert_eq!(bounded.id(), truncated.view().id());
         for id in &ids {
             assert_eq!(bounded.get(*id), truncated.view().get(*id));

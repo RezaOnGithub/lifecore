@@ -53,17 +53,12 @@ pub enum Direction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Interpretation {
+pub struct InspectedEntry<'a> {
+    pub entry: &'a Entry,
     pub stale: bool,
     //A None is reserved for edges, whose type name is a relationship label.
     //A Nodes retain missing/malformed/ambiguous resolution as structured data.
     pub type_definition: Option<Result<Option<TypeDefinition>, ResolutionError>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct InspectedEntry<'a> {
-    pub entry: &'a Entry,
-    pub interpretation: Interpretation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -73,18 +68,17 @@ pub struct Inspection<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct InterpretationChange {
-    pub entry: EntryId,
-    pub before: Interpretation,
-    pub after: Interpretation,
+pub struct EntryChange<'base, 'target> {
+    pub at_base: InspectedEntry<'base>,
+    pub at_target: InspectedEntry<'target>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Comparison<'a> {
-    pub before: ViewId,
-    pub after: ViewId,
-    pub added: Vec<InspectedEntry<'a>>,
-    pub changed: Vec<InterpretationChange>,
+pub struct Comparison<'base, 'target> {
+    pub base_view: ViewId,
+    pub target_view: ViewId,
+    pub added: Vec<InspectedEntry<'target>>,
+    pub changed: Vec<EntryChange<'base, 'target>>,
 }
 
 impl<'a> View<'a> {
@@ -151,10 +145,8 @@ impl<'a> View<'a> {
         let entry = self.get(id)?;
         Some(InspectedEntry {
             entry,
-            interpretation: Interpretation {
-                stale: self.is_stale(id)?,
-                type_definition: entry.as_node().map(|node| self.resolve_type(&node.ty_name)),
-            },
+            stale: self.is_stale(id)?,
+            type_definition: entry.as_node().map(|node| self.resolve_type(&node.ty_name)),
         })
     }
 
@@ -168,29 +160,28 @@ impl<'a> View<'a> {
         }
     }
 
-    //A Comparison is directed: the later view must extend the entire earlier
-    //A view. Sibling candidates share only their base, never provisional entries.
-    pub fn compare<'b>(self, after: View<'b>) -> Result<Comparison<'b>, ViewError> {
-        after.extends(self)?;
+    //A The target must extend the entire base, including entry contents. Added
+    //A positions are [base_view.end_exclusive, target_view.end_exclusive).
+    pub fn compare<'target>(
+        self,
+        target: View<'target>,
+    ) -> Result<Comparison<'a, 'target>, ViewError> {
+        target.extends(self)?;
         let changed = self
             .entries()
             .filter_map(|entry| {
-                let before = self.inspect(entry.id())?.interpretation;
-                let later = after.inspect(entry.id())?.interpretation;
-                (before != later).then_some(InterpretationChange {
-                    entry: entry.id(),
-                    before,
-                    after: later,
-                })
+                let at_base = self.inspect(entry.id())?;
+                let at_target = target.inspect(entry.id())?;
+                (at_base != at_target).then_some(EntryChange { at_base, at_target })
             })
             .collect();
         Ok(Comparison {
-            before: self.id(),
-            after: after.id(),
-            added: after
+            base_view: self.id(),
+            target_view: target.id(),
+            added: target
                 .entries()
                 .skip(self.len())
-                .filter_map(|entry| after.inspect(entry.id()))
+                .filter_map(|entry| target.inspect(entry.id()))
                 .collect(),
             changed,
         })
@@ -279,6 +270,4 @@ fn dot_quote(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod test {
-    mod test2;
-}
+mod test;
