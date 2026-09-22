@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, EvaluationInputs, InnerMessageType, InnerOutput, Message,
-        MessageKind, MessageType, Output, TypedAnalyzer,
+        Analyzer, AnalyzerCertificate, AnalyzerFactory, EvaluationInputs, InnerMessageType,
+        InnerOutput, Message, MessageKind, MessageType, Output, TypedAnalyzer,
     },
 };
 use semver::Version;
@@ -328,8 +328,10 @@ impl DagCheck {
     fn convert_message(&self, message: DagCheckMessage) -> lifecore::analysis::Message {
         let text = Self::message_text(&message.component);
         Message {
-            analyzer_key: serde_json::to_string(&DagFinding::CyclicComponent(&message.component))
-                .expect("typed cycle finding"),
+            analyzer_certificate: AnalyzerCertificate(
+                serde_json::to_string(&DagFinding::CyclicComponent(&message.component))
+                    .expect("typed cycle finding"),
+            ),
             subjects: message.relevance.iter().copied().collect(),
             offending_event: Some(message.location),
             relevance: message.relevance.into_iter().collect(),

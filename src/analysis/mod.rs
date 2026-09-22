@@ -9,9 +9,9 @@ use std::{
 
 mod identity;
 pub mod presentation;
-pub mod repair;
-pub use identity::{AnalyzerIdentity, EvaluationInputs, FindingKey};
-pub use repair::{RevisionIntent, SuggestedAction};
+pub mod suggestion;
+pub use identity::{AnalyzerCertificate, AnalyzerIdentity, EvaluationInputs, FindingKey};
+pub use suggestion::{RevisionIntent, SuggestedAction};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);
@@ -39,7 +39,7 @@ pub enum MessageKind {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Message {
-    pub analyzer_key: String,
+    pub analyzer_certificate: AnalyzerCertificate,
     pub subjects: BTreeSet<EntryId>,
     //A Setup has no graph location. Replay can describe an earlier transition,
     //A but never a location outside the invocation prefix.
@@ -116,12 +116,18 @@ pub trait AnalyzerFactory {
     fn analyzer_name(&self) -> &'static str;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EvaluatedView {
+    Initialization,
+    Prefix(ViewId),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("analyzer {analyzer:?} failed at {evaluated_view:?}: {message}")]
 pub struct ExecutionFailure {
     pub analyzer: AnalyzerIdentity,
     pub inputs: EvaluationInputs,
-    pub evaluated_view: Option<ViewId>,
+    pub evaluated_view: EvaluatedView,
     pub message: String,
 }
 
@@ -130,7 +136,7 @@ pub struct ExecutionFailure {
 pub struct Observation {
     pub key: FindingKey,
     pub inputs: EvaluationInputs,
-    pub evaluated_view: Option<ViewId>,
+    pub evaluated_view: EvaluatedView,
     pub subjects: BTreeSet<EntryId>,
     pub offending_event: Option<DiagnosticLocation>,
     pub relevance: BTreeSet<EntryId>,
@@ -212,7 +218,7 @@ impl AnalysisRunner {
         };
         let mut seen = HashMap::new();
         for (analyzer, identity) in analyzers.iter_mut().zip(&report.implementations) {
-            let evaluated_view = None;
+            let evaluated_view = EvaluatedView::Initialization;
             let output = analyzer.initialize(&self.inputs).map_err(|message| {
                 LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
                     analyzer: identity.clone(),
@@ -236,7 +242,7 @@ impl AnalysisRunner {
         for (analyzer, identity) in analyzers.iter().zip(&report.implementations) {
             for end_exclusive in 0..=view.len() {
                 let prefix = view.prefix(end_exclusive).expect("bounded replay prefix");
-                let evaluated_view = Some(prefix.id());
+                let evaluated_view = EvaluatedView::Prefix(prefix.id());
                 let output = analyzer.analyze(prefix, &self.inputs).map_err(|message| {
                     LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
                         analyzer: identity.clone(),
@@ -266,7 +272,7 @@ fn record(
     identity: &AnalyzerIdentity,
     inputs: &EvaluationInputs,
     view: View<'_>,
-    evaluated_view: Option<ViewId>,
+    evaluated_view: EvaluatedView,
     output: Output,
 ) -> Result<(), LifeCoreError> {
     for diagnostic in output.0 {
@@ -275,7 +281,7 @@ fn record(
             message: message.into(),
         };
         if let Some(location) = diagnostic.offending_event {
-            if evaluated_view.is_none() {
+            if evaluated_view == EvaluatedView::Initialization {
                 return Err(invalid("initialization cannot have a graph location"));
             }
             let prefix = view
@@ -302,7 +308,7 @@ fn record(
                 database: view.id().database,
                 analyzer: identity.clone(),
                 kind: diagnostic.ty(),
-                analyzer_key: diagnostic.analyzer_key,
+                analyzer_certificate: diagnostic.analyzer_certificate,
             },
             inputs: inputs.clone(),
             evaluated_view,

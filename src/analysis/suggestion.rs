@@ -1,4 +1,4 @@
-use super::{AnalysisRunner, MessageKind, Observation};
+use super::{AnalysisRunner, EvaluatedView, MessageKind, Observation};
 use crate::{
     Body, LifeCoreList, ViewError,
     transaction::{self, Change, PreparedTransaction, Reference},
@@ -29,14 +29,14 @@ pub enum SuggestedAction {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("the selected observation has no suggested repair")]
+    #[error("the selected observation has no suggested actions")]
     NotSuggestion,
     #[error(transparent)]
     View(#[from] ViewError),
     #[error(transparent)]
     Check(#[from] transaction::Error),
     #[error(
-        "repair operation {operation} has inconsistent predecessor/intent or revises a stale predecessor"
+        "suggested operation {operation} has inconsistent predecessor/intent or revises a stale predecessor"
     )]
     Intent { operation: usize },
 }
@@ -51,7 +51,7 @@ pub fn prepare_suggestion(
     if graph.view().id().database != observation.key.database {
         return Err(ViewError::DifferentHistory.into());
     }
-    if let Some(at) = observation.evaluated_view
+    if let EvaluatedView::Prefix(at) = observation.evaluated_view
         && graph.view().prefix(at.end_exclusive)?.id() != at
     {
         return Err(ViewError::DifferentHistory.into());

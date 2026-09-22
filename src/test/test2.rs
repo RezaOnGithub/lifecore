@@ -102,6 +102,81 @@ fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
 }
 
 #[test]
+fn ancestry_excludes_self_and_preserves_roots_and_current_descendants_in_each_prefix() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            node("A", None),
+            node("B", None),
+            Change::AddEdge {
+                from: Added(0),
+                ty_name: "link".into(),
+                to: Added(1),
+            },
+            node("Child", Some(Added(0))),
+            node("Grandchild", Some(Added(3))),
+            node("Branch", Some(Added(0))),
+        ],
+    );
+    let mut other = LifeCoreList::default();
+    let foreign = append(&mut other, &[node("A", None)])[0];
+    for (end_exclusive, descendants, current) in [
+        (0, vec![], vec![]),
+        (1, vec![], vec![ids[0]]),
+        (2, vec![], vec![ids[0]]),
+        (3, vec![], vec![ids[0]]),
+        (4, vec![ids[3]], vec![ids[3]]),
+        (5, vec![ids[3], ids[4]], vec![ids[4]]),
+        (6, vec![ids[3], ids[4], ids[5]], vec![ids[4], ids[5]]),
+    ] {
+        let view = graph.view().prefix(end_exclusive).unwrap();
+        for (id, ancestors, root) in [
+            (ids[0], vec![], ids[0]),
+            (ids[1], vec![], ids[1]),
+            (ids[3], vec![ids[0]], ids[0]),
+            (ids[4], vec![ids[3], ids[0]], ids[0]),
+            (ids[5], vec![ids[0]], ids[0]),
+        ] {
+            let visible = id.position() < end_exclusive;
+            assert_eq!(
+                view.ancestors(id).map(|n| n.id).collect::<Vec<_>>(),
+                if visible { ancestors } else { vec![] }
+            );
+            assert_eq!(view.root_of(id), visible.then_some(root));
+        }
+        assert_eq!(
+            view.descendants(ids[0]).map(|n| n.id).collect::<Vec<_>>(),
+            descendants
+        );
+        assert_eq!(
+            view.fresh_successors(ids[0])
+                .map(|n| n.id)
+                .collect::<Vec<_>>(),
+            current
+        );
+        for id in [foreign, ids[2]] {
+            assert!(view.ancestors(id).next().is_none());
+            assert_eq!(view.root_of(id), None);
+            assert!(view.descendants(id).next().is_none());
+            assert!(view.fresh_successors(id).next().is_none());
+        }
+    }
+    let view = graph.view();
+    assert_eq!(
+        view.fresh_successors(ids[4])
+            .map(|n| n.id)
+            .collect::<Vec<_>>(),
+        vec![ids[4]]
+    );
+    assert!(view.descendants(ids[4]).next().is_none());
+    assert_eq!(view.relative_degree(ids[3], ids[5]), Some(0));
+    assert_eq!(view.relative_degree(ids[4], ids[5]), Some(1));
+    assert_eq!(view.relative_degree(ids[5], ids[4]), Some(1));
+    assert_eq!(view.relative_degree(ids[4], ids[1]), None);
+}
+
+#[test]
 fn identities_reject_other_databases_and_independent_candidate_suffixes() {
     let mut graph = LifeCoreList::default();
     let base = append(&mut graph, &[node("A", None)])[0];

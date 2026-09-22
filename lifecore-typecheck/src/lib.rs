@@ -1,8 +1,8 @@
 use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerFactory, EvaluationInputs, InnerMessageType, InnerOutput, Message,
-        MessageKind, MessageType, Output, TypedAnalyzer,
+        Analyzer, AnalyzerCertificate, AnalyzerFactory, EvaluationInputs, InnerMessageType,
+        InnerOutput, Message, MessageKind, MessageType, Output, TypedAnalyzer,
     },
     typing::{FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition},
 };
@@ -275,8 +275,10 @@ impl TypedAnalyzer for TypeCheck {
                     Message {
                         //A The typed variant skips its ordinary boundary; the exact
                         //A subject and distinguishing details still define identity.
-                        analyzer_key: serde_json::to_string(&(&finding, location.entry))
-                            .expect("typed TypeCheck finding"),
+                        analyzer_certificate: AnalyzerCertificate(
+                            serde_json::to_string(&(&finding, location.entry))
+                                .expect("typed TypeCheck finding"),
+                        ),
                         subjects: location.entry.into_iter().collect(),
                         offending_event: Some(location),
                         relevance: location.entry.into_iter().collect(),

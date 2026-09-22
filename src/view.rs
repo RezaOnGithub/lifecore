@@ -110,21 +110,26 @@ impl<'a> View<'a> {
     pub fn children(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         self.nodes().filter(move |n| n.parent == Some(id))
     }
-    pub fn ancestors(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
+    //A Roots and current endpoints need an inclusive walk; public ancestry starts
+    //A at the parent so a node is never its own ancestor.
+    fn lineage(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         std::iter::successors(self.node(id), move |node| {
             node.parent.and_then(|id| self.node(id))
         })
     }
+    pub fn ancestors(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
+        self.lineage(id).skip(1)
+    }
     pub fn root_of(self, id: EntryId) -> Option<EntryId> {
-        self.ancestors(id).last().map(|n| n.id)
+        self.lineage(id).last().map(|n| n.id)
     }
     pub fn fresh_successors(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         self.fresh_nodes()
-            .filter(move |node| self.ancestors(node.id).any(|n| n.id == id))
+            .filter(move |node| self.lineage(node.id).any(|n| n.id == id))
     }
     pub fn relative_degree(self, a: EntryId, b: EntryId) -> Option<usize> {
-        for (left, ancestor) in self.ancestors(a).skip(1).enumerate() {
-            if let Some(right) = self.ancestors(b).skip(1).position(|n| n.id == ancestor.id) {
+        for (left, ancestor) in self.ancestors(a).enumerate() {
+            if let Some(right) = self.ancestors(b).position(|n| n.id == ancestor.id) {
                 return Some(left.max(right));
             }
         }

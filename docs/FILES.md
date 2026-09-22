@@ -246,7 +246,7 @@ into one proposed edge before producing the file.
 ## 3. Planning, checking, and applying
 
 The library provides
-`lifecore::analysis::repair::prepare_suggestion(graph, observation, runner)` for
+`lifecore::analysis::suggestion::prepare_suggestion(graph, observation, runner)` for
 an explicitly selected suggestion. It returns a freshly checked
 `PreparedTransaction`; callers inspect candidate prefixes and explicitly commit
 in memory. Source identity, exact references, revision intent, and every-prefix
@@ -294,10 +294,13 @@ read a clock implicitly. Freeze the inputs across initialization and every
 replayed prefix. An analyzer requiring time errors when it is absent. A receipt
 records this context; an old check cannot authorize ignoring changes to it.
 
-Stored reports retain `evaluated_view: None` for initialization and `Some` for
-an exact prefix, including empty prefix zero. Views cover `[0, end_exclusive)`.
+Stored reports retain `EvaluatedView::Initialization` or
+`EvaluatedView::Prefix(view)` for an exact prefix, including empty prefix zero.
+Views cover `[0, end_exclusive)`.
 Finding keys compare database identity, registered analyzer name, exact version,
-original configuration string, category, and complete opaque analyzer key.
+original configuration string, category, and complete opaque
+`analyzer_certificate: AnalyzerCertificate`. The certificate is a String newtype
+serialized transparently as a string.
 Behaviorally equivalent configuration spellings remain distinct identities.
 Ordinary boundaries, wording, time, and suggested actions belong to observations.
 Dismissal records retain their exact key, reason (`Acknowledged`, `FalsePositive`,

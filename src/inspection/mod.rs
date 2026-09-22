@@ -2,7 +2,7 @@ use crate::{
     Edge, Entry, EntryId, Node, Payload, View, ViewError, ViewId,
     typing::{ResolutionError, TypeDefinition},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -53,32 +53,58 @@ pub enum Direction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct InspectedEntry<'a> {
+pub struct Resolution<'a> {
     pub entry: &'a Entry,
     pub stale: bool,
-    //A None is reserved for edges, whose type name is a relationship label.
-    //A Nodes retain missing/malformed/ambiguous resolution as structured data.
-    pub type_definition: Option<Result<Option<TypeDefinition>, ResolutionError>>,
+    pub type_definition: TypeResolution,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypeResolution {
+    //A Edges carry relationship labels rather than node type declarations.
+    NotApplicableToEdge,
+    MissingDeclaration,
+    Resolved(TypeDefinition),
+    Failed(ResolutionError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Inspection<'a> {
     pub view: ViewId,
-    pub entries: Vec<InspectedEntry<'a>>,
+    pub entries: Vec<Resolution<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct EntryChange<'base, 'target> {
-    pub at_base: InspectedEntry<'base>,
-    pub at_target: InspectedEntry<'target>,
+pub struct ResolutionDifference<'base, 'target> {
+    at_base: Resolution<'base>,
+    at_target: Resolution<'target>,
+}
+
+impl<'base, 'target> ResolutionDifference<'base, 'target> {
+    //A Only distinct resolutions of the same immutable entry form a difference.
+    //A Private fields and shared accessors preserve that invariant after construction.
+    pub fn new(at_base: Resolution<'base>, at_target: Resolution<'target>) -> Option<Self> {
+        if at_base.entry != at_target.entry || at_base == at_target {
+            return None;
+        }
+        Some(Self { at_base, at_target })
+    }
+
+    pub fn at_base(&self) -> &Resolution<'base> {
+        &self.at_base
+    }
+
+    pub fn at_target(&self) -> &Resolution<'target> {
+        &self.at_target
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Comparison<'base, 'target> {
+pub struct ResolutionComparison<'base, 'target> {
     pub base_view: ViewId,
     pub target_view: ViewId,
-    pub added: Vec<InspectedEntry<'target>>,
-    pub changed: Vec<EntryChange<'base, 'target>>,
+    pub added: Vec<Resolution<'target>>,
+    pub changed: Vec<ResolutionDifference<'base, 'target>>,
 }
 
 impl<'a> View<'a> {
@@ -133,20 +159,26 @@ impl<'a> View<'a> {
             })
     }
 
-    //A Descendants exclude the starting revision; ancestors and fresh_successors
-    //A include it when eligible. All traversal retains exact revision identities.
+    //A Ancestors and descendants exclude the starting revision. Fresh successors
+    //A include it when current. All traversal retains exact revision identities.
     pub fn descendants(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
-        self.nodes().filter(move |node| {
-            node.id != id && self.ancestors(node.id).skip(1).any(|n| n.id == id)
-        })
+        self.nodes()
+            .filter(move |node| self.ancestors(node.id).any(|n| n.id == id))
     }
 
-    pub fn inspect(self, id: EntryId) -> Option<InspectedEntry<'a>> {
+    pub fn resolve(self, id: EntryId) -> Option<Resolution<'a>> {
         let entry = self.get(id)?;
-        Some(InspectedEntry {
+        Some(Resolution {
             entry,
             stale: self.is_stale(id)?,
-            type_definition: entry.as_node().map(|node| self.resolve_type(&node.ty_name)),
+            type_definition: match entry {
+            Entry::Edge(_) => TypeResolution::NotApplicableToEdge,
+            Entry::Node(node) => match self.resolve_type(&node.ty_name) {
+            Ok(Some(definition)) => TypeResolution::Resolved(definition),
+            Ok(None) => TypeResolution::MissingDeclaration,
+            Err(error) => TypeResolution::Failed(error),
+            },
+            },
         })
     }
 
@@ -155,7 +187,7 @@ impl<'a> View<'a> {
             view: self.id(),
             entries: self
                 .entries()
-                .filter_map(|entry| self.inspect(entry.id()))
+                .filter_map(|entry| self.resolve(entry.id()))
                 .collect(),
         }
     }
@@ -165,23 +197,23 @@ impl<'a> View<'a> {
     pub fn compare<'target>(
         self,
         target: View<'target>,
-    ) -> Result<Comparison<'a, 'target>, ViewError> {
+    ) -> Result<ResolutionComparison<'a, 'target>, ViewError> {
         target.extends(self)?;
         let changed = self
             .entries()
             .filter_map(|entry| {
-                let at_base = self.inspect(entry.id())?;
-                let at_target = target.inspect(entry.id())?;
-                (at_base != at_target).then_some(EntryChange { at_base, at_target })
+                let at_base = self.resolve(entry.id())?;
+                let at_target = target.resolve(entry.id())?;
+                ResolutionDifference::new(at_base, at_target)
             })
             .collect();
-        Ok(Comparison {
+        Ok(ResolutionComparison {
             base_view: self.id(),
             target_view: target.id(),
             added: target
                 .entries()
                 .skip(self.len())
-                .filter_map(|entry| target.inspect(entry.id()))
+                .filter_map(|entry| target.resolve(entry.id()))
                 .collect(),
             changed,
         })

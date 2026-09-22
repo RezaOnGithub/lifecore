@@ -388,8 +388,9 @@ analyzers or analyzer execution failures are errors, not successful checks.
 adapter calls the implementation's explicit `convert_report`; direct third-party
 `dyn Analyzer` implementations are also supported. Factories and domain findings
 remain in their analyzer packages. Shared `Message` output contains an opaque
-`analyzer_key: String`, exact subjects, optional diagnostic location, relevance
-set, text, `MessageKind`, and `retain_in_current_report: bool`.
+`analyzer_certificate: AnalyzerCertificate`, exact subjects, optional diagnostic
+location, relevance set, text, `MessageKind`, and `retain_in_current_report: bool`.
+`AnalyzerCertificate` is a String newtype, serialized transparently as a string.
 
 Both analyzer traits return `version() -> semver::Version`. The runner constructs
 `AnalyzerIdentity` from the registered name, returned version, and original
@@ -415,9 +416,10 @@ constructed first, initialized in suite order, then each replays boundaries
 and prefix zero. Missing factories, invalid configuration, execution failures,
 and malformed subject/location output are errors.
 
-An observation or execution failure records `evaluated_view: Option<ViewId>`.
-`None` means initialization; `Some(view)` identifies the exact evaluated prefix,
-including zero. Failures also retain analyzer identity and frozen inputs.
+An observation or execution failure records `evaluated_view: EvaluatedView`.
+`EvaluatedView::Initialization` identifies initialization;
+`EvaluatedView::Prefix(view)` identifies the exact evaluated prefix, including
+zero. Failures also retain analyzer identity and frozen inputs.
 Initialization has no graph access or graph diagnostic location. Every replay
 location must identify an actual prefix of the evaluated view, with its subject
 visible there. Message subjects and relevance must be visible in the evaluated
@@ -426,9 +428,10 @@ view. Initialization therefore cannot name graph entries.
 ### 8.2 Finding identity and observations
 
 `FindingKey` has four fields: database identity, `AnalyzerIdentity`, message
-category, and `analyzer_key: String`. The string is the complete analyzer-owned
-finding identity, opaque to shared orchestration. There is no shared `Fact`,
-nested `Finding`, versioned key envelope, or digest helper. Grouping and dismissal
+category, and `analyzer_certificate: AnalyzerCertificate`. The wrapped string is
+the complete analyzer-owned finding identity, opaque to shared orchestration.
+There is no shared `Fact`, nested `Finding`, versioned key envelope, or digest helper.
+Grouping and dismissal
 compare complete keys, including the entire string; hashes are only collection
 implementation details and collisions do not establish equality.
 
@@ -447,11 +450,11 @@ Typed domain data stays inside each analyzer; presentation wording is not a key.
 Ordinary evaluation boundaries, evaluation time, wording, relevance ordering,
 and suggested actions do not by themselves change finding identity. When a time
 threshold or transition distinguishes an issue, the analyzer must deliberately
-include that detail in its local key. Different subjects, distinguishing details,
+include that detail in its certificate. Different subjects, distinguishing details,
 versions, original configuration strings, categories, or databases stay distinct.
 Repeated observations of a dismissed key remain dismissed.
 
-The runner consumes each `Message`, moves its local key into `FindingKey`, and
+The runner consumes each `Message`, moves its certificate into `FindingKey`, and
 stores occurrence and presentation fields directly on `Observation`: frozen
 inputs, evaluated view, subjects, location, relevance, wording, kind/actions, and
 retention flag. It retains no second nested diagnostic containing the same key.
@@ -489,9 +492,9 @@ report selection, or imported dismissal records. Dismiss operations reject
 inconsistency keys. Transaction acceptance uses the unfiltered report and execution
 errors, independently of dismissal reasons, notes, or presentation.
 
-### 8.4 Explicit suggested repairs
+### 8.4 Explicit suggestions
 
-`analysis::repair::prepare_suggestion(graph, observation, runner)` returns
+`analysis::suggestion::prepare_suggestion(graph, observation, runner)` returns
 `Result<PreparedTransaction, Error>` for an explicitly selected suggestion.
 Its ordered actions are checked anew with `transaction::prepare` under the
 runner's frozen evaluation inputs, including historical and intermediate prefixes.
@@ -502,7 +505,7 @@ Revision actions specify `revise` or `branch`; `revise` requires a current
 predecessor immediately before that action, including earlier actions in the
 same suggestion. A predecessor requires an intent and a root must omit it.
 The returned candidate and its prefixes can be inspected before explicit commit.
-Preparation neither applies the repair nor dismisses a finding or infers
+Preparation neither applies the suggestion nor dismisses a finding or infers
 reconnections. All core values, including the full timestamp range, remain
 available. Plan IDs, TOML envelopes, timestamp conversion, persistence, and
 receipts belong to stage 5's CLI; there is no library export wrapper.
@@ -539,22 +542,29 @@ there is no field-path or textual query language. Empty collections are present.
 `EdgeSelection` selects an exact relationship type and currentness.
 Both selections default to current entries; `Historical` selects only stale
 entries and `All` includes both. Relationships retain direction and exact
-endpoints. Descendants exclude the starting revision; `ancestors` and
-`fresh_successors` include it when eligible. Entry collections use append order;
-ancestors run from the subject toward its root.
+endpoints. `ancestors` and `descendants` exclude the starting revision.
+Ancestors run from the parent toward the root; a root has no ancestors.
+`root_of` returns the starting node itself when it is a root, and
+`fresh_successors` includes the starting revision when current. Entry collections
+use append order. Traversal of unavailable identities yields no results.
 
-`inspect` returns absence for unavailable identities. `inspection` produces a
-serializable, ordered snapshot with source/boundary and `InspectedEntry` values.
-Each inspected entry directly holds its borrowed entry, `stale`, and the existing
-type-resolution result, including typed errors; there is no interpretation wrapper.
+`resolve` returns absence for unavailable identities. `inspection` produces a
+serializable, ordered snapshot with source/boundary and `Resolution` values.
+Each resolution directly holds its borrowed entry, `stale`, and
+`type_definition: TypeResolution`. Its variants distinguish `NotApplicableToEdge`,
+`MissingDeclaration`, `Resolved(TypeDefinition)`, and `Failed(ResolutionError)`;
+there is no interpretation wrapper.
 An old node's type is interpreted in the requested view, just as with a direct
 `resolve_type` call; this does not assert that TypeCheck checks stale nodes.
 `base.compare(target)` requires the target to extend the entire base history,
-comparing exact entry identities and contents. `Comparison` exposes `base_view`
-and `target_view`. Added entries occupy
+comparing exact entry identities and contents. `ResolutionComparison` exposes
+`base_view` and `target_view`. Added entries occupy
 `[base_view.end_exclusive, target_view.end_exclusive)`: comparing prefixes 3 and 5
-adds positions 3 and 4. Existing freshness or type changes are `EntryChange`
-values holding complete inspected entries as `at_base` and `at_target`.
+adds positions 3 and 4. Existing freshness or type changes are
+`ResolutionDifference` values holding complete resolutions. The constructor
+returns no difference for equal resolutions or different stored entries, including
+altered contents under the same identity. Private fields and the read-only
+`at_base()` and `at_target()` accessors preserve those invariants.
 Comparisons support committed base/candidate views and reject unrelated sources,
 reversed boundaries, and divergent histories, even if boundary/head IDs match.
 No freshness or resolved-type cache is retained.

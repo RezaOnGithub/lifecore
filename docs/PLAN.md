@@ -81,9 +81,9 @@ Independent cleanup can proceed while an unrelated decision remains open.
 | Schema representation | Implemented in Stage 2. | Named field records carry `shape` and `presence`; shapes use `kind`, `element` for lists, and `fields` for records. No textual type-expression parser. |
 | Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
 | Plan persistence | Atomic staging retained; library persistence removed at the review checkpoint. | Libraries compare exact original graph/suite state before in-memory commit. Stage 5's `lifecore-cli` owns publication, writer exclusion, stale-base rejection, no-clobber initialization, and receipts. Concrete layout remains open. |
-| Finding identity | Revised at the review checkpoint; SPEC section 8. | Database, registered analyzer name, exact `semver::Version`, original configuration string, category, and complete opaque analyzer key. Built-ins encode typed variants, exact subjects, and details as deterministic JSON. Ordinary boundaries, wording, inputs, and actions belong to observations. |
+| Finding identity | Revised at the review checkpoint; SPEC section 8. | Database, registered analyzer name, exact `semver::Version`, original configuration string, category, and complete opaque `analyzer_certificate: AnalyzerCertificate` (a String newtype). Built-ins encode typed variants, exact subjects, and details as deterministic JSON. Ordinary boundaries, wording, inputs, and actions belong to observations. |
 | Advisory presentation | Stage 4, simplified at review; SPEC section 8. | Current observations plus explicit `retain_in_current_report` advisories; full history selectable. Serializable dismissal has a reason and optional note; persistence belongs to stage 5. Retention and dismissal never establish applicability or resolution. |
-| Evaluation context | Explicit at review. | `EvaluationInputs { evaluation_time: Option<jiff::Timestamp> }`, default `None`, frozen through initialization and replay. Missing required time is an error; no implicit clock. `evaluated_view: None` identifies initialization and `Some` includes prefix zero. |
+| Evaluation context | Explicit at review. | `EvaluationInputs { evaluation_time: Option<jiff::Timestamp> }`, default `None`, frozen through initialization and replay. Missing required time is an error; no implicit clock. `EvaluatedView::Initialization` identifies initialization; `EvaluatedView::Prefix(view)` includes prefix zero. |
 
 Stage 0 decisions: text, signed integers, booleans, and timestamps; nested lists
 and string-keyed records; no floats, sets, tuples, or unions. Lists have a declared
@@ -126,13 +126,15 @@ to support every previous sketch format.
 ### View contract and operations involving multiple views
 
 Use one `View` for one immutable history snapshot and `end_exclusive` boundary:
-its entries occupy `[0, end_exclusive)`. Comparison exposes `base_view` and
-`target_view`; added positions occupy
+its entries occupy `[0, end_exclusive)`. `ResolutionComparison` exposes
+`base_view` and `target_view`; added positions occupy
 `[base_view.end_exclusive, target_view.end_exclusive)`. Comparing prefixes 3 and 5
-adds positions 3 and 4. Changed entries contain complete `at_base` and `at_target`
-inspections, with `stale` and type resolution directly on each inspected entry.
-Keep entry identity separate from inspection: `view.node(id)`, freshness,
-relationship traversal, and type resolution all use that view's boundary.
+adds positions 3 and 4. `ResolutionDifference` contains complete `Resolution`
+values accessible through `at_base()` and `at_target()`, with `stale` and an
+explicit `TypeResolution` outcome on each. Its constructor requires different
+resolutions of the same immutable entry; private fields preserve this invariant.
+Keep entry identity separate from inspection: `view.node(id)`, `view.resolve(id)`,
+freshness, relationship traversal, and type resolution all use that view's boundary.
 Stored nodes and edges carry identities and payloads, not inspection contexts.
 Looking up an old entry in a newer view does not change its identity, but can
 change its freshness and the meaning of its stored type name.
@@ -420,8 +422,9 @@ an analyzer responsibility, not an automatic issue-resolution subsystem.
 ### Review checkpoint — Simplify contracts between stages 4 and 5
 
 - [x] Keep typed findings in each analyzer and replace shared `Fact`/`Finding`
-  machinery with a complete opaque `analyzer_key: String`. Built-ins use
-  deterministic JSON for typed variants, exact subjects, and distinguishing details.
+  machinery with a complete opaque `analyzer_certificate: AnalyzerCertificate`,
+  a String newtype. Built-ins use deterministic JSON for typed variants, exact
+  subjects, and distinguishing details.
   Compare full keys for grouping/dismissal; remove versioned key encoding and
   digest helpers.
 - [x] Construct analyzer identity in the runner from registered name, exact
@@ -430,22 +433,31 @@ an analyzer responsibility, not an automatic issue-resolution subsystem.
   Built-ins parse their own package versions; version equality is exact.
 - [x] Use explicit optional evaluation time, frozen for initialization and every
   prefix. Missing required time errors. Replace invocation/scope wrappers with
-  `evaluated_view: Option<ViewId>` and `retain_in_current_report: bool`; flatten
+  `evaluated_view: EvaluatedView` and `retain_in_current_report: bool`; flatten
   observations and preserve typed/dynamic execution, ordering, and validation.
+  Distinguish `Initialization` from `Prefix(view)`, including prefix zero.
 - [x] Add dismissal reasons and optional notes as serializable display state.
   No dismissal or historical retention establishes resolution or affects acceptance.
-- [x] Name exclusive view boundaries `end_exclusive`; flatten inspected entries
-  and retain both complete inspections in `EntryChange { at_base, at_target }`.
-  Expose comparison views and precise appended ranges; preserve shared-history checks.
-- [x] Convert every file-backed module in the active crates to `<module>/mod.rs`,
-  keeping `lib.rs` roots and `*::test::test2` paths. Extract inline test scaffolding.
+- [x] Name exclusive view boundaries `end_exclusive`; use `Resolution` with an
+  explicit `TypeResolution` outcome from `View::resolve` and retain both resolutions
+  in `ResolutionDifference`. Its constructor requires different resolutions of the
+  same entry, preserved by private fields and read-only accessors.
+  `ResolutionComparison` exposes comparison views and precise appended ranges;
+  preserve shared-history checks.
+- [x] Make `ancestors` start at the parent. Preserve self-inclusive behavior for
+  roots and current successors through a private lineage walk; descendants and
+  relative-degree callers must not skip an additional generation.
+- [x] Use `<module>.rs` for single-file modules and `<module>/mod.rs` only when a
+  module spans multiple files, keeping `lib.rs` roots and `*::test::test2` paths.
+  Extract inline test scaffolding to `test/mod.rs`; keep leaf tests in `test2.rs`.
 - [x] Remove library stores and publication machinery. Retain structural validation
   on graph deserialization and atomic in-memory preparation/commit. Compare exact
   database identity, original entries/count, and original ordered suite; reuse the
   candidate's original prefix and snapshot only the original suite separately.
-- [x] Replace repair export with `prepare_suggestion` returning a checked transaction.
-  Preserve source checks, exact references, intent, all-prefix checks, and explicit
-  commit. Remove plan IDs, TOML envelopes, and timestamp export restrictions.
+- [x] Replace repair export with `analysis::suggestion::prepare_suggestion`
+  returning a checked transaction. Preserve source checks, exact references,
+  intent, all-prefix checks, and explicit commit. Remove plan IDs, TOML envelopes,
+  and timestamp export restrictions.
 - [x] Remove `tempfile`, `toml`, and `blake3`; update SPEC, FILES, and contributor
   guidance together. Replace filesystem-dependent library tests with in-memory
   serialization tests and carry publication acceptance into stage 5.
@@ -456,10 +468,20 @@ remain. Earlier stage 1–4 publication and export tests are historical evidence
 stage 5 must restore those safeguards in the CLI alongside durable receipts.
 No CLI implementation, compatibility adapters, or migrations belong to this checkpoint.
 
-Review evidence: `cargo test --workspace` passes 73 unit tests (47 core,
-18 TypeCheck, 8 DAG Check), with no failures or ignored tests. These checks pass:
+The initial review commit used `InspectedEntry`, `EntryChange`, and `Comparison`,
+an optional evaluated view, a plain string analyzer key, and `analysis::repair`.
+It also moved every file-backed module to `mod.rs`. Follow-up review supersedes
+those choices with the names, enums, newtype, checked difference constructor,
+and conditional module layout recorded above.
+
+Initial review evidence: `cargo test --workspace` passed 73 unit tests (47 core,
+18 TypeCheck, 8 DAG Check), with no failures or ignored tests. Follow-up review
+passes 76 unit tests (50 core, 18 TypeCheck, 8 DAG Check), including constructor
+invariants, explicit type-resolution outcomes, and exclusive ancestry with
+preserved roots and current successors across boundaries. These checks pass:
 
 ```sh
+cargo check --workspace
 cargo +nightly fmt --check -p lifecore -p lifecore-typecheck -p lifecore-dag-check
 cargo clippy -p lifecore -p lifecore-typecheck -p lifecore-dag-check --all-targets --no-deps -- -D warnings
 ```
@@ -563,10 +585,12 @@ a clean strict workspace lint. Update package-specific commands when the old
 CLI is removed and the new authoring package is introduced.
 
 Use targeted `cargo +nightly fmt --check -p <changed-package>` and appropriate
-package lint checks. Add agent-authored Rust tests only under `*::test::test2`,
-using `test/test2/mod.rs`; all file-backed modules use `<module>/mod.rs` except
-crate-root `lib.rs`. Follow AGENTS for comments. Include meaningful failure and
-historical-window cases rather than tests that merely duplicate implementation steps.
+package lint checks. Add agent-authored Rust tests only under `*::test::test2`.
+Use `<module>.rs` for single-file modules, including `test/test2.rs`; use
+`<module>/mod.rs` only when a module spans multiple files, including `test/mod.rs`
+for test scaffolding. Keep crate-root `lib.rs`. Follow AGENTS for comments.
+Include meaningful failure and historical-window cases rather than tests that
+merely duplicate implementation steps.
 
 New stored formats can be incompatible with old sketches. Within a selected
 format, reloads, deterministic interpretation, safe writes, and exact historical

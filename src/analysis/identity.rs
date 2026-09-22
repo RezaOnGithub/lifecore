@@ -21,6 +21,10 @@ pub struct EvaluationInputs {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AnalyzerCertificate(pub String);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FindingKey {
     pub database: Uuid,
@@ -28,5 +32,5 @@ pub struct FindingKey {
     pub kind: MessageType,
     //A The analyzer owns this complete semantic identity; shared code never
     //A parses it or substitutes a digest for exact equality.
-    pub analyzer_key: String,
+    pub analyzer_certificate: AnalyzerCertificate,
 }

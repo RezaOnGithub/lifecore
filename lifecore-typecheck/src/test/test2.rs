@@ -592,7 +592,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             .all(|g| g.observations.len() == 2 && g.selected.len() == 1)
     );
     let key = groups[0].key.clone();
-    let encoded: serde_json::Value = serde_json::from_str(&key.analyzer_key).unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&key.analyzer_certificate.0).unwrap();
     assert_eq!(
         encoded[0]["Field"]["issue"]["path"],
         serde_json::json!([{ "Field": "first" }])
@@ -618,8 +618,13 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
     let equivalent = runner().run_view(graph.view(), &config(" { } ")).unwrap();
     assert_ne!(report, equivalent);
     assert_eq!(
-        report.warnings().next().unwrap().key.analyzer_key,
-        equivalent.warnings().next().unwrap().key.analyzer_key
+        report.warnings().next().unwrap().key.analyzer_certificate,
+        equivalent
+            .warnings()
+            .next()
+            .unwrap()
+            .key
+            .analyzer_certificate
     );
     assert_eq!(
         equivalent

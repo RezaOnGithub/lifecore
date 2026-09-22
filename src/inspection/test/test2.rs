@@ -1,7 +1,10 @@
 use crate::{
     Body, EntryId, LifeCoreList, Payload, ViewError,
     analysis::AnalysisRunner,
-    inspection::{Currentness, Direction, EdgeSelection, FieldFilter, NodeSelection},
+    inspection::{
+        Currentness, Direction, EdgeSelection, FieldFilter, NodeSelection, ResolutionDifference,
+        TypeResolution,
+    },
     transaction::{
         Change,
         Reference::{Added, Existing},
@@ -114,7 +117,7 @@ fn selection_and_exact_relationships_follow_each_split_boundary() {
             .collect::<Vec<_>>(),
             vec![ids[1]]
         );
-        assert_eq!(at.inspect(ids[4]).is_some(), end_exclusive >= 5);
+        assert_eq!(at.resolve(ids[4]).is_some(), end_exclusive >= 5);
     }
     assert!(view.prefix(3).unwrap().descendants(ids[3]).next().is_none());
     assert!(
@@ -211,7 +214,7 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
         comparison
             .changed
             .iter()
-            .map(|c| c.at_base.entry.id())
+            .map(|c| c.at_base().entry.id())
             .collect::<Vec<_>>(),
         vec![ids[0], ids[2]]
     );
@@ -219,7 +222,7 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
         comparison
             .changed
             .iter()
-            .all(|c| !c.at_base.stale && c.at_target.stale)
+            .all(|c| !c.at_base().stale && c.at_target().stale)
     );
     assert!(middle.compare(before).is_err());
     let ty = Type::new(
@@ -243,9 +246,12 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     let comparison = graph.view().compare(plan.view()).unwrap();
     assert_eq!(comparison.changed.len(), 4);
     for change in comparison.changed {
-        assert_eq!(change.at_base.type_definition, Some(Ok(None)));
+        assert_eq!(
+            change.at_base().type_definition,
+            TypeResolution::MissingDeclaration
+        );
         assert!(
-            matches!(change.at_target.type_definition, Some(Ok(Some(TypeDefinition::Declared {id, ..}))) if id == declaration)
+            matches!(change.at_target().type_definition, TypeResolution::Resolved(TypeDefinition::Declared {id, ..}) if id == declaration)
         );
     }
     plan.commit(&mut graph).unwrap();
@@ -267,10 +273,10 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
             .view()
             .prefix(6)
             .unwrap()
-            .inspect(ids[0])
+            .resolve(ids[0])
             .unwrap()
             .type_definition,
-        Some(Ok(None))
+        TypeResolution::MissingDeclaration
     );
 }
 
@@ -333,8 +339,8 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
     let json = serde_json::to_value(before.inspection()).unwrap();
     assert_eq!(json["view"]["end_exclusive"], 3);
     assert_eq!(json["entries"].as_array().unwrap().len(), 3);
-    assert!(!before.inspect(ids[2]).unwrap().stale);
-    assert!(graph.view().inspect(ids[2]).unwrap().stale);
+    assert!(!before.resolve(ids[2]).unwrap().stale);
+    assert!(graph.view().resolve(ids[2]).unwrap().stale);
     let reload: LifeCoreList =
         serde_json::from_slice(&serde_json::to_vec(&graph).unwrap()).unwrap();
     assert_eq!(
@@ -371,7 +377,7 @@ fn failed_drafts_and_missing_analyzers_leave_committed_inspection_available() {
         snapshot,
         serde_json::to_vec(&graph.view().inspection()).unwrap()
     );
-    assert!(graph.view().inspect(ids[0]).is_some());
+    assert!(graph.view().resolve(ids[0]).is_some());
     assert!(
         LifeCoreList::default()
             .view()
@@ -401,14 +407,14 @@ fn comparisons_use_exclusive_boundaries_and_retain_both_inspected_entries() {
     );
     for change in &comparison.changed {
         assert_eq!(
-            change.at_base,
-            base.inspect(change.at_base.entry.id()).unwrap()
+            *change.at_base(),
+            base.resolve(change.at_base().entry.id()).unwrap()
         );
         assert_eq!(
-            change.at_target,
-            target.inspect(change.at_base.entry.id()).unwrap()
+            *change.at_target(),
+            target.resolve(change.at_base().entry.id()).unwrap()
         );
-        assert_eq!(change.at_base.entry, change.at_target.entry);
+        assert_eq!(change.at_base().entry, change.at_target().entry);
     }
     let same = base.compare(base).unwrap();
     assert!(same.added.is_empty());
@@ -423,4 +429,142 @@ fn comparisons_use_exclusive_boundaries_and_retain_both_inspected_entries() {
         base.compare(divergent.view()),
         Err(ViewError::DifferentHistory)
     );
+}
+
+#[test]
+fn resolution_differences_require_changed_resolutions_of_the_same_entry() {
+    let (graph, ids) = fixture();
+    let base = graph.view().prefix(3).unwrap();
+    let target = graph.view().prefix(4).unwrap();
+    let original = base.resolve(ids[0]).unwrap();
+    let revised = target.resolve(ids[0]).unwrap();
+    assert!(ResolutionDifference::new(original.clone(), original.clone()).is_none());
+    assert!(ResolutionDifference::new(revised.clone(), revised.clone()).is_none());
+    assert!(ResolutionDifference::new(original.clone(), target.resolve(ids[1]).unwrap()).is_none());
+
+    let mut edited_entry = original.entry.clone();
+    let crate::Entry::Node(node) = &mut edited_entry else {
+        unreachable!()
+    };
+    node.ty_name = "Altered payload with the same identity".into();
+    let altered = super::super::Resolution {
+        entry: &edited_entry,
+        ..original.clone()
+    };
+    assert!(ResolutionDifference::new(original.clone(), altered).is_none());
+
+    let difference = ResolutionDifference::new(original.clone(), revised.clone()).unwrap();
+    assert_eq!(difference.at_base(), &original);
+    assert_eq!(difference.at_target(), &revised);
+    assert_eq!(difference.at_base().entry, difference.at_target().entry);
+    assert_ne!(difference.at_base(), difference.at_target());
+    let json = serde_json::to_value(&difference).unwrap();
+    assert_eq!(json["at_base"]["stale"], false);
+    assert_eq!(json["at_target"]["stale"], true);
+}
+
+#[test]
+fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_boundary() {
+    use crate::typing::ResolutionError;
+    let (mut graph, ids) = fixture();
+    let undeclared = graph.view().resolve(ids[0]).unwrap().type_definition;
+    let edge = graph.view().resolve(ids[2]).unwrap().type_definition;
+    assert_eq!(undeclared, TypeResolution::MissingDeclaration);
+    assert_eq!(edge, TypeResolution::NotApplicableToEdge);
+    let schema = Type::new("Note", &[], &[], &[], &[]);
+    let declaration = |schema: &Type| Change::AddNode {
+        ty_name: "Type".into(),
+        body: schema.to_body(),
+        parent: None,
+    };
+    let checked = prepare(
+        &graph,
+        &[declaration(&schema)],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap();
+    let schema_id = checked.added()[0];
+    checked.commit(&mut graph).unwrap();
+    let resolved = graph.view().resolve(ids[0]).unwrap().type_definition;
+    assert_eq!(
+        resolved,
+        TypeResolution::Resolved(TypeDefinition::Declared {
+            id: schema_id,
+            schema: schema.clone()
+        })
+    );
+    let builtin = graph.view().resolve(schema_id).unwrap().type_definition;
+    assert_eq!(builtin, TypeResolution::Resolved(TypeDefinition::Builtin));
+    assert_eq!(
+        graph
+            .view()
+            .prefix(6)
+            .unwrap()
+            .resolve(ids[0])
+            .unwrap()
+            .type_definition,
+        undeclared
+    );
+
+    let mut duplicate = schema;
+    duplicate.outgoing.insert("link".into());
+    let checked = prepare(
+        &graph,
+        &[declaration(&duplicate)],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap();
+    let duplicate_id = checked.added()[0];
+    checked.commit(&mut graph).unwrap();
+    let ambiguous = graph.view().resolve(ids[0]).unwrap().type_definition;
+    assert_eq!(
+        ambiguous,
+        TypeResolution::Failed(ResolutionError::Ambiguous {
+            name: "Note".into(),
+            entries: vec![schema_id, duplicate_id],
+        })
+    );
+    assert_eq!(
+        graph
+            .view()
+            .prefix(7)
+            .unwrap()
+            .resolve(ids[0])
+            .unwrap()
+            .type_definition,
+        resolved
+    );
+
+    let checked = prepare(
+        &graph,
+        &[Change::AddNode {
+            ty_name: "Type".into(),
+            body: Body::new(),
+            parent: None,
+        }],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap();
+    let malformed_id = checked.added()[0];
+    checked.commit(&mut graph).unwrap();
+    let malformed = graph.view().resolve(ids[0]).unwrap().type_definition;
+    assert!(
+        matches!(&malformed, TypeResolution::Failed(ResolutionError::Malformed { id, .. }) if *id == malformed_id)
+    );
+    assert_eq!(
+        graph
+            .view()
+            .prefix(8)
+            .unwrap()
+            .resolve(ids[0])
+            .unwrap()
+            .type_definition,
+        ambiguous
+    );
+    assert_eq!(graph.view().resolve(ids[2]).unwrap().type_definition, edge);
+    for resolution in [undeclared, edge, resolved, builtin, ambiguous, malformed] {
+        let encoded = serde_json::to_vec(&resolution).unwrap();
+        let decoded: TypeResolution = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, resolution);
+    }
 }

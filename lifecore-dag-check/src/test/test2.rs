@@ -248,8 +248,13 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
         .unwrap();
     assert_ne!(plain, normalized);
     assert_eq!(
-        plain.warnings().next().unwrap().key.analyzer_key,
-        normalized.warnings().next().unwrap().key.analyzer_key
+        plain.warnings().next().unwrap().key.analyzer_certificate,
+        normalized
+            .warnings()
+            .next()
+            .unwrap()
+            .key
+            .analyzer_certificate
     );
     assert_eq!(
         plain.implementations[0].version,
@@ -302,8 +307,13 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
         .unwrap();
     assert_ne!(filtered, filtered_again);
     assert_eq!(
-        filtered.warnings().next().unwrap().key.analyzer_key,
-        filtered_again.warnings().next().unwrap().key.analyzer_key
+        filtered.warnings().next().unwrap().key.analyzer_certificate,
+        filtered_again
+            .warnings()
+            .next()
+            .unwrap()
+            .key
+            .analyzer_certificate
     );
     assert_ne!(filtered.warnings().next().unwrap().key, key);
     prepare(

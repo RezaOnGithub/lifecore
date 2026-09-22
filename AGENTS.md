@@ -37,11 +37,19 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 
 - `LifeCoreList::view()` borrows immutable entries; `View::prefix(end_exclusive)`
   only narrows `[0, end_exclusive)`. Lookups require an `EntryId`, not a position.
-  Comparison exposes `base_view` and `target_view`; appended positions are
-  `[base_view.end_exclusive, target_view.end_exclusive)`.
+  `ResolutionComparison` exposes `base_view` and `target_view`; appended positions
+  are `[base_view.end_exclusive, target_view.end_exclusive)`.
 - Entry identity is separate from its interpretation in a bounded history view.
   Freshness and active type declarations depend on that view; never inspect a
   future suffix or cache resolved types without the source and boundary.
+  `View::resolve(id)` returns a `Resolution` holding the entry, freshness, and
+  explicit `TypeResolution` outcome.
+  Construct `ResolutionDifference` only from different resolutions of the same
+  immutable entry; its read-only accessors preserve that invariant.
+- `ancestors` starts at the parent and walks toward the root; `descendants` also
+  excludes the starting revision. `root_of` returns a root's own identity, and
+  `fresh_successors` includes the starting revision when current. All traversals
+  use exact identities visible in the selected view.
 - Edges retain exact endpoint identities. Superseding an endpoint makes an edge
   stale in views containing the successor; it does not retarget the edge.
 - Test history-sensitive changes at multiple boundaries, including before and
@@ -66,13 +74,15 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
   `evaluation_time: Option<jiff::Timestamp>` and defaults to `None`. Freeze it
   across initialization and replay; time-dependent analyzers error when absent.
   Neither runner nor analyzer implicitly reads the clock. Missing factories are errors.
-  `evaluated_view: None` means initialization; `Some` includes prefix zero.
+  `EvaluatedView::Initialization` identifies initialization;
+  `EvaluatedView::Prefix(view)` identifies the exact prefix, including zero.
 - Dismissal and display filtering cannot affect the inconsistency gate.
   Non-emission or supersession alone does not establish resolution.
 - Finding equality compares database identity, registered analyzer name, exact
   `semver::Version`, original configuration string, category, and complete opaque
-  `analyzer_key`. Factories receive configuration unchanged; behaviorally equivalent
-  spellings still have distinct identities. Built-ins parse their package versions
+  `analyzer_certificate: AnalyzerCertificate`, a String newtype. Factories receive
+  configuration unchanged; behaviorally equivalent spellings still have distinct
+  identities. Built-ins parse their package versions
   and deterministically JSON-encode typed variants, exact subjects, and details.
   Normalize distinguishing domain details inside the analyzer. Shared code does
   not parse finding keys or replace equality with digests. Ordinary boundaries,
@@ -82,9 +92,10 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 
 ## Editing conventions
 
-- Every file-backed module in the active crates uses `<module>/mod.rs`, including
-  tests; `lib.rs` remains the crate root. Keep test scaffolding in `test/mod.rs`
-  and agent-authored tests under `test/test2/mod.rs`.
+- Use `<module>.rs` for single-file modules. When, and only when, a module spans
+  multiple files, use `<module>/mod.rs` with its supporting files in that directory.
+  This also applies to tests: keep multi-file scaffolding in `test/mod.rs` and
+  single-file agent-authored tests in `test/test2.rs`. `lib.rs` remains the crate root.
 - End every agent-authored commit message with
   `Co-authored-by: Codex <codex@openai.com>`.
 - Add agent-authored tests only in a module matching `*::test::test2`.

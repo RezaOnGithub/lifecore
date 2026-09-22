@@ -1,4 +1,4 @@
-use super::{FindingKey, MessageType, Observation, Report};
+use super::{EvaluatedView, FindingKey, MessageType, Observation, Report};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -134,8 +134,8 @@ impl Report {
             AdvisoryFilter::None => false,
             };
             let boundary = options.selection == ReportSelection::History
-                || observation.evaluated_view.is_none()
-                || observation.evaluated_view == Some(self.view)
+                || observation.evaluated_view == EvaluatedView::Initialization
+                || observation.evaluated_view == EvaluatedView::Prefix(self.view)
                 || observation.retain_in_current_report;
             if inconsistency
                 || (category
@@ -160,7 +160,7 @@ impl Report {
                 "{:?} {} {:?}{}",
                 group.key.kind,
                 group.key.analyzer.name,
-                group.key.analyzer_key,
+                group.key.analyzer_certificate.0,
                 if group.dismissal.is_some() && group.key.kind != MessageType::Inconsistency {
                     " (dismissed)"
                 } else {
@@ -170,13 +170,11 @@ impl Report {
             .unwrap();
             for observation in group.selected {
                 let at = match observation.evaluated_view {
-                None => "initialization".to_string(),
-                Some(view) => format!("boundary {}", view.end_exclusive),
+                EvaluatedView::Initialization => "initialization".to_string(),
+                EvaluatedView::Prefix(view) => format!("boundary {}", view.end_exclusive),
                 };
                 let retained = if observation.retain_in_current_report
-                    && observation
-                        .evaluated_view
-                        .is_some_and(|view| view != self.view)
+                    && matches!(observation.evaluated_view, EvaluatedView::Prefix(view) if view != self.view)
                 {
                     " (historical advisory; current applicability unconfirmed)"
                 } else {
