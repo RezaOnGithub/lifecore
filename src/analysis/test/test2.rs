@@ -2,8 +2,8 @@ use crate::{
     Body, DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
     analysis::{
         AnalysisRunner, Analyzer, AnalyzerCertificate, AnalyzerFactory, AnalyzerIdentity, Config,
-        EvaluatedView, EvaluationInputs, InnerMessageType, InnerOutput, Message, MessageKind,
-        MessageType, Output, SuiteConfig, TypedAnalyzer,
+        EvaluatedView, EvaluationInputs, InnerMessageType, Message, MessageKind, MessageType,
+        SuiteConfig, TypedAnalyzer,
     },
     transaction::{Change, prepare},
 };
@@ -19,14 +19,6 @@ impl InnerMessageType for Finding {
         MessageType::Inconsistency
     }
 }
-#[derive(Clone)]
-struct Report(Vec<Finding>);
-impl InnerOutput<Finding> for Report {
-    fn push(&mut self, value: Finding) {
-        self.0.push(value);
-    }
-}
-
 struct Probe {
     observed: Arc<Mutex<Vec<ViewId>>>,
     future: EntryId,
@@ -34,14 +26,17 @@ struct Probe {
 }
 impl TypedAnalyzer for Probe {
     type MSG = Finding;
-    type OUTPUT = Report;
     fn version(&self) -> Version {
         Version::new(1, 0, 0)
     }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Report, String> {
-        Ok(Report(vec![]))
+    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+        Ok(vec![])
     }
-    fn analyze_inner(&self, view: View<'_>, _inputs: &EvaluationInputs) -> Result<Report, String> {
+    fn analyze_inner(
+        &self,
+        view: View<'_>,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, String> {
         self.observed.lock().unwrap().push(view.id());
         assert!(view.prefix(view.len() + 1).is_err());
         if self.future.position() >= view.len() {
@@ -49,30 +44,24 @@ impl TypedAnalyzer for Probe {
         }
         assert_eq!(view.entries().count(), view.len());
         assert!(view.entries().all(|e| e.id().position() < view.len()));
-        Ok(Report(if self.reject == Some(view.len()) {
+        Ok(if self.reject == Some(view.len()) {
             vec![Finding {
                 location: view.location(None).unwrap(),
             }]
         } else {
             vec![]
-        }))
+        })
     }
-    fn convert_report(&self, report: Report) -> Output {
-        Output(
-            report
-                .0
-                .into_iter()
-                .map(|finding| Message {
-                    analyzer_certificate: AnalyzerCertificate("rejected_prefix".into()),
-                    subjects: Default::default(),
-                    offending_event: Some(finding.location),
-                    relevance: Default::default(),
-                    message: "rejected prefix".into(),
-                    kind: MessageKind::Inconsistency,
-                    retain_in_current_report: false,
-                })
-                .collect(),
-        )
+    fn convert_message(&self, finding: Self::MSG) -> Message {
+        Message {
+            analyzer_certificate: AnalyzerCertificate("rejected_prefix".into()),
+            subjects: Default::default(),
+            offending_event: Some(finding.location),
+            relevance: Default::default(),
+            message: "rejected prefix".into(),
+            kind: MessageKind::Inconsistency,
+            sticky: false,
+        }
     }
 }
 struct Factory {
@@ -268,22 +257,22 @@ impl Analyzer for Advisories {
     fn version(&self) -> Version {
         self.factory.version.parse().unwrap()
     }
-    fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Output, String> {
+    fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
         self.factory.log.lock().unwrap().push((self.config, None));
         if self.factory.fail == Some(EvaluatedView::Initialization) {
             return Err("setup failed".into());
         }
-        Ok(Output(vec![Message {
+        Ok(vec![Message {
             analyzer_certificate: local_certificate("setup", &[], ""),
             subjects: BTreeSet::new(),
             offending_event: self.factory.invalid,
             relevance: BTreeSet::new(),
             message: "configured".into(),
             kind: MessageKind::Warning,
-            retain_in_current_report: false,
-        }]))
+            sticky: false,
+        }])
     }
-    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String> {
+    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
         self.factory
             .log
             .lock()
@@ -292,7 +281,7 @@ impl Analyzer for Advisories {
         if self.factory.fail == Some(EvaluatedView::Prefix(view.id())) {
             return Err("prefix failed".into());
         }
-        let mut output = Output::default();
+        let mut output = Vec::new();
         if let Some(node) = view.nodes().next()
             && view.is_stale(node.id) == Some(false)
         {
@@ -307,14 +296,14 @@ impl Analyzer for Advisories {
                     inputs.evaluation_time
                 ),
                 kind: MessageKind::Warning,
-                retain_in_current_report: false,
+                sticky: false,
             };
-            output.0.extend([message.clone(), message]);
+            output.extend([message.clone(), message]);
         }
         if let Some(child) = view.entries().next_back().and_then(|entry| entry.as_node())
             && let Some(parent) = child.parent
         {
-            output.0.push(Message {
+            output.push(Message {
                 analyzer_certificate: local_certificate(
                     "review_connections",
                     &[parent, child.id],
@@ -330,7 +319,7 @@ impl Analyzer for Advisories {
                     parent: None,
                     intent: None,
                 }]),
-                retain_in_current_report: true,
+                sticky: true,
             });
         }
         Ok(output)
@@ -421,7 +410,7 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
     );
     assert_eq!(*received.lock().unwrap(), ["7", "7", "7", " 007 "]);
     assert_eq!(different_spelling.implementations[1].configuration, " 007 ");
-    let reloaded: crate::analysis::Report =
+    let reloaded: crate::analysis::AnalysisOutput =
         serde_json::from_slice(&serde_json::to_vec(&report).unwrap()).unwrap();
     assert_eq!(reloaded, report);
     assert_eq!(
@@ -619,7 +608,7 @@ fn dismiss_restore_round_trips_all_reasons_and_notes_without_current_emission() 
 }
 
 #[test]
-fn transition_events_remain_visible_after_unrelated_appends_and_partial_split_reconnection() {
+fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round_trips() {
     let mut graph = LifeCoreList::default();
     let node = |name: &str, parent| Change::AddNode {
         ty_name: name.into(),
@@ -682,6 +671,87 @@ fn transition_events_remain_visible_after_unrelated_appends_and_partial_split_re
         vec![ids[3]]
     );
     assert!(graph.view().fresh_nodes().any(|node| node.id == ids[4]));
+
+    let output = runner
+        .run_view(graph.view(), &advisory_suite(&["7"]))
+        .unwrap();
+    let key = output.suggestions().next().unwrap().key.clone();
+    assert!(output.suggestions().all(|observation| {
+        observation.sticky && observation.evaluated_view != EvaluatedView::Prefix(output.view)
+    }));
+    let encoded = serde_json::to_value(&output).unwrap();
+    let loaded: crate::analysis::AnalysisOutput = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(loaded, output);
+    assert!(
+        encoded["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["sticky"] == true)
+    );
+    let mut dismissals = Dismissals::default();
+    dismissals
+        .dismiss(
+            key.clone(),
+            DismissalReason::Acknowledged,
+            Some("Reviewed the split".into()),
+        )
+        .unwrap();
+    let mut dismissals: Dismissals =
+        serde_json::from_value(serde_json::to_value(dismissals).unwrap()).unwrap();
+    assert!(
+        loaded
+            .groups(&dismissals, ReportOptions::default())
+            .iter()
+            .all(|g| g.key != &key)
+    );
+    assert!(
+        loaded
+            .groups(
+                &dismissals,
+                ReportOptions {
+                    include_dismissed: true,
+                    ..Default::default()
+                }
+            )
+            .iter()
+            .any(|g| g.key == &key)
+    );
+    assert!(dismissals.restore(&key));
+    assert!(
+        loaded
+            .groups(&dismissals, ReportOptions::default())
+            .iter()
+            .any(|g| g.key == &key)
+    );
+
+    let mut without_sticky = loaded.clone();
+    for observation in &mut without_sticky.observations {
+        observation.sticky = false;
+    }
+    assert!(
+        without_sticky
+            .groups(&dismissals, ReportOptions::default())
+            .iter()
+            .all(|g| g.key != &key)
+    );
+    assert!(
+        without_sticky
+            .groups(&dismissals, history_options())
+            .iter()
+            .any(|g| g.key == &key)
+    );
+    assert!(
+        loaded
+            .groups(
+                &dismissals,
+                ReportOptions {
+                    advisories: AdvisoryFilter::None,
+                    ..Default::default()
+                }
+            )
+            .is_empty()
+    );
 }
 
 #[test]
@@ -841,7 +911,7 @@ fn repair_observation(view: View<'_>, actions: Vec<SuggestedAction>) -> Observat
         relevance: BTreeSet::new(),
         message: "Explicit repair".into(),
         kind: MessageKind::Suggestion(actions),
-        retain_in_current_report: true,
+        sticky: true,
     }
 }
 
@@ -1003,11 +1073,11 @@ impl Analyzer for InvalidOutputFactory {
     fn version(&self) -> Version {
         Version::new(1, 0, 0)
     }
-    fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Output, String> {
-        Ok(Output::default())
+    fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(Vec::new())
     }
-    fn analyze(&self, _view: View<'_>, _inputs: &EvaluationInputs) -> Result<Output, String> {
-        Ok(Output(vec![self.0.clone()]))
+    fn analyze(&self, _view: View<'_>, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(vec![self.0.clone()])
     }
 }
 
@@ -1022,7 +1092,7 @@ fn normalization_rejects_future_and_foreign_locations_subjects_and_relevance() {
         relevance: BTreeSet::new(),
         message: "invalid output".into(),
         kind: MessageKind::Warning,
-        retain_in_current_report: false,
+        sticky: false,
     };
     let mut bad_location = base.clone();
     bad_location.offending_event = graph.view().location(Some(future));
@@ -1066,6 +1136,17 @@ fn timed_inputs() -> EvaluationInputs {
 struct TimedAnalyzer {
     initialization_time: Option<crate::Timestamp>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct TimeFinding {
+    evaluation_time: crate::Timestamp,
+}
+impl InnerMessageType for TimeFinding {
+    fn ty(&self) -> MessageType {
+        MessageType::Warning
+    }
+}
+
 impl AnalyzerFactory for TimedAnalyzer {
     fn analyzer_name(&self) -> &'static str {
         "Timed"
@@ -1075,32 +1156,41 @@ impl AnalyzerFactory for TimedAnalyzer {
     }
 }
 impl TimedAnalyzer {
-    fn output(inputs: &EvaluationInputs) -> Result<Output, String> {
-        let time = inputs
+    fn findings(inputs: &EvaluationInputs) -> Result<Vec<TimeFinding>, String> {
+        let evaluation_time = inputs
             .evaluation_time
             .ok_or("evaluation time is required")?;
-        Ok(Output(vec![Message {
+        Ok(vec![TimeFinding { evaluation_time }])
+    }
+}
+impl TypedAnalyzer for TimedAnalyzer {
+    type MSG = TimeFinding;
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
+    }
+    fn initialize_inner(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+        self.initialization_time = inputs.evaluation_time;
+        Self::findings(inputs)
+    }
+    fn analyze_inner(
+        &self,
+        _view: View<'_>,
+        inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, String> {
+        assert_eq!(inputs.evaluation_time, self.initialization_time);
+        Self::findings(inputs)
+    }
+    fn convert_message(&self, finding: Self::MSG) -> Message {
+        assert_eq!(self.initialization_time, Some(finding.evaluation_time));
+        Message {
             analyzer_certificate: AnalyzerCertificate("time advisory".into()),
             subjects: BTreeSet::new(),
             offending_event: None,
             relevance: BTreeSet::new(),
-            message: format!("Evaluated at {time}"),
+            message: format!("Evaluated at {}", finding.evaluation_time),
             kind: MessageKind::Warning,
-            retain_in_current_report: false,
-        }]))
-    }
-}
-impl Analyzer for TimedAnalyzer {
-    fn version(&self) -> Version {
-        Version::new(1, 0, 0)
-    }
-    fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Output, String> {
-        self.initialization_time = inputs.evaluation_time;
-        Self::output(inputs)
-    }
-    fn analyze(&self, _view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String> {
-        assert_eq!(inputs.evaluation_time, self.initialization_time);
-        Self::output(inputs)
+            sticky: false,
+        }
     }
 }
 
@@ -1132,6 +1222,15 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
             .is_err()
     );
     let inputs = timed_inputs();
+    let mut analyzer = TimedAnalyzer::default();
+    let expected = vec![TimeFinding {
+        evaluation_time: inputs.evaluation_time.unwrap(),
+    }];
+    assert_eq!(analyzer.initialize_inner(&inputs).unwrap(), expected);
+    assert_eq!(
+        analyzer.analyze_inner(graph.view(), &inputs).unwrap(),
+        expected
+    );
     let mut runner = make_runner(inputs.clone());
     let report = runner.run_view(graph.view(), &suite).unwrap();
     assert_eq!(report, runner.run_view(graph.view(), &suite).unwrap());
@@ -1164,7 +1263,7 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
         serde_json::to_value(graph.view().prefix(0).unwrap().id()).unwrap()
     );
     assert_eq!(report.inputs, inputs);
-    let reloaded: crate::analysis::Report =
+    let reloaded: crate::analysis::AnalysisOutput =
         serde_json::from_slice(&serde_json::to_vec(&report).unwrap()).unwrap();
     assert_eq!(reloaded, report);
     let empty = runner

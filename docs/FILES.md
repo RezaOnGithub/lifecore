@@ -294,8 +294,9 @@ read a clock implicitly. Freeze the inputs across initialization and every
 replayed prefix. An analyzer requiring time errors when it is absent. A receipt
 records this context; an old check cannot authorize ignoring changes to it.
 
-Stored reports retain `EvaluatedView::Initialization` or
-`EvaluatedView::Prefix(view)` for an exact prefix, including empty prefix zero.
+Stored `AnalysisOutput` values retain observations with
+`EvaluatedView::Initialization` or `EvaluatedView::Prefix(view)` for an exact prefix,
+including empty prefix zero.
 Views cover `[0, end_exclusive)`.
 Finding keys compare database identity, registered analyzer name, exact version,
 original configuration string, category, and complete opaque
@@ -303,6 +304,8 @@ original configuration string, category, and complete opaque
 serialized transparently as a string.
 Behaviorally equivalent configuration spellings remain distinct identities.
 Ordinary boundaries, wording, time, and suggested actions belong to observations.
+The observation's `sticky` flag keeps historical advisories visible until dismissed
+or filtered, with no automatic expiry or assertion of current applicability.
 Dismissal records retain their exact key, reason (`Acknowledged`, `FalsePositive`,
 or `NoLongerRelevant`), and optional note. Persistence must not normalize these
 identities or turn dismissal into resolution or a transaction-acceptance rule.

@@ -4,7 +4,7 @@ use crate::{
 };
 use lifecore::{
     Body, EntryId, LifeCoreList,
-    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, Config, SuiteConfig},
+    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, Config, MessageType, SuiteConfig},
     transaction::{
         Change,
         Reference::{Added, Existing},
@@ -153,7 +153,10 @@ fn normalized_diagnostics_retain_boundaries_severity_and_relevance() {
     let (graph, ids) = graph();
     let analyzer = DagCheck { config: config() };
     let output = analyzer.analyze(graph.view(), &Default::default()).unwrap();
-    let warning = output.warnings().next().unwrap();
+    let warning = output
+        .iter()
+        .find(|message| message.ty() == MessageType::Warning)
+        .unwrap();
     assert_eq!(warning.offending_event.unwrap().view.end_exclusive, 6);
     assert_eq!(warning.offending_event.unwrap().entry, Some(ids[0]));
     assert_eq!(warning.relevance, ids.into_iter().collect());
@@ -167,7 +170,8 @@ fn normalized_diagnostics_retain_boundaries_severity_and_relevance() {
         analyzer
             .analyze(graph.view(), &Default::default())
             .unwrap()
-            .has_error()
+            .iter()
+            .any(|message| message.ty() == MessageType::Inconsistency)
     );
 }
 

@@ -4,7 +4,7 @@ use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, EvaluationInputs, InnerMessageType,
-        InnerOutput, Message, MessageKind, MessageType, Output, TypedAnalyzer,
+        Message, MessageKind, MessageType, TypedAnalyzer,
     },
 };
 use semver::Version;
@@ -277,15 +277,6 @@ impl InnerMessageType for DagCheckMessage {
     }
 }
 
-#[derive(Clone)]
-pub struct DagCheckOutput(pub Vec<DagCheckMessage>);
-
-impl InnerOutput<DagCheckMessage> for DagCheckOutput {
-    fn push(&mut self, value: DagCheckMessage) {
-        self.0.push(value);
-    }
-}
-
 #[derive(Serialize)]
 enum DagFinding<'a> {
     CyclicComponent(&'a CyclicComponent),
@@ -324,8 +315,60 @@ impl DagCheck {
             "Filtered graph contains a cyclic strongly connected component with nodes [{nodes}] and edges [{edges}]"
         )
     }
+}
 
-    fn convert_message(&self, message: DagCheckMessage) -> lifecore::analysis::Message {
+impl TypedAnalyzer for DagCheck {
+    type MSG = DagCheckMessage;
+
+    fn version(&self) -> Version {
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
+    }
+    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+        Ok(Vec::new())
+    }
+
+    fn analyze_inner(
+        &self,
+        view: View<'_>,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, String> {
+        let report = check_dag(view, &self.config);
+        if !report.checked {
+            return Ok(Vec::new());
+        }
+
+        let latest_node = view
+            .entries()
+            .next_back()
+            .and_then(|e| e.as_node())
+            .map(|n| n.id);
+        Ok(report
+            .components
+            .into_iter()
+            .map(|component| {
+                let location = match self.config.on_cycle {
+                CycleDisposition::Inconsistency => view.location(None).expect("view location"),
+                CycleDisposition::Warning => Self::warning_location(view, &component, latest_node),
+                };
+                let mut relevance = component
+                    .nodes
+                    .iter()
+                    .chain(&component.edges)
+                    .copied()
+                    .collect::<Vec<_>>();
+                relevance.sort_unstable();
+                relevance.dedup();
+                DagCheckMessage {
+                    disposition: self.config.on_cycle,
+                    location,
+                    relevance,
+                    component,
+                }
+            })
+            .collect())
+    }
+
+    fn convert_message(&self, message: Self::MSG) -> Message {
         let text = Self::message_text(&message.component);
         Message {
             analyzer_certificate: AnalyzerCertificate(
@@ -340,75 +383,8 @@ impl DagCheck {
             CycleDisposition::Inconsistency => MessageKind::Inconsistency,
             CycleDisposition::Warning => MessageKind::Warning,
             },
-            retain_in_current_report: false,
+            sticky: false,
         }
-    }
-}
-
-impl TypedAnalyzer for DagCheck {
-    type MSG = DagCheckMessage;
-    type OUTPUT = DagCheckOutput;
-
-    fn version(&self) -> Version {
-        Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
-    }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String> {
-        Ok(DagCheckOutput(Vec::new()))
-    }
-
-    fn analyze_inner(
-        &self,
-        view: View<'_>,
-        _inputs: &EvaluationInputs,
-    ) -> Result<Self::OUTPUT, String> {
-        let report = check_dag(view, &self.config);
-        if !report.checked {
-            return Ok(DagCheckOutput(Vec::new()));
-        }
-
-        let latest_node = view
-            .entries()
-            .next_back()
-            .and_then(|e| e.as_node())
-            .map(|n| n.id);
-        Ok(DagCheckOutput(
-            report
-                .components
-                .into_iter()
-                .map(|component| {
-                    let location = match self.config.on_cycle {
-                    CycleDisposition::Inconsistency => view.location(None).expect("view location"),
-                    CycleDisposition::Warning => {
-                        Self::warning_location(view, &component, latest_node)
-                    }
-                    };
-                    let mut relevance = component
-                        .nodes
-                        .iter()
-                        .chain(&component.edges)
-                        .copied()
-                        .collect::<Vec<_>>();
-                    relevance.sort_unstable();
-                    relevance.dedup();
-                    DagCheckMessage {
-                        disposition: self.config.on_cycle,
-                        location,
-                        relevance,
-                        component,
-                    }
-                })
-                .collect(),
-        ))
-    }
-
-    fn convert_report(&self, report: Self::OUTPUT) -> Output {
-        Output(
-            report
-                .0
-                .into_iter()
-                .map(|message| self.convert_message(message))
-                .collect(),
-        )
     }
 }
 

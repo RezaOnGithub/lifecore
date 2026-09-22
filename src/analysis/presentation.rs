@@ -1,4 +1,4 @@
-use super::{EvaluatedView, FindingKey, MessageType, Observation, Report};
+use super::{AnalysisOutput, EvaluatedView, FindingKey, MessageType, Observation};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -94,7 +94,7 @@ pub struct FindingGroup<'a> {
     pub dismissal: Option<&'a Dismissal>,
 }
 
-impl Report {
+impl AnalysisOutput {
     pub fn groups<'a>(
         &'a self,
         dismissals: &'a Dismissals,
@@ -136,7 +136,7 @@ impl Report {
             let boundary = options.selection == ReportSelection::History
                 || observation.evaluated_view == EvaluatedView::Initialization
                 || observation.evaluated_view == EvaluatedView::Prefix(self.view)
-                || observation.retain_in_current_report;
+                || observation.sticky;
             if inconsistency
                 || (category
                     && boundary
@@ -173,7 +173,7 @@ impl Report {
                 EvaluatedView::Initialization => "initialization".to_string(),
                 EvaluatedView::Prefix(view) => format!("boundary {}", view.end_exclusive),
                 };
-                let retained = if observation.retain_in_current_report
+                let retained = if observation.sticky
                     && matches!(observation.evaluated_view, EvaluatedView::Prefix(view) if view != self.view)
                 {
                     " (historical advisory; current applicability unconfirmed)"

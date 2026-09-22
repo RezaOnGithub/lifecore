@@ -42,7 +42,6 @@ fn findings(graph: &LifeCoreList, end_exclusive: usize) -> Vec<TypeCheckMessage>
             &Default::default(),
         )
         .unwrap()
-        .0
 }
 fn has_error(findings: &[TypeCheckMessage]) -> bool {
     findings
@@ -65,13 +64,7 @@ fn runner() -> AnalysisRunner {
 #[test]
 fn builtin_metatype_needs_no_bootstrap_and_cannot_be_redeclared() {
     let mut analyzer = TypeCheck::default();
-    assert!(
-        analyzer
-            .initialize(&Default::default())
-            .unwrap()
-            .0
-            .is_empty()
-    );
+    assert!(analyzer.initialize(&Default::default()).unwrap().is_empty());
     let mut graph = LifeCoreList::default();
     assert!(findings(&graph, 0).is_empty());
     assert_eq!(

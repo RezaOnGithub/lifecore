@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Body, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, View,
-    analysis::{AnalysisRunner, Report, SuiteConfig},
+    analysis::{AnalysisOutput, AnalysisRunner, SuiteConfig},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct PreparedTransaction {
     base_end_exclusive: usize,
     original_suite: SuiteConfig,
     candidate: LifeCoreList,
-    pub diagnostics: Report,
+    pub diagnostics: AnalysisOutput,
     added: Vec<EntryId>,
 }
 

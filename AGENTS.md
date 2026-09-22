@@ -6,7 +6,7 @@ The cleanup direction and open decisions are in [docs/PLAN.md](docs/PLAN.md).
 current behavior. Stages 0–4 and the review checkpoint before stage 5 are complete:
 the old CLI/sidecars and context wrappers are removed. Values are scalars, lists,
 and records. Bounded inspection, comparison, and Graphviz export use `View`.
-Analyzer reports separate complete finding keys from observations; dismissal is
+`AnalysisOutput` separates complete finding keys from observations; dismissal is
 serializable display state and suggestions prepare explicit in-memory transactions.
 The libraries provide graph operations, analysis, transactions, and Serde support,
 with no filesystem persistence or authoring envelopes. Stage 5 creates
@@ -68,6 +68,10 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 - Preserve full-prefix analyzer execution, typed inner findings, normalization,
   and third-party/dynamically dispatched implementations. Keep analyzers and
   their private findings/factories together; shared orchestration uses traits.
+  Typed analyzers return `Vec<Self::MSG>` and own `convert_message`; the adapter
+  produces `Vec<Message>`. Assert typed variants and details in analyzer tests;
+  presentation text must not replace structured domain findings. The runner
+  returns `AnalysisOutput` with observations and the complete evaluation context.
 - Analyzer inspection is read-only and prefix-bounded. Initialization has no
   database access. Results must be deterministic for fixed graph, implementation,
   configuration, and evaluation inputs. `EvaluationInputs` contains only
@@ -87,7 +91,9 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
   Normalize distinguishing domain details inside the analyzer. Shared code does
   not parse finding keys or replace equality with digests. Ordinary boundaries,
   wording, evaluation inputs, and suggested actions belong to observations.
-  `retain_in_current_report` does not assert current applicability or resolution.
+  `sticky` keeps historical advisories visible at later prefixes until dismissed
+  or filtered, with no automatic expiry. It does not assert current applicability
+  or resolution; nonsticky observations remain available in history mode.
   Dismissal reasons and optional notes never establish resolution or affect acceptance.
 
 ## Editing conventions

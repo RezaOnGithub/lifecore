@@ -82,7 +82,7 @@ Independent cleanup can proceed while an unrelated decision remains open.
 | Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
 | Plan persistence | Atomic staging retained; library persistence removed at the review checkpoint. | Libraries compare exact original graph/suite state before in-memory commit. Stage 5's `lifecore-cli` owns publication, writer exclusion, stale-base rejection, no-clobber initialization, and receipts. Concrete layout remains open. |
 | Finding identity | Revised at the review checkpoint; SPEC section 8. | Database, registered analyzer name, exact `semver::Version`, original configuration string, category, and complete opaque `analyzer_certificate: AnalyzerCertificate` (a String newtype). Built-ins encode typed variants, exact subjects, and details as deterministic JSON. Ordinary boundaries, wording, inputs, and actions belong to observations. |
-| Advisory presentation | Stage 4, simplified at review; SPEC section 8. | Current observations plus explicit `retain_in_current_report` advisories; full history selectable. Serializable dismissal has a reason and optional note; persistence belongs to stage 5. Retention and dismissal never establish applicability or resolution. |
+| Advisory presentation | Stage 4, simplified at review; SPEC section 8. | Current observations plus `sticky` historical advisories, which remain visible until dismissed or filtered and have no automatic expiry. Full history remains selectable. Serializable dismissal has a reason and optional note; persistence belongs to stage 5. Stickiness and dismissal never establish applicability or resolution. |
 | Evaluation context | Explicit at review. | `EvaluationInputs { evaluation_time: Option<jiff::Timestamp> }`, default `None`, frozen through initialization and replay. Missing required time is an error; no implicit clock. `EvaluatedView::Initialization` identifies initialization; `EvaluatedView::Prefix(view)` includes prefix zero. |
 
 Stage 0 decisions: text, signed integers, booleans, and timestamps; nested lists
@@ -433,9 +433,16 @@ an analyzer responsibility, not an automatic issue-resolution subsystem.
   Built-ins parse their own package versions; version equality is exact.
 - [x] Use explicit optional evaluation time, frozen for initialization and every
   prefix. Missing required time errors. Replace invocation/scope wrappers with
-  `evaluated_view: EvaluatedView` and `retain_in_current_report: bool`; flatten
+  `evaluated_view: EvaluatedView` and `sticky: bool`; flatten
   observations and preserve typed/dynamic execution, ordering, and validation.
   Distinguish `Initialization` from `Prefix(view)`, including prefix zero.
+- [x] Rename the runner's `Report` to `AnalysisOutput`. Remove `Output`,
+  `InnerOutput`, and the trivial built-in output containers. Typed analyzers
+  return `Vec<Self::MSG>` and own each `convert_message`; the shared adapter
+  produces `Vec<Message>` in order without discarding duplicates. Preserve typed
+  findings and expected variants/details in tests, plus direct dynamic analyzers.
+  Name the historical-advisory display flag `sticky` and document its lack of
+  automatic expiry, dismissal/filter behavior, and unconfirmed applicability.
 - [x] Add dismissal reasons and optional notes as serializable display state.
   No dismissal or historical retention establishes resolution or affects acceptance.
 - [x] Name exclusive view boundaries `end_exclusive`; use `Resolution` with an
@@ -474,11 +481,21 @@ It also moved every file-backed module to `mod.rs`. Follow-up review supersedes
 those choices with the names, enums, newtype, checked difference constructor,
 and conditional module layout recorded above.
 
+Further review names the advisory flag `sticky` and the aggregate `AnalysisOutput`,
+and replaces the analyzer output wrappers with vectors. The typed-finding boundary
+remains intentional: commit `42d1ca9` documented it as guidance for implementors,
+including AI agents, to report structured domain issues before converting to text.
+That purpose is preserved by `Vec<Self::MSG>` and analyzer-owned conversion.
+
 Initial review evidence: `cargo test --workspace` passed 73 unit tests (47 core,
 18 TypeCheck, 8 DAG Check), with no failures or ignored tests. Follow-up review
 passes 76 unit tests (50 core, 18 TypeCheck, 8 DAG Check), including constructor
 invariants, explicit type-resolution outcomes, and exclusive ancestry with
-preserved roots and current successors across boundaries. These checks pass:
+preserved roots and current successors across boundaries. Sticky-advisory coverage
+also checks later prefixes, serialization, dismissal/restore, and history selection.
+The time-replay fixture checks typed findings and conversion using initialized
+analyzer state, alongside the direct dynamic-analyzer regressions.
+These checks pass:
 
 ```sh
 cargo check --workspace

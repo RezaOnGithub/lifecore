@@ -2,7 +2,7 @@ use lifecore::{
     DiagnosticLocation, EntryId, LifeCoreError, View,
     analysis::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, EvaluationInputs, InnerMessageType,
-        InnerOutput, Message, MessageKind, MessageType, Output, TypedAnalyzer,
+        Message, MessageKind, MessageType, TypedAnalyzer,
     },
     typing::{FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition},
 };
@@ -118,34 +118,25 @@ impl TypeCheckMessage {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct TypeCheckOutput(pub Vec<TypeCheckMessage>);
-impl InnerOutput<TypeCheckMessage> for TypeCheckOutput {
-    fn push(&mut self, v: TypeCheckMessage) {
-        self.0.push(v);
-    }
-}
-
 #[derive(Default)]
 pub struct TypeCheck {}
 
 impl TypedAnalyzer for TypeCheck {
     type MSG = TypeCheckMessage;
-    type OUTPUT = TypeCheckOutput;
     fn version(&self) -> Version {
         Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
     }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String> {
-        Ok(TypeCheckOutput::default())
+    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+        Ok(Vec::new())
     }
     fn analyze_inner(
         &self,
         view: View<'_>,
         _inputs: &EvaluationInputs,
-    ) -> Result<Self::OUTPUT, String> {
+    ) -> Result<Vec<Self::MSG>, String> {
         use TypeCheckMessage::*;
         let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
-        let mut output = TypeCheckOutput::default();
+        let mut output = Vec::new();
         let mut types = BTreeMap::<String, (EntryId, Type)>::new();
         for node in view.fresh_nodes().filter(|n| n.ty_name == Type::TYPE_NAME) {
             match Type::from_body(&node.body) {
@@ -189,12 +180,10 @@ impl TypedAnalyzer for TypeCheck {
                 });
                 continue;
             };
-            output
-                .0
-                .extend(ty.check(&node.body).into_iter().map(|issue| Field {
-                    location: location(node.id),
-                    issue,
-                }));
+            output.extend(ty.check(&node.body).into_iter().map(|issue| Field {
+                location: location(node.id),
+                issue,
+            }));
         }
         for edge in view.fresh_edges() {
             for (endpoint, outgoing) in [(edge.from, true), (edge.to, false)] {
@@ -264,34 +253,26 @@ impl TypedAnalyzer for TypeCheck {
         }
         Ok(output)
     }
-    fn convert_report(&self, report: Self::OUTPUT) -> Output {
-        Output(
-            report
-                .0
-                .into_iter()
-                .map(|finding| {
-                    let location = finding.location();
-                    let message = finding.description();
-                    Message {
-                        //A The typed variant skips its ordinary boundary; the exact
-                        //A subject and distinguishing details still define identity.
-                        analyzer_certificate: AnalyzerCertificate(
-                            serde_json::to_string(&(&finding, location.entry))
-                                .expect("typed TypeCheck finding"),
-                        ),
-                        subjects: location.entry.into_iter().collect(),
-                        offending_event: Some(location),
-                        relevance: location.entry.into_iter().collect(),
-                        message,
-                        kind: match finding.ty() {
-                        MessageType::Warning => MessageKind::Warning,
-                        _ => MessageKind::Inconsistency,
-                        },
-                        retain_in_current_report: false,
-                    }
-                })
-                .collect(),
-        )
+    fn convert_message(&self, finding: Self::MSG) -> Message {
+        let location = finding.location();
+        let message = finding.description();
+        Message {
+            //A The typed variant skips its ordinary boundary; the exact
+            //A subject and distinguishing details still define identity.
+            analyzer_certificate: AnalyzerCertificate(
+                serde_json::to_string(&(&finding, location.entry))
+                    .expect("typed TypeCheck finding"),
+            ),
+            subjects: location.entry.into_iter().collect(),
+            offending_event: Some(location),
+            relevance: location.entry.into_iter().collect(),
+            message,
+            kind: match finding.ty() {
+            MessageType::Warning => MessageKind::Warning,
+            _ => MessageKind::Inconsistency,
+            },
+            sticky: false,
+        }
     }
 }
 

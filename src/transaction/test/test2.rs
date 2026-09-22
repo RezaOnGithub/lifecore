@@ -260,14 +260,14 @@ impl crate::analysis::Analyzer for EmptyAnalyzer {
     fn initialize(
         &mut self,
         _inputs: &crate::analysis::EvaluationInputs,
-    ) -> Result<crate::analysis::Output, String> {
+    ) -> Result<Vec<crate::analysis::Message>, String> {
         Ok(Default::default())
     }
     fn analyze(
         &self,
         _view: crate::View<'_>,
         _inputs: &crate::analysis::EvaluationInputs,
-    ) -> Result<crate::analysis::Output, String> {
+    ) -> Result<Vec<crate::analysis::Message>, String> {
         Ok(Default::default())
     }
 }

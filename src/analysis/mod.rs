@@ -47,8 +47,9 @@ pub struct Message {
     pub relevance: BTreeSet<EntryId>,
     pub message: String,
     pub kind: MessageKind,
-    //A Retention never establishes current applicability or resolution.
-    pub retain_in_current_report: bool,
+    //A Sticky advisories stay visible at later prefixes until dismissed or filtered.
+    //A They have no automatic expiry and do not assert current applicability.
+    pub sticky: bool,
 }
 
 impl Message {
@@ -67,47 +68,49 @@ impl MessageKind {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Output(pub Vec<Message>);
-
 pub trait InnerMessageType: Clone + Debug + PartialEq + Eq + Hash {
     fn ty(&self) -> MessageType;
 }
-pub trait InnerOutput<MSG: InnerMessageType>: Clone {
-    fn push(&mut self, v: MSG);
-}
 
+//A Keep structured domain findings until analyzer-owned conversion. Tests can
+//A assert their variants and details independently of presentation wording.
 pub trait TypedAnalyzer: Send + Sync {
     type MSG: InnerMessageType;
-    type OUTPUT: InnerOutput<Self::MSG>;
     fn version(&self) -> Version;
-    fn initialize_inner(&mut self, inputs: &EvaluationInputs) -> Result<Self::OUTPUT, String>;
+    fn initialize_inner(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String>;
     fn analyze_inner(
         &self,
         view: View<'_>,
         inputs: &EvaluationInputs,
-    ) -> Result<Self::OUTPUT, String>;
-    fn convert_report(&self, report: Self::OUTPUT) -> Output;
+    ) -> Result<Vec<Self::MSG>, String>;
+    fn convert_message(&self, message: Self::MSG) -> Message;
 }
 
 //A Direct object-safe implementations are supported alongside the typed adapter.
 //A Setup receives only frozen inputs; all graph access is through View.
 pub trait Analyzer: Send + Sync {
     fn version(&self) -> Version;
-    fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Output, String>;
-    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String>;
+    fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Message>, String>;
+    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String>;
 }
 
 impl<T: TypedAnalyzer> Analyzer for T {
     fn version(&self) -> Version {
         TypedAnalyzer::version(self)
     }
-    fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Output, String> {
-        let report = self.initialize_inner(inputs)?;
-        Ok(self.convert_report(report))
+    fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(self
+            .initialize_inner(inputs)?
+            .into_iter()
+            .map(|message| self.convert_message(message))
+            .collect())
     }
-    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Output, String> {
-        Ok(self.convert_report(self.analyze_inner(view, inputs)?))
+    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(self
+            .analyze_inner(view, inputs)?
+            .into_iter()
+            .map(|message| self.convert_message(message))
+            .collect())
     }
 }
 
@@ -142,12 +145,12 @@ pub struct Observation {
     pub relevance: BTreeSet<EntryId>,
     pub message: String,
     pub kind: MessageKind,
-    pub retain_in_current_report: bool,
+    pub sticky: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Report {
+pub struct AnalysisOutput {
     pub view: ViewId,
     pub inputs: EvaluationInputs,
     pub implementations: Vec<AnalyzerIdentity>,
@@ -185,14 +188,14 @@ impl AnalysisRunner {
         }),
         }
     }
-    pub fn run(&mut self, graph: &LifeCoreList) -> Result<Report, LifeCoreError> {
+    pub fn run(&mut self, graph: &LifeCoreList) -> Result<AnalysisOutput, LifeCoreError> {
         self.run_view(graph.view(), graph.analysis_suite())
     }
     pub fn run_view(
         &mut self,
         view: View<'_>,
         suite: &SuiteConfig,
-    ) -> Result<Report, LifeCoreError> {
+    ) -> Result<AnalysisOutput, LifeCoreError> {
         let mut analyzers = vec![];
         let mut identities = vec![];
         for config in &suite.0 {
@@ -210,7 +213,7 @@ impl AnalysisRunner {
             identities.push(identity);
             analyzers.push(analyzer);
         }
-        let mut report = Report {
+        let mut report = AnalysisOutput {
             view: view.id(),
             inputs: self.inputs.clone(),
             implementations: identities,
@@ -273,9 +276,9 @@ fn record(
     inputs: &EvaluationInputs,
     view: View<'_>,
     evaluated_view: EvaluatedView,
-    output: Output,
+    output: Vec<Message>,
 ) -> Result<(), LifeCoreError> {
-    for diagnostic in output.0 {
+    for diagnostic in output {
         let invalid = |message: &str| LifeCoreError::InvalidAnalyzerOutput {
             analyzer: identity.name.clone(),
             message: message.into(),
@@ -317,7 +320,7 @@ fn record(
             relevance: diagnostic.relevance,
             message: diagnostic.message,
             kind: diagnostic.kind,
-            retain_in_current_report: diagnostic.retain_in_current_report,
+            sticky: diagnostic.sticky,
         };
         //A Keep indices instead of a second owned copy of every diagnostic.
         //A A hash collision still compares the complete observation.
@@ -332,24 +335,7 @@ fn record(
     Ok(())
 }
 
-impl Output {
-    pub fn has_error(&self) -> bool {
-        self.errors().next().is_some()
-    }
-    pub fn errors(&self) -> impl Iterator<Item = &Message> {
-        self.0
-            .iter()
-            .filter(|m| m.ty() == MessageType::Inconsistency)
-    }
-    pub fn warnings(&self) -> impl Iterator<Item = &Message> {
-        self.0.iter().filter(|m| m.ty() == MessageType::Warning)
-    }
-    pub fn suggestions(&self) -> impl Iterator<Item = &Message> {
-        self.0.iter().filter(|m| m.ty() == MessageType::Suggestion)
-    }
-}
-
-impl Report {
+impl AnalysisOutput {
     pub fn observations(&self) -> impl Iterator<Item = &Observation> {
         self.observations.iter()
     }

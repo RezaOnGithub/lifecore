@@ -384,12 +384,19 @@ analyzers or analyzer execution failures are errors, not successful checks.
 
 ### 8.1 Execution and normalization
 
-`TypedAnalyzer` retains analyzer-specific typed findings and reports. A shared
-adapter calls the implementation's explicit `convert_report`; direct third-party
-`dyn Analyzer` implementations are also supported. Factories and domain findings
-remain in their analyzer packages. Shared `Message` output contains an opaque
-`analyzer_certificate: AnalyzerCertificate`, exact subjects, optional diagnostic
-location, relevance set, text, `MessageKind`, and `retain_in_current_report: bool`.
+`TypedAnalyzer` returns analyzer-specific typed findings as `Vec<Self::MSG>` from
+initialization and analysis. The shared adapter converts each finding with the
+implementation's `convert_message(&self, message)` and returns `Vec<Message>`,
+preserving order and duplicates for runner normalization. Conversion can use the
+analyzer's state and configuration. Direct third-party `dyn Analyzer`
+implementations return `Vec<Message>` and are also supported. There is no shared
+`Output` wrapper, `InnerOutput` trait, or associated output container.
+
+Keep domain findings structured and assert their variants and details in analyzer
+tests; presentation text cannot substitute for that evidence. Factories and
+domain findings remain in their analyzer packages. Shared `Message` output
+contains an opaque `analyzer_certificate: AnalyzerCertificate`, exact subjects,
+optional diagnostic location, relevance set, text, `MessageKind`, and `sticky: bool`.
 `AnalyzerCertificate` is a String newtype, serialized transparently as a string.
 
 Both analyzer traits return `version() -> semver::Version`. The runner constructs
@@ -457,22 +464,25 @@ Repeated observations of a dismissed key remain dismissed.
 The runner consumes each `Message`, moves its certificate into `FindingKey`, and
 stores occurrence and presentation fields directly on `Observation`: frozen
 inputs, evaluated view, subjects, location, relevance, wording, kind/actions, and
-retention flag. It retains no second nested diagnostic containing the same key.
+sticky flag. It retains no second nested diagnostic containing the same key.
 Whole-observation equality controls deduplication; grouping by finding key is
 separate and retains distinct boundaries and presentation. Duplicate suite entries
-still execute in full. `Report` retains the selected view, inputs, and ordered
-implementation identities even when no messages were emitted. Reports support
-Serde round trips; their persistence belongs to the CLI.
+still execute in full. The runner returns `AnalysisOutput`, retaining the selected
+view, inputs, and ordered implementation identities even when no messages were
+emitted. It supports Serde round trips; persistence belongs to the CLI.
 
 ### 8.3 Presentation and dismissal
 
 The default report selects initialization output, observations emitted at the
-selected boundary, and advisories with `retain_in_current_report = true`.
-Retained advisories from earlier prefixes are labeled historical with current
-applicability unconfirmed. The flag does not mean that a finding still applies,
-has been resolved, or should be automatically repaired. History mode selects all
-replayed observations. Groups expose all observations and the selected subset in
-deterministic first-emission order.
+selected boundary, and advisories with `sticky = true`. A sticky advisory stays
+visible at later prefixes until dismissed or filtered; it has no automatic expiry.
+With fixed implementation, configuration, and inputs, replay recovers the earlier
+observation even if the analyzer emits nothing at the selected head. Sticky
+advisories from earlier prefixes are labeled historical with current applicability
+unconfirmed. The flag does not mean that a finding still applies, has been resolved,
+or should be automatically repaired. History mode selects all replayed observations,
+including nonsticky advisories. Groups expose all observations and the selected
+subset in deterministic first-emission order.
 
 No generic resolution status is inferred. Non-emission, subject supersession,
 or reconnecting only one split branch cannot establish resolution. Historical
