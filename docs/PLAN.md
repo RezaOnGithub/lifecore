@@ -1,7 +1,8 @@
 # Rust Sketch 02 Cleanup Plan
 
 Status: Stages 0–4 and the review checkpoint before stage 5 are complete.
-Stages 5–6 remain planned.
+Stages 5–6 remain planned. The authoring review below makes structured `plan_id`
+optional and defers durable receipts/retry recovery beyond this round.
 
 ## 1. Outcome
 
@@ -57,6 +58,9 @@ weakening historical correctness under the chosen model.
 - Build authoring around explicit TOML plans in a new `lifecore-cli`, which owns
   storage envelopes and persistence. Keep libraries focused on graph operations,
   analysis, in-memory transactions, and serialization.
+- Combine database identity, expected graph/suite base, and proposal identity in
+  one optional CLI-minted `plan_id`. Omission uses the CLI-selected database's
+  current state; `apply` always checks anew before committing.
 - Simplify MessageUniverse responsibilities rather than relocating the whole
   subsystem into the core.
 
@@ -69,6 +73,8 @@ weakening historical correctness under the chosen model.
 - A large web application before the inspection and authoring APIs work.
 - Markdown document collections, link extraction, relationship authority,
   collection manifests, or document checkout/writeback.
+- Durable application receipts or automatic retry recovery after uncertain
+  acknowledgment. Preserve their requirements in the backlog.
 
 ## 3. Decisions to record before dependent changes
 
@@ -80,7 +86,8 @@ Independent cleanup can proceed while an unrelated decision remains open.
 | Scalar and aggregate shapes | Decided in Stage 0; implemented in Stage 2. | Text, signed integers, booleans, timestamps, nested lists and string-keyed records. No floats, sets, tuples, or unions. |
 | Schema representation | Implemented in Stage 2. | Named field records carry `shape` and `presence`; shapes use `kind`, `element` for lists, and `fields` for records. No textual type-expression parser. |
 | Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
-| Plan persistence | Atomic staging retained; library persistence removed at the review checkpoint. | Libraries compare exact original graph/suite state before in-memory commit. Stage 5's `lifecore-cli` owns publication, writer exclusion, stale-base rejection, no-clobber initialization, and receipts. Concrete layout remains open. |
+| Plan persistence | Atomic staging retained; library persistence removed at the review checkpoint. | Libraries compare exact original graph/suite state before in-memory commit. Stage 5's `lifecore-cli` owns publication, writer exclusion, stale-base rejection, and no-clobber initialization. Concrete layout remains open. Durable receipts/retry recovery are deferred to section 8. |
+| Change-file identity | Revised after the review checkpoint; FILES sections 2–3. | Optional CLI-minted `plan_id` combines database ID, a token for the exact graph/suite base, and proposal identity. No separate `database`/`base` fields. Omission uses the selected current state; a supplied token must match. Apply always performs a full check. |
 | Finding identity | Revised at the review checkpoint; SPEC section 8. | Database, registered analyzer name, exact `semver::Version`, original configuration string, category, and complete opaque `analyzer_certificate: AnalyzerCertificate` (a String newtype). Built-ins encode typed variants, exact subjects, and details as deterministic JSON. Ordinary boundaries, wording, inputs, and actions belong to observations. |
 | Advisory presentation | Stage 4, simplified at review; SPEC section 8. | Current observations plus `sticky` historical advisories, which remain visible until dismissed or filtered and have no automatic expiry. Full history remains selectable. Serializable dismissal has a reason and optional note; persistence belongs to stage 5. Stickiness and dismissal never establish applicability or resolution. |
 | Evaluation context | Explicit at review. | `EvaluationInputs { evaluation_time: Option<jiff::Timestamp> }`, default `None`, frozen through initialization and replay. Missing required time is an error; no implicit clock. `EvaluatedView::Initialization` identifies initialization; `EvaluatedView::Prefix(view)` includes prefix zero. |
@@ -236,7 +243,8 @@ initialization, failed atomic replacement, malformed references, and a historica
 cycle repaired only in the final view. Remaining warnings are in the old core
 and disabled tests scheduled for Stage 2. File writers now exclude one another
 through an advisory lock held over base verification and replacement. Receipts
-for retries after uncertain acknowledgment remain Stage 5 work.
+for retries after uncertain acknowledgment were assigned to stage 5 at this exit;
+the later authoring review defers them to section 8.
 
 ### Stage 2 — Replace contexts, then simplify values and core operations
 
@@ -316,8 +324,9 @@ The reusable SCC algorithm and typed analyzer/factory boundary remain.
 At the stage 2 exit, file publication synced the file and directory. A directory-sync
 failure after rename was reported as `transaction::Error::Published`, because the
 new state might already be visible. The review checkpoint removes this library
-API and carries the safeguard into stage 5. Receipt-based retries after uncertain acknowledgment remain
-Stage 5 work. TypeCheck remains opt-in as agreed; no TOML executable is claimed.
+API and carries the safeguard into stage 5. Receipt-based retries after uncertain
+acknowledgment were planned for stage 5, but are now deferred to section 8.
+TypeCheck remains opt-in as agreed; no TOML executable is claimed.
 
 ### Stage 3 — Build inspection and simplify queries over View
 
@@ -415,9 +424,10 @@ explicit revision intent, nested payloads, and nanosecond timestamps. It rejecte
 stale revise intent, invalid aliases, foreign sources, out-of-profile timestamps,
 and historical analyzer failures without publication. These exports covered the
 output side of the timestamp contract at that exit. The review checkpoint below
-removes the stores and TOML exporter; both input and output adapters, the executable,
-and durable receipts now belong to stage 5. Event applicability assessment remains
-an analyzer responsibility, not an automatic issue-resolution subsystem.
+removes the stores and TOML exporter; both input and output adapters and the
+executable belong to stage 5. Durable receipts were also assigned there at the
+checkpoint and are now deferred to section 8. Event applicability assessment
+remains an analyzer responsibility, not an automatic issue-resolution subsystem.
 
 ### Review checkpoint — Simplify contracts between stages 4 and 5
 
@@ -472,7 +482,8 @@ an analyzer responsibility, not an automatic issue-resolution subsystem.
 The libraries now provide graph operations, bounded inspection, analysis,
 in-memory transactions, and Serde support. No file envelopes or persistence API
 remain. Earlier stage 1–4 publication and export tests are historical evidence;
-stage 5 must restore those safeguards in the CLI alongside durable receipts.
+stage 5 must restore those safeguards in the CLI. The checkpoint also assigned
+durable receipts to stage 5; the subsequent authoring review below defers them.
 No CLI implementation, compatibility adapters, or migrations belong to this checkpoint.
 
 The initial review commit used `InspectedEntry`, `EntryChange`, and `Comparison`,
@@ -511,6 +522,29 @@ changes, foreign/divergent histories, exact stale bases including suite-only
 changes, rollback, malformed deserialization, and explicitly checked suggestions.
 Publication-specific cases are carried forward below as stage 5 requirements.
 
+### Authoring review before stage 5
+
+Use one optional, CLI-minted token with the logical shape
+`lc1:<database-id>:<base-token>:<proposal-id>`. Its base identifies the complete
+graph/suite state, including content changes and suite-only changes that leave
+entry counts equal. Stage 5 chooses the concrete token encoding with the storage
+envelope. The proposal component distinguishes separate plans against one base.
+Other utilities should obtain tokens from the CLI and carry them verbatim.
+
+This replaces the previously required `database`, numeric `base`, and free-form
+`plan_id` envelope fields. With a token, both `check` and `apply` require the
+selected database and its current base to match. Without one, each command uses
+the selected database's current state at that invocation. A standalone check is
+a preview: `apply` always performs its own full check, fixes its concrete base
+and evaluation context, and protects that base through publication. No reusable
+checked-plan artifact or persistent draft attachment is introduced.
+
+Token minting is useful immediately for database/base expectations and proposal
+identity. Receipt-backed retries are independent and deferred to section 8;
+the token alone provides no recognition of an already completed application.
+This revises the earlier receipt commitment without changing completed-stage
+evidence, full-prefix validation, or atomic publication requirements.
+
 ### Stage 5 — Create lifecore-cli for persistence and TOML authoring
 
 - [ ] Create `lifecore-cli` over shared library operations for checking, applying,
@@ -520,6 +554,15 @@ Publication-specific cases are carried forward below as stage 5 requirements.
 - [ ] Implement the FILES authoring envelope, complete node payloads, ordered
   entries, exact existing references, local aliases, revision/branch intent,
   and TOML import/export, including explicitly selected checked suggestions.
+- [ ] Mint and validate optional structured `plan_id` tokens carrying database,
+  exact graph/suite base, and distinct proposal identity. Select the concrete
+  base-token representation with storage; entry counts alone are insufficient.
+  Omit separate `database`/`base` envelope fields. Expose minting to integrations
+  without appending history or reserving a base.
+- [ ] With a supplied token, reject mismatched database/base and malformed or
+  unsupported tokens. Without one, choose the CLI-selected current state.
+  `apply` always performs a full check, including when no standalone check ran
+  or the database changed since a check of a file without `plan_id`.
 - [ ] Implement the explicit [timestamp adapter](FILES.md#timestamp-conversion-contract):
   preserve nanoseconds, reject excess precision and leap seconds before lossy
   parsing, check the converted UTC range, and export native UTC datetimes.
@@ -538,19 +581,19 @@ Publication-specific cases are carried forward below as stage 5 requirements.
 - [ ] Persist reports and dismissals with exact keys, all reasons, and optional
   notes. Dismiss/restore survives reload and absent current emission; concurrent
   dismissal edits preserve each writer's records under writer exclusion.
-- [ ] Publish durable application receipts atomically with the graph. After
-  uncertain acknowledgment, an identical retry returns the receipt without
-  appending; a reused identity with different content fails. Receipt lookup
-  precedes stale-base rejection for an already committed plan.
 - [ ] Expose each proposed boundary through the same view operations used for
   committed history, with provisional status clearly shown.
 
 Exit evidence: handwritten TOML can create, revise, split, and connect nodes;
-failed checks leave persistence untouched. No-clobber initialization, competing
-writers, stale bases, failed replacement, post-publication synchronization
-failure, dismissal reload, and safe retries all have executable coverage.
-Interrupted apply has a documented recoverable state. Identical checked inputs
-produce identical semantic plans. Collection workflows remain backlogged.
+failed checks leave persistence untouched. Token minting and both optional-token
+paths have coverage, including foreign databases, divergent states with equal
+entry counts, and suite-only changes. No-clobber initialization, competing
+writers, stale prepared bases, failed replacement, post-publication
+synchronization failure, and dismissal reload all have executable coverage.
+Interrupted apply reports possible publication and supports state inspection
+without automatically repeating changes. Identical checked inputs produce
+identical semantic plans. Durable receipts/retry recovery and collection
+workflows remain backlogged.
 
 ### Stage 6 — Finish the round and remove leftovers
 
@@ -587,7 +630,13 @@ produce identical semantic plans. Collection workflows remain backlogged.
 | A TOML plan revises B, then revises A without reconnecting their old edge | Execute the listed order and show the historical edge at the intermediate boundary. |
 | A TOML plan explicitly reconnects unchanged A to a successor of B | Show the replacement edge and the intermediate view where the old edge is historical. |
 | An edge references a superseded revision or an ambiguous target | Reject the invalid reference; never implicitly select a successor. |
-| A stale base, concurrent writer, or commit interruption occurs | Stage 5 rejects or recovers under the atomic contract; never duplicate entries on retry. |
+| A token is minted for a proposal | Capture database/exact graph-suite base and a distinct proposal identity without appending history. |
+| A supplied token names another database or a changed base | Reject before application, including equal-count divergent states and suite-only changes. |
+| A token is malformed or has an unsupported version | Reject rather than treating it as omitted. |
+| No token is supplied and the head changes after standalone check | Apply checks the then-current state afresh, preserving exact references and revision intent. |
+| Apply runs with or without a previous check | Always run the complete preflight; no prior check artifact is required. |
+| A prepared base changes or a concurrent writer attempts publication | Stage 5 preserves exact-base rejection and writer exclusion, with or without `plan_id`. |
+| A commit is interrupted after possible publication | Report uncertainty and support state inspection; automatic retry recovery is deferred. |
 | A suite changes without any entry append | In-memory commit rejects the exact stale base; stage 5 preserves this in storage. |
 | Initialization would overwrite a database, or publication fails before/after replacement | Stage 5 verifies no-clobber and pre-publication rollback, and distinguishes post-publication synchronization failure. |
 | Dismissals are reloaded or concurrently edited | Stage 5 retains exact keys, reasons, and notes and preserves both writers' edits. |
@@ -615,27 +664,38 @@ inspection remain required. Keep structural/type validation failures distinct
 from analyzer diagnostics in tests and presentation.
 
 This round is complete when the active stages have evidence, not when their code
-has only been written. Backlogged collections are not an exit requirement. Completed-stage evidence is recorded above; TOML authoring is not implemented
-until Stage 5.
+has only been written. Backlogged collections and receipt recovery are not exit
+requirements. Completed-stage evidence is recorded above; TOML authoring is not
+implemented until stage 5.
 
 ## 7. Backlog — Markdown document collections
 
 Preserve the collection proposal in FILES for a later round. Do not implement
 collection-specific infrastructure as speculative preparation for it. Explicit
-TOML authoring, plan receipts, bounded graph views, and historical analyzer
-reporting remain in the current round for their own purposes.
+TOML authoring with optional plan tokens, bounded graph views, and historical
+analyzer reporting remain in the current round for their own purposes.
 
 Before resuming collections, revisit document identities, relationship
 authority, manifests, alias handling, and writeback normalization. Select the
 minimum needed for exact planning, conflict detection, and historical link
 interpretation; unresolved ambiguity may require an explicit TOML edit.
+Resumable collection writeback also depends on the deferred receipt work below.
+
+The selected collection format uses YAML frontmatter with a `lifecore` string
+containing TOML metadata, conventionally emitted as a literal block (`|`). This
+replaces the earlier proposal for a standalone `+++` TOML frontmatter block.
+Decode YAML before parsing the contained TOML, and reuse the change-file value
+and timestamp profile. Preserve unrelated YAML fields during writeback.
+The Markdown body uses ordinary CommonMark inline/reference links; edge
+annotations stay inside the embedded TOML. Existing destination spellings and
+collection-relative database context remain as specified in FILES.
 
 Deferred work:
 
 - Check out document revisions and distinguish edits, moves, copies, missing
   files, and deliberate splits.
-- Parse Markdown with TOML frontmatter and derive ordinary, typed, and incoming
-  edges from links, including links to mechanical nodes.
+- Parse the YAML frontmatter string as TOML metadata and derive ordinary, typed,
+  and incoming edges from CommonMark links, including links to mechanical nodes.
 - Compare all edited documents together and generate ordered TOML plans with
   explicit reconnections and source-local diagnostics.
 - Reconcile externally authored relationships and conflicting declarations.
@@ -647,6 +707,9 @@ Deferred acceptance scenarios:
 
 | Scenario | Expected evidence when collections resume |
 | --- | --- |
+| YAML frontmatter embeds TOML metadata with multiline values | Decode the string and apply the existing TOML value/timestamp rules; indented delimiter text remains content. |
+| LifeCore updates revision metadata beside unrelated YAML fields | Preserve unrelated fields and unchanged metadata values; formatting-only changes do not revise graph payloads. |
+| Managed metadata is malformed or uses a YAML mapping instead of the TOML string | Reject explicitly; no implicit YAML-native interpretation. |
 | B changes while A removes its link to B | Generate the selected revision order without an unnecessary old-A/new-B edge. |
 | B changes while unchanged A retains a file link | Generate an explicit replacement edge and show the intermediate historical edge. |
 | A document declares an incoming edge from a mechanical node | Derive the correct direction and validate both endpoint permissions. |
@@ -655,3 +718,35 @@ Deferred acceptance scenarios:
 | A target splits or an exact URI points at a superseded revision | Require explicit target selection or navigation-only intent. |
 | Database persistence succeeds but document writeback fails | Recover writeback from durable evidence while preserving newer text. |
 | An old document refers to a moved path or plan-local alias | Historical rendering uses retained resolution at the selected view. |
+
+### Further collection format and tooling work
+
+- YAML-native LifeCore metadata is backlogged beyond the initial embedded-TOML
+  format. Revisit its value mapping, especially timestamps versus strings, and
+  metadata editing in other tools before selecting that representation.
+- Defer custom-scheme clickability in external Markdown renderers and desktop
+  URI-handler installation. Valid CommonMark link syntax does not guarantee that
+  a renderer permits the scheme or launches a handler. Neither feature is needed
+  to parse collection links or validate graph changes. No URI context redesign
+  is part of this format revision.
+
+## 8. Backlog — Durable application receipts
+
+Receipt-backed retries after uncertain acknowledgment are outside stage 5.
+Optional structured `plan_id` tokens provide proposal identity and database/base
+expectations now; they do not require a receipt store or promise idempotent retries.
+Preserve the [recovery contract](FILES.md#84-deferred-receipts-and-retry-recovery)
+for future CLI work, without adding speculative library persistence.
+
+Deferred work and acceptance evidence:
+
+- Publish plan identity/content, actual base, check context, and assigned entry
+  IDs atomically with the graph; a journal written only afterward is insufficient.
+- Recover a crash after publication but before acknowledgment. An identical
+  retry returns its receipt without appending the operations again.
+- Verify identity/content and look up completed receipts before testing the
+  original expected base; reject reuse of an identity with changed content.
+- Cover empty plans, receipt retention/reload, and retries after later writes.
+  Change files without `plan_id` carry no retry identity guarantee.
+- Coordinate any later collection writeback with the durable receipt so it can
+  resume without overwriting newer files or repeating graph appends.

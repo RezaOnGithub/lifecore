@@ -3,16 +3,18 @@
 Status: proposed authoring contract. Stages 0–4 and the review checkpoint before
 stage 5 are complete. Libraries provide serialization and checked in-memory
 suggestions. Stage 5 creates `lifecore-cli` for all file envelopes, persistence,
-TOML import/export, timestamp conversion, and durable application receipts.
-Concrete storage layout remains a stage 5 decision.
+TOML import/export, timestamp conversion, and optional structured plan IDs.
+Concrete storage layout and base-token encoding remain stage 5 decisions.
+Durable application receipts and retry recovery are deferred.
 
 Current cleanup scope is TOML change files and bounded inspection. Markdown
 document collections are backlogged in [PLAN.md](PLAN.md#7-backlog--markdown-document-collections).
 The collection design below is retained for later work. Its document checkout,
 link extraction, relationship authority, collection manifests, historical link
 rendering, and document writeback requirements are not requirements for this
-round. TOML plan validation, persistence/retry handling, and core historical
-inspection remain in scope.
+round. TOML plan validation, atomic persistence, and core historical inspection
+remain in scope. The [receipt design](#84-deferred-receipts-and-retry-recovery)
+is retained as future work, not a requirement for stage 5.
 
 This document complements [SPEC.md](SPEC.md). The core specification takes
 precedence for graph identity, history, typing, and transaction validity.
@@ -139,9 +141,7 @@ not an empty-database bootstrap.
 ```toml
 format_version = 1
 value_profile = "toml-basic-v1"
-database = "personal"
-base = 184
-plan_id = "proposal-update-001"
+plan_id = "lc1:<database-id>:<base-token>:<proposal-id>"
 
 [[entries]]
 name = "task_done"
@@ -170,24 +170,72 @@ from = "$explanation"
 to = "$task_done"
 ```
 
-The envelope has these required fields:
+The envelope has these fields:
 
-| Field | Meaning |
-| --- | --- |
-| `format_version` | Authoring format version; initially `1`. |
-| `value_profile` | Selected stored-value representation. |
-| `database` | Persistent database identity, not merely a filename or mutable display name. |
-| `base` | Expected starting boundary, expressed as an exclusive entry count. |
-| `plan_id` | Nonempty operation identity, unique within this database. |
-| `entries` | Ordered array of proposed entries; may be empty. |
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `format_version` | Yes | Authoring format version; initially `1`. |
+| `value_profile` | Yes | Selected stored-value representation. |
+| `plan_id` | No | CLI-minted, versioned token identifying the database, expected base state, and particular proposal. |
+| `entries` | Yes | Ordered array of proposed entries; may be empty. |
 
-The sample database identity is illustrative. A real identity must distinguish
-unrelated databases even if their entry counts and local IDs coincide.
+There are no separate `database` or `base` control fields. The CLI selects the
+database through its usual locator or configured default. When present, `plan_id`
+asserts that the selected database and its current state match the token.
 
 Each array element describes exactly one append. TOML table key order does not
 affect semantics; `entries` array order does. Comments are never operations.
-Entry IDs are assigned on commit and returned in the receipt, not claimed by
-the author.
+The CLI returns assigned entry IDs after successful commit; authors cannot
+claim them in the change file. This application result does not require a
+durable receipt.
+
+#### Optional structured plan identity
+
+The token has the logical shape `lc1:<database-id>:<base-token>:<proposal-id>`.
+The angle-bracket values in examples are placeholders. Stage 5 selects their
+concrete encoding with the storage envelope; callers should obtain the complete
+token from the CLI and copy it verbatim rather than assemble it themselves.
+
+- The database component is the persistent database identity, independent of
+  its filename or mutable display name.
+- The base component identifies the complete expected graph/suite state:
+  original entry count and ordered contents, and the exact ordered analyzer
+  suite. A boundary count alone is insufficient. Divergent histories with equal
+  counts and suite-only changes must fail the expectation. Dismissal edits do
+  not change the graph/suite base.
+- The proposal component distinguishes different proposals against the same
+  database and base. Mint a fresh proposal identity for a different plan.
+
+The CLI must expose token minting for a selected database without appending
+history. Generated plans should include a token, and integrations are encouraged
+to obtain one when preparing changes against a known state. Minting does not
+reserve or lock that state for a later application. Malformed tokens and unknown
+token versions are errors; they must not be treated as an absent field.
+
+| Change file | `check` and `apply` starting state |
+| --- | --- |
+| Contains `plan_id` | Require the selected database and current graph/suite state to match the token; reject a changed base. |
+| Omits `plan_id` | Use the selected database's current graph/suite state when that command starts. |
+
+A one-off addition can therefore omit the token:
+
+```toml
+format_version = 1
+value_profile = "toml-basic-v1"
+
+[[entries]]
+name = "task"
+kind = "node"
+type = "Task"
+payload = { title = "Buy groceries", status = "open" }
+```
+
+Both forms receive the same complete validation. Existing references remain
+exact, and every prepared application has a concrete base that must remain
+unchanged through publication. A token does not certify a previous check or
+freeze analyzer implementation versions or evaluation time; `apply` checks anew.
+Its immediate purpose is database/base checking and proposal identity.
+Receipt-backed recognition of a completed retry is deferred to section 8.4.
 
 ### 2.3 References and names
 
@@ -195,9 +243,11 @@ the author.
   nonempty strings after `@`; the numeric examples do not require numeric IDs.
 - `$task_done` denotes a node introduced by an earlier entry in this plan.
 - Every entry has a unique `name` matching `[A-Za-z_][A-Za-z0-9_-]*`. Edge names
-  identify operations and receipts but cannot serve as node endpoints.
-- Existing references must be present at `base`. Aliases cannot be forward
-  references. Predecessors and endpoints must resolve to nodes.
+  identify operations and their application results but cannot serve as node
+  endpoints.
+- Existing references must be present in the starting state selected under
+  section 2.2. Aliases cannot be forward references. Predecessors and endpoints
+  must resolve to nodes.
 - Ordinary payload strings are literal, including strings starting with `@` or
   `$`. Only designated reference fields perform resolution.
 
@@ -254,14 +304,16 @@ checking remain library responsibilities. There is no plan ID, file envelope,
 TOML string, or export-specific timestamp restriction in this API.
 
 Stage 5's `lifecore-cli` owns authoring envelopes and graph/report/dismissal
-persistence, imports and exports TOML, converts timestamps, and publishes durable
-receipts. It uses the shared preparation and validation paths. No compatibility
-reader or migration from earlier sketch formats is required. The concrete
-storage layout is deliberately left to that stage.
+persistence, imports and exports TOML, converts timestamps, and mints structured
+plan IDs. It uses the shared preparation and validation paths. Durable receipts
+are deferred. No compatibility reader or migration from earlier sketch formats
+is required. The concrete storage layout is deliberately left to that stage.
 
-The basic workflows are:
+The basic workflows below use the database selected through the CLI. Command
+spelling is illustrative; token minting must be available to other utilities:
 
 ```sh
+lc plan-id
 lc check changes.toml
 lc apply changes.toml
 
@@ -270,14 +322,17 @@ lc check changes.toml
 lc apply changes.toml
 ```
 
-`check` does not append history or update the document checkout. It resolves the
-specified database and boundary, freezes input values, and simulates the listed
-appends in order. It performs the core append checks and resulting-view checks
-at every prefix. A successful final graph is not sufficient.
+`plan-id` returns a new token for the selected database's current graph/suite
+state. `check` does not append history, rewrite the change file, or mint a missing
+token. It selects the starting state according to section 2.2, freezes input
+values, and simulates the listed appends in order. It performs the core append
+checks and resulting-view checks at every prefix. A successful final graph is
+not sufficient.
 
 The report must include:
 
-- The base, plan identity, ordered operations, and exact resolved existing IDs.
+- The selected database, concrete graph/suite base and its exclusive entry
+  count, plan identity if supplied, ordered operations, and exact existing IDs.
 - Payload differences, type transitions, and connections that become historical,
   are retained through new edges, or are deliberately dropped.
 - The first failing prefix, operation name, relevant IDs, and source locations
@@ -291,8 +346,8 @@ and plan content are part of the check context. `EvaluationInputs` contains
 `evaluation_time: Option<jiff::Timestamp>` and defaults to `None`. A frontend may
 explicitly choose a time before checking; the library runner and analyzers never
 read a clock implicitly. Freeze the inputs across initialization and every
-replayed prefix. An analyzer requiring time errors when it is absent. A receipt
-records this context; an old check cannot authorize ignoring changes to it.
+replayed prefix. An analyzer requiring time errors when it is absent. The check
+result records this context; an old check cannot authorize ignoring changes to it.
 
 Stored `AnalysisOutput` values retain observations with
 `EvaluatedView::Initialization` or `EvaluatedView::Prefix(view)` for an exact prefix,
@@ -310,19 +365,28 @@ Dismissal records retain their exact key, reason (`Acknowledged`, `FalsePositive
 or `NoLongerRelevant`), and optional note. Persistence must not normalize these
 identities or turn dismissal into resolution or a transaction-acceptance rule.
 
-`apply` freezes the file, verifies the database identity and expected base, and
-repeats a full preflight before appending. The default rejects a changed head;
-there is no implicit rebase. Matching boundary/head numbers alone are insufficient:
+`apply` always freezes the file and performs a full check before appending,
+whether or not a standalone `check` was run. A standalone check previews the
+state at that invocation; it does not create a reusable authorization artifact.
+If `plan_id` is present, reject a different database or changed base rather than
+rewrite the token. If it is absent, a database change between standalone `check`
+and `apply` is allowed: `apply` checks the current state and may produce a
+different result. Exact references and revision/branch intent are unchanged.
+
+During `apply`, the concrete base and evaluation context remain fixed. Matching
+entry counts alone cannot satisfy a supplied token or protect publication:
 also reject changed original entry contents and changed ordered analyzer suites.
-A newer evaluation context requires a new check
-result to be presented, rather than claiming the earlier result still applies.
-During application the selected context remains fixed.
+Present the actual application check result, including any newer evaluation
+context, rather than claiming the earlier standalone result still applies.
 
 The complete plan commits atomically after every prefix passes. Hold the writer
 exclusion and expected-base check through replacement so another writer cannot
 interleave with publication. Each committed intermediate boundary remains
-inspectable. Editing the plan changes its check result and requires a new plan
-identity; there is no partially committed plan suffix to resume.
+inspectable. Editing the plan changes its check result; when using `plan_id`,
+mint a fresh proposal identity for changed operations. Neither command silently
+adds or refreshes the token. There is no partially committed plan suffix to
+resume, and stage 5 does not promise automatic retry recovery after uncertain
+acknowledgment, with or without a token.
 
 ## 4. Document collections
 
@@ -347,33 +411,45 @@ Missing tracked files are unresolved removals, not instructions to delete nodes.
 An explicit untrack action only removes collection membership. Archiving, if
 desired, is a typed payload revision with application-defined meaning.
 
-### 4.2 Markdown with TOML frontmatter
+### 4.2 Markdown with TOML embedded in YAML frontmatter
 
-Managed documents begin with a TOML block delimited by standalone `+++` lines.
-The first following closing delimiter ends the block; the remaining text is the
-Markdown body. Delimiter lines cannot occur inside frontmatter multiline values.
-The body uses [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/); extensions
-must be separately versioned and cannot silently change edge extraction.
+Managed documents begin with a YAML frontmatter mapping delimited by unindented
+`---` lines. The opening delimiter is the first line; the next unindented closing
+delimiter ends the frontmatter. The remaining text is the Markdown body.
+Frontmatter is an authoring convention outside CommonMark; the body uses
+[CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/).
+Any later body extensions must be separately versioned and cannot silently
+change edge extraction.
+
+The required top-level YAML key `lifecore` contains a string holding the complete
+TOML metadata. Writers emit a YAML [literal block scalar](https://yaml.org/spec/1.2.2/#812-literal-style),
+`lifecore: |`, so the TOML stays readable and its line breaks are preserved.
+Decode the YAML string first, including its indentation and trailing-newline
+rules, then parse that string as TOML. Equivalent YAML string spellings are
+accepted when their decoded contents are valid metadata. A missing, duplicate,
+or non-string `lifecore` field, invalid YAML, or invalid embedded TOML is an error.
 
 ```markdown
-+++
-format_version = 1
-document_id = "design-note"
-revision = "@42"
-type = "Document"
-body_field = "body"
+---
+tags: [design]
+lifecore: |
+  format_version = 1
+  document_id = "design-note"
+  revision = "@42"
+  type = "Document"
+  body_field = "body"
 
-[payload]
-title = "Design rationale"
+  [payload]
+  title = "Design rationale"
 
-[edges.implementation-task]
-type = "Supports"
-direction = "incoming"
+  [edges.implementation-task]
+  type = "Supports"
+  direction = "incoming"
 
-[edges.underlying-concept]
-type = "Explains"
-direction = "outgoing"
-+++
+  [edges.underlying-concept]
+  type = "Explains"
+  direction = "outgoing"
+---
 [This task][implementation-task] supports the work described here.
 
 The document explains [this concept][underlying-concept].
@@ -383,32 +459,52 @@ Compare [the experiment](./experiment.md).
 [underlying-concept]: lifecore:entry/96
 ```
 
-`format_version`, `document_id`, `type`, and `body_field` are required. `payload`
-is a table, empty if omitted. For an existing document, `revision` must agree
-with checkout metadata. For a new root it is absent. Split metadata is described
-in section 7.3.
+Inside the decoded TOML, `format_version`, `document_id`, `type`, and `body_field`
+are required. `payload` is a table, empty if omitted. For an existing document,
+`revision` must agree with checkout metadata. For a new root it is absent.
+Split metadata is described in section 7.3.
+
+Other YAML fields, such as `tags` in the example, belong to other tools or the
+user. Preserve them during LifeCore writeback; they do not implicitly become
+graph payload or control metadata. Unknown control fields inside the embedded
+TOML remain errors. Its payload uses the same TOML value and timestamp profile
+as change files, including the distinction between timestamp literals and
+quoted strings. YAML only carries that TOML text; it does not decode graph values.
+YAML-native LifeCore metadata is [backlogged](PLAN.md#further-collection-format-and-tooling-work).
+
+An indented delimiter-looking line inside the YAML scalar belongs to its TOML
+text and does not close the frontmatter. TOML multiline values retain their
+normal meaning after YAML decoding.
 
 The stored payload is `payload` plus the Markdown body under `body_field`.
 Declaring that same field inside `payload` is an error. Control metadata,
-including `edges`, is not injected into the payload. Unknown control fields are
-errors. The type declaration must accept the resulting payload.
+including `edges`, is not injected into the payload. The type declaration must
+accept the resulting payload.
 
 Relationships that should not appear in prose can be written in change files;
 they remain visible as external or unowned connections in collection inspection.
 The first format does not require dummy prose links to expose such connections.
 
 Physical line endings normalize to LF. Body text otherwise remains exact,
-including whitespace and reference definitions. Reformatting TOML without
-changing parsed values is a no-op; reformatting the Markdown body can change its
-stored string even when rendering looks the same. No formatter runs implicitly.
+including whitespace and reference definitions. Reformatting YAML or embedded
+TOML without changing the decoded TOML metadata values does not change the graph
+payload. Reformatting the Markdown body can change its stored string even when
+rendering looks the same. No formatter runs implicitly.
 
 ### 4.3 Links and relationship annotations
+
+The body uses standard CommonMark inline links and reference links, with ordinary
+reference definitions. Relationship annotations live in the embedded TOML;
+interpreting links as proposed graph edges adds application semantics without
+adding Markdown link syntax. Other readers can parse the same links without
+understanding those annotations. See [CommonMark links](https://spec.commonmark.org/0.31.2/#links).
 
 An unannotated Markdown link to another managed document or a `lifecore:entry`
 node proposes an outgoing `References` edge. That label must be permitted by
 both endpoint types like any other label.
 
-`[edges.<label>]` annotates a Markdown reference label. It accepts:
+`[edges.<label>]` in the embedded TOML annotates a Markdown reference label.
+It accepts:
 
 | Field | Meaning |
 | --- | --- |
@@ -427,7 +523,7 @@ The example proposes `Task #81 --Supports--> Document`,
 Incoming direction does not require the external node to have a document file.
 
 Labels match using CommonMark's Unicode case folding and whitespace
-normalization. Colliding frontmatter labels or duplicate normalized reference
+normalization. Colliding annotation labels or duplicate normalized reference
 definitions are errors in managed documents. Type names themselves remain exact
 strings. An annotation without a used reference link is an error, preventing a
 misspelled label from silently falling back to `References`.
@@ -451,6 +547,12 @@ links, but must not invent relationships from bracket-shaped text.
 | `lifecore:alias/new_task` | Node named `new_task` in the accompanying plan. |
 | `#section` or a path to this same document | Navigation only; no self-edge. |
 | External URL or unmanaged attachment | Ordinary navigation; no inferred node or edge. |
+
+The `lifecore:` destinations fit [generic URI syntax](https://www.rfc-editor.org/rfc/rfc3986.html#section-3)
+and the CommonMark link grammar. This does not guarantee that every renderer
+makes them clickable: a renderer may filter unfamiliar schemes. Renderer
+compatibility and future desktop URI-handler installation are deferred tooling
+work, independent of collection parsing and graph-link validation.
 
 URI IDs are UTF-8 percent-encoded as one component and decoded exactly once.
 Entry links inherit database identity from their collection or archived view;
@@ -550,7 +652,8 @@ The planner must:
    exact edge appends, coalescing repeated link occurrences.
 6. Propose a deterministic operation order respecting necessary dependencies.
    Simulate every prefix and verify final collection correspondence.
-7. Emit the TOML plan and a frozen collection manifest for inspection/application.
+7. Emit the TOML plan with a minted `plan_id` for that database/base and a frozen
+   collection manifest for inspection/application.
 
 Combining mechanical entries and generated document operations creates one
 explicitly ordered plan with a single alias namespace. Duplicate operation names
@@ -589,9 +692,7 @@ link to it. A possible plan is:
 ```toml
 format_version = 1
 value_profile = "toml-basic-v1"
-database = "personal"
-base = 184
-plan_id = "revise-b-then-a-001"
+plan_id = "lc1:<database-id>:<base-token>:<proposal-id>"
 
 [[entries]]
 name = "b"
@@ -641,9 +742,10 @@ revision and resulting reconnections must appear explicitly in the plan.
 
 A split is explicit. New successor documents receive new `document_id` values,
 omit `revision`, and specify `predecessor = "@42"` with `intent = "branch"` in
-frontmatter. These two fields are otherwise absent from ordinary checked-out
-documents. The old document's departure from current collection membership must
-be acknowledged as part of the split, not treated as unexplained deletion.
+the embedded TOML metadata. These two fields are otherwise absent from ordinary
+checked-out documents. The old document's departure from current collection
+membership must be acknowledged as part of the split, not treated as unexplained
+deletion.
 
 The resulting plan appends one successor per document. Connections must be
 assigned to a successor, both successors, or neither. Any unchanged incoming
@@ -656,7 +758,7 @@ branches from historical predecessors.
 
 ## 8. Robust application and recovery
 
-### 8.1 Receipts and atomic publication
+### 8.1 Atomic publication
 
 These requirements belong to stage 5's CLI, including the safeguards previously
 exercised by library stores in stages 1–4. The libraries now expose only in-memory
@@ -674,21 +776,15 @@ transactions and Serde support. Storage layout and envelope encoding are open.
 - Reload graph, report, and dismissal data without changing exact identities.
   Dismiss/restore survives reload and absent current emission. Concurrent dismissal
   edits reread under writer exclusion and preserve other writers' records.
-- Recover retries after uncertain acknowledgment using a durable application
-  receipt; never append the same plan twice or accept a reused ID with changed content.
+- Validate a supplied token's database/base expectation before preparation and
+  preserve the chosen concrete base through publication even when no token was
+  supplied. Persist the base identity consistently with the graph/suite state.
 
-Persist the frozen plan identity, check context, and assigned operation IDs in
-the same atomic publication as the graph. A workspace-only journal written after
-commit cannot close the crash window. Receipts are auxiliary persistence
-metadata, not graph entries.
-
-A failure before publication leaves the previous graph intact. A failure after
-publication but before acknowledgment is recovered through the durable receipt.
-Retrying an identical completed plan returns its receipt without appending again;
-reusing its identity with different content is an error. Verify identity/content
-and look up the receipt before checking the original expected base, since a
-successful application has itself advanced that base. Safe retries and receipts
-are required of `lifecore-cli` in stage 5 and are not implemented yet.
+A failure before publication leaves the previous graph intact. After publication,
+failed synchronization or acknowledgment may leave the caller uncertain. Report
+that uncertainty and support inspection of the stored state; do not automatically
+repeat the changes. Token minting alone supplies no durable application receipt.
+Retry recovery is deferred to section 8.4.
 
 ### 8.2 Source edits and file writeback
 
@@ -705,9 +801,11 @@ writeback must block ordinary replanning until resolved; it must not look like
 a mixture of unrelated user edits and new root documents.
 
 Preserve user formatting where possible. Routine writeback changes revision
-metadata, plan-local URI spellings, and explicitly planned path changes. If a
-file changed concurrently, present the frozen, committed, and working versions
-for reconciliation instead of overwriting it.
+metadata inside the YAML-carried TOML string, plan-local URI spellings, and
+explicitly planned path changes. Preserve unrelated YAML fields and the decoded
+meaning of unchanged TOML values. If a file changed concurrently, present the
+frozen, committed, and working versions for reconciliation instead of overwriting
+it.
 
 ### 8.3 Historical rendering and integrity
 
@@ -730,10 +828,32 @@ Export/backup must include retained authoring records to preserve full collectio
 and historical-link behavior. Importing history still requires all-prefix core
 integrity checks, not merely checking the final documents.
 
+### 8.4 Deferred receipts and retry recovery
+
+This future CLI work is outside stage 5. It preserves the earlier recovery
+requirements for a later implementation; the current optional token does not
+claim to implement them. Plans participating in retry recovery would carry
+`plan_id`; omitted tokens carry no retry identity guarantee.
+
+- Persist the frozen plan identity/content, actual base, check context, and
+  assigned operation IDs in the same atomic publication as the graph. A
+  workspace-only journal written afterward cannot close the crash window.
+- Retrying an identical completed plan returns its receipt without appending
+  again. Reusing its identity with different content is an error.
+- Verify identity/content and look up the receipt before checking the original
+  expected base, since a successful application has itself advanced that base.
+- Recover uncertain acknowledgment and any backlogged collection writeback
+  without repeating graph appends. Receipts are auxiliary persistence metadata,
+  not graph entries.
+
+The future design must cover empty plans as well as plans that change the graph.
+Receipt retention, encoding, and storage layout remain decisions for that work.
+
 ## 9. Robustness scenarios to verify
 
 These are behavioral acceptance scenarios for an implementation, not additional
-exceptions to the core contract.
+exceptions to the core contract. Collection scenarios remain backlogged; receipt
+recovery scenarios below are explicitly deferred beyond stage 5.
 
 | Scenario | Required outcome |
 | --- | --- |
@@ -741,14 +861,19 @@ exceptions to the core contract.
 | Offset conversion crosses the supported UTC range, or export receives an out-of-profile core timestamp | Reject explicitly; no string fallback, rounding, or clamping. |
 | Nanosecond timestamp is exported and imported with a different offset spelling | Preserve the exact instant and equality; spelling need not survive. |
 | Quoted timestamp text or local datetime appears in a payload | Keep quoted text as text; reject the local datetime without assuming a timezone. |
-| Database identity differs despite matching IDs/count | Reject before mutation. |
-| Head advances between planning and apply, or entries/suite change without an append | Reject the exact stale base; require refresh/replan. |
+| A minted token is supplied and database identity differs despite matching IDs/count | Reject before mutation. |
+| A token is malformed or uses an unknown version | Reject; do not fall back to applying without a token. |
+| Two proposals are minted against one database/base | Tokens share that database/base and have distinct proposal identities; minting leaves graph history unchanged. |
+| A token's expected head advances, or entries/suite differ despite an equal entry count | Reject the stale token; require deliberate refresh/replanning. |
+| No token is supplied and the database changes between standalone check and apply | Check anew against the current state and apply only if valid; leave the source file unchanged. |
+| A token is supplied without a previous standalone check | Apply verifies its database/base and performs the full check itself. |
+| A standalone check used an earlier evaluation time or analyzer implementation | Apply checks using its selected context and reports the actual result. |
 | Initialization targets an existing database | Refuse without clobbering it. |
 | Publication fails before replacement | Leave prior state intact. |
-| Synchronization fails after publication | Report possible publication and recover through receipts. |
+| Synchronization fails after publication | Report possible publication; permit state inspection and do not automatically retry. Receipt recovery is deferred. |
 | Dismissal is saved, reloaded, restored, or edited by concurrent frontends | Retain exact keys/reasons/notes and preserve each writer's update; never affect acceptance. |
 | Writer advances the base during checking | Reject under writer exclusion before publishing any operation. |
-| Analyzer changes, disappears, fails, or receives a new evaluation time | Invalidate the old check; never silently skip it. |
+| Analyzer changes, disappears, fails, or receives a new evaluation time | Check anew; changed inputs may change diagnostics, and missing or failed analyzers reject application. |
 | Schema migration is valid only at the final view | Reject the first invalid prefix. |
 | Both A and B change and A removes its link | Plan both revisions without unnecessary transient reconnection. |
 | B changes and unchanged A retains a file link | Show explicit reconnection and the intervening historical edge. |
@@ -762,13 +887,31 @@ exceptions to the core contract.
 | A document is moved, copied, deleted, or split | Distinguish identity-preserving move, duplicate identity, unresolved removal, and explicit branching. |
 | File link target escapes the root or has case ambiguity | Reject graph resolution deterministically. |
 | Payloads of independent new roots are identical | Apply the core duplicate rule; do not invent identity fields. |
-| Crash occurs after commit but before client acknowledgment | Recover the operation receipt; do not append twice. |
-| Plan identity is reused with changed content | Reject the conflicting identity, even if the earlier plan committed. |
 | User edits a file during apply or writeback | Preserve newer bytes and expose the synchronization conflict. |
 | Alias URI writeback is followed by an unchanged collection check | Produce no revision; use the recorded normalized checkout baseline. |
 | Old document contains a renamed path or plan-local alias | Resolve from retained view-specific information, never today's files. |
 | Authoring metadata is lost or incompatible | Preserve core readability; block unsafe collection reconciliation. |
 | Check is run twice with identical view/context/inputs | Produce the same operations, resolutions, ordering, and diagnostics. |
+
+Deferred collection-format acceptance scenarios:
+
+| Scenario | Required outcome when collections are implemented |
+| --- | --- |
+| A YAML literal block contains LifeCore TOML metadata | Decode the YAML string, then validate TOML with the change-file value/timestamp profile; preserve exact reference-link destinations in the body. |
+| YAML or TOML presentation changes without changing decoded metadata values | Produce no graph payload change from that reformatting. |
+| An indented `---` line occurs inside a TOML multiline value in the YAML scalar | Keep it in the decoded value; only the unindented frontmatter delimiter ends the header. |
+| The `lifecore` field is missing, duplicated, a YAML mapping, or invalid TOML text | Reject managed-document metadata; YAML-native LifeCore fields remain backlogged. |
+| Revision writeback encounters unrelated YAML fields | Preserve those fields without importing them into the graph payload. |
+| A renderer does not make a valid `lifecore:` link clickable | Collection parsing and graph-link validation still work; renderer integration and URI-handler installation remain separate future work. |
+
+Deferred receipt acceptance scenarios:
+
+| Scenario | Required outcome when receipt recovery is implemented |
+| --- | --- |
+| Crash occurs after commit but before client acknowledgment | Recover the operation receipt; do not append twice. |
+| A completed plan is retried after its base has advanced | Verify plan identity/content and return the receipt before stale-base rejection. |
+| Plan identity is reused with changed content | Reject the conflicting identity, even if the earlier plan committed. |
+| An empty plan is retried | Recognize its completed application through its receipt even if the graph/suite state did not change. |
 
 ## 10. Implementation boundaries
 
@@ -778,10 +921,17 @@ review interface. CLI, editor, and local web interfaces may inspect the same
 plan and bounded views. None should have a separate unchecked write path.
 
 The current implementation round covers TOML parsing and explicit append plans,
-check/apply with durable receipts, and bounded inspection. Document checkout,
-ordinary and typed/incoming links, and authority reconciliation are backlogged.
+optional structured plan IDs and minting, full check/apply with atomic publication,
+and bounded inspection. Durable receipts and automatic retry recovery are
+backlogged, along with document checkout, ordinary and typed/incoming links, and
+authority reconciliation.
 When collection work resumes, collection mutation should not ship with silent
 fallback behavior for unfinished recovery cases.
+
+The selected collection format embeds TOML metadata in a YAML frontmatter string
+and uses ordinary CommonMark body links. YAML-native LifeCore metadata and
+external-renderer clickability/desktop URI-handler integration are further
+backlog items, not prerequisites for that first collection implementation.
 
 Stage 5 selects the CLI storage envelopes and concrete layout; the library has
 no persistence machinery. Collection workspace/manifest layout and UI choices

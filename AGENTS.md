@@ -10,8 +10,24 @@ and records. Bounded inspection, comparison, and Graphviz export use `View`.
 serializable display state and suggestions prepare explicit in-memory transactions.
 The libraries provide graph operations, analysis, transactions, and Serde support,
 with no filesystem persistence or authoring envelopes. Stage 5 creates
-`lifecore-cli` for storage, TOML authoring, timestamp conversion, and durable
-receipts. Document collections are backlogged.
+`lifecore-cli` for storage, TOML authoring, timestamp conversion, and optional
+structured plan IDs. Durable receipts/retry recovery and document collections
+are backlogged.
+
+The proposed TOML envelope uses one optional CLI-minted `plan_id` containing
+database identity, the exact graph/suite base, and proposal identity; it has no
+separate `database` or `base` fields. With a token, verify its database/base;
+without one, use the CLI-selected current state. `apply` always performs a full
+check and protects its concrete base through publication. A standalone `check`
+is a preview, and token minting alone provides no retry recovery. Concrete token
+encoding follows the stage 5 storage design; see [docs/FILES.md](docs/FILES.md).
+
+The backlogged collection format uses YAML frontmatter with TOML metadata in a
+`lifecore` string, conventionally a literal block (`|`), followed by a CommonMark
+body with standard inline/reference links. Preserve unrelated YAML fields.
+YAML-native LifeCore metadata, custom-scheme clickability, and desktop URI-handler
+integration remain further backlog work. Existing URI destination and database
+context rules are unchanged.
 
 ## Compatibility
 

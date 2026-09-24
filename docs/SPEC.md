@@ -351,13 +351,23 @@ Deserializing a report does not certify a new transaction.
 
 The libraries have no filesystem stores, storage envelopes, publication errors,
 or TOML adapters. Stage 5 introduces `lifecore-cli` to own graph/report/dismissal
-persistence and durable receipts. It must preserve writer exclusion, exact
-stale-base rejection, no-clobber initialization, and atomic publication. Failures
-before publication leave stored state unchanged; synchronization failures after
-publication must report that state may already be visible. Safe retries after
-uncertain acknowledgment require receipts published atomically with the graph.
-The concrete storage layout is a stage 5 decision; FILES records acceptance
-requirements without implementing them in the libraries.
+persistence. It must preserve writer exclusion, exact stale-base rejection,
+no-clobber initialization, and atomic publication. Failures before publication
+leave stored state unchanged; synchronization failures after publication must
+report that state may already be visible. Durable receipts and automatic retry
+recovery are deferred beyond stage 5. Their future contract requires receipts
+published atomically with the graph; a plan token alone provides no retry recovery.
+
+The proposed TOML envelope has one optional CLI-minted `plan_id` combining
+database identity, an exact graph/suite base token, and proposal identity, with
+no separate `database` or `base` fields. When supplied, the token's database and
+expected state must match. When omitted, each command uses the CLI-selected
+database's current state. A standalone `check` is a preview; `apply` always checks
+anew and fixes its concrete base and evaluation inputs through publication.
+Both paths preserve exact references and the core transaction checks above.
+The concrete storage layout and token encoding are stage 5 decisions;
+[FILES](FILES.md#optional-structured-plan-identity) records the authoring contract
+without implementing it in the libraries.
 
 ## 8. Analyzers
 
@@ -383,6 +393,11 @@ nor the runner may implicitly read the clock. Missing configured
 analyzers or analyzer execution failures are errors, not successful checks.
 
 ### 8.1 Execution and normalization
+
+See [Analyzer message flow](MESSAGES.md) for diagrams of field ownership,
+normalization, group selection, dismissal and transaction checks in the current
+implementation, including when a sticky advisory's certificate reaches a returned
+`FindingGroup`.
 
 `TypedAnalyzer` returns analyzer-specific typed findings as `Vec<Self::MSG>` from
 initialization and analysis. The shared adapter converts each finding with the
@@ -480,9 +495,11 @@ With fixed implementation, configuration, and inputs, replay recovers the earlie
 observation even if the analyzer emits nothing at the selected head. Sticky
 advisories from earlier prefixes are labeled historical with current applicability
 unconfirmed. The flag does not mean that a finding still applies, has been resolved,
-or should be automatically repaired. History mode selects all replayed observations,
-including nonsticky advisories. Groups expose all observations and the selected
-subset in deterministic first-emission order.
+or should be automatically repaired. History mode admits all replayed observations,
+including nonsticky advisories, subject to category and dismissal filters. Grouping
+first collects all observations by complete finding key, then selects occurrences
+for display. Only groups with a nonempty selected subset are returned; each exposes
+all its observations as well as that subset, in deterministic first-emission order.
 
 No generic resolution status is inferred. Non-emission, subject supersession,
 or reconnecting only one split branch cannot establish resolution. Historical
@@ -517,8 +534,9 @@ same suggestion. A predecessor requires an intent and a root must omit it.
 The returned candidate and its prefixes can be inspected before explicit commit.
 Preparation neither applies the suggestion nor dismisses a finding or infers
 reconnections. All core values, including the full timestamp range, remain
-available. Plan IDs, TOML envelopes, timestamp conversion, persistence, and
-receipts belong to stage 5's CLI; there is no library export wrapper.
+available. Plan IDs, TOML envelopes, timestamp conversion, and persistence belong
+to stage 5's CLI; durable receipts are deferred CLI work. There is no library
+export wrapper.
 
 ## 9. Inspection and queries
 
