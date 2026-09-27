@@ -4,6 +4,11 @@ This describes the current library implementation. For the contract, see
 [SPEC §8](SPEC.md#8-analyzers). The diagrams follow owned values into
 `AnalysisOutput`, then borrowed references into presentation groups.
 
+The planned application exports authenticated suggestion proposals and publishes
+their graph changes with finding acknowledgment. That additional layer is
+described in [SUGGESTIONS.md](SUGGESTIONS.md); the library flow below does not
+itself authenticate proposals or dismiss findings on commit.
+
 A sticky message's certificate moves into `Observation.key` during normalization,
 just like any other certificate. `AnalysisOutput::groups` borrows that key into a
 `FindingGroup` before applying display filters. The group is returned only if at

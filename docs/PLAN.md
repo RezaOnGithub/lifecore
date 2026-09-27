@@ -1,752 +1,262 @@
-# Rust Sketch 02 Cleanup Plan
-
-Status: Stages 0–4 and the review checkpoint before stage 5 are complete.
-Stages 5–6 remain planned. The authoring review below makes structured `plan_id`
-optional and defers durable receipts/retry recovery beyond this round.
+# LifeCore Web Application Plan
 
 ## 1. Outcome
 
-Reuse the authoritative Rust implementation in this checkout, reduce the amount
-of machinery needed to understand it, and make plaintext authoring and bounded
-inspection the main user workflows.
+Build a React browser client served by a Rust HTTP application. Keep graph
+operations, analyzers, and the shared application service synchronous. HTTP and
+CLI adapters use the same requests, proposal types, results, and errors.
 
-The round succeeds when a user can author records in TOML, inspect the exact
-ordered changes and their intermediate views, check them, apply them, and
-investigate the resulting history. The old CLI and attached-sidecar interaction
-model should be gone. Markdown document collections are backlogged; they are
-not a prerequisite for completing this round.
+JSON and TOML change files remain first-class authoring inputs. Keep dedicated
+change-file commands alongside `init`, `serve`, and a minimal `rpc` command that
+reads one request line from stdin, prints one response line to stdout, and exits.
+The web server calls the application service directly through a worker thread.
 
-Read [AGENTS.md](../AGENTS.md), [SPEC.md](SPEC.md), and [FILES.md](FILES.md) together
-with this plan. SPEC and FILES are proposed contracts, not descriptions of what
-the old code already implements. This plan identifies where they need decisions
-or revision; it does not silently settle those questions.
+Read [SPEC.md](SPEC.md) for graph semantics, [INTERFACES.md](INTERFACES.md) for
+application boundaries and commands, [FILES.md](FILES.md) for authoring and
+publication contracts, [SUGGESTIONS.md](SUGGESTIONS.md) for authenticated
+suggestions and dismissal, and [AGENTS.md](../AGENTS.md) for contributor guidance.
+These documents describe the intended application; unchecked boxes below are
+remaining work, not claims of implemented behavior.
 
-Backwards compatibility is explicitly out of scope. Do not build legacy
-readers, migration layers, command aliases, or API shims to preserve earlier
-sketches. This freedom does not authorize deleting unrelated user data or
-weakening historical correctness under the chosen model.
+## 2. Selected direction
 
-## 2. Direction and boundaries
+- Use React with TypeScript for the browser. Serve its built assets and
+  `POST /rpc` from the Rust HTTP application, initially for a local user and one
+  selected database. Axum is the planned HTTP adapter.
+- Define shared Serde request, result, error, and proposal types. The synchronous
+  application service owns checking, application, storage, and dismissal updates.
+  Reuse core domain types where suitable; transport types must own their data.
+- Keep async execution, channels, and HTTP dependencies in the server adapter.
+  A dedicated ordinary thread owns application state and handles a bounded queue.
+  CLI operations call the synchronous service directly without a running server.
+- `rpc` accepts no method arguments or change-file options. It processes exactly
+  one JSON request line and returns exactly one compact JSON response line.
+  Diagnostics go to stderr. Dedicated `check`, `apply`, `plan-id`, and proposal
+  export commands remain conveniences over the shared service.
+- Keep `init` outside the RPC capability set. Only explicit initialization creates
+  a database; ordinary requests require one to exist. Add the TypeCheck
+  configuration by default; `init --no-typecheck` opts out. Resolve
+  `LIFECORE_STATE_FILE_PATH`, or `./LifeCoreState.json` when unset, relative to the
+  process working directory. A bad selected path is an error, never a fallback.
+- Deserialize JSON and TOML change files into the same `Proposal`. Use native
+  strings and arrays; wrap integers, booleans, timestamps, and records in tagged
+  objects/tables. Integer envelopes carry decimal strings; accept bare `i64`
+  input shorthand in both formats and always export envelopes. Known large
+  control integers use decimal strings without wrappers. Use Jiff's ordinary
+  Serde timestamp strings, with no TOML datetime adapter or normalization profile.
+- Carry an optional service-minted `plan_id` containing database identity, exact
+  graph/suite base, and proposal identity. Browser-generated proposals include
+  it. Without a token, select the current stored base for that invocation.
+  `apply` always checks anew and protects its concrete base through publication.
+- Store one JSON snapshot containing `format_version`, `graph_revision`, `graph`
+  (including the ordered suite), `dismissals`, and private `proposal_auth_key`.
+  Use a stable sibling `<state-path>.lock` file and atomic whole-snapshot
+  replacement. Rotate the revision UUID on graph/suite changes, not dismissal
+  edits, no-ops, or minting. Keep the core's exact base comparisons; the application
+  owns revision maintenance.
+- Use explicit ordinary and authenticated suggestion token kinds. Ordinary
+  minting supplies only a base expectation. Export each suggestion from trusted
+  service analysis with its ready-made proposal and an HMAC-SHA-256 token binding
+  the full finding key, source context, database/base, and canonical content.
+  Clients select the attached proposal; no report-ID registry is needed.
+- Apply authenticated suggestions through full checking and atomically publish
+  graph changes with acknowledgment of the original finding. Preserve existing
+  dismissal reasons/notes. Failed checks dismiss nothing. Authentication does
+  not establish current applicability, resolution, or one-use/retry semantics.
+- Keep analysis outputs ephemeral, with optional in-memory caching. Recompute
+  on demand and show the complete evaluation context. History mode means prefixes
+  replayed in this run, not saved earlier runs. Persist dismissals independently.
+- Preserve exact references, explicit revision/branch intent, every-prefix
+  validation, frozen evaluation inputs, and the unfiltered inconsistency gate.
+  No adapter has an unchecked mutation path.
+- Acquire filesystem writer exclusion for mutations. Reads and standalone checks
+  open one complete immutable snapshot without a writer lock. Refresh
+  current-state requests after external writes. Do not hold a lock while a user
+  edits a draft or between standalone check and apply.
 
-### Preserve
+## 3. Decisions before dependent implementation
 
-- Immutable entry history, explicit revision forests, exact edge endpoints, and
-  bounded type/freshness interpretation.
-- Validity at every entry prefix. The retired CLI persisted composite additions
-  atomically; stage 5's new CLI must preserve that guarantee. The libraries retain
-  atomic in-memory commit. Atomic publication never permits invalid prefixes.
-- Full-prefix analyzer execution as a robustness and historical compatibility
-  check, with explicit implementation/configuration/evaluation context.
-- Analyzer-specific typed findings, normalization, and third-party analyzer
-  implementations. Avoid replacing domain variants with unstructured strings.
-- Shared validation/staging paths and reliable failure behavior.
-- Existing semantic tests that exercise retained behavior, independent of their
-  current CLI presentation.
-
-### Change
-
-- Remove the current CLI, its command language, and attached-sidecar state.
-- Remove `Context` and `EntryContext`, including context-bearing node/edge
-  wrappers. Replace them with stable entry identities and a bounded `View` over
-  a particular history snapshot. Do not retain the old API behind a facade.
-- Reduce field types to a small scalar/aggregate model; settle the precise
-  aggregate boundary before changing representations.
-- Remove or substantially reduce textual query syntax. Preserve useful query
-  operations through a bounded library interface.
-- Simplify ownership, borrowing, iteration, and conversion code where this makes
-  the invariants easier to review.
-- Build authoring around explicit TOML plans in a new `lifecore-cli`, which owns
-  storage envelopes and persistence. Keep libraries focused on graph operations,
-  analysis, in-memory transactions, and serialization.
-- Combine database identity, expected graph/suite base, and proposal identity in
-  one optional CLI-minted `plan_id`. Omission uses the CLI-selected database's
-  current state; `apply` always checks anew before committing.
-- Simplify MessageUniverse responsibilities rather than relocating the whole
-  subsystem into the core.
-
-### Do not expand this round into
-
-- A Python rewrite, a generic plugin platform, or a new general query language.
-- Multiple storage backends or speculative incremental-analysis infrastructure.
-- Automatic graph repair, automatic split winners, or implicit edge retargeting.
-- A general persistent issue tracker for analyzer findings.
-- A large web application before the inspection and authoring APIs work.
-- Markdown document collections, link extraction, relationship authority,
-  collection manifests, or document checkout/writeback.
-- Durable application receipts or automatic retry recovery after uncertain
-  acknowledgment. Preserve their requirements in the backlog.
-
-## 3. Decisions to record before dependent changes
-
-Resolve these with small examples and record the decision in SPEC or FILES.
-Independent cleanup can proceed while an unrelated decision remains open.
-
-| Decision | Current situation | Proposed direction / required evidence |
-| --- | --- | --- |
-| Scalar and aggregate shapes | Decided in Stage 0; implemented in Stage 2. | Text, signed integers, booleans, timestamps, nested lists and string-keyed records. No floats, sets, tuples, or unions. |
-| Schema representation | Implemented in Stage 2. | Named field records carry `shape` and `presence`; shapes use `kind`, `element` for lists, and `fields` for records. No textual type-expression parser. |
-| Type enforcement and metatype | Configured TypeCheck with a fixed built-in metatype. | Mandatory installation remains an authoring-policy decision before Stage 5. No bootstrap graph entry. |
-| Plan persistence | Atomic staging retained; library persistence removed at the review checkpoint. | Libraries compare exact original graph/suite state before in-memory commit. Stage 5's `lifecore-cli` owns publication, writer exclusion, stale-base rejection, and no-clobber initialization. Concrete layout remains open. Durable receipts/retry recovery are deferred to section 8. |
-| Change-file identity | Revised after the review checkpoint; FILES sections 2–3. | Optional CLI-minted `plan_id` combines database ID, a token for the exact graph/suite base, and proposal identity. No separate `database`/`base` fields. Omission uses the selected current state; a supplied token must match. Apply always performs a full check. |
-| Finding identity | Revised at the review checkpoint; SPEC section 8. | Database, registered analyzer name, exact `semver::Version`, original configuration string, category, and complete opaque `analyzer_certificate: AnalyzerCertificate` (a String newtype). Built-ins encode typed variants, exact subjects, and details as deterministic JSON. Ordinary boundaries, wording, inputs, and actions belong to observations. |
-| Advisory presentation | Stage 4, simplified at review; SPEC section 8. | Current observations plus `sticky` historical advisories, which remain visible until dismissed or filtered and have no automatic expiry. Full history remains selectable. Serializable dismissal has a reason and optional note; persistence belongs to stage 5. Stickiness and dismissal never establish applicability or resolution. |
-| Evaluation context | Explicit at review. | `EvaluationInputs { evaluation_time: Option<jiff::Timestamp> }`, default `None`, frozen through initialization and replay. Missing required time is an error; no implicit clock. `EvaluatedView::Initialization` identifies initialization; `EvaluatedView::Prefix(view)` includes prefix zero. |
-
-Stage 0 decisions: text, signed integers, booleans, and timestamps; nested lists
-and string-keyed records; no floats, sets, tuples, or unions. Lists have a declared
-element shape; records have named fields and presence policies. `Type` uses
-records for named field descriptions, with structured kind/element/fields tags;
-the fixed metatype decoder checks that vocabulary without a second schema DSL.
-TypeCheck remains configured, with its fixed built-in metatype available in an
-empty graph. Correctly shaped empty collections count as present. Plans persist
-atomically; every prefix remains checked and inspectable. SPEC/FILES reflect
-these choices. Stage 4 settled finding identity and advisory defaults; the review
-checkpoint below supersedes its shared facts, normalized configuration identity,
-and library persistence choices in SPEC section 8.
-
-Baseline at `5dbb719`: `cargo test --workspace` passed 119 unit tests and one
-doctest. Warnings include disabled `cfg(revise)`/`cfg(never)` tests, unused
-variables/helpers/imports, and the misplaced root manifest lint setting. The two
-ignored `*_witness` tests fail when explicitly run, reproducing ordering/hash
-contract defects; Stage 2 removes their obsolete types.
-
-| Retained behavior / contract difference | Cleanup action |
+| Decision | Required outcome |
 | --- | --- |
-| Exact edge duplicates and currently identical nodes are rejected; stale node duplicates are permitted | Preserve, with owned structural equality. |
-| A stale endpoint cannot receive a new edge; the old core permits self-links | Preserve freshness, reject self-links under SPEC. Retain SCC self-loop coverage with a direct algorithm fixture. |
-| Splits can branch from an old predecessor | Preserve exact parent identity and pre-append transition interpretation. |
-| Active declarations reinterpret fresh nodes, and transitions use the preceding schema | Preserve; add revoked-permission and future-lookup regression cases. |
-| Empty matching containers count as missing; Type requires a bootstrap graph node | Change to presence by key and a fixed built-in metatype. |
-| Composite CLI transactions clone/stage/check/apply/save once; save uses a flushed/fsynced temporary and atomic replacement | Extract shared staging and persistence, retain failed-save and stale-base tests. Existing head reread alone does not exclude concurrent writers. |
-
-CLI salvage: transaction composite/rollback fixtures, state no-clobber/load/
-replacement safeguards, malformed-reference fixtures, and bounded freshness
-scenarios move into library tests. Keep DAG SCC and typechecking scenarios.
-CLI locators, aliases, sidecar workflows, message namespace, and command/output
-snapshots retire. GraphViz rendering is frontend-specific; Stage 3 can reuse its
-escaping/deterministic-output scenarios from git history without keeping the CLI.
-
-No compatibility requirement should decide these questions. Historical analyzer
-reproducibility is a correctness concern within the selected design, not a reason
-to support every previous sketch format.
-
-### View contract and operations involving multiple views
-
-Use one `View` for one immutable history snapshot and `end_exclusive` boundary:
-its entries occupy `[0, end_exclusive)`. `ResolutionComparison` exposes
-`base_view` and `target_view`; added positions occupy
-`[base_view.end_exclusive, target_view.end_exclusive)`. Comparing prefixes 3 and 5
-adds positions 3 and 4. `ResolutionDifference` contains complete `Resolution`
-values accessible through `at_base()` and `at_target()`, with `stale` and an
-explicit `TypeResolution` outcome on each. Its constructor requires different
-resolutions of the same immutable entry; private fields preserve this invariant.
-Keep entry identity separate from inspection: `view.node(id)`, `view.resolve(id)`,
-freshness, relationship traversal, and type resolution all use that view's boundary.
-Stored nodes and edges carry identities and payloads, not inspection contexts.
-Looking up an old entry in a newer view does not change its identity, but can
-change its freshness and the meaning of its stored type name.
-
-Most operations need only one view, including comparing two nodes, traversing
-their revisions, and checking the graph at one prefix. Multiple views are needed
-when the question explicitly compares interpretations at different boundaries:
-
-| Operation | Views and purpose |
-| --- | --- |
-| Check an append or replacement | The preceding view supplies active transition permissions and endpoint eligibility; the resulting view supplies the graph and schema meaning to check after the append. A predecessor's creation view is not a substitute for the view immediately before the new append. |
-| Replay analyzers | Run against successive bounded views. An analyzer examining a historical transition may need its before/after views, but cannot inspect beyond the prefix supplied to that invocation. Replay alone does not require holding every view at once. |
-| Preview a plan or compare history | Compare the committed base with a proposed step/final view, or two selected historical boundaries. Show changes in interpretation as well as appended entries. |
-| Explain lost relationships or a split | Inspect relationships before replacement and their disposition in a later view. This supports explicit findings; it does not authorize generic automatic resolution. |
-| Compare analyzer observations | Retain which view each observation describes. Grouping and dismissal use the finding identity policy, rather than reinterpreting every subject in the newest view. |
-
-The implementation must make these distinctions explicit without recreating
-pointed contexts under another name:
-
-- A view is tied to its source as well as its boundary. Equal entry numbers or
-  equal boundary numbers do not establish shared history. Cross-view comparison
-  must establish a common history prefix; reject unrelated sources where an
-  operation requires shared identity.
-- A committed base and its candidate can share committed entry identities.
-  Proposed entries from independent candidates must remain distinguishable even
-  when allocated the same numerical positions. Scope provisional handles to
-  their candidate; do not build a general branching/merging framework for this.
-- Keep lookups and subviews bounded. A future entry is absent; requesting a
-  subview beyond the supplied boundary is an error, not an implicit expansion.
-  A bounded analyzer API must not expose a route to the underlying future suffix.
-- Use explicit before/after parameters for operations that need both. Rust
-  borrowing protects access to storage, but a shared lifetime does not prove
-  that two views describe the same source or boundary.
-- Do not give views a global ordering that implies ancestry. Keep ordering of
-  entry identities, boundary comparison within a history, and contextual
-  freshness as separate operations. Initially avoid resolved-type caches; any
-  later cache must include source/candidate identity and inspection boundary.
-- Scope borrowed views to an immutable inspection phase of a candidate. Finish
-  that phase before appending again, then obtain new views. Prefix projections
-  can supply before/after inspection without cloning the graph for each view.
-
-## 4. Execution sequence
-
-Keep stages reviewable and leave the active workspace buildable after each.
-Stages 0–4 below retain their historical decisions and exit evidence. Their
-library stores, normalized configuration identity, shared facts, and repair TOML
-export are superseded by the review checkpoint before stage 5; completion of the
-earlier stages is not revoked and later stages are not renumbered.
-Do not keep obsolete layers solely to avoid updating their callers. Record the
-tests run and any known failures at each stage; avoid mixing behavior changes
-with unrelated formatting churn.
-
-### Stage 0 — Establish the baseline and resolve contract differences
-
-- [x] Run the existing active workspace tests and record actual failures and
-  warnings. Historical reports from another checkout are not baseline evidence.
-- [x] Map retained core behavior against SPEC: duplicate rules, endpoint
-  freshness, branching, contextual type resolution, transition permissions,
-  field presence, metatype behavior, and transaction boundaries.
-- [x] Turn reported flakiness into minimal reproducible cases. Separate a bug
-  from an intentional contract difference before changing expectations.
-- [x] Carry forward the two reproduced trait defects as witnesses:
-  `EntryContext::cmp` and `partial_cmp` disagree, and equal `OrderedSet` values
-  can hash differently when inserted in different orders. Remove the former
-  abstraction in Stage 2; choose the latter's semantics with the value model.
-  Test the retained contracts rather than polishing types scheduled for removal.
-- [x] Inventory useful CLI fixtures, persistence safeguards, and rendering code
-  before removing the package.
-- [x] Resolve the value/schema and plan-persistence decisions above. Update
-  SPEC/FILES where needed and record the remaining advisory questions.
-
-Exit evidence: a concrete baseline and a list of intended semantic changes.
-Useful witnesses include a revision, a split, a type change, a historical cycle,
-and a failed ordered plan. Do not preserve an obsolete behavior just because a
-test currently asserts it.
-
-### Stage 1 — Retire the old CLI and attached sidecars
-
-- [x] Extract only the reusable persistence, staging, and inspection behavior
-  identified in Stage 0 into frontend-independent library code. Preserve the
-  existing composite operation's atomic persistence and prefix checks during
-  extraction; frontend removal must not weaken those guarantees.
-- [x] Move relevant regression scenarios into the retained libraries' tests.
-  Do not reproduce the old command/output contract in the new API.
-- [x] Remove `lifecore-cli` from the workspace and remove its implementation,
-  CLI-specific state, attached-sidecar machinery, and obsolete package docs.
-- [x] Remove dependencies and lockfile entries that no remaining target needs.
-- [x] Update AGENTS and repository entry documentation to describe the active
-  workspace and available verification commands.
-
-Exit evidence: core and analyzer tests run without the old CLI. No retained
-library depends on an attached draft to answer a committed-data query. A small
-new executable is introduced later for explicit file operations.
-
-Stage 1 evidence: `cargo test --workspace` passes 69 unit tests and one doctest,
-with the two Stage 0 defect witnesses ignored. The shared transaction tests cover
-composite rollback, missing factories, stale memory/file bases, no-clobber
-initialization, failed atomic replacement, malformed references, and a historical
-cycle repaired only in the final view. Remaining warnings are in the old core
-and disabled tests scheduled for Stage 2. File writers now exclude one another
-through an advisory lock held over base verification and replacement. Receipts
-for retries after uncertain acknowledgment were assigned to stage 5 at this exit;
-the later authoring review defers them to section 8.
-
-### Stage 2 — Replace contexts, then simplify values and core operations
-
-- [x] Make `View` replacement the first structural change after CLI extraction.
-  Delete `Context`, `EntryContext`, their ordering/conversion machinery, and
-  context-bearing node/edge representations. Retain a simple entry identity and
-  an explicit exclusive boundary; implement the view contract above.
-- [x] Move lookup, freshness, relationship, and type-resolution operations onto
-  `View`. Update validation, analyzer callers, and retained tests in the same
-  buildable change; do not leave an old-context compatibility layer.
-- [x] Exercise before/after validation and base/candidate comparison before
-  spreading the API. Update AGENTS' Core Model instructions when the replacement
-  actually lands.
-- [x] Implement the selected scalar/aggregate model and its schema encoding.
-  Update parsing, equality, hashing, typechecking, and serialization together.
-- [x] Decide whether aggregate order participates in equality. Remove
-  `OrderedSet` if unnecessary; otherwise make equality, hashing, and encoding
-  obey the selected semantics. Equal values must hash equally. Do not use a
-  Rust collection hash as a durable finding identity.
-- [x] Remove obsolete type constructors, recursive field-conversion helpers,
-  and payload kinds instead of carrying unused variants forward.
-- [x] Evaluate replacing interned string/value/sequence/set tables with directly
-  owned entry payloads. Prefer the direct representation unless a measured need
-  justifies an indirection. Preserve entry identity independently of equality.
-- [x] Consolidate repeated enum inspection and conversion through borrowing,
-  pattern matching, standard collection operations, and small shared helpers.
-  Prefer borrowed node/edge accessors and direct variant checks over cloning
-  merely to inspect an entry. Return slices or iterators when ownership is not
-  needed; remove pass-through iterator wrapper types.
-- [x] If any intern tables remain, replace repeated membership tests and
-  insert/index bookkeeping with the collection's insertion/entry APIs. Do not
-  optimize interning code that the chosen representation deletes.
-- [x] Make the selected type/metatype behavior and failed-append guarantees
-  explicit in one mutation path.
-- [x] Consolidate nested transaction/add/connect/apply cloning around one
-  isolated candidate per atomic operation. Perform private mutations and
-  required prefix checks there, then publish once. Keep public mutation
-  failure-atomic; do not introduce public unchecked appends or a rollback journal
-  where discarding the candidate suffices.
-- [x] Separate provisional state from incidental session metadata where this
-  removes `Mock` bookkeeping. Keep any metadata whose purpose is demonstrated;
-  avoid gathering environment information merely to perform a graph operation.
-- [x] Colocate substantive implementations with their types and responsibilities
-  instead of leaving ordering, hashing, and traversal hidden in `boilerplate.rs`.
-  Keep the module split small: entries/values, views, validation, analysis, and
-  persistence as justified by actual code. Keep root exports easy to inspect.
-
-Exit evidence: the reduced model represents its own schemas and round-trips
-through storage. Invalid references and payloads fail without mutation; earlier
-views retain their original meanings. Reviewers can trace an append without
-following multiple representation-conversion layers. The old context types are
-gone, and explicit cross-view checks prevent accidental source/boundary mixing.
-
-Stage 2 evidence: `cargo test --workspace` passes 47 unit tests with no ignored
-cases; `cargo +nightly fmt --check` and strict workspace Clippy pass. The old
-context/hash witnesses are replaced by identity-ordering and record-equality
-regressions. Prefix/source isolation, before/after schema and permission changes,
-empty-field presence, typed findings, malformed imports, atomic rollback, and
-competing writers are covered. Dormant `lifecore-test` scenarios now live in the
-active core/typechecker tests; placeholder application crates remain untouched.
-
-At the stage 2 exit, the public path was `LifeCoreList::view()` /
-`View::prefix(end)` for inspection,
-and `transaction::prepare` followed by memory or `Store` commit for mutation.
-Entry handles include an origin plus a position. Independent plans receive
-separate suffix identities; committed handles survive reload unchanged.
-`Reference::Added(n)` identifies an earlier operation, including through mixed
-node/edge/analyzer plans. No implicit session or machine metadata is collected.
-
-The context-bound query representation and type-expression parser retired with
-their obsolete models. Stage 3 adds richer selection, comparison reports,
-and exports. Migrating the runner also removed its placeholder validation,
-panicking output conversion, redundant factory lookups, and diagnostic clones;
-Stage 4 adds finding/observation identity, dismissal, and presentation.
-The reusable SCC algorithm and typed analyzer/factory boundary remain.
-
-At the stage 2 exit, file publication synced the file and directory. A directory-sync
-failure after rename was reported as `transaction::Error::Published`, because the
-new state might already be visible. The review checkpoint removes this library
-API and carries the safeguard into stage 5. Receipt-based retries after uncertain
-acknowledgment were planned for stage 5, but are now deferred to section 8.
-TypeCheck remains opt-in as agreed; no TOML executable is claimed.
-
-### Stage 3 — Build inspection and simplify queries over View
-
-- [x] Use the Stage 2 view API throughout inspection. Avoid parallel query
-  contexts or a second freshness/type-resolution implementation.
-- [x] Remove the old textual query language and field-path syntax that no longer
-  serve the reduced value model.
-- [x] Provide direct selection by type/currentness, simple field filtering,
-  text search, relationship traversal, revision traversal, and view comparison.
-- [x] Produce structured inspection output and a small graph export or viewer
-  that distinguishes revision relationships from ordinary edges.
-
-Exit evidence: a revision/split can be inspected at boundaries before, between,
-and after its appends. Missing future entries remain absent. Results have
-deterministic ordering. Draft errors do not disable committed-data inspection.
-
-Stage 3 evidence: `cargo test --workspace` passes 56 unit tests. Nightly
-formatting and strict core Clippy pass. Six inspection regressions cover
-before/between/after revision and split boundaries, exact relationship direction,
-literal field filtering and recursive text search, type reinterpretation,
-base/candidate comparisons, rejection of divergent sources, deterministic JSON
-and escaped Graphviz output, reloads, and inspection after draft/check failures.
-The implementation is `lifecore::inspection` plus methods on `View`; there is
-no inspection context, query parser, or frontend dependency. SPEC section 9
-records selection defaults, traversal ordering, comparison direction, and export
-semantics.
-
-### Stage 4 — Simplify analyzer output and MessageUniverse
-
-- [x] Preserve full-prefix execution, typed inner reports, explicit
-  normalization, and dynamically dispatched analyzer implementations.
-- [x] Centralize the typed-to-normalized wrapper methods if doing so removes
-  duplication from real implementations; do not make the adapter a project in
-  its own right.
-- [x] Simplify runner registration/lookups with collection entry/get APIs and
-  accumulate initialization output directly. Preserve initialization and replay
-  ordering unless an explicit contract change is justified. Missing factories
-  remain errors; exercise the empty-history boundary deliberately.
-- [x] Expose borrowed diagnostic iterators rather than cloning outputs into
-  fresh vectors for each category. Keep owning conversions at actual ownership
-  boundaries and retain typed analyzer-specific variants and `dyn` support.
-- [x] Remove the always-true `Output::validate` placeholder, or replace it with
-  concrete invariant checking where required. Replace the assertion-bearing
-  `Into<LifeCoreError>` conversion with an explicit fallible/result-producing
-  operation. Expected invalid input must not panic through an infallible API.
-- [x] Separate a finding from the observations of it at particular boundaries.
-  Record the evaluation context needed to interpret an observation.
-- [x] Implement the chosen finding key and deterministic encoding. Deduplicate
-  identical observations separately from grouping a finding across boundaries.
-  Retain semantic equality checks when hashes coincide.
-- [x] Keep the acceptance gate on unfiltered inconsistencies and execution
-  errors. Dismissal and display filters must never affect it.
-- [x] Replace generic staleness-based automatic resolution with explicit
-  observation/report semantics. A historical finding is not "fixed" merely
-  because an entry is superseded or the newest invocation does not emit it.
-- [x] Reduce frontend behavior to grouping, joining dismissal records, report
-  selection, and rendering. Keep restore usable for dismissals whose finding is
-  not currently emitted; avoid carrying the old abbreviation namespace forward.
-- [x] Route an explicitly requested suggested repair into a newly checked TOML
-  plan. Document-aware connection redistribution is backlogged with collections.
-
-Historical stage 4 decisions (superseded where noted at review): identity uses
-database/analyzer identity and version, normalized configuration, category, code,
-exact subjects, and typed facts.
-Boundaries, wording, evaluation inputs, and repair payloads belong to observations
-unless deliberately included as distinguishing facts. TypeCheck retains its typed
-variant/path/issue facts; DAG Check uses exact cyclic components and normalized
-configuration. Complete key equality controls grouping and dismissal, including
-on hash collisions. The default report shows current state observations and
-retained events with unconfirmed current applicability. No generic resolution
-state is inferred. SPEC section 8 and FILES record the full contract.
-
-Exit evidence: repeated historical observations can be grouped without losing
-their boundaries; dismiss/restore survives reload and cannot hide an
-inconsistency. Current and historical reports are distinguishable. Document the
-chosen default and any limitations for event-oriented analyzers.
-
-Stage 4 evidence: `cargo test --workspace` passes 70 unit tests. Scoped nightly
-formatting and strict Clippy pass for all three active packages. Regression
-coverage includes dynamic and typed analyzers, initialization plus empty-prefix
-execution order, fixed evaluation inputs and contextual execution failures,
-invalid future/foreign diagnostics, expected TypeCheck and DAG output,
-normalized configuration and finding keys, repeated observations, forced hash
-collisions, historical/current selection, dismissal file reload/restore and
-concurrent edits, unfiltered historical inconsistencies, and retained split
-advisories after reconnecting only one branch.
-
-The old message category wrappers and duplicate typed adapters are replaced by
-`MessageKind`, a shared `TypedAnalyzer` adapter, and explicit `Report` /
-`Observation` records. There is no revived MessageUniverse lifecycle or namespace.
-At the stage 4 exit, `analysis::presentation` supplied grouping, filtering,
-rendering, and atomic standalone dismissal storage. `analysis::repair::check`
-exported freshly checked ordered actions as TOML, preserving exact references,
-explicit revision intent, nested payloads, and nanosecond timestamps. It rejected
-stale revise intent, invalid aliases, foreign sources, out-of-profile timestamps,
-and historical analyzer failures without publication. These exports covered the
-output side of the timestamp contract at that exit. The review checkpoint below
-removes the stores and TOML exporter; both input and output adapters and the
-executable belong to stage 5. Durable receipts were also assigned there at the
-checkpoint and are now deferred to section 8. Event applicability assessment
-remains an analyzer responsibility, not an automatic issue-resolution subsystem.
-
-### Review checkpoint — Simplify contracts between stages 4 and 5
-
-- [x] Keep typed findings in each analyzer and replace shared `Fact`/`Finding`
-  machinery with a complete opaque `analyzer_certificate: AnalyzerCertificate`,
-  a String newtype. Built-ins use deterministic JSON for typed variants, exact
-  subjects, and distinguishing details.
-  Compare full keys for grouping/dismissal; remove versioned key encoding and
-  digest helpers.
-- [x] Construct analyzer identity in the runner from registered name, exact
-  `semver::Version`, and original configuration string passed unchanged to the
-  factory. Equivalent spellings can behave identically but have distinct identities.
-  Built-ins parse their own package versions; version equality is exact.
-- [x] Use explicit optional evaluation time, frozen for initialization and every
-  prefix. Missing required time errors. Replace invocation/scope wrappers with
-  `evaluated_view: EvaluatedView` and `sticky: bool`; flatten
-  observations and preserve typed/dynamic execution, ordering, and validation.
-  Distinguish `Initialization` from `Prefix(view)`, including prefix zero.
-- [x] Rename the runner's `Report` to `AnalysisOutput`. Remove `Output`,
-  `InnerOutput`, and the trivial built-in output containers. Typed analyzers
-  return `Vec<Self::MSG>` and own each `convert_message`; the shared adapter
-  produces `Vec<Message>` in order without discarding duplicates. Preserve typed
-  findings and expected variants/details in tests, plus direct dynamic analyzers.
-  Name the historical-advisory display flag `sticky` and document its lack of
-  automatic expiry, dismissal/filter behavior, and unconfirmed applicability.
-- [x] Add dismissal reasons and optional notes as serializable display state.
-  No dismissal or historical retention establishes resolution or affects acceptance.
-- [x] Name exclusive view boundaries `end_exclusive`; use `Resolution` with an
-  explicit `TypeResolution` outcome from `View::resolve` and retain both resolutions
-  in `ResolutionDifference`. Its constructor requires different resolutions of the
-  same entry, preserved by private fields and read-only accessors.
-  `ResolutionComparison` exposes comparison views and precise appended ranges;
-  preserve shared-history checks.
-- [x] Make `ancestors` start at the parent. Preserve self-inclusive behavior for
-  roots and current successors through a private lineage walk; descendants and
-  relative-degree callers must not skip an additional generation.
-- [x] Use `<module>.rs` for single-file modules and `<module>/mod.rs` only when a
-  module spans multiple files, keeping `lib.rs` roots and `*::test::test2` paths.
-  Extract inline test scaffolding to `test/mod.rs`; keep leaf tests in `test2.rs`.
-- [x] Remove library stores and publication machinery. Retain structural validation
-  on graph deserialization and atomic in-memory preparation/commit. Compare exact
-  database identity, original entries/count, and original ordered suite; reuse the
-  candidate's original prefix and snapshot only the original suite separately.
-- [x] Replace repair export with `analysis::suggestion::prepare_suggestion`
-  returning a checked transaction. Preserve source checks, exact references,
-  intent, all-prefix checks, and explicit commit. Remove plan IDs, TOML envelopes,
-  and timestamp export restrictions.
-- [x] Remove `tempfile`, `toml`, and `blake3`; update SPEC, FILES, and contributor
-  guidance together. Replace filesystem-dependent library tests with in-memory
-  serialization tests and carry publication acceptance into stage 5.
-
-The libraries now provide graph operations, bounded inspection, analysis,
-in-memory transactions, and Serde support. No file envelopes or persistence API
-remain. Earlier stage 1–4 publication and export tests are historical evidence;
-stage 5 must restore those safeguards in the CLI. The checkpoint also assigned
-durable receipts to stage 5; the subsequent authoring review below defers them.
-No CLI implementation, compatibility adapters, or migrations belong to this checkpoint.
-
-The initial review commit used `InspectedEntry`, `EntryChange`, and `Comparison`,
-an optional evaluated view, a plain string analyzer key, and `analysis::repair`.
-It also moved every file-backed module to `mod.rs`. Follow-up review supersedes
-those choices with the names, enums, newtype, checked difference constructor,
-and conditional module layout recorded above.
-
-Further review names the advisory flag `sticky` and the aggregate `AnalysisOutput`,
-and replaces the analyzer output wrappers with vectors. The typed-finding boundary
-remains intentional: commit `42d1ca9` documented it as guidance for implementors,
-including AI agents, to report structured domain issues before converting to text.
-That purpose is preserved by `Vec<Self::MSG>` and analyzer-owned conversion.
-
-Initial review evidence: `cargo test --workspace` passed 73 unit tests (47 core,
-18 TypeCheck, 8 DAG Check), with no failures or ignored tests. Follow-up review
-passes 76 unit tests (50 core, 18 TypeCheck, 8 DAG Check), including constructor
-invariants, explicit type-resolution outcomes, and exclusive ancestry with
-preserved roots and current successors across boundaries. Sticky-advisory coverage
-also checks later prefixes, serialization, dismissal/restore, and history selection.
-The time-replay fixture checks typed findings and conversion using initialized
-analyzer state, alongside the direct dynamic-analyzer regressions.
-These checks pass:
-
-```sh
-cargo check --workspace
-cargo +nightly fmt --check -p lifecore -p lifecore-typecheck -p lifecore-dag-check
-cargo clippy -p lifecore -p lifecore-typecheck -p lifecore-dag-check --all-targets --no-deps -- -D warnings
-```
-
-Coverage includes exact configuration strings and package versions, complete
-opaque keys under forced hash collisions, explicit time and deterministic replay,
-initialization versus prefix zero, contextual failures, dismissal reasons/notes
-and round trips, unfiltered inconsistencies, exclusive comparisons, revision/type
-changes, foreign/divergent histories, exact stale bases including suite-only
-changes, rollback, malformed deserialization, and explicitly checked suggestions.
-Publication-specific cases are carried forward below as stage 5 requirements.
-
-### Authoring review before stage 5
-
-Use one optional, CLI-minted token with the logical shape
-`lc1:<database-id>:<base-token>:<proposal-id>`. Its base identifies the complete
-graph/suite state, including content changes and suite-only changes that leave
-entry counts equal. Stage 5 chooses the concrete token encoding with the storage
-envelope. The proposal component distinguishes separate plans against one base.
-Other utilities should obtain tokens from the CLI and carry them verbatim.
-
-This replaces the previously required `database`, numeric `base`, and free-form
-`plan_id` envelope fields. With a token, both `check` and `apply` require the
-selected database and its current base to match. Without one, each command uses
-the selected database's current state at that invocation. A standalone check is
-a preview: `apply` always performs its own full check, fixes its concrete base
-and evaluation context, and protects that base through publication. No reusable
-checked-plan artifact or persistent draft attachment is introduced.
-
-Token minting is useful immediately for database/base expectations and proposal
-identity. Receipt-backed retries are independent and deferred to section 8;
-the token alone provides no recognition of an already completed application.
-This revises the earlier receipt commitment without changing completed-stage
-evidence, full-prefix validation, or atomic publication requirements.
-
-### Stage 5 — Create lifecore-cli for persistence and TOML authoring
-
-- [ ] Create `lifecore-cli` over shared library operations for checking, applying,
-  and inspecting TOML and bounded views. No persistent draft attachment.
-- [ ] Select concrete storage layout and envelopes here. The CLI owns graph,
-  report, and dismissal persistence; libraries retain serialization and validation.
-- [ ] Implement the FILES authoring envelope, complete node payloads, ordered
-  entries, exact existing references, local aliases, revision/branch intent,
-  and TOML import/export, including explicitly selected checked suggestions.
-- [ ] Mint and validate optional structured `plan_id` tokens carrying database,
-  exact graph/suite base, and distinct proposal identity. Select the concrete
-  base-token representation with storage; entry counts alone are insufficient.
-  Omit separate `database`/`base` envelope fields. Expose minting to integrations
-  without appending history or reserving a base.
-- [ ] With a supplied token, reject mismatched database/base and malformed or
-  unsupported tokens. Without one, choose the CLI-selected current state.
-  `apply` always performs a full check, including when no standalone check ran
-  or the database changed since a check of a file without `plan_id`.
-- [ ] Implement the explicit [timestamp adapter](FILES.md#timestamp-conversion-contract):
-  preserve nanoseconds, reject excess precision and leap seconds before lossy
-  parsing, check the converted UTC range, and export native UTC datetimes.
-  Restore export boundary regressions and verify exact instant round trips.
-- [ ] Freeze evaluation inputs and expose the concrete ordered plan, affected
-  relationships, and source-local diagnostics. Record original configuration
-  strings and exact versions; never implicitly read time in library analysis.
-- [ ] Validate every proposed prefix and replay historical prefixes under the
-  fixed evaluation context. Deserialization alone cannot certify a transaction.
-- [ ] Preserve writer exclusion from exact stale-base verification through
-  atomic publication; reject changed database identity, entries/count, and suite,
-  including suite-only changes. Two writers against one base cannot both commit.
-- [ ] Initialize without clobbering an existing database. Failures before
-  publication preserve prior state; synchronize publication and distinguish
-  post-publication synchronization failures from rollback.
-- [ ] Persist reports and dismissals with exact keys, all reasons, and optional
-  notes. Dismiss/restore survives reload and absent current emission; concurrent
-  dismissal edits preserve each writer's records under writer exclusion.
-- [ ] Expose each proposed boundary through the same view operations used for
-  committed history, with provisional status clearly shown.
-
-Exit evidence: handwritten TOML can create, revise, split, and connect nodes;
-failed checks leave persistence untouched. Token minting and both optional-token
-paths have coverage, including foreign databases, divergent states with equal
-entry counts, and suite-only changes. No-clobber initialization, competing
-writers, stale prepared bases, failed replacement, post-publication
-synchronization failure, and dismissal reload all have executable coverage.
-Interrupted apply reports possible publication and supports state inspection
-without automatically repeating changes. Identical checked inputs produce
-identical semantic plans. Durable receipts/retry recovery and collection
-workflows remain backlogged.
-
-### Stage 6 — Finish the round and remove leftovers
-
-- [ ] Remove unreachable helpers, obsolete schema/query parsers, stale docs,
-  and unused dependencies exposed by the preceding stages.
-- [ ] Make SPEC, FILES, AGENTS, examples, and actual behavior agree. Mark genuine
-  deferrals explicitly instead of claiming the full original FILES proposal.
-- [ ] Run the active workspace tests, relevant formatting/lint checks, and the
-  end-to-end fixture through the new executable.
-- [ ] Record what was removed, remaining known failures, commands run, and the
-  smallest next increment. Do not add compatibility work to the remainder list.
-
-## 5. Cross-stage acceptance scenarios
-
-| Scenario | Expected evidence |
-| --- | --- |
-| One entry is inspected before and after a revision/type change | Identity stays stable; visibility, freshness, and type resolution follow the selected view. |
-| An analyzer asks for an entry or subview beyond its supplied prefix | Future entries remain absent and boundary expansion is rejected. |
-| Two databases or independent candidates reuse numerical entry positions | Shared identity is not inferred from numbers or Rust lifetimes; cross-view operations reject unsupported source combinations. |
-| A base view is compared with its candidate at successive steps | Shared committed entries compare correctly; proposed identities remain scoped and intermediate differences are visible. |
-| Aggregate insertion order changes | Equality, hashing, and serialization obey the selected ordered/unordered semantics; equal values hash equally. |
-| A multi-entry operation fails after valid earlier candidate appends | The published receiver and persisted graph remain unchanged under the atomic contract. |
-| A type declaration changes | Earlier views use earlier schemas; the resulting current graph is checked under the new declaration. |
-| A transition permission is revoked | Earlier legal replacements remain historical facts; a later branch uses the permission active before its append. |
-| A plan contains an invalid intermediate entry and a valid final replacement | Reject the invalid prefix under either persistence policy. |
-| An analyzer version starts rejecting an old prefix | Full replay identifies the historical compatibility failure and its context; it does not report only the current graph. |
-| An analyzer incorrectly stops emitting a known finding | Expected-output fixtures catch what acceptance-only replay cannot. |
-| A warning repeats after an unrelated append | Group the same finding while retaining distinct observations. |
-| A grouped finding is dismissed and replayed | The dismissal survives; historical execution still occurs. |
-| A dismissed warning changes subject or distinguishing facts | Apply the specified identity policy; do not suppress a genuinely different finding. |
-| A missing-field warning disappears after revision | Preserve the historical observations; current reporting does not infer generic resolution from staleness. |
-| A transition suggestion is followed by unrelated entries | Demonstrate the selected current/historical reporting contract; do not accidentally lose an actionable suggestion. |
-| A split reconnects only one branch | Explicitly distinguish intended distribution from a universally "resolved" warning. |
-| A TOML plan revises B, then revises A without reconnecting their old edge | Execute the listed order and show the historical edge at the intermediate boundary. |
-| A TOML plan explicitly reconnects unchanged A to a successor of B | Show the replacement edge and the intermediate view where the old edge is historical. |
-| An edge references a superseded revision or an ambiguous target | Reject the invalid reference; never implicitly select a successor. |
-| A token is minted for a proposal | Capture database/exact graph-suite base and a distinct proposal identity without appending history. |
-| A supplied token names another database or a changed base | Reject before application, including equal-count divergent states and suite-only changes. |
-| A token is malformed or has an unsupported version | Reject rather than treating it as omitted. |
-| No token is supplied and the head changes after standalone check | Apply checks the then-current state afresh, preserving exact references and revision intent. |
-| Apply runs with or without a previous check | Always run the complete preflight; no prior check artifact is required. |
-| A prepared base changes or a concurrent writer attempts publication | Stage 5 preserves exact-base rejection and writer exclusion, with or without `plan_id`. |
-| A commit is interrupted after possible publication | Report uncertainty and support state inspection; automatic retry recovery is deferred. |
-| A suite changes without any entry append | In-memory commit rejects the exact stale base; stage 5 preserves this in storage. |
-| Initialization would overwrite a database, or publication fails before/after replacement | Stage 5 verifies no-clobber and pre-publication rollback, and distinguishes post-publication synchronization failure. |
-| Dismissals are reloaded or concurrently edited | Stage 5 retains exact keys, reasons, and notes and preserves both writers' edits. |
-| A draft is malformed or a configured analyzer is unavailable | Checking/application fails appropriately; committed-data inspection remains available. |
-
-## 6. Verification discipline
-
-Use the actual active workspace when selecting commands. Initially the baseline
-includes `cargo test --workspace`, `cargo test -p lifecore-typecheck`, and
-`cargo test -p lifecore-dag-check`; inspect existing warnings rather than assuming
-a clean strict workspace lint. Update package-specific commands when the old
-CLI is removed and the new authoring package is introduced.
-
-Use targeted `cargo +nightly fmt --check -p <changed-package>` and appropriate
-package lint checks. Add agent-authored Rust tests only under `*::test::test2`.
-Use `<module>.rs` for single-file modules, including `test/test2.rs`; use
-`<module>/mod.rs` only when a module spans multiple files, including `test/mod.rs`
-for test scaffolding. Keep crate-root `lib.rs`. Follow AGENTS for comments.
-Include meaningful failure and historical-window cases rather than tests that
-merely duplicate implementation steps.
-
-New stored formats can be incompatible with old sketches. Within a selected
-format, reloads, deterministic interpretation, safe writes, and exact historical
-inspection remain required. Keep structural/type validation failures distinct
-from analyzer diagnostics in tests and presentation.
-
-This round is complete when the active stages have evidence, not when their code
-has only been written. Backlogged collections and receipt recovery are not exit
-requirements. Completed-stage evidence is recorded above; TOML authoring is not
-implemented until stage 5.
-
-## 7. Backlog — Markdown document collections
-
-Preserve the collection proposal in FILES for a later round. Do not implement
-collection-specific infrastructure as speculative preparation for it. Explicit
-TOML authoring with optional plan tokens, bounded graph views, and historical
-analyzer reporting remain in the current round for their own purposes.
-
-Before resuming collections, revisit document identities, relationship
-authority, manifests, alias handling, and writeback normalization. Select the
-minimum needed for exact planning, conflict detection, and historical link
-interpretation; unresolved ambiguity may require an explicit TOML edit.
-Resumable collection writeback also depends on the deferred receipt work below.
-
-The selected collection format uses YAML frontmatter with a `lifecore` string
-containing TOML metadata, conventionally emitted as a literal block (`|`). This
-replaces the earlier proposal for a standalone `+++` TOML frontmatter block.
-Decode YAML before parsing the contained TOML, and reuse the change-file value
-and timestamp profile. Preserve unrelated YAML fields during writeback.
-The Markdown body uses ordinary CommonMark inline/reference links; edge
-annotations stay inside the embedded TOML. Existing destination spellings and
-collection-relative database context remain as specified in FILES.
-
-Deferred work:
-
-- Check out document revisions and distinguish edits, moves, copies, missing
-  files, and deliberate splits.
-- Parse the YAML frontmatter string as TOML metadata and derive ordinary, typed,
-  and incoming edges from CommonMark links, including links to mechanical nodes.
-- Compare all edited documents together and generate ordered TOML plans with
-  explicit reconnections and source-local diagnostics.
-- Reconcile externally authored relationships and conflicting declarations.
-- Retain view-specific path/alias resolution for historical rendering.
-- Recover document writeback after database persistence without overwriting
-  concurrent user edits or repeating graph appends.
-
-Deferred acceptance scenarios:
-
-| Scenario | Expected evidence when collections resume |
-| --- | --- |
-| YAML frontmatter embeds TOML metadata with multiline values | Decode the string and apply the existing TOML value/timestamp rules; indented delimiter text remains content. |
-| LifeCore updates revision metadata beside unrelated YAML fields | Preserve unrelated fields and unchanged metadata values; formatting-only changes do not revise graph payloads. |
-| Managed metadata is malformed or uses a YAML mapping instead of the TOML string | Reject explicitly; no implicit YAML-native interpretation. |
-| B changes while A removes its link to B | Generate the selected revision order without an unnecessary old-A/new-B edge. |
-| B changes while unchanged A retains a file link | Generate an explicit replacement edge and show the intermediate historical edge. |
-| A document declares an incoming edge from a mechanical node | Derive the correct direction and validate both endpoint permissions. |
-| A document-owned incoming edge is removed | Show the endpoint revision and all retained relationships affected by it. |
-| A mechanical change conflicts with document declarations | Expose the conflict before overwriting or dropping relationships. |
-| A target splits or an exact URI points at a superseded revision | Require explicit target selection or navigation-only intent. |
-| Database persistence succeeds but document writeback fails | Recover writeback from durable evidence while preserving newer text. |
-| An old document refers to a moved path or plan-local alias | Historical rendering uses retained resolution at the selected view. |
+| RPC method and result shapes | Freeze method names and Serde fixtures before building forms, including observation/proposal associations and preview/application dismissal effects. Preserve FILES references and operation-to-entry mappings. |
+
+## 4. Implementation sequence
+
+### Shared contracts and proposal checking
+
+- [ ] Define common request/result/error types and the single-call JSON-RPC-based
+  envelope described in INTERFACES. Share decoding and dispatch between HTTP and
+  the one-shot CLI; keep `init` outside dispatch.
+- [ ] Implement one Serde payload representation and one proposal representation
+  for JSON and TOML. Omit absent optional fields in exports so both formats agree.
+- [ ] Serialize integer payloads as tagged decimal-string envelopes. Deserialize
+  envelopes and bare `i64` shorthand through the same format-independent Serde
+  input type. Validate syntax/range; keep plain strings as text. Encode known
+  large control integers as strings and validate their respective ranges.
+- [ ] Implement complete node/edge proposals, unique operation names, exact
+  existing references, earlier-operation references, and revision/branch intent.
+  Export trusted suggestion observations with ready-made proposals of this type.
+- [ ] Implement ordinary and authenticated suggestion token codecs from
+  SUGGESTIONS. Bind complete claims and canonical typed proposal content, excluding
+  `plan_id`, with HMAC-SHA-256. Freeze JCS/MAC fixtures and validate equivalent
+  JSON/TOML input, precise integers, timestamp normalization, malformed/duplicate
+  fields, changed content, and changed claims. Use a vetted MAC implementation.
+- [ ] Mint suggestion tokens only from trusted analysis of committed history;
+  preserve source context and never sign invented observations or provisional
+  candidate findings. Keep generic plan-ID minting ordinary-only. Export bundles
+  as independent proposals with separate identities and shared base expectations.
+- [ ] Preserve complete analysis context and advisories when a proposal has
+  blocking inconsistencies. Return operation/field locations where available.
+  Permit useful candidate inspection only when structure is valid; rejected
+  proposals must never yield a committable transaction.
+- [ ] Return provisional operation-to-entry mappings for previews and actual
+  mappings after apply. Do not assume independent preparations reuse entry IDs.
+- [ ] Implement explicit evaluation inputs per request. Default to absent time;
+  an explicit UI/CLI choice of current time is captured once by the host and
+  reported as the concrete timestamp used throughout replay.
+- [ ] Exercise equivalent JSON/TOML proposals, nested and empty values, timestamp
+  round trips, both integer input forms and canonical output, malformed envelopes,
+  invalid references, failed checks, and revision intent at intermediate prefixes.
+
+### Synchronous application service, storage, and CLI
+
+- [ ] Implement synchronous application operations above the core, with
+  format codecs and storage shared by all frontends. Keep storage outside the
+  graph/analyzer crates; choose package boundaries that avoid HTTP dependencies
+  in shared contracts or synchronous operations.
+- [ ] Implement environment/cwd path resolution once. Reject empty, missing, or
+  unreadable selected paths for ordinary operations. Implement no-clobber `init`
+  with TypeCheck configured by default, `--no-typecheck` opt-out, and
+  structural/configured-analyzer validation. Cover both initialization paths.
+- [ ] Implement the single JSON snapshot and stable sibling lock file specified
+  in FILES. Reload/publish graph, ordered suite, revision UUID, private key, and
+  dismissals together. Hold writer exclusion from reload and exact base verification
+  through same-directory temporary-file publication and required synchronization.
+  Preserve pre-publication rollback and distinguish post-publication
+  synchronization failure.
+- [ ] Generate and persist the 256-bit authentication key at initialization;
+  preserve it on reload/writes and reject missing/malformed keys. Keep private
+  storage fields out of public Serde results and logs. Cover restart, full-copy
+  behavior, wrong keys, and secret-free RPC/export results.
+- [ ] Verify suggestion authentication and base under writer exclusion, perform
+  normal full-prefix checks, then stage graph and finding acknowledgment in one
+  candidate snapshot. Preview both effects without mutation. Preserve concurrent
+  dismissal records and an existing reason/note; reject inconsistencies as
+  dismissal targets. An ordinary proposal never acquires automatic dismissal.
+- [ ] Return ephemeral analysis outputs with view, inputs, and implementations.
+  Recompute after restart; any memory cache must distinguish the exact graph,
+  suite, implementations, and inputs. Keep dismissal loading independent of
+  analyzer availability or a matching current emission.
+- [ ] Start with mutation locking around reload, check, and publication. A later
+  optimization may prepare outside the lock only if it rereads and compares the
+  exact base under the lock before publication. A queued request is not a lock.
+- [ ] Mint and validate optional plan IDs, including foreign databases,
+  equal-count divergence through supported writes, and suite-only changes.
+  Persist fresh graph revision UUIDs atomically with changed graph/suite state.
+  Test that dismissals, no-ops, and minting preserve the revision. Minting neither
+  appends nor reserves a base, and supplies no retry receipt.
+- [ ] Implement dedicated `check FILE`, `apply FILE`, `plan-id`, and proposal
+  export conveniences. Serialize selected ready-made suggestion proposals without
+  reminting; preserve tokens across format conversion. Reject edited authenticated
+  content and support deliberate conversion to an ordinary draft. JSON/TOML
+  decoding feeds the shared service; do not add a second graph command language.
+- [ ] Implement `rpc`: one line in, one compact line out, then exit. No request
+  loop, method arguments, file options, notifications, or batches in this initial
+  request/response profile. Invalid input must not mutate the database.
+- [ ] Cover writer competition, stale bases, no-clobber initialization, publication
+  failures, dismissal reload/restore, and preservation of concurrent dismissal
+  edits. CLI and HTTP must observe each other's committed writes.
+
+### Rust HTTP adapter and React client
+
+- [ ] Add `serve`, serving the React assets and one HTTP RPC endpoint over the
+  shared decoder/dispatcher. Resolve the database at startup. Keep initialization
+  and filesystem path selection outside remote methods.
+- [ ] Run synchronous work on a dedicated thread. Construct analyzer factories
+  there; send owned requests/results through a bounded queue. Do not add async
+  traits or new cross-thread requirements to the core for HTTP convenience.
+- [ ] Implement local binding and same-origin access controls, queue failure
+  handling, orderly shutdown, and structured busy/backend errors. An HTTP
+  disconnect must not be presented as a transaction rollback.
+- [ ] Generate TypeScript contracts from the shared Rust representation and
+  verify runtime encoding against fixtures, including integer envelopes, large
+  control integers, and timestamps. Keep integer model values as decimal strings;
+  use `bigint` only when arithmetic is needed. Keep certificate strings opaque.
+- [ ] Build browsing by type/currentness, entry details, relationships, revision
+  navigation, and bounded comparisons using backend resolution results.
+- [ ] Build a structured draft editor, JSON/TOML import/export, check preview,
+  explicit apply, and actual assigned-ID handling. Preserve unsaved drafts on
+  failure. Send raw imported file text to the Rust codec so bare large integers
+  are decoded before JavaScript can round them. Require deliberate replanning
+  after stale-base rejection.
+- [ ] Present analyzer groups, current/history selection, historical sticky
+  labels, evaluation context, dismissal reasons/notes, restore, and explicit
+  selection of an observation's attached proposal. Show automatic acknowledgment
+  in check/apply and retain original versus current evaluation context. Reuse
+  backend grouping and validation semantics.
+- [ ] Distinguish rejection, successful publication, and uncertain acknowledgment.
+  Never automatically replay a write after transport failure.
+
+### End-to-end verification
+
+- [ ] Demonstrate: `init` -> browse -> author/import a proposal -> check -> apply
+  -> reload -> inspect revisions and relationships, through both CLI and HTTP.
+- [ ] Compare the same request through CLI `rpc`, HTTP, and dedicated change-file
+  commands. Results agree for fixed base/inputs, allowing transport correlation
+  IDs and independently allocated provisional entry IDs to differ.
+- [ ] Prove a rejected proposal leaves persisted state unchanged, an invalid
+  intermediate prefix cannot pass, and two drafts cannot silently overwrite
+  each other's base. Exercise failure before and after publication.
+- [ ] Verify `rpc` returns before stdin EOF once a newline-terminated request is
+  available, emits one line on success/error, does not process a second line,
+  and sends logs only to stderr.
+- [ ] Exercise React with `i64` extrema, nanosecond timestamps, nested records,
+  missing evaluation time, sticky findings, and dismissed inconsistencies in
+  imported display state. Presentation never changes acceptance.
+- [ ] Verify that restart retains graph/suite and dismissals but recomputes
+  analysis. History selection must not imply an archive of prior evaluation
+  times or implementation versions.
+- [ ] Exercise tampered suggestion exports, stale sibling proposals, changed
+  evaluation context, atomic graph/dismissal failures, and application after cache
+  loss. Cover empty suggestions and restore/reapply without assuming a token is
+  a receipt. Use SUGGESTIONS' focused acceptance scenarios.
+- [ ] Keep SPEC, FILES, INTERFACES, SUGGESTIONS, AGENTS, examples, and implementation
+  aligned. Run workspace tests, nightly formatting, strict Clippy for changed Rust
+  packages, and frontend type/build checks plus focused browser workflow tests.
+
+## 5. Backlog
+
+### Markdown document collections
+
+Preserve the [collection contract](FILES.md#4-document-collections) for later:
+checkout/reconciliation, document identities, relationship authority, retained
+historical link resolution, manifests, and recoverable source-file writeback.
+Collection planning and its `plan` workflow are not required for this web round.
+
+The selected format embeds TOML in a YAML frontmatter `lifecore` string and uses
+CommonMark body links. It reuses the shared payload encoding. URI destinations
+and inherited database context remain as specified in FILES. Collection
+writeback recovery depends on durable receipts.
 
 ### Further collection format and tooling work
 
-- YAML-native LifeCore metadata is backlogged beyond the initial embedded-TOML
-  format. Revisit its value mapping, especially timestamps versus strings, and
-  metadata editing in other tools before selecting that representation.
-- Defer custom-scheme clickability in external Markdown renderers and desktop
-  URI-handler installation. Valid CommonMark link syntax does not guarantee that
-  a renderer permits the scheme or launches a handler. Neither feature is needed
-  to parse collection links or validate graph changes. No URI context redesign
-  is part of this format revision.
+YAML-native metadata, custom-scheme clickability in external renderers, and
+installation of desktop URI handlers remain deferred. Preserve unrelated YAML
+fields when collection editing is implemented.
 
-## 8. Backlog — Durable application receipts
+### Durable application receipts
 
-Receipt-backed retries after uncertain acknowledgment are outside stage 5.
-Optional structured `plan_id` tokens provide proposal identity and database/base
-expectations now; they do not require a receipt store or promise idempotent retries.
-Preserve the [recovery contract](FILES.md#84-deferred-receipts-and-retry-recovery)
-for future CLI work, without adding speculative library persistence.
+Preserve the [recovery contract](FILES.md#84-deferred-receipts-and-retry-recovery):
+atomically record proposal identity/content and application results, recognize
+identical retries before stale-base rejection, reject conflicting identity reuse,
+and recover collection writeback without overwriting newer text. Cover empty
+plans and retries after later appends. Tokens alone provide no retry recovery.
+Authenticated suggestion tokens do not record consumption; include empty-action
+suggestions and combined graph/dismissal effects in future receipt recovery.
 
-Deferred work and acceptance evidence:
+### Other deferred work
 
-- Publish plan identity/content, actual base, check context, and assigned entry
-  IDs atomically with the graph; a journal written only afterward is insufficient.
-- Recover a crash after publication but before acknowledgment. An identical
-  retry returns its receipt without appending the operations again.
-- Verify identity/content and look up completed receipts before testing the
-  original expected base; reject reuse of an identity with changed content.
-- Cover empty plans, receipt retention/reload, and retries after later writes.
-  Change files without `plan_id` carry no retry identity guarantee.
-- Coordinate any later collection writeback with the durable receipt so it can
-  resume without overwriting newer files or repeating graph appends.
+Persistent analysis-output archives, remote multi-user hosting, multiple storage
+backends, incremental analysis, general query languages, automatic
+repair/reconnection, and automatic split selection are outside this round.
+Keep improvements driven by concrete workflows.

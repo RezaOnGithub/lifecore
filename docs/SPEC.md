@@ -4,10 +4,11 @@ Status: proposed contract for the simplified LifeCore model.
 
 This document specifies a typed graph with explicit replacement history. Every entry
 prefix must be valid and inspectable; an ordered plan commits atomically.
-For this cleanup, type checking remains a configured analyzer. Its rules below
-apply when TypeCheck is configured; mandatory installation is an authoring-policy
-decision before TOML check/apply. It does not select a storage engine, authoring language, or user
-interface. Appendix A records the transaction tradeoffs behind this decision.
+Type checking remains a configured analyzer. Its rules below apply when
+TypeCheck is configured. Application initialization enables it by default, with
+an explicit `init --no-typecheck` opt-out. Application and authoring contracts
+are in [INTERFACES.md](INTERFACES.md) and [FILES.md](FILES.md). Appendix A records
+the transaction tradeoffs behind prefix validity.
 
 ## 1. Purpose
 
@@ -23,7 +24,7 @@ The model has two structures:
 
 Replacement determines which revisions are current. A historical view determines
 which replacements and type declarations apply. Type checking is configured
-explicitly for this cleanup.
+explicitly.
 Optional analyzers express rules beyond typing.
 
 ## 2. History, entries, and transactions
@@ -31,9 +32,9 @@ Optional analyzers express rules beyond typing.
 History is an ordered sequence of immutable entries. Each entry is either a node
 or an edge.
 
-Every entry has a unique ID and an unambiguous position in append order. An
-implementation may use the position itself as the ID. Content equality does not
-imply entry identity.
+Every entry has a unique ID and an unambiguous position in append order.
+An exact ID includes its origin UUID and position; position alone cannot identify
+independently prepared suffixes. Content equality does not imply entry identity.
 
 A transaction appends an ordered plan atomically: all entries commit after the
 checks pass, or committed history remains unchanged. Existing entries cannot be
@@ -204,9 +205,9 @@ if null is supported. Validation must not rewrite committed data, inject newly
 introduced defaults, or silently coerce historical values. Authoring helpers may
 normalize input before constructing the payload to be stored.
 
-TypeCheck remains configurable in this cleanup. Its inconsistencies block writes
-when configured; encouraged and deprecated field warnings are advisory. The
-authoring layer must settle whether TypeCheck is mandatory before it ships.
+TypeCheck remains configurable in the core. Its inconsistencies block writes
+when configured; encouraged and deprecated field warnings are advisory.
+Application `init` adds its configuration by default; `--no-typecheck` omits it.
 
 ### 6.1 Built-in metatype
 
@@ -349,25 +350,29 @@ A structurally valid import remains inspectable without installed analyzers;
 preparing any transaction still requires the configured analyzers and full replay.
 Deserializing a report does not certify a new transaction.
 
-The libraries have no filesystem stores, storage envelopes, publication errors,
-or TOML adapters. Stage 5 introduces `lifecore-cli` to own graph/report/dismissal
-persistence. It must preserve writer exclusion, exact stale-base rejection,
-no-clobber initialization, and atomic publication. Failures before publication
-leave stored state unchanged; synchronization failures after publication must
-report that state may already be visible. Durable receipts and automatic retry
-recovery are deferred beyond stage 5. Their future contract requires receipts
-published atomically with the graph; a plan token alone provides no retry recovery.
+Filesystem envelopes and publication belong to the synchronous application
+service shared by HTTP and CLI. It must preserve writer exclusion, exact
+stale-base rejection, no-clobber initialization, and atomic publication. Failures
+before publication leave stored state unchanged; synchronization failures after
+publication must report that state may already be visible. Durable receipts and
+automatic retry recovery are deferred. A plan token alone provides no retry
+recovery. The graph/analyzer libraries remain independent of storage and HTTP.
 
-The proposed TOML envelope has one optional CLI-minted `plan_id` combining
-database identity, an exact graph/suite base token, and proposal identity, with
-no separate `database` or `base` fields. When supplied, the token's database and
-expected state must match. When omitted, each command uses the CLI-selected
-database's current state. A standalone `check` is a preview; `apply` always checks
-anew and fixes its concrete base and evaluation inputs through publication.
-Both paths preserve exact references and the core transaction checks above.
-The concrete storage layout and token encoding are stage 5 decisions;
-[FILES](FILES.md#optional-structured-plan-identity) records the authoring contract
-without implementing it in the libraries.
+JSON/TOML proposals and application requests share one Serde representation.
+Their optional service-minted `plan_id` combines database identity, an exact
+graph/suite base, and proposal identity, with no separate `database` or `base`
+fields. A supplied token must match. Without it, use the host-selected current
+state. A standalone check is a preview; apply always checks anew and fixes its
+concrete base and evaluation inputs through publication. Both paths preserve
+exact references and the core transaction checks above. The application stores
+one JSON snapshot with format version, graph revision UUID, graph/ordered suite,
+dismissals, and a private proposal authentication key, protected by a stable
+sibling lock file. Ordinary tokens assert a base; authenticated suggestion tokens
+also bind a full finding key, source context, and proposal content. The revision
+changes on graph/suite changes, not dismissal edits or minting. These application
+mechanisms do not replace the core's exact commit comparisons.
+[FILES](FILES.md#optional-structured-plan-identity) and [INTERFACES](INTERFACES.md)
+define these contracts and their publication requirements.
 
 ## 8. Analyzers
 
@@ -484,7 +489,13 @@ Whole-observation equality controls deduplication; grouping by finding key is
 separate and retains distinct boundaries and presentation. Duplicate suite entries
 still execute in full. The runner returns `AnalysisOutput`, retaining the selected
 view, inputs, and ordered implementation identities even when no messages were
-emitted. It supports Serde round trips; persistence belongs to the CLI.
+emitted. It supports Serde round trips. The application returns outputs
+ephemerally, with optional context-sensitive in-memory caching and no persistent
+report archive. After restart it recomputes analysis from stored history and the
+selected inputs/implementations. History mode selects prefixes in that run,
+not saved earlier runs; changed inputs or implementations may yield different
+observations. Dismissals persist independently. See
+[analysis lifetime](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence).
 
 ### 8.3 Presentation and dismissal
 
@@ -511,8 +522,15 @@ serializable display state, with exact-key listing, lookup, dismissal, and resto
 even when the finding is not currently emitted. Each record has a
 `DismissalReason` (`Acknowledged`, `FalsePositive`, or `NoLongerRelevant`) and
 `note: Option<String>`. Updating a record replaces its reason and note. No reason
-establishes resolution. Dismissal file loading, writer exclusion, and atomic
-publication belong to `lifecore-cli` in stage 5; the library provides no store.
+establishes resolution. Dismissal loading, writer exclusion, and atomic
+publication belong to the shared application service used by HTTP and CLI.
+
+Successful application of an authenticated suggestion atomically publishes the
+graph changes and acknowledgment of its complete finding key. Add `Acknowledged`
+with no note only when no dismissal already exists; preserve an existing record's
+reason/note. This acknowledges the issue across its observations without asserting
+resolution. A failed proposal must not dismiss anything. Ordinary proposals do
+not gain this effect merely by containing similar operations.
 
 All inconsistencies remain visible across history regardless of advisory filters,
 report selection, or imported dismissal records. Dismiss operations reject
@@ -534,9 +552,22 @@ same suggestion. A predecessor requires an intent and a root must omit it.
 The returned candidate and its prefixes can be inspected before explicit commit.
 Preparation neither applies the suggestion nor dismisses a finding or infers
 reconnections. All core values, including the full timestamp range, remain
-available. Plan IDs, TOML envelopes, timestamp conversion, and persistence belong
-to stage 5's CLI; durable receipts are deferred CLI work. There is no library
-export wrapper.
+available. Proposal envelopes, plan IDs, JSON/TOML codecs, and persistence belong
+to the shared application layer. Timestamps use Jiff's ordinary Serde strings;
+no separate TOML datetime conversion profile is required. Durable receipts remain
+backlogged application work.
+
+The application exports suggestions directly from trusted analyzer output as
+ready-made `Proposal` objects. Their `plan_id` carries authenticated database/base
+and proposal identities, the complete finding key, and issuance context; an
+HMAC-SHA-256 binds those claims to canonical typed proposal content. Generic minting
+cannot authenticate arbitrary client observations. A token proves issuance and
+unchanged content, not transaction validity, present applicability, or resolution.
+Apply still checks every prefix using its selected context before publishing the
+graph/dismissal pair. The original key determines dismissal even if current
+inputs or implementations differ. The private key, token codecs, and atomic
+coordination stay in the application layer. See [SUGGESTIONS.md](SUGGESTIONS.md)
+for the full contract, editing behavior, and retry limits.
 
 ## 9. Inspection and queries
 
@@ -561,8 +592,8 @@ Querying a historical node does not make it current and does not redirect its ID
 to a descendant. An unavailable entry is reported as absent from the view, even
 if it exists later in the database.
 
-Stage 3 implements these operations on `View`, with selection and structured
-reports in `lifecore::inspection`. `NodeSelection` combines an optional exact
+These operations use `View`, with selection and structured results in
+`lifecore::inspection`. `NodeSelection` combines an optional exact
 type name, currentness, top-level field presence/absence/equality predicates,
 and a case-sensitive substring search across text values (including nested
 lists and records). Predicates are ANDed. Keys and type names are not searched;
@@ -675,18 +706,24 @@ invalidate the already recorded transition.
 
 ## 11. Implementation scope
 
-The prototype may use Python classes, runtime introspection, executable
-authoring files, SQL, a version-control system, or another existing host.
+The application uses a Rust HTTP adapter and React client, plus CLI initialization,
+one-shot RPC, and change-file conveniences. Shared application operations and
+core graph/analyzer APIs remain synchronous. Async execution belongs at the
+HTTP boundary. See [INTERFACES.md](INTERFACES.md) for ownership and execution.
 
-The specification does not require a custom storage engine, interning, a query
-language, analyzer factories, schema hashing, a CLI, or a generic backend
-interface. It also does not require physical storage to resemble the logical
-entry sequence, provided historical views and ordering rules are preserved.
+A shared Serde proposal/value representation serves JSON and TOML. Payload
+strings and arrays are native; integers, booleans, timestamps, and records use
+tagged objects/tables. Integer envelopes contain decimal strings and are always
+used for output; bare `i64` input shorthand is accepted in both formats. Known
+large control integers use decimal strings without payload wrappers. Timestamp
+strings follow Jiff's Serde behavior. Value encoding is specified in
+[FILES.md](FILES.md#21-syntax-and-values).
 
-Supporting code or dependencies needed to interpret historical schemas must be
-retained or versioned sufficiently to avoid silently changing their meaning. The
-concrete schema language, value encoding, persistence format, and frontend
-remain implementation decisions.
+A custom storage engine, interning, general query language, schema hashing, or
+generic storage-backend interface is not required. Physical storage may differ
+from the logical entry sequence while preserving history and ordering.
+Supporting code needed to interpret historical schemas must remain available or
+versioned sufficiently to avoid silently changing their meaning.
 
 The defining contract is: **immutable revisions, tree-shaped replacement,
 explicit relationships, contextual type names, and validity at every prefix.**
@@ -776,8 +813,8 @@ the migration path.
 ### A.5 Failure handling and cost
 
 A plan stages the entire sequence, validates every prefix, and persists none of
-it if any check fails. This preserves the existing CLI's atomic composite-write
-behavior. It does not repair the construction problem in A.3.
+it if any check fails. Atomic publication does not repair the construction
+problem in A.3.
 
 Validating after every append may cost more than checking one final graph. The
 prototype should favor the simpler invariant; caching or incremental checks must
