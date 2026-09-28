@@ -324,7 +324,6 @@ name = "lifecore-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "jiff",
  "lifecore",
  "lifecore-app",
  "lifecore-dag-check",

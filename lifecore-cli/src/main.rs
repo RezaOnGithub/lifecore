@@ -1,5 +1,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use lifecore::analysis::{AnalyzerFactory, Config};
+use lifecore::{
+    Timestamp,
+    analysis::{AnalyzerFactory, Config},
+};
 use lifecore_app::{
     AppError, Service,
     proposal::{self, Format, Proposal},
@@ -11,8 +14,8 @@ use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
 use serde::Serialize;
 use std::{
-    fs,
-    io::{self, BufRead, Write},
+    fs::{self, File},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -71,7 +74,7 @@ struct Evaluation {
         conflicts_with = "now",
         help = "Evaluate analyzers at this instant"
     )]
-    evaluation_time: Option<jiff::Timestamp>,
+    evaluation_time: Option<Timestamp>,
     #[arg(long, help = "Capture the current instant once and evaluate at it")]
     now: bool,
 }
@@ -145,16 +148,46 @@ fn emit<T: Serialize>(result: Result<T, AppError>) -> ExitCode {
     }
 }
 
+//A Consumes bytes through the first newline, or to EOF, and returns them
+//A without the newline. Callers pass an unbuffered reader, so every byte after
+//A the newline stays unread for whoever holds the input next.
+fn read_line(input: &mut impl Read) -> io::Result<Vec<u8>> {
+    let mut line = vec![];
+    let mut byte = [0];
+    loop {
+        match input.read(&mut byte) {
+        Ok(0) => return Ok(line),
+        Ok(_) if byte[0] == b'\n' => return Ok(line),
+        Ok(_) => line.push(byte[0]),
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+        Err(error) => return Err(error),
+        }
+    }
+}
+
+//A The standard stdin handle buffers up to 8 KiB, which would consume input
+//A after the request line. A duplicate of the descriptor reads the same open
+//A file unbuffered.
+fn raw_stdin() -> io::Result<File> {
+    #[cfg(unix)]
+    let handle = std::os::fd::AsFd::as_fd(&io::stdin()).try_clone_to_owned()?;
+    #[cfg(windows)]
+    let handle = std::os::windows::io::AsHandle::as_handle(&io::stdin()).try_clone_to_owned()?;
+    Ok(File::from(handle))
+}
+
 //A Reads at most one line: a newline or EOF ends it, and nothing after it is
 //A read or executed. Exactly one compact response line is written.
 fn run_rpc(
-    input: &mut impl BufRead,
+    input: &mut impl Read,
     output: &mut impl Write,
     service: impl FnOnce() -> Result<Service, AppError>,
 ) -> io::Result<bool> {
-    let mut line = String::new();
-    let response = match input.read_line(&mut line) {
-    Ok(_) => match rpc::parse_line(line.trim_end_matches(['\n', '\r'])) {
+    let line = read_line(input).and_then(|line| {
+        String::from_utf8(line).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    });
+    let response = match line {
+    Ok(line) => match rpc::parse_line(line.strip_suffix('\r').unwrap_or(&line)) {
     Ok(request) => match service() {
     Ok(service) => request.respond(&service),
     Err(error) => request.fail(&error),
@@ -163,7 +196,11 @@ fn run_rpc(
     },
     Err(error) => rpc::parse_error(format!("cannot read the request line: {error}")),
     };
-    serde_json::to_writer(&mut *output, &response)?;
+    write_response(output, &response)
+}
+
+fn write_response(output: &mut impl Write, response: &rpc::Response) -> io::Result<bool> {
+    serde_json::to_writer(&mut *output, response)?;
     output.write_all(b"\n")?;
     output.flush()?;
     Ok(response.is_success())
@@ -183,14 +220,24 @@ fn main() -> ExitCode {
         };
         emit(service().and_then(|service| service.init(&suite)))
     }
-    Command::Rpc => match run_rpc(&mut io::stdin().lock(), &mut io::stdout().lock(), service) {
-    Ok(true) => ExitCode::SUCCESS,
-    Ok(false) => ExitCode::FAILURE,
-    Err(error) => {
-        eprintln!("lifecore: cannot write the response: {error}");
-        ExitCode::FAILURE
+    Command::Rpc => {
+        let mut output = io::stdout().lock();
+        let responded = match raw_stdin() {
+        Ok(mut input) => run_rpc(&mut input, &mut output, service),
+        Err(error) => write_response(
+            &mut output,
+            &rpc::parse_error(format!("cannot read the request line: {error}")),
+        ),
+        };
+        match responded {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("lifecore: cannot write the response: {error}");
+            ExitCode::FAILURE
+        }
+        }
     }
-    },
     Command::Check { file, evaluation } => {
         let checked =
             proposal_request(&file, evaluation).and_then(|request| service()?.check(request));

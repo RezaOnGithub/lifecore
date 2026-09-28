@@ -13,7 +13,6 @@ lifecore-app = { path = "../lifecore-app" }
 lifecore-dag-check = { path = "../lifecore-dag-check" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 clap = { version = "4.6", features = ["derive"] }
-jiff = "0.2.28"
 serde = "1.0.228"
 serde_json = "1.0.150"
 
