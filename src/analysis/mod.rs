@@ -11,7 +11,7 @@ mod identity;
 pub mod presentation;
 pub mod suggestion;
 pub use identity::{AnalyzerCertificate, AnalyzerIdentity, EvaluationInputs, FindingKey};
-pub use suggestion::{RevisionIntent, SuggestedAction};
+pub use suggestion::SuggestedAction;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);

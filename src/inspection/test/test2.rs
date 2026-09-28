@@ -6,22 +6,23 @@ use crate::{
         TypeResolution,
     },
     transaction::{
-        Change,
+        Change, NewEdge, NewNode,
         Reference::{Added, Existing},
-        prepare,
+        RevisionIntent, prepare,
     },
     typing::{FieldStatus, Type, TypeDefinition, ValueType},
 };
 
 fn node(title: &str, parent: Option<crate::transaction::Reference>) -> Change {
-    Change::AddNode {
+    Change::AddNode(NewNode {
         ty_name: "Note".into(),
         body: Body::from([
             ("title".into(), title.into()),
             ("tags".into(), Payload::List(vec![])),
         ]),
         parent,
-    }
+        intent: parent.map(|_| RevisionIntent::Branch),
+    })
 }
 
 fn fixture() -> (LifeCoreList, Vec<EntryId>) {
@@ -31,24 +32,24 @@ fn fixture() -> (LifeCoreList, Vec<EntryId>) {
         &[
             node("A", None),
             node("B", None),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
-            },
+            }),
             node("A one", Some(Added(0))),
             node("A two", Some(Added(0))),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(1),
-            },
+            }),
         ],
         &mut AnalysisRunner::default(),
     )
     .unwrap();
     let ids = plan.added().to_vec();
-    plan.commit(&mut graph).unwrap();
+    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
     (graph, ids)
 }
 
@@ -147,16 +148,17 @@ fn field_presence_equality_and_recursive_text_are_literal_and_composable() {
     )]);
     let plan = prepare(
         &graph,
-        &[Change::AddNode {
+        &[Change::AddNode(NewNode {
             ty_name: "Other".into(),
             body,
             parent: None,
-        }],
+            intent: None,
+        })],
         &mut AnalysisRunner::default(),
     )
     .unwrap();
     let nested = plan.added()[0];
-    plan.commit(&mut graph).unwrap();
+    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
     let empty = Payload::List(vec![]);
     let title = Payload::from("A two");
     let selection = NodeSelection {
@@ -234,11 +236,12 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     );
     let plan = prepare(
         &graph,
-        &[Change::AddNode {
+        &[Change::AddNode(NewNode {
             ty_name: "Type".into(),
             body: ty.to_body(),
             parent: None,
-        }],
+            intent: None,
+        })],
         &mut AnalysisRunner::default(),
     )
     .unwrap();
@@ -254,16 +257,17 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
             matches!(change.at_target().type_definition, TypeResolution::Resolved(TypeDefinition::Declared {id, ..}) if id == declaration)
         );
     }
-    plan.commit(&mut graph).unwrap();
+    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
     let mut revised = ty;
     revised.body.clear();
     let plan = prepare(
         &graph,
-        &[Change::AddNode {
+        &[Change::AddNode(NewNode {
             ty_name: "Type".into(),
             body: revised.to_body(),
             parent: Some(Existing(declaration)),
-        }],
+            intent: Some(RevisionIntent::Branch),
+        })],
         &mut AnalysisRunner::default(),
     )
     .unwrap();
@@ -325,7 +329,7 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
         &mut AnalysisRunner::default(),
     )
     .unwrap();
-    plan.commit(&mut graph).unwrap();
+    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
     let before = graph.view().prefix(3).unwrap();
     let dot = before.to_dot();
     assert!(!dot.contains("revision"));
@@ -337,7 +341,7 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
     assert!(dot.contains("quote\\\\\\\" slash\\\\\\\\ line\\\\n<angle>"));
     assert_eq!(dot, graph.view().to_dot());
     let json = serde_json::to_value(before.inspection()).unwrap();
-    assert_eq!(json["view"]["end_exclusive"], 3);
+    assert_eq!(json["view"]["end_exclusive"], "3");
     assert_eq!(json["entries"].as_array().unwrap().len(), 3);
     assert!(!before.resolve(ids[2]).unwrap().stale);
     assert!(graph.view().resolve(ids[2]).unwrap().stale);
@@ -472,10 +476,13 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
     assert_eq!(undeclared, TypeResolution::MissingDeclaration);
     assert_eq!(edge, TypeResolution::NotApplicableToEdge);
     let schema = Type::new("Note", &[], &[], &[], &[]);
-    let declaration = |schema: &Type| Change::AddNode {
-        ty_name: "Type".into(),
-        body: schema.to_body(),
-        parent: None,
+    let declaration = |schema: &Type| {
+        Change::AddNode(NewNode {
+            ty_name: "Type".into(),
+            body: schema.to_body(),
+            parent: None,
+            intent: None,
+        })
     };
     let checked = prepare(
         &graph,
@@ -484,7 +491,7 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
     )
     .unwrap();
     let schema_id = checked.added()[0];
-    checked.commit(&mut graph).unwrap();
+    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
     let resolved = graph.view().resolve(ids[0]).unwrap().type_definition;
     assert_eq!(
         resolved,
@@ -515,7 +522,7 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
     )
     .unwrap();
     let duplicate_id = checked.added()[0];
-    checked.commit(&mut graph).unwrap();
+    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
     let ambiguous = graph.view().resolve(ids[0]).unwrap().type_definition;
     assert_eq!(
         ambiguous,
@@ -537,16 +544,17 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
 
     let checked = prepare(
         &graph,
-        &[Change::AddNode {
+        &[Change::AddNode(NewNode {
             ty_name: "Type".into(),
             body: Body::new(),
             parent: None,
-        }],
+            intent: None,
+        })],
         &mut AnalysisRunner::default(),
     )
     .unwrap();
     let malformed_id = checked.added()[0];
-    checked.commit(&mut graph).unwrap();
+    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
     let malformed = graph.view().resolve(ids[0]).unwrap().type_definition;
     assert!(
         matches!(&malformed, TypeResolution::Failed(ResolutionError::Malformed { id, .. }) if *id == malformed_id)

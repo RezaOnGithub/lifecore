@@ -5,6 +5,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ViewId {
     pub database: Uuid,
+    #[serde(with = "crate::decimal")]
     pub end_exclusive: usize,
     pub head: Option<EntryId>,
 }

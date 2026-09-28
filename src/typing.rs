@@ -13,9 +13,9 @@ pub enum FieldStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ValueType {
     Text,
-    Number,
+    Integer,
     Boolean,
-    PreciseTime,
+    Timestamp,
     List(Box<ValueType>),
     Record(BTreeMap<String, FieldDecl>),
 }
@@ -210,9 +210,9 @@ impl ValueType {
     pub fn kind(&self) -> PayloadKind {
         match self {
         Self::Text => PayloadKind::Text,
-        Self::Number => PayloadKind::Number,
+        Self::Integer => PayloadKind::Integer,
         Self::Boolean => PayloadKind::Boolean,
-        Self::PreciseTime => PayloadKind::PreciseTime,
+        Self::Timestamp => PayloadKind::Timestamp,
         Self::List(_) => PayloadKind::List,
         Self::Record(_) => PayloadKind::Record,
         }
@@ -220,9 +220,9 @@ impl ValueType {
     fn to_payload(&self) -> Payload {
         let (kind, detail) = match self {
         Self::Text => ("text", None),
-        Self::Number => ("integer", None),
+        Self::Integer => ("integer", None),
         Self::Boolean => ("boolean", None),
-        Self::PreciseTime => ("timestamp", None),
+        Self::Timestamp => ("timestamp", None),
         Self::List(element) => ("list", Some(("element", element.to_payload()))),
         Self::Record(fields) => ("record", Some(("fields", fields_to_payload(fields)))),
         };
@@ -243,9 +243,9 @@ impl ValueType {
         keys(body, allowed)?;
         Ok(match kind {
         "text" => Self::Text,
-        "integer" => Self::Number,
+        "integer" => Self::Integer,
         "boolean" => Self::Boolean,
-        "timestamp" => Self::PreciseTime,
+        "timestamp" => Self::Timestamp,
         "list" => Self::List(Box::new(
             Self::from_payload(required(body, "element")?).map_err(|e| e.field("element"))?,
         )),

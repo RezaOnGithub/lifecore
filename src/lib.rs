@@ -4,6 +4,7 @@ mod values;
 mod view;
 
 pub mod analysis;
+pub mod decimal;
 pub mod inspection;
 pub mod transaction;
 pub mod typing;
@@ -11,7 +12,7 @@ pub mod typing;
 pub use entries::{Edge, Entry, EntryId, Node};
 pub use graph::{BasicValidationFailure, LifeCoreList};
 pub use jiff::Timestamp;
-pub use values::{Body, Payload, PayloadKind};
+pub use values::{Body, Payload, PayloadKind, deserialize_body};
 pub use view::{DiagnosticLocation, View, ViewError, ViewId};
 
 #[derive(Debug, thiserror::Error)]

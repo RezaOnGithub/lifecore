@@ -6,9 +6,9 @@ use lifecore::{
     Body, EntryId, LifeCoreList,
     analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, Config, MessageType, SuiteConfig},
     transaction::{
-        Change,
+        Change, NewEdge, NewNode,
         Reference::{Added, Existing},
-        prepare,
+        RevisionIntent, prepare,
     },
 };
 use std::collections::BTreeSet;
@@ -21,18 +21,19 @@ fn config() -> DagCheckConfig {
     }
 }
 fn node(name: &str) -> Change {
-    Change::AddNode {
+    Change::AddNode(NewNode {
         ty_name: name.into(),
         body: Body::new(),
         parent: None,
-    }
+        intent: None,
+    })
 }
 fn edge(a: usize, b: usize) -> Change {
-    Change::AddEdge {
+    Change::AddEdge(NewEdge {
         from: Added(a),
         ty_name: "link".into(),
         to: Added(b),
-    }
+    })
 }
 fn graph() -> (LifeCoreList, Vec<EntryId>) {
     let mut graph = LifeCoreList::default();
@@ -50,7 +51,7 @@ fn graph() -> (LifeCoreList, Vec<EntryId>) {
     )
     .unwrap();
     let ids = plan.added().to_vec();
-    plan.commit(&mut graph).unwrap();
+    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
     (graph, ids)
 }
 
@@ -116,13 +117,16 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
     assert!(check_dag(graph.view(), &filtered).components.is_empty());
     prepare(
         &graph,
-        &[Change::AddNode {
+        &[Change::AddNode(NewNode {
             ty_name: "A2".into(),
             body: Body::new(),
             parent: Some(Existing(ids[0])),
-        }],
+            intent: Some(RevisionIntent::Branch),
+        })],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .into_prepared()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -207,17 +211,30 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
         node("B"),
         edge(0, 1),
         edge(1, 0),
-        Change::AddNode {
+        Change::AddNode(NewNode {
             ty_name: "A2".into(),
             body: Body::new(),
             parent: Some(Added(0)),
-        },
+            intent: Some(RevisionIntent::Revise),
+        }),
         Change::AddAnalyzer {
             name: DagCheckFactory::name().into(),
             config: r#"{"on_cycle":"inconsistency"}"#.into(),
         },
     ];
-    assert!(prepare(&graph, &changes, &mut runner).is_err());
+    let checked = prepare(&graph, &changes, &mut runner).unwrap();
+    //A Only the prefix that closes the cycle is inconsistent; the revision after
+    //A it cannot excuse that boundary.
+    let boundaries = checked
+        .analysis()
+        .errors()
+        .map(|o| match o.evaluated_view {
+        lifecore::analysis::EvaluatedView::Prefix(view) => view.end_exclusive,
+        lifecore::analysis::EvaluatedView::Initialization => usize::MAX,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(boundaries, vec![4]);
+    assert!(checked.into_prepared().is_err());
     assert!(graph.view().is_empty());
 }
 
@@ -228,6 +245,8 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     };
     let (mut graph, ids) = graph();
     prepare(&graph, &[node("Unrelated")], &mut AnalysisRunner::default())
+        .unwrap()
+        .into_prepared()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -322,13 +341,16 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     assert_ne!(filtered.warnings().next().unwrap().key, key);
     prepare(
         &graph,
-        &[Change::AddNode {
+        &[Change::AddNode(NewNode {
             ty_name: "A2".into(),
             body: Body::new(),
             parent: Some(Existing(ids[0])),
-        }],
+            intent: Some(RevisionIntent::Branch),
+        })],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .into_prepared()
     .unwrap()
     .commit(&mut graph)
     .unwrap();

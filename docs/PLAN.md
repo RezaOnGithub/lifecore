@@ -92,13 +92,13 @@ together rather than working around the document.
 
 Core API and encoding changes that the first slice builds on.
 
-- [ ] Move revision intent into the core: `Change::AddNode` carries
+- [x] Move revision intent into the core: `Change::AddNode` carries
   `Option<RevisionIntent>`, and `transaction::prepare` validates it at each
   prefix (a predecessor requires an intent, a root forbids one, and `revise`
   requires a current predecessor immediately before the append). Give
   `SuggestedAction` the same node/edge shapes as `Change`, so acknowledgment
   matching is plain equality; `prepare_suggestion` keeps only its source check.
-- [ ] Give core types the canonical encoding from FILES, so the snapshot, change
+- [x] Give core types the canonical encoding from FILES, so the snapshot, change
   files, and RPC share one representation without transport copies: `Payload`
   uses native strings and arrays, tagged integer/boolean/timestamp/record
   envelopes, decimal-string integers, and bare `i64` input shorthand.
@@ -106,11 +106,11 @@ Core API and encoding changes that the first slice builds on.
   serialize as decimal strings. Rename `Number` to `Integer` and `PreciseTime` to
   `Timestamp` in `Payload`, `PayloadKind`, and `ValueType`, matching the words
   the type schema already uses.
-- [ ] Return a checked candidate from `transaction::prepare` that owns its
+- [x] Return a checked candidate from `transaction::prepare` that owns its
   complete `AnalysisOutput` and remains inspectable when it has inconsistencies.
   Only a candidate without inconsistencies converts into a committable
   `PreparedTransaction`. Structural and analyzer execution failures stay errors.
-- [ ] Test intent, encoding round trips, and rejected-candidate inspection at
+- [x] Test intent, encoding round trips, and rejected-candidate inspection at
   several boundaries, including before and after the relevant append.
 
 ### 4.1 First slice: change files, storage, and CLI

@@ -8,6 +8,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntryId {
+    #[serde(with = "crate::decimal")]
     pub(crate) position: usize,
     pub(crate) origin: Uuid,
 }
@@ -23,6 +24,7 @@ impl EntryId {
 pub struct Node {
     pub id: EntryId,
     pub ty_name: String,
+    #[serde(deserialize_with = "crate::deserialize_body")]
     pub body: Body,
     pub parent: Option<EntryId>,
 }

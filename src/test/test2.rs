@@ -2,9 +2,9 @@ use crate::{
     Body, EntryId, LifeCoreList, Payload, ViewError,
     analysis::AnalysisRunner,
     transaction::{
-        Change,
+        Change, NewEdge, NewNode,
         Reference::{Added, Existing},
-        prepare,
+        RevisionIntent, prepare,
     },
     typing::{
         FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaErrorKind, Type, TypeDefinition,
@@ -17,14 +17,17 @@ use std::{
 };
 
 fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
-    Change::AddNode {
+    Change::AddNode(NewNode {
         ty_name: name.into(),
         body: Body::default(),
         parent,
-    }
+        intent: parent.map(|_| RevisionIntent::Branch),
+    })
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
-    let plan = prepare(graph, changes, &mut AnalysisRunner::default()).unwrap();
+    let plan = prepare(graph, changes, &mut AnalysisRunner::default())
+        .and_then(|checked| checked.into_prepared())
+        .unwrap();
     let ids = plan.added().to_vec();
     plan.commit(graph).unwrap();
     ids
@@ -59,18 +62,18 @@ fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
         &[
             node("A", None),
             node("B", None),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
-            },
+            }),
             node("A2", Some(Added(0))),
             node("A3", Some(Added(0))),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(1),
-            },
+            }),
         ],
     );
     let view = graph.view();
@@ -109,11 +112,11 @@ fn ancestry_excludes_self_and_preserves_roots_and_current_descendants_in_each_pr
         &[
             node("A", None),
             node("B", None),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
-            },
+            }),
             node("Child", Some(Added(0))),
             node("Grandchild", Some(Added(3))),
             node("Branch", Some(Added(0))),
@@ -212,46 +215,46 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
         vec![node("A", None), node("A", None)],
         vec![
             node("A", None),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(0),
-            },
+            }),
         ],
         vec![node("A", Some(Added(0)))],
         vec![
             node("A", None),
             node("B", None),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            },
+            }),
             node("Child", Some(Added(2))),
         ],
         vec![
             node("A", None),
             node("B", None),
             node("A2", Some(Added(0))),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            },
+            }),
         ],
         vec![
             node("A", None),
             node("B", None),
-            Change::AddEdge {
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            },
-            Change::AddEdge {
+            }),
+            Change::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            },
+            }),
         ],
     ];
     for changes in cases {
@@ -307,7 +310,7 @@ fn records_hash_independently_of_insertion_order_and_lists_retain_order() {
         Payload::List(vec![1.into(), 2.into()]),
         Payload::List(vec![2.into(), 1.into()])
     );
-    assert_ne!(Payload::Number(1), Payload::Boolean(true));
+    assert_ne!(Payload::Integer(1), Payload::Boolean(true));
 }
 
 #[test]
@@ -391,7 +394,7 @@ fn deserialization_rejects_cyclic_forward_and_mismatched_identities_before_inspe
     forward["entries"][0]["Node"]["parent"] = forward["entries"][1]["Node"]["id"].clone();
     assert!(serde_json::from_value::<LifeCoreList>(forward).is_err());
     let mut wrong = original;
-    wrong["entries"][1]["Node"]["id"]["position"] = 99.into();
+    wrong["entries"][1]["Node"]["id"]["position"] = "99".into();
     assert!(serde_json::from_value::<LifeCoreList>(wrong).is_err());
 }
 
@@ -426,6 +429,173 @@ fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary(
                 .view()
                 .fresh_successors(ids[0])
                 .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn payloads_export_canonical_envelopes_and_accept_bare_integer_shorthand() {
+    let time: crate::Timestamp = "2026-09-30T17:00:00.123456789Z".parse().unwrap();
+    let value = Payload::Record(Body::from([
+        ("title".into(), "Submit report".into()),
+        ("priority".into(), 2.into()),
+        (
+            "labels".into(),
+            Payload::List(vec!["work".into(), i64::MIN.into()]),
+        ),
+        ("deadline".into(), time.into()),
+        ("completed".into(), false.into()),
+        ("empty_list".into(), Payload::List(vec![])),
+        ("empty_record".into(), Payload::Record(Body::new())),
+    ]));
+    let canonical = serde_json::json!({"kind": "record", "value": {
+        "title": "Submit report",
+        "priority": {"kind": "integer", "value": "2"},
+        "labels": ["work", {"kind": "integer", "value": "-9223372036854775808"}],
+        "deadline": {"kind": "timestamp", "value": "2026-09-30T17:00:00.123456789Z"},
+        "completed": {"kind": "boolean", "value": false},
+        "empty_list": [],
+        "empty_record": {"kind": "record", "value": {}},
+    }});
+    assert_eq!(serde_json::to_value(&value).unwrap(), canonical);
+    assert_eq!(serde_json::from_value::<Payload>(canonical).unwrap(), value);
+    //A Shorthand works at every nesting level and at both i64 extrema, and the
+    //A envelope may list `value` before `kind`.
+    let shorthand = r#"{"value": {
+        "title": "Submit report",
+        "priority": 2,
+        "labels": ["work", -9223372036854775808],
+        "deadline": {"value": "2026-09-30T17:00:00.123456789Z", "kind": "timestamp"},
+        "completed": {"kind": "boolean", "value": false},
+        "empty_list": [],
+        "empty_record": {"kind": "record", "value": {}}
+    }, "kind": "record"}"#;
+    assert_eq!(serde_json::from_str::<Payload>(shorthand).unwrap(), value);
+    assert_eq!(
+        serde_json::from_str::<Payload>("9223372036854775807").unwrap(),
+        Payload::Integer(i64::MAX)
+    );
+    assert_eq!(
+        serde_json::to_string(&Payload::Integer(i64::MAX)).unwrap(),
+        r#"{"kind":"integer","value":"9223372036854775807"}"#
+    );
+    //A Quoted digits outside an envelope and record fields named like tags
+    //A remain ordinary values.
+    assert_eq!(
+        serde_json::from_str::<Payload>(r#""42""#).unwrap(),
+        Payload::Text("42".into())
+    );
+    let tag_like = Payload::Record(Body::from([
+        ("kind".into(), "integer".into()),
+        ("value".into(), "1".into()),
+    ]));
+    let encoded = serde_json::to_string(&tag_like).unwrap();
+    assert_eq!(serde_json::from_str::<Payload>(&encoded).unwrap(), tag_like);
+}
+
+#[test]
+fn malformed_payload_envelopes_and_integers_are_rejected_without_coercion() {
+    for input in [
+        "9223372036854775808",
+        "-9223372036854775809",
+        "18446744073709551616",
+        "1.5",
+        "1e3",
+        "true",
+        "null",
+        r#"{"kind":"integer","value":"9223372036854775808"}"#,
+        r#"{"kind":"integer","value":42}"#,
+        r#"{"kind":"integer","value":"+1"}"#,
+        r#"{"kind":"integer","value":" 1"}"#,
+        r#"{"kind":"integer","value":"1.0"}"#,
+        r#"{"kind":"integer","value":""}"#,
+        r#"{"kind":"integer","value":"0x10"}"#,
+        r#"{"kind":"number","value":"1"}"#,
+        r#"{"kind":"text","value":"x"}"#,
+        r#"{"kind":"list","value":[]}"#,
+        r#"{"kind":"boolean","value":"true"}"#,
+        r#"{"kind":"timestamp","value":"yesterday"}"#,
+        r#"{"kind":"timestamp","value":1}"#,
+        r#"{"kind":"record","value":[]}"#,
+        r#"{"kind":"record"}"#,
+        r#"{"value":"1"}"#,
+        r#"{"kind":"integer","value":"1","extra":true}"#,
+        r#"{"kind":"integer","kind":"integer","value":"1"}"#,
+        r#"{"kind":"record","value":{"a":"x","a":"y"}}"#,
+        r#"{"title":"not wrapped"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<Payload>(input).is_err(),
+            "accepted {input}"
+        );
+    }
+}
+
+#[test]
+fn timestamp_payloads_follow_jiff_serde_and_keep_nanoseconds() {
+    for time in [
+        crate::Timestamp::MIN,
+        crate::Timestamp::MAX,
+        crate::Timestamp::UNIX_EPOCH,
+        "1969-12-31T23:59:59.999999999Z".parse().unwrap(),
+    ] {
+        let encoded = serde_json::to_value(Payload::Timestamp(time)).unwrap();
+        assert_eq!(encoded["value"], serde_json::to_value(time).unwrap());
+        assert_eq!(
+            serde_json::from_value::<Payload>(encoded).unwrap(),
+            Payload::Timestamp(time)
+        );
+    }
+    //A Jiff accepts an offset and represents the same instant; LifeCore adds no
+    //A normalization profile of its own.
+    let offset: Payload =
+        serde_json::from_str(r#"{"kind":"timestamp","value":"2026-09-30T20:00:00+03:00"}"#)
+            .unwrap();
+    assert_eq!(
+        offset,
+        Payload::Timestamp("2026-09-30T17:00:00Z".parse().unwrap())
+    );
+}
+
+#[test]
+fn large_control_integers_are_decimal_strings_in_identities_and_views() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(&mut graph, &[node("A", None), node("B", Some(Added(0)))]);
+    let encoded = serde_json::to_value(ids[1]).unwrap();
+    assert_eq!(encoded["position"], "1");
+    assert_eq!(
+        serde_json::from_value::<EntryId>(encoded.clone()).unwrap(),
+        ids[1]
+    );
+    let view = graph.view().prefix(1).unwrap().id();
+    let encoded_view = serde_json::to_value(view).unwrap();
+    assert_eq!(encoded_view["end_exclusive"], "1");
+    assert_eq!(encoded_view["head"]["position"], "0");
+    assert_eq!(
+        serde_json::from_value::<crate::ViewId>(encoded_view).unwrap(),
+        view
+    );
+    let stored = serde_json::to_value(&graph).unwrap();
+    assert_eq!(stored["entries"][1]["Node"]["parent"]["position"], "0");
+    //A The static type bounds the range; bare numbers and signs are not accepted.
+    let mut far = encoded.clone();
+    far["position"] = usize::MAX.to_string().into();
+    assert_eq!(
+        serde_json::from_value::<EntryId>(far).unwrap().position(),
+        usize::MAX
+    );
+    for position in [
+        serde_json::json!(1),
+        serde_json::json!("-1"),
+        serde_json::json!("+1"),
+        serde_json::json!("18446744073709551616"),
+        serde_json::json!(""),
+    ] {
+        let mut changed = encoded.clone();
+        changed["position"] = position.clone();
+        assert!(
+            serde_json::from_value::<EntryId>(changed).is_err(),
+            "accepted {position}"
         );
     }
 }

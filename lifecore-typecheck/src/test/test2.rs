@@ -5,9 +5,9 @@ use lifecore::{
         AnalysisRunner, Analyzer, AnalyzerFactory, InnerMessageType, MessageType, TypedAnalyzer,
     },
     transaction::{
-        Change,
+        Change, NewEdge, NewNode,
         Reference::{Added, Existing},
-        prepare,
+        RevisionIntent, prepare,
     },
     typing::{FieldDecl, FieldIssueKind, FieldStatus, Type, TypeDefinition, ValueType},
 };
@@ -16,23 +16,25 @@ fn ty(name: &str) -> Type {
     Type::new(name, &[], &[], &[], &[])
 }
 fn declaration(ty: &Type, parent: Option<lifecore::transaction::Reference>) -> Change {
-    Change::AddNode {
+    Change::AddNode(NewNode {
         ty_name: "Type".into(),
         body: ty.to_body(),
         parent,
-    }
+        intent: parent.map(|_| RevisionIntent::Branch),
+    })
 }
 fn node(name: &str, body: Body, parent: Option<lifecore::transaction::Reference>) -> Change {
-    Change::AddNode {
+    Change::AddNode(NewNode {
         ty_name: name.into(),
         body,
         parent,
-    }
+        intent: parent.map(|_| RevisionIntent::Branch),
+    })
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut AnalysisRunner::default()).unwrap();
     let ids = plan.added().to_vec();
-    plan.commit(graph).unwrap();
+    plan.into_prepared().unwrap().commit(graph).unwrap();
     ids
 }
 fn findings(graph: &LifeCoreList, end_exclusive: usize) -> Vec<TypeCheckMessage> {
@@ -409,11 +411,11 @@ fn both_endpoint_permissions_are_checked_in_the_selected_view() {
                 declaration(&b, None),
                 node("A", Body::new(), None),
                 node("B", Body::new(), None),
-                Change::AddEdge {
+                Change::AddEdge(NewEdge {
                     from: Added(2),
                     ty_name: "link".into(),
                     to: Added(3),
-                },
+                }),
             ],
         );
         let report = findings(&graph, 5);
@@ -457,7 +459,16 @@ fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
         ),
         configure(),
     ];
-    assert!(prepare(&graph, &changes, &mut runner()).is_err());
+    let checked = prepare(&graph, &changes, &mut runner()).unwrap();
+    assert_eq!(
+        checked
+            .analysis()
+            .errors()
+            .map(|o| o.offending_event.unwrap().view.end_exclusive)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert!(checked.into_prepared().is_err());
     assert!(graph.view().is_empty());
     prepare(
         &graph,
@@ -468,6 +479,8 @@ fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
         ],
         &mut runner(),
     )
+    .unwrap()
+    .into_prepared()
     .unwrap()
     .commit(&mut graph)
     .unwrap();

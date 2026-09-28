@@ -337,8 +337,17 @@ invalid endpoint permissions at its creation.
 ### 7.4 Failure and persistence
 
 The libraries own structural validation, analysis, serialization, and atomic
-in-memory transactions. `transaction::prepare` stages one candidate and checks
-every prefix. `PreparedTransaction::commit` replaces the receiver only when its
+in-memory transactions. `transaction::prepare` stages one candidate, checks every
+prefix structurally, and replays the analyzers. Node and edge changes use the
+`NewNode`/`NewEdge` shapes shared with suggested actions. A node change with a
+predecessor must state `revise` or `branch`, and a root must omit intent; `revise`
+additionally requires the predecessor to be current immediately before that
+append, including earlier operations of the same plan. Structural, reference,
+intent, and analyzer execution failures are errors. Otherwise `prepare` returns a
+`CheckedCandidate` that owns its complete `AnalysisOutput` and stays inspectable
+even when it contains inconsistencies; only `CheckedCandidate::into_prepared`
+without inconsistencies yields a committable `PreparedTransaction`.
+`PreparedTransaction::commit` replaces the receiver only when its
 database identity, original entry count and contents, and original ordered
 analyzer suite exactly match the prepared base. The candidate already retains
 the original entry prefix; only the original suite needs a separate snapshot.
@@ -538,15 +547,13 @@ errors, independently of dismissal reasons, notes, or presentation.
 ### 8.4 Explicit suggestions
 
 `analysis::suggestion::prepare_suggestion(graph, observation, runner)` returns
-`Result<PreparedTransaction, Error>` for an explicitly selected suggestion.
-Its ordered actions are checked anew with `transaction::prepare` under the
-runner's frozen evaluation inputs, including historical and intermediate prefixes.
-The observation source must match the supplied history. Exact existing references
-and earlier-operation references retain their meaning.
-
-Revision actions specify `revise` or `branch`; `revise` requires a current
-predecessor immediately before that action, including earlier actions in the
-same suggestion. A predecessor requires an intent and a root must omit it.
+`Result<CheckedCandidate, Error>` for an explicitly selected suggestion.
+It checks only that the observation source matches the supplied history and
+that the observation is a suggestion; its ordered actions, which share
+`Change`'s node/edge shapes, are then checked anew with `transaction::prepare`
+under the runner's frozen evaluation inputs, including historical and
+intermediate prefixes and the revision-intent rules of section 7.4. Exact
+existing references and earlier-operation references retain their meaning.
 The returned candidate and its prefixes can be inspected before explicit commit.
 Preparation neither applies the suggestion nor dismisses a finding or infers
 reconnections. All core values, including the full timestamp range, remain

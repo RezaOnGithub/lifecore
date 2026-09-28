@@ -188,12 +188,12 @@ being selected for display does not automatically apply its actions.
 flowchart TD
     O["Caller chooses an Observation"]
     S{"prepare_suggestion:<br/>matching source and kind = Suggestion?"}
-    A["Observation.kind = Suggestion(actions)<br/>Vec&lt;SuggestedAction&gt; becomes ordered Vec&lt;Change&gt;"]
-    P["transaction::prepare(graph, changes, runner)<br/>Stage and structurally validate candidate"]
+    A["Observation.kind = Suggestion(actions)<br/>SuggestedAction shares NewNode/NewEdge with Change"]
+    P["transaction::prepare(graph, changes, runner)<br/>Stage; validate structure and revision intent at each prefix"]
     R["Runner checks all candidate prefixes<br/>Fresh unfiltered AnalysisOutput"]
-    G{"AnalysisOutput::into_result:<br/>any Inconsistency?"}
-    I{"Suggestion revision intents valid<br/>immediately before each action?"}
-    T["Return PreparedTransaction<br/>diagnostics owns the checked AnalysisOutput"]
+    K["CheckedCandidate<br/>owns the complete AnalysisOutput; inspectable"]
+    G{"into_prepared:<br/>any Inconsistency?"}
+    T["PreparedTransaction"]
     C{"Caller explicitly commits;<br/>original base still matches exactly?"}
     OK["Replace graph atomically in memory"]
     E["Return error<br/>Original graph unchanged"]
@@ -202,20 +202,17 @@ flowchart TD
     S -->|yes| A --> P
     S -->|no| E
     P -->|valid| R
-    P -->|invalid structure or references| E
-    R -->|success| G
+    P -->|invalid structure, references or intent| E
+    R -->|success| K --> G
     R -->|execution or normalization failure| E
-    G -->|yes: SystemsError carries inconsistencies| E
-    G -->|no| I
-    I -->|no| E
-    I -->|yes| T --> C
+    G -->|yes: Inconsistent returns the candidate| E
+    G -->|no| T --> C
     C -->|yes| OK
     C -->|no: StaleBase| E
 ```
 
-This diagram follows the suggestion path; direct `transaction::prepare` returns
-its prepared transaction after the inconsistency check, without the
-suggestion-specific intent check. Preparation uses the supplied runner's frozen
+This diagram follows the suggestion path; direct `transaction::prepare` behaves
+the same after staging, including the intent check. Preparation uses the supplied runner's frozen
 inputs, not automatically the selected observation's original inputs. Source
 checking uses `Observation.key.database` and, for a prefix observation, its
 `evaluated_view`. The opaque certificate is not an action or a commit receipt.

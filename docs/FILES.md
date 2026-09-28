@@ -112,8 +112,9 @@ count = { kind = "integer", value = "9223372036854775807" }
 Deserialize either that envelope or a bare integer shorthand, such as TOML
 `count = 9223372036854775807` or JSON `{"count":9223372036854775807}`. Both formats
 accept the shorthand through the same Serde input type; exports always use the
-envelope. Decimal strings must parse to `i64`; malformed values and overflow in
-either input form are errors. Canonical output uses the integer's decimal display
+envelope. Decimal strings are an optional `-` followed by ASCII digits and must
+parse to `i64`; signs, whitespace, and other spellings are malformed. Malformed
+values and overflow in either input form are errors. Canonical output uses the integer's decimal display
 spelling. Outside an envelope, `"42"` remains text. Floating-point and exponent
 syntax do not stand in for integer payloads.
 
@@ -129,7 +130,9 @@ Known potentially large control integers, including `EntryId.position`,
 payload wrappers. Their statically known types define range validation. Small
 bounded control values such as format versions and protocol error codes remain
 numbers. This applies consistently to application requests/results and files;
-it does not change the integer types used by the in-memory graph.
+it does not change the integer types used by the in-memory graph. These fields
+accept only decimal strings, with the same syntax as integer envelopes; bare
+numbers are not shorthand for them.
 
 #### Timestamp representation
 
@@ -305,8 +308,9 @@ Explicit duplicates fail rather than being silently skipped.
 
 The synchronous application service owns proposal parsing/export, plan-ID
 minting, checking, graph/suite and dismissal persistence, and publication. CLI
-convenience commands, CLI RPC, and HTTP call the same operations. Source and
-revision-intent validation for explicit suggestions must remain consistent with
+convenience commands, CLI RPC, and HTTP call the same operations. Revision intent
+is validated by `transaction::prepare` for every plan; source validation for
+explicit suggestions must remain consistent with
 `analysis::suggestion::prepare_suggestion`; exports use the shared `Proposal` type.
 No compatibility reader or migration is required.
 
