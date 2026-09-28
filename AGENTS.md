@@ -126,6 +126,13 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
   alone unless their content needs changing.
 - Explain non-obvious invariants, boundary choices, and ordering constraints;
   avoid narrating self-explanatory code.
+- Treat every way a value can be observed as part of its contract, not only its
+  intended accessors: trait implementations (`Debug`, `Display`, `Serialize`,
+  `Hash`, `PartialEq`), error and panic messages, and ordering. A prefix-bounded
+  value must reveal nothing past its boundary through any of them. Derived data
+  must not take part in equality, hashing, or serialization. Hand-write these
+  implementations on types that carry derived or boundary-sensitive data, and
+  test the boundary through each channel that matters.
 - Give each documented contract one owning document; elsewhere, link to it
   instead of restating it. Keep this file to guidance for every change and to
   invariants the code already upholds.

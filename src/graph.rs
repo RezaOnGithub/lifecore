@@ -23,7 +23,7 @@ pub enum BasicValidationFailure {
 
 //A Fields stay private to this module: entries and the suite change only
 //A through the staging methods below, which keep the derived index in step.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct LifeCoreList {
     id: Uuid,
     entries: Vec<Entry>,
@@ -45,6 +45,23 @@ impl PartialEq for LifeCoreList {
     }
 }
 impl Eq for LifeCoreList {}
+
+//A Debug prints the stored history only, as it did before the derived index.
+impl std::fmt::Debug for LifeCoreList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            id,
+            entries,
+            suite,
+            staleness: _,
+        } = self;
+        f.debug_struct("LifeCoreList")
+            .field("id", id)
+            .field("entries", entries)
+            .field("suite", suite)
+            .finish()
+    }
+}
 
 //A Derived and never serialized: one slot per entry, holding the position of that
 //A node's first child. History is append-only, so a slot is set at most once and

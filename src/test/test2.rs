@@ -925,6 +925,17 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
     assert_eq!(loaded.staleness(), graph.staleness());
     assert_eq!(serde_json::to_value(&loaded).unwrap(), stored);
     assert_staleness_matches_scan(loaded.view(), &[]);
+    //A Debug output shows the stored history as before the index existed.
+    let view = graph.view();
+    assert_eq!(
+        format!("{graph:?}"),
+        format!(
+            "LifeCoreList {{ id: {:?}, entries: {:?}, suite: {:?} }}",
+            view.id().database,
+            view.entries().collect::<Vec<_>>(),
+            graph.analysis_suite()
+        )
+    );
     //A A stored index cannot be supplied; a new graph starts with an empty one.
     let mut injected = stored.clone();
     injected["staleness"] = serde_json::json!([null]);
