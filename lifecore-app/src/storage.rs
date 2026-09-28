@@ -3,7 +3,7 @@ use lifecore::{LifeCoreList, analysis::presentation::Dismissals};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
-    fs::{self, File, OpenOptions, TryLockError},
+    fs::{self, File, OpenOptions, Permissions, TryLockError},
     io::{self, Write},
     path::{Path, PathBuf},
     thread,
@@ -13,7 +13,9 @@ use uuid::Uuid;
 
 pub const STATE_PATH_VARIABLE: &str = "LIFECORE_STATE_FILE_PATH";
 pub const DEFAULT_STATE_FILE: &str = "LifeCoreState.json";
-const BUSY_RETRY: Duration = Duration::from_secs(1);
+//A One check can take seconds at a few thousand entries (PLAN section 5), so a
+//A waiting writer must outlast a competing apply rather than a brief write.
+pub const DEFAULT_BUSY_RETRY: Duration = Duration::from_secs(10);
 const BUSY_POLL: Duration = Duration::from_millis(20);
 
 //A The selected snapshot path and its stable sibling lock file.
@@ -55,8 +57,13 @@ impl StatePath {
         PathBuf::from(lock)
     }
 
-    fn directory(&self) -> &Path {
-        self.path.parent().unwrap_or(Path::new("."))
+    //A A bare file name has an empty parent, which names no directory to open
+    //A or synchronize; it lives in the current directory.
+    pub(crate) fn directory(&self) -> &Path {
+        match self.path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+        }
     }
 }
 
@@ -82,7 +89,7 @@ impl Snapshot {
 
 //A Reads open the path afresh and parse one complete file; atomic replacement
 //A means they see either the old or the new snapshot. No lock is needed.
-pub fn read(state: &StatePath) -> Result<Snapshot, AppError> {
+pub(crate) fn read(state: &StatePath) -> Result<Snapshot, AppError> {
     let text = fs::read_to_string(state.path()).map_err(|error| match error.kind() {
     io::ErrorKind::NotFound => AppError::DatabaseMissing {
         path: state.path().into(),
@@ -98,7 +105,7 @@ pub fn read(state: &StatePath) -> Result<Snapshot, AppError> {
     })
 }
 
-pub fn require_existing(state: &StatePath) -> Result<(), AppError> {
+pub(crate) fn require_existing(state: &StatePath) -> Result<(), AppError> {
     match fs::metadata(state.path()) {
     Ok(_) => Ok(()),
     Err(error) if error.kind() == io::ErrorKind::NotFound => Err(AppError::DatabaseMissing {
@@ -111,14 +118,34 @@ pub fn require_existing(state: &StatePath) -> Result<(), AppError> {
     }
 }
 
+//A Initialization preconditions checked before the lock file is created, so a
+//A refused `init` leaves nothing behind. The no-clobber link in `publish_new`
+//A still decides a race with a concurrent `init`.
+pub(crate) fn require_initializable(state: &StatePath) -> Result<(), AppError> {
+    if fs::symlink_metadata(state.path()).is_ok() {
+        return Err(AppError::DatabaseExists {
+            path: state.path().into(),
+        });
+    }
+    match fs::metadata(state.directory()) {
+    Ok(metadata) if !metadata.is_dir() => Err(AppError::DirectoryMissing {
+        path: state.directory().into(),
+    }),
+    Err(error) if error.kind() == io::ErrorKind::NotFound => Err(AppError::DirectoryMissing {
+        path: state.directory().into(),
+    }),
+    _ => Ok(()),
+    }
+}
+
 //A Holding this value is writer exclusion. Closing the file releases the lock;
 //A the lock file itself is never removed or replaced.
 #[derive(Debug)]
-pub struct WriterLock {
+pub(crate) struct WriterLock {
     _file: File,
 }
 
-pub fn lock(state: &StatePath) -> Result<WriterLock, AppError> {
+pub(crate) fn lock(state: &StatePath, retry: Duration) -> Result<WriterLock, AppError> {
     let path = state.lock_path();
     let failed = |error: io::Error| AppError::Lock {
         path: path.clone(),
@@ -131,7 +158,7 @@ pub fn lock(state: &StatePath) -> Result<WriterLock, AppError> {
         .truncate(false)
         .open(&path)
         .map_err(failed)?;
-    let deadline = Instant::now() + BUSY_RETRY;
+    let deadline = Instant::now() + retry;
     loop {
         match file.try_lock() {
         Ok(()) => return Ok(WriterLock { _file: file }),
@@ -140,6 +167,22 @@ pub fn lock(state: &StatePath) -> Result<WriterLock, AppError> {
         Err(TryLockError::Error(error)) => return Err(failed(error)),
         }
     }
+}
+
+//A Synchronizes the containing directory after replacement. The service holds
+//A it as a function so tests can inject a failure after the rename.
+pub(crate) type SyncDirectory = fn(&Path) -> io::Result<()>;
+
+pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
+    File::open(directory)?.sync_all()
+}
+
+//A Whether a publication that replaced the snapshot was also synchronized. An
+//A uncertain one may or may not persist, but the new state is already visible.
+#[must_use]
+pub(crate) enum Publication {
+    Complete,
+    Uncertain(String),
 }
 
 fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, AppError> {
@@ -152,8 +195,14 @@ fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, AppError> {
 }
 
 //A Writes and synchronizes a complete temporary file beside the target, so the
-//A later rename or link never exposes a partial snapshot.
-fn stage(state: &StatePath, bytes: &[u8]) -> Result<PathBuf, AppError> {
+//A later rename or link never exposes a partial snapshot. Permissions are set
+//A before any content is written, so a private snapshot never has a readable
+//A temporary copy.
+fn stage(
+    state: &StatePath,
+    bytes: &[u8],
+    permissions: Option<Permissions>,
+) -> Result<PathBuf, AppError> {
     let name = state
         .path()
         .file_name()
@@ -164,14 +213,17 @@ fn stage(state: &StatePath, bytes: &[u8]) -> Result<PathBuf, AppError> {
     temporary.push(name);
     temporary.push(format!(".{}.tmp", Uuid::new_v4()));
     let temporary = state.directory().join(temporary);
-    let written = OpenOptions::new()
+    let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        });
+        .map_err(|error| AppError::PublicationFailed {
+            message: error.to_string(),
+        })?;
+    let written = permissions
+        .map_or(Ok(()), |permissions| file.set_permissions(permissions))
+        .and_then(|()| file.write_all(bytes))
+        .and_then(|()| file.sync_all());
     if let Err(error) = written {
         //A Best effort: a leftover temporary file does not affect the snapshot.
         fs::remove_file(&temporary).ok();
@@ -182,39 +234,50 @@ fn stage(state: &StatePath, bytes: &[u8]) -> Result<PathBuf, AppError> {
     Ok(temporary)
 }
 
-fn sync_directory(state: &StatePath) -> Result<(), AppError> {
-    File::open(state.directory())
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| AppError::PublicationUncertain {
-            message: error.to_string(),
-        })
+fn synchronize(state: &StatePath, sync: SyncDirectory) -> Publication {
+    match sync(state.directory()) {
+    Ok(()) => Publication::Complete,
+    Err(error) => Publication::Uncertain(error.to_string()),
+    }
 }
 
-//A Atomically replaces the published snapshot. Failures before the rename leave
-//A the previous snapshot intact; a failure afterwards is reported as uncertain.
-pub fn publish(state: &StatePath, snapshot: &Snapshot, _lock: &WriterLock) -> Result<(), AppError> {
-    let temporary = stage(state, &encode(snapshot)?)?;
+//A Atomically replaces the published snapshot, keeping its file mode. Failures
+//A before the rename leave the previous snapshot intact; a failure afterwards
+//A is an uncertain publication, not a rollback.
+pub(crate) fn publish(
+    state: &StatePath,
+    snapshot: &Snapshot,
+    _lock: &WriterLock,
+    sync: SyncDirectory,
+) -> Result<Publication, AppError> {
+    let permissions = fs::metadata(state.path())
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.permissions());
+    let temporary = stage(state, &encode(snapshot)?, permissions)?;
     if let Err(error) = fs::rename(&temporary, state.path()) {
         fs::remove_file(&temporary).ok();
         return Err(AppError::PublicationFailed {
             message: error.to_string(),
         });
     }
-    sync_directory(state)
+    Ok(synchronize(state, sync))
 }
 
 //A Initialization never replaces an existing path: a hard link fails if the
-//A target exists, where a rename would silently clobber it.
-pub fn publish_new(
+//A target exists, where a rename would silently clobber it. This requires a
+//A filesystem with hard links.
+pub(crate) fn publish_new(
     state: &StatePath,
     snapshot: &Snapshot,
     _lock: &WriterLock,
-) -> Result<(), AppError> {
-    let temporary = stage(state, &encode(snapshot)?)?;
+    sync: SyncDirectory,
+) -> Result<Publication, AppError> {
+    let temporary = stage(state, &encode(snapshot)?, None)?;
     let linked = fs::hard_link(&temporary, state.path());
     fs::remove_file(&temporary).ok();
     match linked {
-    Ok(()) => sync_directory(state),
+    Ok(()) => Ok(synchronize(state, sync)),
     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(AppError::DatabaseExists {
         path: state.path().into(),
     }),

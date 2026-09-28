@@ -785,11 +785,14 @@ A mutation acquires writer exclusion, reloads the current snapshot, verifies
 the expected base, checks/prepares the change, and stages any verified
 acknowledgment alongside concurrent dismissal records.
 Allocate a fresh graph revision only if graph/suite state changes.
-Write the complete candidate to a temporary file in the same directory, flush
-and synchronize it, then atomically replace the published snapshot. Synchronize
+Write the complete candidate to a temporary file in the same directory, with
+the published snapshot's permissions applied before any content, flush and
+synchronize it, then atomically replace the published snapshot. Synchronize
 the containing directory before releasing the lock and acknowledging success.
 Initialization uses no-clobber atomic publication and never replaces an existing
-state path. No publication step may expose a partly written snapshot.
+state path: it hard-links the synchronized temporary file into place, so it
+requires a filesystem with hard links. No publication step may expose a partly
+written snapshot.
 
 Readers open one snapshot and read it completely; replacement leaves that open
 snapshot immutable. No shared read lock is needed. A read concurrent with a
@@ -816,8 +819,9 @@ reopen the selected path; retaining an old open handle cannot observe replacemen
 
 A failure before publication leaves the previous graph intact. After publication,
 failed synchronization or acknowledgment may leave the caller uncertain. Report
-that uncertainty and support inspection of the stored state; do not automatically
-repeat the changes. Token minting alone supplies no durable application receipt.
+that uncertainty together with the outcome the call would have returned,
+including the new graph revision and operation-to-entry mapping, and support
+inspection of the stored state; do not automatically repeat the changes. Token minting alone supplies no durable application receipt.
 Retry recovery is deferred to section 8.4.
 
 ### 8.2 Source edits and file writeback

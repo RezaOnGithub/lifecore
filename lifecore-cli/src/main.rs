@@ -192,7 +192,18 @@ fn main() -> ExitCode {
     }
     },
     Command::Check { file, evaluation } => {
-        emit(proposal_request(&file, evaluation).and_then(|request| service()?.check(request)))
+        let checked =
+            proposal_request(&file, evaluation).and_then(|request| service()?.check(request));
+        //A A rejected preview is a result, not an error, but the command still
+        //A reports it through its exit status.
+        let accepted = checked.as_ref().map_or(true, |result| result.accepted);
+        let code = emit(checked);
+        if accepted {
+            code
+        } else {
+            eprintln!("lifecore: the proposal is not accepted; analysis emitted inconsistencies");
+            ExitCode::FAILURE
+        }
     }
     Command::Apply { file, evaluation } => {
         emit(proposal_request(&file, evaluation).and_then(|request| service()?.apply(request)))

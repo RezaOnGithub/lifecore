@@ -1,7 +1,7 @@
 use crate::{
     AppError,
     proposal::{PlanId, Proposal, ProposalLocation, present},
-    storage::{self, Snapshot, StatePath},
+    storage::{self, Publication, Snapshot, StatePath, SyncDirectory},
 };
 use lifecore::{
     BasicValidationFailure, Body, Entry, EntryId, LifeCoreError, LifeCoreList, Timestamp, View,
@@ -13,7 +13,7 @@ use lifecore::{
     transaction::{self, Change, CheckedCandidate},
 };
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::time::Duration;
 use uuid::Uuid;
 
 //A Called once per operation, so each request gets fresh analyzer instances
@@ -25,6 +25,8 @@ pub type Factories = Box<dyn Fn() -> Vec<Box<dyn AnalyzerFactory>>>;
 pub struct Service {
     state: StatePath,
     factories: Factories,
+    busy_retry: Duration,
+    sync_directory: SyncDirectory,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -125,6 +127,15 @@ pub struct ProposalReport {
     pub analysis: AnalysisOutput,
 }
 
+//A A preview is a result whether or not it would be accepted; `apply` of the
+//A same proposal against the same base would reject it exactly when
+//A `accepted` is false.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckResult {
+    pub accepted: bool,
+    pub report: ProposalReport,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyResult {
     pub graph_revision: Uuid,
@@ -136,6 +147,65 @@ pub struct AnalyzerAdded {
     pub graph_revision: Uuid,
     pub suite: SuiteConfig,
     pub report: ProposalReport,
+}
+
+//A The result a mutation would have returned. An uncertain publication
+//A carries it, since the new state may already be visible.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Published {
+    Initialized(Initialized),
+    Applied(ApplyResult),
+    AnalyzerAdded(AnalyzerAdded),
+}
+
+impl From<Initialized> for Published {
+    fn from(result: Initialized) -> Self {
+        Self::Initialized(result)
+    }
+}
+
+impl From<ApplyResult> for Published {
+    fn from(result: ApplyResult) -> Self {
+        Self::Applied(result)
+    }
+}
+
+impl From<AnalyzerAdded> for Published {
+    fn from(result: AnalyzerAdded) -> Self {
+        Self::AnalyzerAdded(result)
+    }
+}
+
+fn settle<T: Into<Published>>(publication: Publication, result: T) -> Result<T, AppError> {
+    match publication {
+    Publication::Complete => Ok(result),
+    Publication::Uncertain(message) => Err(AppError::PublicationUncertain {
+        message,
+        outcome: Box::new(result.into()),
+    }),
+    }
+}
+
+//A Commit a checked candidate into the loaded snapshot, returning whether
+//A graph/suite state changed. Every node, edge, or analyzer operation does and
+//A gets a fresh revision; an empty plan is a no-op that keeps it.
+fn commit(
+    snapshot: &mut Snapshot,
+    checked: CheckedCandidate,
+    report: ProposalReport,
+) -> Result<(ProposalReport, bool), AppError> {
+    let Ok(prepared) = checked.into_prepared() else {
+        return Err(AppError::Rejected(Box::new(report)));
+    };
+    let changed = !prepared.checked().operations().is_empty();
+    prepared
+        .commit(&mut snapshot.graph)
+        .map_err(|error| preparation_error(error, None, 0))?;
+    if changed {
+        snapshot.graph_revision = Uuid::new_v4();
+    }
+    Ok((report, changed))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,7 +357,25 @@ fn preparation_error(
 
 impl Service {
     pub fn new(state: StatePath, factories: Factories) -> Self {
-        Self { state, factories }
+        Self {
+            state,
+            factories,
+            busy_retry: storage::DEFAULT_BUSY_RETRY,
+            sync_directory: storage::sync_directory,
+        }
+    }
+
+    //A How long a writer keeps retrying a held lock before reporting `busy`.
+    pub fn with_busy_retry(self, busy_retry: Duration) -> Self {
+        Self { busy_retry, ..self }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_sync_directory(self, sync_directory: SyncDirectory) -> Self {
+        Self {
+            sync_directory,
+            ..self
+        }
     }
 
     fn runner(&self, inputs: EvaluationInputs) -> Result<AnalysisRunner, AppError> {
@@ -353,39 +441,22 @@ impl Service {
         self.prepare(snapshot, Some(proposal), &changes, inputs)
     }
 
-    //A Commit a checked candidate into the loaded snapshot and publish it under
-    //A the caller's writer lock. A fresh revision marks every graph/suite change.
+    //A Publish a changed snapshot under the caller's writer lock.
     fn publish(
         &self,
-        mut snapshot: Snapshot,
-        checked: CheckedCandidate,
-        report: ProposalReport,
+        snapshot: &Snapshot,
+        changed: bool,
         lock: &storage::WriterLock,
-    ) -> Result<(Snapshot, ProposalReport), AppError> {
-        let Ok(prepared) = checked.into_prepared() else {
-            return Err(AppError::Rejected(Box::new(report)));
-        };
-        //A Every node, edge, or analyzer operation changes graph/suite state; an
-        //A empty plan is a no-op that keeps the revision and skips publication.
-        let changed = !prepared.checked().operations().is_empty();
-        prepared
-            .commit(&mut snapshot.graph)
-            .map_err(|error| preparation_error(error, None, 0))?;
-        if changed {
-            snapshot.graph_revision = Uuid::new_v4();
-            storage::publish(&self.state, &snapshot, lock)?;
+    ) -> Result<Publication, AppError> {
+        if !changed {
+            return Ok(Publication::Complete);
         }
-        Ok((snapshot, report))
+        storage::publish(&self.state, snapshot, lock, self.sync_directory)
     }
 
     pub fn init(&self, suite: &[Config]) -> Result<Initialized, AppError> {
-        let lock = storage::lock(&self.state)?;
-        if fs::symlink_metadata(self.state.path()).is_ok() {
-            return Err(AppError::DatabaseExists {
-                path: self.state.path().into(),
-            });
-        }
-        let mut graph = LifeCoreList::default();
+        storage::require_initializable(&self.state)?;
+        let mut snapshot = Snapshot::new(LifeCoreList::default());
         let changes = suite
             .iter()
             .map(|config| Change::AddAnalyzer {
@@ -395,22 +466,17 @@ impl Service {
             .collect::<Vec<_>>();
         //A The initial suite is added through the ordinary checked path, so
         //A missing factories and invalid configurations are rejected here too.
-        let checked = transaction::prepare(&graph, &changes, &mut self.runner(Default::default())?)
-            .map_err(|error| preparation_error(error, None, 0))?;
-        let prepared = checked.into_prepared().map_err(|_| AppError::Internal {
-            message: "the initial suite emitted inconsistencies on an empty history".into(),
-        })?;
-        prepared
-            .commit(&mut graph)
-            .map_err(|error| preparation_error(error, None, 0))?;
-        let snapshot = Snapshot::new(graph);
-        storage::publish_new(&self.state, &snapshot, &lock)?;
-        Ok(Initialized {
+        let (checked, report) = self.prepare(&snapshot, None, &changes, Default::default())?;
+        commit(&mut snapshot, checked, report)?;
+        let lock = storage::lock(&self.state, self.busy_retry)?;
+        let publication = storage::publish_new(&self.state, &snapshot, &lock, self.sync_directory)?;
+        let initialized = Initialized {
             path: self.state.path().to_string_lossy().into_owned(),
             database: database(&snapshot.graph),
             graph_revision: snapshot.graph_revision,
             suite: snapshot.graph.analysis_suite().clone(),
-        })
+        };
+        settle(publication, initialized)
     }
 
     pub fn describe(&self, _: NoParams) -> Result<Description, AppError> {
@@ -481,18 +547,18 @@ impl Service {
     }
 
     //A A preview: it reads one snapshot without the writer lock and stores
-    //A nothing. A rejected proposal returns its complete report as an error.
-    pub fn check(&self, request: ProposalRequest) -> Result<ProposalReport, AppError> {
+    //A nothing. A proposal that `apply` would reject is still a result.
+    pub fn check(&self, request: ProposalRequest) -> Result<CheckResult, AppError> {
         if request.proposal.acknowledges.is_some() {
             return Err(AppError::AcknowledgmentUnsupported);
         }
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         let snapshot = storage::read(&self.state)?;
         let (_, report) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
-        if report.analysis.has_error() {
-            return Err(AppError::Rejected(Box::new(report)));
-        }
-        Ok(report)
+        Ok(CheckResult {
+            accepted: !report.analysis.has_error(),
+            report,
+        })
     }
 
     //A Always checks anew under writer exclusion, from reload through
@@ -505,14 +571,16 @@ impl Service {
         }
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         storage::require_existing(&self.state)?;
-        let lock = storage::lock(&self.state)?;
-        let snapshot = storage::read(&self.state)?;
+        let lock = storage::lock(&self.state, self.busy_retry)?;
+        let mut snapshot = storage::read(&self.state)?;
         let (checked, report) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
-        let (snapshot, report) = self.publish(snapshot, checked, report, &lock)?;
-        Ok(ApplyResult {
+        let (report, changed) = commit(&mut snapshot, checked, report)?;
+        let publication = self.publish(&snapshot, changed, &lock)?;
+        let applied = ApplyResult {
             graph_revision: snapshot.graph_revision,
             report,
-        })
+        };
+        settle(publication, applied)
     }
 
     //A Appends to the ordered suite through a one-operation transaction, so the
@@ -520,18 +588,20 @@ impl Service {
     pub fn add_analyzer(&self, request: AddAnalyzerRequest) -> Result<AnalyzerAdded, AppError> {
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         storage::require_existing(&self.state)?;
-        let lock = storage::lock(&self.state)?;
-        let snapshot = storage::read(&self.state)?;
+        let lock = storage::lock(&self.state, self.busy_retry)?;
+        let mut snapshot = storage::read(&self.state)?;
         let changes = [Change::AddAnalyzer {
             name: request.name,
             config: request.configuration,
         }];
         let (checked, report) = self.prepare(&snapshot, None, &changes, inputs)?;
-        let (snapshot, report) = self.publish(snapshot, checked, report, &lock)?;
-        Ok(AnalyzerAdded {
+        let (report, changed) = commit(&mut snapshot, checked, report)?;
+        let publication = self.publish(&snapshot, changed, &lock)?;
+        let added = AnalyzerAdded {
             graph_revision: snapshot.graph_revision,
             suite: snapshot.graph.analysis_suite().clone(),
             report,
-        })
+        };
+        settle(publication, added)
     }
 }

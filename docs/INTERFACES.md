@@ -64,7 +64,8 @@ These conveniences call the same operations and use the same data as RPC.
 Collection-specific planning remains backlogged. `init`, `check`, `apply`,
 `plan-id`, and `add-analyzer` print the corresponding RPC result or error object
 as JSON on stdout, adding a one-line diagnostic on stderr for errors, and exit
-zero on success, nonzero on rejection or error. `export` prints the converted
+zero on success, nonzero on rejection or error. `check` of a proposal that is
+not accepted prints its result and exits nonzero. `export` prints the converted
 document. `FILE` arguments select JSON or TOML by their `.json` or `.toml`
 extension. There is no separate human-readable renderer yet. `check`, `apply`, and `add-analyzer` take
 `--evaluation-time <timestamp>` or `--now`; without either, evaluation time is
@@ -106,9 +107,10 @@ For example, the whole stdin line is:
 
 The result or error is one compact JSON object followed by a newline on stdout.
 Empty or malformed input produces one structured error response without mutation.
-Logs and operational diagnostics go to stderr. Success exits zero; failed calls
-exit nonzero while retaining the machine-readable response when output is
-available. No automatic write retry occurs.
+Logs and operational diagnostics go to stderr. A response carrying `result`
+exits zero, including a check with `accepted: false`; an `error` response exits
+nonzero while retaining the machine-readable response when output is available.
+No automatic write retry occurs.
 
 ## 3. Shared RPC envelope
 
@@ -178,7 +180,7 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | `entries.list` | optional `kind` (`node`/`edge`), `type`, `currentness` (`current` default, `historical`, `all`), `text` (node text search) | `database`, `graph_revision`, `view`, `entries` in append order |
 | `entries.get` | `id` (exact `EntryId`) | `view` and `entry` |
 | `plan_id.mint` | none | `plan_id` |
-| `proposal.check` | `proposal`, evaluation inputs | report: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |
+| `proposal.check` | `proposal`, evaluation inputs | `accepted` and `report`: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |
 | `proposal.apply` | `proposal`, evaluation inputs | new `graph_revision` and the report with actual entry IDs |
 | `proposal.decode` | raw `text`, `format` (`json`/`toml`) | canonical `Proposal` |
 | `proposal.encode` | `proposal`, `format` | `text` |
@@ -187,22 +189,23 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 Each entry record carries `kind`, exact `id`, `type`, `current`, and either
 `predecessor` (when present) and `payload`, or `from` and `to`.
 
-A structurally valid proposal whose replay emits an inconsistency fails `check`
-and `apply` alike with the `rejected` error; its `data.report` is the complete
-report above, including advisories. `add-analyzer` rejects the same way, with no
-operations. Application errors use codes outside the reserved JSON-RPC range and
-a stable `data.kind`:
+A structurally valid proposal whose replay emits an inconsistency is still a
+`check` result, with `accepted: false` and the complete report, including
+advisories. `apply` refuses it with the `rejected` error, whose `data.report` is
+that report; `analyzers.add` rejects the same way, with no operations.
+Application errors use codes outside the reserved JSON-RPC range and a stable
+`data.kind`:
 
 | Code | `data.kind` | Meaning |
 | --- | --- | --- |
-| 1001 | `state_path_empty`, `working_directory` | The state path cannot be selected. |
+| 1001 | `state_path_empty`, `working_directory`, `directory_missing` | The state path cannot be selected, or `init`'s containing directory does not exist. |
 | 1002 | `database_missing` | No database at the selected path. |
 | 1003 | `database_unreadable` | The snapshot cannot be read or is invalid. |
 | 1004 | `database_exists` | `init` refuses to replace an existing path. |
 | 1005 | `lock_failed` | The lock file cannot be opened or locked. |
 | 1006 | `busy` | Another writer held the lock throughout the retry. |
 | 1007 | `publication_failed` | Failure before replacement; stored state unchanged. |
-| 1008 | `publication_uncertain` | Synchronization failed after replacement. |
+| 1008 | `publication_uncertain` | Synchronization failed after replacement; `data.outcome` is the result the call would have returned, such as the new `graph_revision` and report, so the caller can inspect the stored state. |
 | 2001 | `malformed_proposal` | Decoding failed; `data.decode` has `format` and `message`, plus `path`, `line`, and `column` where known. |
 | 2002 | `invalid_proposal` | Names, references, intent, or structure; `data.location` names the entry and field where known. |
 | 2003 | `acknowledgment_unsupported` | `acknowledges` is present but not yet verified (plan section 4.4). |
@@ -245,11 +248,15 @@ check, publish atomically, perform required synchronization, and release the
 lock. Dismissal edits reread and preserve other records under writer exclusion.
 Lock `<state-path>.lock`, a stable sibling file retained across snapshot
 replacement; the default is `LifeCoreState.json.lock`. Use the standard library's
-`File::lock`/`try_lock`. A writer that finds the lock held retries briefly
-(currently for about a second), then returns a structured busy error instead of
-blocking indefinitely. Ordinary operations on a missing database fail without
-creating the snapshot or its lock file; `init` requires the containing directory
-to exist.
+`File::lock`/`try_lock`. A writer that finds the lock held retries for a
+bounded window, then returns a structured busy error instead of blocking
+indefinitely. The window defaults to 10 seconds, since one check can take
+seconds on a large history ([PLAN](PLAN.md#5-upcoming-checking-cost)); hosts can
+change it with `Service::with_busy_retry`. Ordinary operations on a missing
+database fail without creating the snapshot or its lock file. `init` requires
+the containing directory to exist on a filesystem with hard links
+([FILES](FILES.md#81-atomic-publication)), and a refused `init` creates no lock
+file.
 Do not hold locks across browser editing or between standalone check and apply.
 An optimization that prepares outside the lock must compare the exact base
 again under writer exclusion before publication.

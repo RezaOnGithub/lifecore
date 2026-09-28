@@ -4,22 +4,29 @@ use crate::{
     rpc,
     service::{
         AddAnalyzerRequest, EntryGetRequest, EntryListRequest, EntryRecord, NoParams,
-        ProposalRequest,
+        ProposalRequest, Published,
     },
-    storage::{self, DEFAULT_STATE_FILE, StatePath},
+    storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
 use lifecore::{
-    Body, EntryId, Payload, Timestamp,
-    analysis::{AnalyzerFactory, Config, MessageType},
+    Body, EntryId, LifeCoreList, Payload, Timestamp,
+    analysis::{AnalysisRunner, AnalyzerFactory, Config, MessageType},
     inspection::Currentness,
-    transaction::RevisionIntent,
+    transaction::{self, Change, NewNode, RevisionIntent},
     typing::{FieldStatus, Type, ValueType},
 };
 use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use uuid::Uuid;
+
+//A Short enough to keep busy tests fast; see `with_busy_retry`.
+const SHORT_RETRY: Duration = Duration::from_millis(50);
 
 //A A private directory per test, removed afterwards.
 struct Scratch(PathBuf);
@@ -45,6 +52,20 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).ok();
     }
+}
+
+fn temporary_files(scratch: &Scratch) -> usize {
+    fs::read_dir(&scratch.0)
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        })
+        .count()
 }
 
 fn service(state: StatePath) -> Service {
@@ -550,7 +571,26 @@ fn init_supports_both_suites_and_never_clobbers() {
         }]),
         Err(AppError::Analyzer(_))
     ));
+    //A A refused init leaves neither the database nor a lock file behind.
     assert!(!other.state().path().exists());
+    assert!(!other.state().lock_path().exists());
+    let copied = Scratch::new();
+    fs::write(copied.state().path(), scratch.bytes()).unwrap();
+    assert!(matches!(
+        copied.service().init(&[]),
+        Err(AppError::DatabaseExists { .. })
+    ));
+    assert!(!copied.state().lock_path().exists());
+    let nested = self::service(StatePath::new(other.0.join("missing/LifeCoreState.json")));
+    let error = nested.init(&[]).unwrap_err();
+    assert!(
+        matches!(error, AppError::DirectoryMissing { .. }),
+        "{error}"
+    );
+    let object = error.to_object();
+    assert_eq!(object.code, 1001);
+    assert_eq!(object.data.unwrap()["kind"], "directory_missing");
+    assert!(!other.0.join("missing").exists());
     //A A directory or garbage at the selected path is an error, not a fallback.
     fs::write(other.state().path(), "not a snapshot").unwrap();
     assert!(matches!(
@@ -642,12 +682,13 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
                 "intent": "revise", "payload": {"title": "A3", "notes": "n"}},
         ]))))
         .unwrap();
-    assert_eq!(preview.base_revision, applied.graph_revision);
-    assert_eq!(preview.operations.len(), 1);
+    assert!(preview.accepted);
+    assert_eq!(preview.report.base_revision, applied.graph_revision);
+    assert_eq!(preview.report.operations.len(), 1);
     assert_eq!(scratch.bytes(), stored);
     assert!(matches!(
         service.get_entry(EntryGetRequest {
-            id: preview.operations[0].entry
+            id: preview.report.operations[0].entry
         }),
         Err(AppError::EntryNotFound { .. })
     ));
@@ -668,7 +709,9 @@ fn revision_intent_is_enforced_at_intermediate_prefixes() {
         ]))
     };
     for result in [
-        service.check(request(revise_twice("revise"))),
+        service
+            .check(request(revise_twice("revise")))
+            .map(|c| c.report),
         service
             .apply(request(revise_twice("revise")))
             .map(|a| a.report),
@@ -804,13 +847,24 @@ fn rejected_proposals_report_full_context_and_store_nothing() {
                 "from": {"added": "ok"}, "to": existing(ids[2])},
         ])))
     };
-    for result in [
-        service.check(rejected()),
-        service.apply(rejected()).map(|a| a.report),
-    ] {
-        let Err(AppError::Rejected(report)) = result else {
-            panic!("an inconsistent proposal must be rejected")
-        };
+    //A A preview reports the rejection as a result; apply refuses it as an
+    //A error carrying the same complete report.
+    let checked = service.check(rejected()).unwrap();
+    assert!(!checked.accepted);
+    let Err(AppError::Rejected(applied)) = service.apply(rejected()) else {
+        panic!("an inconsistent proposal must be rejected")
+    };
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "proposal.check",
+        "params": {"proposal": serde_json::to_value(&rejected().proposal).unwrap()}})
+    .to_string();
+    let response = serde_json::to_value(rpc::handle_line(&service, &line)).unwrap();
+    assert_eq!(response["result"]["accepted"], false, "{response}");
+    assert_eq!(response["result"]["report"]["operations"][1]["name"], "bad");
+    assert_eq!(
+        response["result"]["report"]["analysis"]["implementations"],
+        serde_json::to_value(&checked.report.analysis.implementations).unwrap()
+    );
+    for report in [Box::new(checked.report), applied] {
         assert_eq!(report.base.end_exclusive, 4);
         assert_eq!(report.operations.len(), 3);
         let analysis = &report.analysis;
@@ -898,34 +952,113 @@ fn add_analyzer_replays_history_and_rejects_an_old_cycle() {
 fn competing_writers_get_a_busy_error_and_no_mutation() {
     let scratch = Scratch::new();
     populated(&scratch);
-    let service = scratch.service();
+    let service = scratch.service().with_busy_retry(SHORT_RETRY);
     let stored = scratch.bytes();
-    let holder = fs::File::options()
-        .write(true)
-        .open(scratch.state().lock_path())
-        .unwrap();
-    holder.lock().unwrap();
+    let holder = storage::lock(&scratch.state(), Duration::ZERO).unwrap();
     assert!(matches!(
         service.apply(request(proposal(json!([task("c", "C")])))),
         Err(AppError::Busy { .. })
     ));
-    assert!(matches!(service.init(&[]), Err(AppError::Busy { .. })));
+    //A An existing database is refused before the lock is consulted.
+    assert!(matches!(
+        service.init(&[]),
+        Err(AppError::DatabaseExists { .. })
+    ));
     //A Readers and standalone checks need no lock.
-    service
-        .check(request(proposal(json!([task("c", "C")]))))
-        .unwrap();
+    assert!(
+        service
+            .check(request(proposal(json!([task("c", "C")]))))
+            .unwrap()
+            .accepted
+    );
     assert_eq!(scratch.bytes(), stored);
-    //A A writer that releases within the retry window lets the apply proceed.
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        drop(holder);
-    });
-    service
-        .apply(request(proposal(json!([task("c", "C")]))))
-        .unwrap();
-    release.join().unwrap();
+    drop(holder);
+    //A A new database is initialized under the same exclusion.
+    let fresh = Scratch::new();
+    let fresh_holder = storage::lock(&fresh.state(), Duration::ZERO).unwrap();
+    assert!(matches!(
+        fresh.service().with_busy_retry(SHORT_RETRY).init(&[]),
+        Err(AppError::Busy { .. })
+    ));
+    assert!(!fresh.state().path().exists());
+    drop(fresh_holder);
+    fresh.service().init(&[]).unwrap();
 }
 
+//A The lock holder publishes and releases while other writers wait. Each
+//A waiting writer must reload after acquiring the lock, never check a snapshot
+//A read before it.
+#[test]
+fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let state = scratch.state();
+    let old = scratch.service().mint_plan_id(NoParams {}).unwrap().plan_id;
+    let lock = storage::lock(&state, Duration::ZERO).unwrap();
+    let waiting = |name: &'static str, plan_id: Option<PlanId>| {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            let mut proposal = proposal(json!([task(name, name)]));
+            proposal.plan_id = plan_id;
+            service(state)
+                .with_busy_retry(Duration::from_secs(10))
+                .apply(request(proposal))
+        })
+    };
+    let stale = waiting("stale", Some(old));
+    let tokenless = waiting("tokenless", None);
+    //A Give both writers time to start waiting on the held lock.
+    std::thread::sleep(Duration::from_millis(200));
+    let mut snapshot = storage::read(&state).unwrap();
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(TypeCheckFactory))
+        .unwrap();
+    let held = Body::from([
+        ("title".into(), "Held".into()),
+        ("notes".into(), "n".into()),
+    ]);
+    transaction::prepare(
+        &snapshot.graph,
+        &[Change::AddNode(NewNode {
+            ty_name: "Task".into(),
+            body: held,
+            parent: None,
+            intent: None,
+        })],
+        &mut runner,
+    )
+    .unwrap()
+    .into_prepared()
+    .unwrap()
+    .commit(&mut snapshot.graph)
+    .unwrap();
+    snapshot.graph_revision = Uuid::new_v4();
+    let published = storage::publish(&state, &snapshot, &lock, storage::sync_directory);
+    assert!(matches!(published, Ok(Publication::Complete)));
+    drop(lock);
+    let Err(AppError::StaleBase { expected, actual }) = stale.join().unwrap() else {
+        panic!("the old plan ID must be stale after the held publication")
+    };
+    assert_eq!(expected, old.graph_revision);
+    assert_ne!(actual, old.graph_revision);
+    //A The tokenless writer checked the held publication, not its own earlier
+    //A view of the file.
+    let applied = tokenless.join().unwrap().unwrap();
+    assert_eq!(applied.report.base_revision, snapshot.graph_revision);
+    assert_eq!(applied.report.base.end_exclusive, 5);
+    let listed = scratch
+        .service()
+        .list_entries(EntryListRequest {
+            text: Some("Held".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(listed.graph_revision, applied.graph_revision);
+}
+
+#[cfg(unix)]
 #[test]
 fn failed_publication_before_replacement_preserves_state() {
     use std::os::unix::fs::PermissionsExt;
@@ -935,6 +1068,7 @@ fn failed_publication_before_replacement_preserves_state() {
     let stored = scratch.bytes();
     fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o555)).unwrap();
     //A Privileged users bypass directory permissions; nothing to observe then.
+    //A `publication_onto_a_directory_fails_before_replacement` covers them.
     let enforced = fs::write(scratch.0.join("probe"), "").is_err();
     let result = service.apply(request(proposal(json!([task("c", "C")]))));
     fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o755)).unwrap();
@@ -943,6 +1077,131 @@ fn failed_publication_before_replacement_preserves_state() {
         assert_eq!(scratch.bytes(), stored);
         assert_eq!(fs::read_dir(&scratch.0).unwrap().count(), 2);
     }
+}
+
+//A Replacement fails even for privileged users when the target is a
+//A non-empty directory, so this runs as root too.
+#[test]
+fn publication_onto_a_directory_fails_before_replacement() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let snapshot = storage::read(&scratch.state()).unwrap();
+    let blocked = StatePath::new(scratch.0.join("blocked"));
+    fs::create_dir(blocked.path()).unwrap();
+    fs::write(blocked.path().join("inside"), "kept").unwrap();
+    let lock = storage::lock(&blocked, Duration::ZERO).unwrap();
+    let result = storage::publish(&blocked, &snapshot, &lock, storage::sync_directory);
+    assert!(matches!(result, Err(AppError::PublicationFailed { .. })));
+    assert_eq!(fs::read(blocked.path().join("inside")).unwrap(), b"kept");
+    assert_eq!(fs::read_dir(blocked.path()).unwrap().count(), 1);
+    assert_eq!(temporary_files(&scratch), 0);
+}
+
+#[test]
+fn publish_new_refuses_a_path_that_appeared_after_the_check() {
+    let scratch = Scratch::new();
+    let target = StatePath::new(scratch.0.join("taken.json"));
+    fs::write(target.path(), "someone else's file").unwrap();
+    let lock = storage::lock(&target, Duration::ZERO).unwrap();
+    let snapshot = Snapshot::new(LifeCoreList::default());
+    let result = storage::publish_new(&target, &snapshot, &lock, storage::sync_directory);
+    assert!(matches!(result, Err(AppError::DatabaseExists { .. })));
+    assert_eq!(fs::read(target.path()).unwrap(), b"someone else's file");
+    assert_eq!(temporary_files(&scratch), 0);
+}
+
+fn failed_sync(_: &Path) -> io::Result<()> {
+    Err(io::Error::other("injected synchronization failure"))
+}
+
+#[test]
+fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcome() {
+    let scratch = Scratch::new();
+    let error = scratch
+        .service()
+        .with_sync_directory(failed_sync)
+        .init(&typecheck())
+        .unwrap_err();
+    let AppError::PublicationUncertain { outcome, .. } = &error else {
+        panic!("expected an uncertain publication, got {error}")
+    };
+    let Published::Initialized(initialized) = outcome.as_ref() else {
+        panic!("expected the initialization outcome")
+    };
+    //A The initialized database is already visible.
+    let described = scratch.service().describe(NoParams {}).unwrap();
+    assert_eq!(described.database, initialized.database);
+    assert_eq!(described.graph_revision, initialized.graph_revision);
+    assert_eq!(error.to_object().code, 1008);
+
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let failing = scratch.service().with_sync_directory(failed_sync);
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "proposal.apply",
+        "params": {"proposal": {"format_version": 1, "entries": [task("c", "C")]}}})
+    .to_string();
+    let response = serde_json::to_value(rpc::handle_line(&failing, &line)).unwrap();
+    let error = &response["error"];
+    assert_eq!(error["code"], 1008, "{response}");
+    assert_eq!(error["data"]["kind"], "publication_uncertain");
+    let outcome = &error["data"]["outcome"];
+    assert_eq!(outcome["report"]["operations"][0]["name"], "c");
+    //A The carried outcome names the new revision and the actual entry, both
+    //A visible in the stored state.
+    let described = scratch.service().describe(NoParams {}).unwrap();
+    assert_eq!(
+        outcome["graph_revision"],
+        json!(described.graph_revision.to_string())
+    );
+    let id: EntryId =
+        serde_json::from_value(outcome["report"]["operations"][0]["entry"].clone()).unwrap();
+    let EntryRecord::Node { payload, .. } = scratch
+        .service()
+        .get_entry(EntryGetRequest { id })
+        .unwrap()
+        .entry
+    else {
+        panic!("expected the applied node")
+    };
+    assert_eq!(payload["title"], Payload::Text("C".into()));
+}
+
+#[cfg(unix)]
+#[test]
+fn publication_keeps_the_snapshot_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let mode = |scratch: &Scratch| {
+        fs::metadata(scratch.state().path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    for (expected, name) in [(0o600, "c"), (0o640, "d")] {
+        fs::set_permissions(scratch.state().path(), fs::Permissions::from_mode(expected)).unwrap();
+        scratch
+            .service()
+            .apply(request(proposal(json!([task(name, name)]))))
+            .unwrap();
+        assert_eq!(mode(&scratch), expected);
+    }
+}
+
+#[test]
+fn bare_state_file_names_publish_in_the_current_directory() {
+    let bare = StatePath::new(PathBuf::from(DEFAULT_STATE_FILE));
+    assert_eq!(bare.directory(), Path::new("."));
+    storage::sync_directory(bare.directory()).unwrap();
+    assert_eq!(
+        StatePath::new(PathBuf::from("sub/db.json")).directory(),
+        Path::new("sub")
+    );
+    assert_eq!(
+        StatePath::new(PathBuf::from("/db.json")).directory(),
+        Path::new("/")
+    );
 }
 
 #[test]
@@ -980,7 +1239,7 @@ fn evaluation_time_is_explicit_or_captured_once_by_the_host() {
     populated(&scratch);
     let service = scratch.service();
     let absent = service.check(request(proposal(json!([])))).unwrap();
-    assert_eq!(absent.analysis.inputs.evaluation_time, None);
+    assert_eq!(absent.report.analysis.inputs.evaluation_time, None);
     let at: Timestamp = "2026-01-02T03:04:05.000000006Z".parse().unwrap();
     let explicit = service
         .check(ProposalRequest {
@@ -988,14 +1247,14 @@ fn evaluation_time_is_explicit_or_captured_once_by_the_host() {
             ..request(proposal(json!([])))
         })
         .unwrap();
-    assert_eq!(explicit.analysis.inputs.evaluation_time, Some(at));
+    assert_eq!(explicit.report.analysis.inputs.evaluation_time, Some(at));
     let now = service
         .check(ProposalRequest {
             now: true,
             ..request(proposal(json!([])))
         })
         .unwrap();
-    assert!(now.analysis.inputs.evaluation_time.is_some());
+    assert!(now.report.analysis.inputs.evaluation_time.is_some());
     assert!(matches!(
         service.check(ProposalRequest {
             evaluation_time: Some(at),

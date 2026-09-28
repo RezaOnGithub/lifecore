@@ -1,6 +1,6 @@
 use crate::{
     proposal::{DecodeError, ProposalLocation},
-    service::ProposalReport,
+    service::{ProposalReport, Published},
 };
 use lifecore::{EntryId, LifeCoreError};
 use serde::Serialize;
@@ -14,6 +14,8 @@ pub enum AppError {
     EmptyStatePath,
     #[error("cannot determine the working directory: {message}")]
     WorkingDirectory { message: String },
+    #[error("the directory {path} for a new database does not exist")]
+    DirectoryMissing { path: PathBuf },
     #[error("no database at {path}; run `lifecore init` to create one")]
     DatabaseMissing { path: PathBuf },
     #[error("cannot read the database at {path}: {message}")]
@@ -28,10 +30,15 @@ pub enum AppError {
         "publication failed before replacing the database; stored state is unchanged: {message}"
     )]
     PublicationFailed { message: String },
+    //A The new state is already visible, so the caller gets the result it would
+    //A have had and can inspect whether its write is there; see FILES 8.1.
     #[error(
         "the new state was published, but synchronization failed, so it may or may not persist: {message}"
     )]
-    PublicationUncertain { message: String },
+    PublicationUncertain {
+        message: String,
+        outcome: Box<Published>,
+    },
     #[error("malformed {format} proposal: {error}", format = .0.format, error = .0)]
     MalformedProposal(DecodeError),
     #[error("invalid proposal{}: {message}", location.as_ref().map(|at| format!(" at entry {} ({:?})", at.operation, at.name)).unwrap_or_default())]
@@ -75,6 +82,7 @@ impl AppError {
         match self {
         Self::EmptyStatePath => "state_path_empty",
         Self::WorkingDirectory { .. } => "working_directory",
+        Self::DirectoryMissing { .. } => "directory_missing",
         Self::DatabaseMissing { .. } => "database_missing",
         Self::DatabaseUnreadable { .. } => "database_unreadable",
         Self::DatabaseExists { .. } => "database_exists",
@@ -99,7 +107,9 @@ impl AppError {
         match self {
         Self::InvalidParams { .. } => -32602,
         Self::Internal { .. } => -32603,
-        Self::EmptyStatePath | Self::WorkingDirectory { .. } => 1001,
+        Self::EmptyStatePath | Self::WorkingDirectory { .. } | Self::DirectoryMissing { .. } => {
+            1001
+        }
         Self::DatabaseMissing { .. } => 1002,
         Self::DatabaseUnreadable { .. } => 1003,
         Self::DatabaseExists { .. } => 1004,
@@ -121,9 +131,9 @@ impl AppError {
     fn details(&self) -> Value {
         let path = |path: &PathBuf| path.to_string_lossy().into_owned();
         match self {
-        Self::DatabaseMissing { path: p } | Self::DatabaseExists { path: p } => {
-            json!({ "path": path(p) })
-        }
+        Self::DirectoryMissing { path: p }
+        | Self::DatabaseMissing { path: p }
+        | Self::DatabaseExists { path: p } => json!({ "path": path(p) }),
         Self::DatabaseUnreadable { path: p, .. } | Self::Lock { path: p, .. } => {
             json!({ "path": path(p) })
         }
@@ -136,6 +146,7 @@ impl AppError {
         Self::ForeignDatabase { expected, actual } | Self::StaleBase { expected, actual } => {
             json!({ "expected": expected, "actual": actual })
         }
+        Self::PublicationUncertain { outcome, .. } => json!({ "outcome": outcome }),
         Self::Rejected(report) => json!({ "report": report }),
         Self::Analyzer(LifeCoreError::AnalyzerExecution(failure)) => {
             json!({ "failure": failure })
