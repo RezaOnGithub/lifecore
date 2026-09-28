@@ -41,7 +41,8 @@ a database; tasks, concepts, and type declarations need not have document files.
 ### 2.1 Syntax and values
 
 Both formats use UTF-8 and deserialize directly into the same Serde types. TOML
-uses [TOML 1.0 syntax](https://toml.io/en/v1.0.0); JSON uses ordinary JSON syntax.
+input uses [TOML 1.1 syntax](https://toml.io/en/v1.1.0), which the `toml` crate
+parses and which accepts every TOML 1.0 document; JSON uses ordinary JSON syntax.
 Arrays preserve operation order. Object/table key order does not affect graph
 semantics. Files cannot execute code, interpolate environment variables, or fetch
 includes. Unknown envelope versions, control fields, and value tags are errors.
@@ -164,7 +165,8 @@ strings and decimal-string integers for the entire `i64` domain; see
 | `entries` | Yes | Ordered array of proposed entries; may be empty. |
 
 There is one value representation, with no separate value-profile selector.
-There are no separate `database` or `base` fields. The host selects the database
+Optional fields are omitted when absent; JSON `null` is rejected rather than read
+as absence. There are no separate `database` or `base` fields. The host selects the database
 through the [path rule](INTERFACES.md#4-database-selection-and-concurrency).
 A supplied token asserts that this database and its current base match.
 `acknowledges` is verified by replay and, on success, dismisses that finding
