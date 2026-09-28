@@ -175,6 +175,11 @@ state unchanged.
   preserve concurrent records; reject inconsistencies as dismissal targets.
 - [ ] Return ephemeral analysis outputs with view, inputs, and implementations.
   Keep dismissal loading independent of analyzer availability.
+- [ ] Align the core Serde vocabulary with the proposal vocabulary before the
+  fixtures freeze. Core types and snapshots still use `{"Node":{ty_name,body,parent}}`,
+  `{"AddNode":…}`, and `{"Existing":…}` beside the proposal's `kind`, `type`,
+  `payload`, `predecessor`, `existing`, and `added`; `EntryRecord` could then
+  become the core entry plus `current`.
 - [ ] Freeze method names and fixtures (section 3).
 
 ### 4.3 Rust HTTP adapter and React client

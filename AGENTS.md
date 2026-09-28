@@ -27,11 +27,11 @@ Preserve historical correctness under the chosen model and unrelated user work.
 
 ## Checks
 
-Active workspace: `lifecore` (root), `lifecore-typecheck`, and
-`lifecore-dag-check`. Shared checking and atomic in-memory commits live in
-`lifecore::transaction`; persistence belongs to the planned synchronous
-application service shared by HTTP and CLI. Add package/frontend checks when
-those components are introduced.
+Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
+`lifecore-app`, and `lifecore-cli`. Shared checking and atomic in-memory commits
+live in `lifecore::transaction`; persistence belongs to the synchronous
+application service `lifecore_app::service::Service`, shared by HTTP and CLI.
+Add package/frontend checks when those components are introduced.
 
 - Tests: `cargo test --workspace` or `cargo test -p <package>`.
 - Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.
@@ -62,6 +62,8 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 - Test history-sensitive changes at multiple boundaries, including before and
   after the relevant append.
 - All mutations go through `transaction::prepare` and a `PreparedTransaction` commit.
+  `prepare` returns an inspectable `CheckedCandidate`; only its `into_prepared`,
+  without inconsistencies, yields the `PreparedTransaction`.
   `Reference::Added(n)` addresses an earlier operation within that plan;
   `Reference::Existing(id)` retains exact identity across views.
 - Core mutation failures leave the receiver unchanged. Preserve atomic composite
