@@ -1,7 +1,7 @@
 use super::{AnalysisRunner, EvaluatedView, MessageKind, Observation};
 use crate::{
     LifeCoreList, ViewError,
-    transaction::{self, Change, CheckedCandidate, NewEdge, NewNode},
+    transaction::{self, Change, Checked, NewEdge, NewNode},
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ pub fn prepare_suggestion(
     graph: &LifeCoreList,
     observation: &Observation,
     runner: &mut AnalysisRunner,
-) -> Result<CheckedCandidate, Error> {
+) -> Result<Checked, Error> {
     if graph.view().id().database != observation.key.database {
         return Err(ViewError::DifferentHistory.into());
     }

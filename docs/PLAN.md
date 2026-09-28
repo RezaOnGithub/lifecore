@@ -106,12 +106,13 @@ Core API and encoding changes that the first slice builds on.
   serialize as decimal strings. Rename `Number` to `Integer` and `PreciseTime` to
   `Timestamp` in `Payload`, `PayloadKind`, and `ValueType`, matching the words
   the type schema already uses.
-- [x] Return a checked candidate from `transaction::prepare` that owns its
-  complete `AnalysisOutput` and remains inspectable when it has inconsistencies.
-  Only a candidate without inconsistencies converts into a committable
-  `PreparedTransaction`. Structural and analyzer execution failures stay errors.
-- [x] Test intent, encoding round trips, and rejected-candidate inspection at
-  several boundaries, including before and after the relevant append.
+- [x] Return a `Checked` outcome from `transaction::prepare`: an accepted
+  `PreparedTransaction`, the only committable form, owning the candidate graph,
+  or a `Rejection` keeping the complete `AnalysisOutput` and operation mapping
+  without a candidate graph. Structural and analyzer execution failures stay
+  errors.
+- [x] Test intent, encoding round trips, and rejection contents at several
+  boundaries, including before and after the relevant append.
 
 ### 4.1 First slice: change files, storage, and CLI
 

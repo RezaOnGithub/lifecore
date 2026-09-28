@@ -191,9 +191,9 @@ flowchart TD
     A["Observation.kind = Suggestion(actions)<br/>SuggestedAction shares NewNode/NewEdge with Change"]
     P["transaction::prepare(graph, changes, runner)<br/>Stage; validate structure and revision intent at each prefix"]
     R["Runner checks all candidate prefixes<br/>Fresh unfiltered AnalysisOutput"]
-    K["CheckedCandidate<br/>owns the complete AnalysisOutput; inspectable"]
-    G{"into_prepared:<br/>any Inconsistency?"}
-    T["PreparedTransaction"]
+    G{"Any Inconsistency?"}
+    J["Checked::Rejected(Rejection)<br/>complete AnalysisOutput and operation mapping; no candidate graph"]
+    T["Checked::Accepted(PreparedTransaction)<br/>owns the candidate and its AnalysisOutput"]
     C{"Caller explicitly commits;<br/>original base still matches exactly?"}
     OK["Replace graph atomically in memory"]
     E["Return error<br/>Original graph unchanged"]
@@ -203,9 +203,9 @@ flowchart TD
     S -->|no| E
     P -->|valid| R
     P -->|invalid structure, references or intent| E
-    R -->|success| K --> G
+    R -->|success| G
     R -->|execution or normalization failure| E
-    G -->|yes: Err returns the inspectable candidate| E
+    G -->|yes| J
     G -->|no| T --> C
     C -->|yes| OK
     C -->|no: StaleBase| E

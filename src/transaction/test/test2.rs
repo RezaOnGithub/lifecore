@@ -1,4 +1,4 @@
-use super::super::{Change, Error, NewEdge, NewNode, Reference, RevisionIntent, prepare};
+use super::super::{Change, Checked, Error, NewEdge, NewNode, Reference, RevisionIntent, prepare};
 use crate::{Body, LifeCoreList, analysis::AnalysisRunner, transaction::Reference::Added};
 
 fn node(name: &str) -> Change {
@@ -31,10 +31,13 @@ fn composite_commits_once_and_failed_suffix_leaves_memory_unchanged() {
     let before = serde_json::to_vec(&graph).unwrap();
     assert!(prepare(&graph, &invalid, &mut runner).is_err());
     assert_eq!(serde_json::to_vec(&graph).unwrap(), before);
-    let checked = prepare(&graph, &plan(), &mut runner).unwrap();
+    let checked = prepare(&graph, &plan(), &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
     assert!(graph.view().is_empty());
     assert_eq!(checked.view().len(), 3);
-    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
+    checked.commit(&mut graph).unwrap();
     assert_eq!(graph.view().len(), 3);
 }
 
@@ -53,13 +56,12 @@ fn missing_factory_does_not_publish_any_entries() {
 #[test]
 fn graph_round_trip_preserves_composite_entries_and_exact_identities() {
     let mut graph = LifeCoreList::default();
-    let transaction = prepare(&graph, &plan(), &mut AnalysisRunner::default()).unwrap();
-    let ids = transaction.added().to_vec();
-    transaction
-        .into_prepared()
+    let transaction = prepare(&graph, &plan(), &mut AnalysisRunner::default())
         .unwrap()
-        .commit(&mut graph)
+        .accepted()
         .unwrap();
+    let ids = transaction.added().to_vec();
+    transaction.commit(&mut graph).unwrap();
     let loaded: LifeCoreList =
         serde_json::from_slice(&serde_json::to_vec(&graph).unwrap()).unwrap();
     assert_eq!(loaded, graph);
@@ -70,18 +72,18 @@ fn graph_round_trip_preserves_composite_entries_and_exact_identities() {
 #[test]
 fn stale_memory_candidate_is_rejected() {
     let mut graph = LifeCoreList::default();
-    let checked = prepare(&graph, &plan(), &mut AnalysisRunner::default()).unwrap();
+    let checked = prepare(&graph, &plan(), &mut AnalysisRunner::default())
+        .unwrap()
+        .accepted()
+        .unwrap();
     prepare(&graph, &[node("Other")], &mut AnalysisRunner::default())
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
     let before = serde_json::to_vec(&graph).unwrap();
-    assert!(matches!(
-        checked.into_prepared().unwrap().commit(&mut graph),
-        Err(Error::StaleBase)
-    ));
+    assert!(matches!(checked.commit(&mut graph), Err(Error::StaleBase)));
     assert_eq!(serde_json::to_vec(&graph).unwrap(), before);
 }
 
@@ -91,7 +93,7 @@ fn exact_base_rejects_identity_content_count_and_suite_changes() {
     let mut runner = AnalysisRunner::default();
     prepare(&graph, &plan(), &mut runner)
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -116,9 +118,12 @@ fn exact_base_rejects_identity_content_count_and_suite_changes() {
     for encoded in variants {
         let mut receiver: LifeCoreList = serde_json::from_value(encoded).unwrap();
         let before = receiver.clone();
-        let transaction = prepare(&graph, &[], &mut runner).unwrap();
+        let transaction = prepare(&graph, &[], &mut runner)
+            .unwrap()
+            .accepted()
+            .unwrap();
         assert!(matches!(
-            transaction.into_prepared().unwrap().commit(&mut receiver),
+            transaction.commit(&mut receiver),
             Err(Error::StaleBase)
         ));
         assert_eq!(receiver, before);
@@ -154,9 +159,12 @@ fn exact_base_includes_analyzer_names_original_configuration_and_order() {
     for mut receiver in [renamed, reconfigured, reordered] {
         assert_eq!(receiver.view().id(), graph.view().id());
         let before = receiver.clone();
-        let transaction = prepare(&graph, &[], &mut runner).unwrap();
+        let transaction = prepare(&graph, &[], &mut runner)
+            .unwrap()
+            .accepted()
+            .unwrap();
         assert!(matches!(
-            transaction.into_prepared().unwrap().commit(&mut receiver),
+            transaction.commit(&mut receiver),
             Err(Error::StaleBase)
         ));
         assert_eq!(receiver, before);
@@ -169,11 +177,14 @@ fn serialization_formatting_does_not_invalidate_an_exact_base() {
     let mut runner = AnalysisRunner::default();
     prepare(&graph, &plan(), &mut runner)
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
-    let transaction = prepare(&graph, &[node("Other")], &mut runner).unwrap();
+    let transaction = prepare(&graph, &[node("Other")], &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
     let original = serde_json::to_vec_pretty(&graph).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&original).unwrap();
     //A Value sorts object keys; compact encoding also removes whitespace.
@@ -181,11 +192,7 @@ fn serialization_formatting_does_not_invalidate_an_exact_base() {
     assert_ne!(reformatted, original);
     let mut receiver = serde_json::from_slice(&reformatted).unwrap();
     let expected = transaction.candidate.clone();
-    transaction
-        .into_prepared()
-        .unwrap()
-        .commit(&mut receiver)
-        .unwrap();
+    transaction.commit(&mut receiver).unwrap();
     assert_eq!(receiver, expected);
 }
 
@@ -194,7 +201,7 @@ fn malformed_deserialization_is_rejected_before_traversal() {
     let mut graph = LifeCoreList::default();
     prepare(&graph, &plan(), &mut AnalysisRunner::default())
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -222,14 +229,17 @@ fn malformed_deserialization_is_rejected_before_traversal() {
 fn independent_candidates_cannot_overwrite_a_committed_suffix() {
     let mut graph = LifeCoreList::default();
     let mut runner = AnalysisRunner::default();
-    let first = prepare(&graph, &[node("First")], &mut runner).unwrap();
-    let second = prepare(&graph, &[node("Second")], &mut runner).unwrap();
-    first.into_prepared().unwrap().commit(&mut graph).unwrap();
+    let first = prepare(&graph, &[node("First")], &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
+    let second = prepare(&graph, &[node("Second")], &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
+    first.commit(&mut graph).unwrap();
     let before = graph.clone();
-    assert!(matches!(
-        second.into_prepared().unwrap().commit(&mut graph),
-        Err(Error::StaleBase)
-    ));
+    assert!(matches!(second.commit(&mut graph), Err(Error::StaleBase)));
     assert_eq!(graph, before);
 }
 
@@ -251,7 +261,7 @@ fn missing_analyzer_does_not_disable_committed_history_inspection() {
     let mut graph = LifeCoreList::default();
     prepare(&graph, &[node("A")], &mut AnalysisRunner::default())
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -303,7 +313,10 @@ fn suite_only_commit_checks_original_suite_and_blocks_an_older_candidate() {
     runner
         .register_analyzer_kind(Box::new(EmptyAnalyzer("First")))
         .unwrap();
-    let old = prepare(&graph, &[node("Old")], &mut runner).unwrap();
+    let old = prepare(&graph, &[node("Old")], &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
     let before = graph.view().id();
     prepare(
         &graph,
@@ -314,21 +327,18 @@ fn suite_only_commit_checks_original_suite_and_blocks_an_older_candidate() {
         &mut runner,
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
     assert_eq!(graph.view().id(), before);
     assert_eq!(graph.analysis_suite().0[0].config, " {} ");
     let snapshot = graph.clone();
-    assert!(matches!(
-        old.into_prepared().unwrap().commit(&mut graph),
-        Err(Error::StaleBase)
-    ));
+    assert!(matches!(old.commit(&mut graph), Err(Error::StaleBase)));
     assert_eq!(graph, snapshot);
     prepare(&graph, &[node("New")], &mut runner)
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -352,9 +362,9 @@ fn revision_intent_is_checked_immediately_before_each_append() {
     let mut runner = AnalysisRunner::default();
     let committed = prepare(&graph, &[node("A")], &mut runner)
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap();
-    let root = committed.checked().added()[0];
+    let root = committed.added()[0];
     committed.commit(&mut graph).unwrap();
     let before = graph.clone();
     let intent = |changes: &[Change]| prepare(&graph, changes, &mut AnalysisRunner::default());
@@ -389,6 +399,8 @@ fn revision_intent_is_checked_immediately_before_each_append() {
         first.clone(),
         revision("A3", Existing(root), Some(RevisionIntent::Branch)),
     ])
+    .unwrap()
+    .accepted()
     .unwrap();
     assert_eq!(split.view().fresh_successors(root).count(), 2);
     //A Revising the plan's own successor is valid at its later prefix.
@@ -408,7 +420,7 @@ fn revision_intent_is_checked_immediately_before_each_append() {
         &mut runner,
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -469,7 +481,7 @@ impl crate::analysis::Analyzer for BoundaryAnalyzer {
 }
 
 #[test]
-fn rejected_candidates_remain_inspectable_but_cannot_commit() {
+fn rejections_keep_the_analysis_but_no_candidate_graph() {
     use crate::analysis::{EvaluatedView, MessageType};
     let mut graph = LifeCoreList::default();
     let mut runner = AnalysisRunner::default();
@@ -478,7 +490,7 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
         .unwrap();
     prepare(&graph, &[node("Base")], &mut runner)
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -490,21 +502,23 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
             name: "Boundary".into(),
             config: rejected_at.to_string(),
         });
-        let checked = prepare(&graph, &changes, &mut runner).unwrap();
-        assert_eq!(checked.base_end_exclusive, 1);
-        assert_eq!(checked.view().len(), 4);
-        assert_eq!(checked.operations()[3], None);
+        let Checked::Rejected(rejection) = prepare(&graph, &changes, &mut runner).unwrap() else {
+            panic!("an inconsistent candidate must not become committable")
+        };
+        //A Three staged entries and one configuration change, each mapped.
+        let operations = rejection.operations();
+        assert_eq!(operations.len(), 4);
+        assert_eq!(operations[3], None);
         assert_eq!(
-            checked.operations()[..3]
+            operations[..3]
                 .iter()
-                .flatten()
-                .copied()
+                .map(|id| id.unwrap().position())
                 .collect::<Vec<_>>(),
-            checked.added()
+            [1, 2, 3]
         );
-        assert_eq!(checked.candidate.analysis_suite().0.len(), 1);
-        let analysis = checked.analysis();
-        assert_eq!(analysis.view, checked.view().id());
+        let analysis = rejection.analysis();
+        assert_eq!(analysis.view.end_exclusive, 4);
+        assert_eq!(analysis.view.database, graph.view().id().database);
         assert_eq!(
             analysis.implementations[0].configuration,
             rejected_at.to_string()
@@ -514,20 +528,25 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
         let blocked = analysis.errors().collect::<Vec<_>>();
         assert_eq!(blocked.len(), 1);
         assert_eq!(blocked[0].key.kind, MessageType::Inconsistency);
-        assert_eq!(
-            blocked[0].evaluated_view,
-            EvaluatedView::Prefix(checked.view().prefix(rejected_at).unwrap().id())
-        );
-        let Err(returned) = checked.into_prepared() else {
-            panic!("an inconsistent candidate must not become committable")
+        let EvaluatedView::Prefix(at) = blocked[0].evaluated_view else {
+            panic!("the finding names its prefix")
         };
-        assert_eq!(returned.analysis().errors().count(), 1);
+        assert_eq!(at.end_exclusive, rejected_at);
+        //A Prefixes up to the base are the committed history itself.
+        if rejected_at <= 1 {
+            assert_eq!(at, graph.view().prefix(rejected_at).unwrap().id());
+        }
         assert_eq!(graph, before);
     }
-    let clean = prepare(&graph, &plan(), &mut runner).unwrap();
+    let clean = prepare(&graph, &plan(), &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
     assert!(!clean.analysis().has_error());
-    let prepared = clean.into_prepared().unwrap();
-    assert_eq!(prepared.checked().analysis().warnings().count(), 0);
+    let prepared = clean;
+    assert_eq!(prepared.analysis().warnings().count(), 0);
+    assert_eq!(prepared.view().len(), 4);
+    assert_eq!(prepared.analysis().view, prepared.view().id());
     prepared.commit(&mut graph).unwrap();
     assert_eq!(graph.view().len(), 4);
 }

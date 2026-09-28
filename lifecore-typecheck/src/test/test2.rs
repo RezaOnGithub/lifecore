@@ -32,9 +32,12 @@ fn node(name: &str, body: Body, parent: Option<lifecore::transaction::Reference>
     })
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
-    let plan = prepare(graph, changes, &mut AnalysisRunner::default()).unwrap();
+    let plan = prepare(graph, changes, &mut AnalysisRunner::default())
+        .unwrap()
+        .accepted()
+        .unwrap();
     let ids = plan.added().to_vec();
-    plan.into_prepared().unwrap().commit(graph).unwrap();
+    plan.commit(graph).unwrap();
     ids
 }
 fn findings(graph: &LifeCoreList, end_exclusive: usize) -> Vec<TypeCheckMessage> {
@@ -468,7 +471,7 @@ fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
             .collect::<Vec<_>>(),
         vec![2]
     );
-    assert!(checked.into_prepared().is_err());
+    assert!(checked.accepted().is_err());
     assert!(graph.view().is_empty());
     prepare(
         &graph,
@@ -480,7 +483,7 @@ fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
         &mut runner(),
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -541,7 +544,10 @@ fn plan_local_references_count_operations_and_cannot_name_configuration_changes(
         node("A", Body::new(), None),
         node("A", Body::new(), Some(Added(2))),
     ];
-    let plan = prepare(&graph, &changes, &mut runner()).unwrap();
+    let plan = prepare(&graph, &changes, &mut runner())
+        .unwrap()
+        .accepted()
+        .unwrap();
     assert_eq!(plan.added().len(), 3);
     assert_eq!(
         plan.view().node(plan.added()[2]).unwrap().parent,

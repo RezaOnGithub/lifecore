@@ -62,10 +62,13 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 - Test history-sensitive changes at multiple boundaries, including before and
   after the relevant append.
 - All mutations go through `transaction::prepare` and a `PreparedTransaction` commit.
-  `prepare` returns an inspectable `CheckedCandidate`; only its `into_prepared`,
-  without inconsistencies, yields the `PreparedTransaction`.
+  `prepare` returns `Checked`: `Accepted(PreparedTransaction)`, the only
+  committable form, or `Rejected(Rejection)`, which keeps the analysis and
+  operation mapping but no candidate graph.
   `Reference::Added(n)` addresses an earlier operation within that plan;
   `Reference::Existing(id)` retains exact identity across views.
+- Only a `LockedSnapshot`, read under the writer lock for its own state path,
+  can replace a published snapshot; unlocked reads are for previews only.
 - Core mutation failures leave the receiver unchanged. Preserve atomic composite
   writes and every-prefix checks through shared staging and validation. Commit
   compares database identity, the original entry count/content, and the exact

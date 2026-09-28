@@ -344,11 +344,13 @@ predecessor must state `revise` or `branch`, and a root must omit intent; `revis
 additionally requires the predecessor to be current immediately before that
 append, including earlier operations of the same plan. Structural, reference,
 intent, and analyzer execution failures are errors. Otherwise `prepare` returns a
-`CheckedCandidate` that owns its complete `AnalysisOutput` and stays inspectable
-even when it contains inconsistencies. `CheckedCandidate::into_prepared` yields a
-committable `PreparedTransaction` only without inconsistencies; otherwise it
-returns the candidate itself, since an inconsistent candidate is a checked
-outcome rather than a preparation error.
+`Checked` outcome, since an inconsistent plan is a checked result rather than a
+preparation error. `Checked::Accepted` holds a `PreparedTransaction`, the only
+committable form, which owns the candidate graph and its complete
+`AnalysisOutput`. `Checked::Rejected` holds a `Rejection` with the complete
+`AnalysisOutput` and the provisional operation-to-entry mapping but no candidate
+graph, so a state that failed its checks can be neither committed nor inspected
+as history.
 `PreparedTransaction::commit` replaces the receiver only when its
 database identity, original entry count and contents, and original ordered
 analyzer suite exactly match the prepared base. The candidate already retains
@@ -549,14 +551,15 @@ errors, independently of dismissal reasons, notes, or presentation.
 ### 8.4 Explicit suggestions
 
 `analysis::suggestion::prepare_suggestion(graph, observation, runner)` returns
-`Result<CheckedCandidate, Error>` for an explicitly selected suggestion.
+`Result<Checked, Error>` for an explicitly selected suggestion.
 It checks only that the observation source matches the supplied history and
 that the observation is a suggestion; its ordered actions, which share
 `Change`'s node/edge shapes, are then checked anew with `transaction::prepare`
 under the runner's frozen evaluation inputs, including historical and
 intermediate prefixes and the revision-intent rules of section 7.4. Exact
 existing references and earlier-operation references retain their meaning.
-The returned candidate and its prefixes can be inspected before explicit commit.
+An accepted candidate and its prefixes can be inspected before explicit commit;
+a rejection carries only its analysis and operation mapping.
 Preparation neither applies the suggestion nor dismisses a finding or infers
 reconnections. All core values, including the full timestamp range, remain
 available. Proposal envelopes, plan IDs, JSON/TOML codecs, and persistence belong

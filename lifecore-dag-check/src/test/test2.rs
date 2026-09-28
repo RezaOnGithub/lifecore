@@ -49,9 +49,11 @@ fn graph() -> (LifeCoreList, Vec<EntryId>) {
         ],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let ids = plan.added().to_vec();
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     (graph, ids)
 }
 
@@ -126,7 +128,7 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
         &mut AnalysisRunner::default(),
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -234,7 +236,7 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
         })
         .collect::<Vec<_>>();
     assert_eq!(boundaries, vec![4]);
-    assert!(checked.into_prepared().is_err());
+    assert!(checked.accepted().is_err());
     assert!(graph.view().is_empty());
 }
 
@@ -246,7 +248,7 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     let (mut graph, ids) = graph();
     prepare(&graph, &[node("Unrelated")], &mut AnalysisRunner::default())
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -350,7 +352,7 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
         &mut AnalysisRunner::default(),
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();

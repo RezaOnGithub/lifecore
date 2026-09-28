@@ -1,7 +1,7 @@
 use crate::{
     AppError,
     proposal::{PlanId, Proposal, ProposalLocation, present},
-    storage::{self, Publication, Snapshot, StatePath, SyncDirectory},
+    storage::{self, LockedSnapshot, Publication, Snapshot, StatePath, SyncDirectory},
 };
 use lifecore::{
     BasicValidationFailure, Body, Entry, EntryId, LifeCoreError, LifeCoreList, Timestamp, View,
@@ -10,7 +10,7 @@ use lifecore::{
         AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, SuiteConfig,
     },
     inspection::{Currentness, EdgeSelection, NodeSelection},
-    transaction::{self, Change, CheckedCandidate},
+    transaction::{self, Change, Checked},
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -189,18 +189,18 @@ fn settle<T: Into<Published>>(publication: Publication, result: T) -> Result<T, 
     }
 }
 
-//A Commit a checked candidate into the loaded snapshot, returning whether
+//A Commit an accepted plan into the loaded snapshot, returning whether
 //A graph/suite state changed. Every node, edge, or analyzer operation does and
 //A gets a fresh revision; an empty plan is a no-op that keeps it.
 fn commit(
     snapshot: &mut Snapshot,
-    checked: CheckedCandidate,
+    checked: Checked,
     report: ProposalReport,
 ) -> Result<(ProposalReport, bool), AppError> {
-    let Ok(prepared) = checked.into_prepared() else {
+    let Checked::Accepted(prepared) = checked else {
         return Err(AppError::Rejected(Box::new(report)));
     };
-    let changed = !prepared.checked().operations().is_empty();
+    let changed = !prepared.operations().is_empty();
     prepared
         .commit(&mut snapshot.graph)
         .map_err(|error| preparation_error(error, None, 0))?;
@@ -400,7 +400,7 @@ impl Service {
         proposal: Option<&Proposal>,
         changes: &[Change],
         inputs: EvaluationInputs,
-    ) -> Result<(CheckedCandidate, ProposalReport), AppError> {
+    ) -> Result<(Checked, ProposalReport), AppError> {
         let mut runner = self.runner(inputs)?;
         let base = snapshot.graph.view();
         let checked = transaction::prepare(&snapshot.graph, changes, &mut runner)
@@ -435,7 +435,7 @@ impl Service {
         snapshot: &Snapshot,
         proposal: &Proposal,
         inputs: EvaluationInputs,
-    ) -> Result<(CheckedCandidate, ProposalReport), AppError> {
+    ) -> Result<(Checked, ProposalReport), AppError> {
         verify_plan_id(snapshot, proposal.plan_id)?;
         let changes = proposal
             .lower(snapshot.graph.view())
@@ -446,17 +446,12 @@ impl Service {
         self.prepare(snapshot, Some(proposal), &changes, inputs)
     }
 
-    //A Publish a changed snapshot under the caller's writer lock.
-    fn publish(
-        &self,
-        snapshot: &Snapshot,
-        changed: bool,
-        lock: &storage::WriterLock,
-    ) -> Result<Publication, AppError> {
+    //A Publish a changed snapshot under the writer lock it was read with.
+    fn publish(&self, locked: &LockedSnapshot, changed: bool) -> Result<Publication, AppError> {
         if !changed {
             return Ok(Publication::Complete);
         }
-        storage::publish(&self.state, snapshot, lock, self.sync_directory)
+        locked.publish(self.sync_directory)
     }
 
     pub fn init(&self, suite: &[Config]) -> Result<Initialized, AppError> {
@@ -475,7 +470,7 @@ impl Service {
         report.base_revision = None;
         commit(&mut snapshot, checked, report)?;
         let lock = storage::lock(&self.state, self.busy_retry)?;
-        let publication = storage::publish_new(&self.state, &snapshot, &lock, self.sync_directory)?;
+        let publication = lock.publish_new(&snapshot, self.sync_directory)?;
         let initialized = Initialized {
             path: self.state.path().to_string_lossy().into_owned(),
             database: database(&snapshot.graph),
@@ -560,9 +555,9 @@ impl Service {
         }
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         let snapshot = storage::read(&self.state)?;
-        let (_, report) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
+        let (checked, report) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
         Ok(CheckResult {
-            accepted: !report.analysis.has_error(),
+            accepted: matches!(checked, Checked::Accepted(_)),
             report,
         })
     }
@@ -577,13 +572,13 @@ impl Service {
         }
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         storage::require_existing(&self.state)?;
-        let lock = storage::lock(&self.state, self.busy_retry)?;
-        let mut snapshot = storage::read(&self.state)?;
-        let (checked, report) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
-        let (report, changed) = commit(&mut snapshot, checked, report)?;
-        let publication = self.publish(&snapshot, changed, &lock)?;
+        let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
+        let (checked, report) =
+            self.prepare_proposal(locked.snapshot(), &request.proposal, inputs)?;
+        let (report, changed) = commit(locked.snapshot_mut(), checked, report)?;
+        let publication = self.publish(&locked, changed)?;
         let applied = ApplyResult {
-            graph_revision: snapshot.graph_revision,
+            graph_revision: locked.snapshot().graph_revision,
             report,
         };
         settle(publication, applied)
@@ -594,15 +589,15 @@ impl Service {
     pub fn add_analyzer(&self, request: AddAnalyzerRequest) -> Result<AnalyzerAdded, AppError> {
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         storage::require_existing(&self.state)?;
-        let lock = storage::lock(&self.state, self.busy_retry)?;
-        let mut snapshot = storage::read(&self.state)?;
+        let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
         let changes = [Change::AddAnalyzer {
             name: request.name,
             config: request.configuration,
         }];
-        let (checked, report) = self.prepare(&snapshot, None, &changes, inputs)?;
-        let (report, changed) = commit(&mut snapshot, checked, report)?;
-        let publication = self.publish(&snapshot, changed, &lock)?;
+        let (checked, report) = self.prepare(locked.snapshot(), None, &changes, inputs)?;
+        let (report, changed) = commit(locked.snapshot_mut(), checked, report)?;
+        let publication = self.publish(&locked, changed)?;
+        let snapshot = locked.snapshot();
         let added = AnalyzerAdded {
             graph_revision: snapshot.graph_revision,
             suite: snapshot.graph.analysis_suite().clone(),

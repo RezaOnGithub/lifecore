@@ -64,11 +64,55 @@ pub enum Error {
     RevisesSuperseded { operation: usize },
 }
 
-//A A fully staged and replayed candidate. It stays inspectable even when its
-//A analysis contains inconsistencies, but only `into_prepared` can make it
-//A committable, and only when there are none.
+//A The outcome of a full check. Only an accepted plan owns a candidate graph
+//A and can commit it. A rejection keeps the complete analysis and the
+//A provisional operation mapping but no graph, so a state that failed its
+//A checks cannot be committed, published, or inspected as history.
 #[derive(Debug)]
-pub struct CheckedCandidate {
+pub enum Checked {
+    Accepted(PreparedTransaction),
+    Rejected(Rejection),
+}
+
+impl Checked {
+    pub fn analysis(&self) -> &AnalysisOutput {
+        match self {
+        Self::Accepted(prepared) => &prepared.analysis,
+        Self::Rejected(rejection) => &rejection.analysis,
+        }
+    }
+    //A One slot per change, in plan order; configuration changes append no entry.
+    pub fn operations(&self) -> &[Option<EntryId>] {
+        match self {
+        Self::Accepted(prepared) => &prepared.operations,
+        Self::Rejected(rejection) => &rejection.operations,
+        }
+    }
+    pub fn accepted(self) -> Result<PreparedTransaction, Box<Rejection>> {
+        match self {
+        Self::Accepted(prepared) => Ok(prepared),
+        Self::Rejected(rejection) => Err(Box::new(rejection)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Rejection {
+    analysis: AnalysisOutput,
+    operations: Vec<Option<EntryId>>,
+}
+
+impl Rejection {
+    pub fn analysis(&self) -> &AnalysisOutput {
+        &self.analysis
+    }
+    pub fn operations(&self) -> &[Option<EntryId>] {
+        &self.operations
+    }
+}
+
+#[derive(Debug)]
+pub struct PreparedTransaction {
     //A Commit requires the receiver to match the original state, preventing a
     //A concurrently prepared candidate from overwriting intervening changes.
     base_end_exclusive: usize,
@@ -78,50 +122,31 @@ pub struct CheckedCandidate {
     operations: Vec<Option<EntryId>>,
 }
 
-impl CheckedCandidate {
+impl PreparedTransaction {
     pub fn view(&self) -> View<'_> {
         self.candidate.view()
     }
     pub fn analysis(&self) -> &AnalysisOutput {
         &self.analysis
     }
-    //A One slot per change, in plan order; configuration changes append no entry.
     pub fn operations(&self) -> &[Option<EntryId>] {
         &self.operations
     }
     pub fn added(&self) -> Vec<EntryId> {
         self.operations.iter().flatten().copied().collect()
     }
-    //A An inconsistent candidate comes back unchanged for inspection; it is a
-    //A checked outcome, not a failure of preparation.
-    pub fn into_prepared(self) -> Result<PreparedTransaction, Box<CheckedCandidate>> {
-        if self.analysis.has_error() {
-            return Err(Box::new(self));
-        }
-        Ok(PreparedTransaction(self))
-    }
-}
-
-#[derive(Debug)]
-pub struct PreparedTransaction(CheckedCandidate);
-
-impl PreparedTransaction {
-    pub fn checked(&self) -> &CheckedCandidate {
-        &self.0
-    }
 
     pub fn commit(self, receiver: &mut LifeCoreList) -> Result<(), Error> {
-        let checked = self.0;
         //A The candidate retains the exact original prefix, so only the original
         //A boundary and ordered suite need a separate snapshot. Compare contents,
         //A not serialization or hashes, including changes that append no entries.
-        if receiver.view().len() != checked.base_end_exclusive
-            || checked.candidate.view().extends(receiver.view()).is_err()
-            || receiver.analysis_suite() != &checked.original_suite
+        if receiver.view().len() != self.base_end_exclusive
+            || self.candidate.view().extends(receiver.view()).is_err()
+            || receiver.analysis_suite() != &self.original_suite
         {
             return Err(Error::StaleBase);
         }
-        *receiver = checked.candidate;
+        *receiver = self.candidate;
         Ok(())
     }
 }
@@ -130,7 +155,7 @@ pub fn prepare(
     graph: &LifeCoreList,
     changes: &[Change],
     runner: &mut AnalysisRunner,
-) -> Result<CheckedCandidate, Error> {
+) -> Result<Checked, Error> {
     graph
         .basic_validation()
         .map_err(LifeCoreError::BasicValidationFailure)?;
@@ -200,15 +225,22 @@ pub fn prepare(
         operations.push(Some(id));
     }
     //A Full replay certifies old history and every candidate prefix under the
-    //A resulting suite. Inconsistencies stay in the output for inspection.
+    //A resulting suite. Any inconsistency rejects the plan and drops the
+    //A candidate; its analysis stays complete for reporting.
     let analysis = runner.run(&candidate)?;
-    Ok(CheckedCandidate {
+    if analysis.has_error() {
+        return Ok(Checked::Rejected(Rejection {
+            analysis,
+            operations,
+        }));
+    }
+    Ok(Checked::Accepted(PreparedTransaction {
         base_end_exclusive: graph.view().len(),
         original_suite: graph.analysis_suite().clone(),
         candidate,
         analysis,
         operations,
-    })
+    }))
 }
 
 #[cfg(test)]

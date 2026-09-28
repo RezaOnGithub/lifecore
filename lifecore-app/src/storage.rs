@@ -138,11 +138,85 @@ pub(crate) fn require_initializable(state: &StatePath) -> Result<(), AppError> {
     }
 }
 
-//A Holding this value is writer exclusion. Closing the file releases the lock;
-//A the lock file itself is never removed or replaced.
+//A Holding this value is writer exclusion over one state path. Closing the
+//A file releases the lock; the lock file itself is never removed or replaced.
 #[derive(Debug)]
 pub(crate) struct WriterLock {
     _file: File,
+    state: StatePath,
+}
+
+//A A snapshot read while holding writer exclusion, together with that lock.
+//A Only this can replace a published snapshot, so a mutation cannot store
+//A changes to a snapshot read before the lock was taken, or publish to a
+//A different path than it locked and read.
+#[derive(Debug)]
+pub(crate) struct LockedSnapshot {
+    lock: WriterLock,
+    snapshot: Snapshot,
+}
+
+impl WriterLock {
+    pub(crate) fn read(self) -> Result<LockedSnapshot, AppError> {
+        let snapshot = read(&self.state)?;
+        Ok(LockedSnapshot {
+            lock: self,
+            snapshot,
+        })
+    }
+
+    //A Initialization never replaces an existing path: a hard link fails if the
+    //A target exists, where a rename would silently clobber it. This requires a
+    //A filesystem with hard links.
+    pub(crate) fn publish_new(
+        &self,
+        snapshot: &Snapshot,
+        sync: SyncDirectory,
+    ) -> Result<Publication, AppError> {
+        let state = &self.state;
+        let temporary = stage(state, &encode(snapshot)?, None)?;
+        let linked = fs::hard_link(&temporary, state.path());
+        fs::remove_file(&temporary).ok();
+        match linked {
+        Ok(()) => Ok(synchronize(state, sync)),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(AppError::DatabaseExists {
+                path: state.path().into(),
+            })
+        }
+        Err(error) => Err(AppError::PublicationFailed {
+            message: error.to_string(),
+        }),
+        }
+    }
+}
+
+impl LockedSnapshot {
+    pub(crate) fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+    pub(crate) fn snapshot_mut(&mut self) -> &mut Snapshot {
+        &mut self.snapshot
+    }
+
+    //A Atomically replaces the published snapshot, keeping its file mode.
+    //A Failures before the rename leave the previous snapshot intact; a failure
+    //A afterwards is an uncertain publication, not a rollback.
+    pub(crate) fn publish(&self, sync: SyncDirectory) -> Result<Publication, AppError> {
+        let state = &self.lock.state;
+        let permissions = fs::metadata(state.path())
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.permissions());
+        let temporary = stage(state, &encode(&self.snapshot)?, permissions)?;
+        if let Err(error) = fs::rename(&temporary, state.path()) {
+            fs::remove_file(&temporary).ok();
+            return Err(AppError::PublicationFailed {
+                message: error.to_string(),
+            });
+        }
+        Ok(synchronize(state, sync))
+    }
 }
 
 pub(crate) fn lock(state: &StatePath, retry: Duration) -> Result<WriterLock, AppError> {
@@ -161,7 +235,12 @@ pub(crate) fn lock(state: &StatePath, retry: Duration) -> Result<WriterLock, App
     let deadline = Instant::now() + retry;
     loop {
         match file.try_lock() {
-        Ok(()) => return Ok(WriterLock { _file: file }),
+        Ok(()) => {
+            return Ok(WriterLock {
+                _file: file,
+                state: state.clone(),
+            });
+        }
         Err(TryLockError::WouldBlock) if Instant::now() < deadline => thread::sleep(BUSY_POLL),
         Err(TryLockError::WouldBlock) => return Err(AppError::Busy { lock: path }),
         Err(TryLockError::Error(error)) => return Err(failed(error)),
@@ -238,51 +317,5 @@ fn synchronize(state: &StatePath, sync: SyncDirectory) -> Publication {
     match sync(state.directory()) {
     Ok(()) => Publication::Complete,
     Err(error) => Publication::Uncertain(error.to_string()),
-    }
-}
-
-//A Atomically replaces the published snapshot, keeping its file mode. Failures
-//A before the rename leave the previous snapshot intact; a failure afterwards
-//A is an uncertain publication, not a rollback.
-pub(crate) fn publish(
-    state: &StatePath,
-    snapshot: &Snapshot,
-    _lock: &WriterLock,
-    sync: SyncDirectory,
-) -> Result<Publication, AppError> {
-    let permissions = fs::metadata(state.path())
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .map(|metadata| metadata.permissions());
-    let temporary = stage(state, &encode(snapshot)?, permissions)?;
-    if let Err(error) = fs::rename(&temporary, state.path()) {
-        fs::remove_file(&temporary).ok();
-        return Err(AppError::PublicationFailed {
-            message: error.to_string(),
-        });
-    }
-    Ok(synchronize(state, sync))
-}
-
-//A Initialization never replaces an existing path: a hard link fails if the
-//A target exists, where a rename would silently clobber it. This requires a
-//A filesystem with hard links.
-pub(crate) fn publish_new(
-    state: &StatePath,
-    snapshot: &Snapshot,
-    _lock: &WriterLock,
-    sync: SyncDirectory,
-) -> Result<Publication, AppError> {
-    let temporary = stage(state, &encode(snapshot)?, None)?;
-    let linked = fs::hard_link(&temporary, state.path());
-    fs::remove_file(&temporary).ok();
-    match linked {
-    Ok(()) => Ok(synchronize(state, sync)),
-    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(AppError::DatabaseExists {
-        path: state.path().into(),
-    }),
-    Err(error) => Err(AppError::PublicationFailed {
-        message: error.to_string(),
-    }),
     }
 }

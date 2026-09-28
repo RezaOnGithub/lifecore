@@ -47,9 +47,11 @@ fn fixture() -> (LifeCoreList, Vec<EntryId>) {
         ],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let ids = plan.added().to_vec();
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     (graph, ids)
 }
 
@@ -156,9 +158,11 @@ fn field_presence_equality_and_recursive_text_are_literal_and_composable() {
         })],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let nested = plan.added()[0];
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     let empty = Payload::List(vec![]);
     let title = Payload::from("A two");
     let selection = NodeSelection {
@@ -244,6 +248,8 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
         })],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let declaration = plan.added()[0];
     let comparison = graph.view().compare(plan.view()).unwrap();
@@ -257,7 +263,7 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
             matches!(change.at_target().type_definition, TypeResolution::Resolved(TypeDefinition::Declared {id, ..}) if id == declaration)
         );
     }
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     let mut revised = ty;
     revised.body.clear();
     let plan = prepare(
@@ -270,6 +276,8 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
         })],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     assert_eq!(graph.view().compare(plan.view()).unwrap().changed.len(), 5);
     assert_eq!(
@@ -292,12 +300,16 @@ fn comparison_rejects_foreign_histories_and_sibling_candidates() {
         &[node("candidate", None)],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let two = prepare(
         &graph,
         &[node("candidate", None)],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     assert!(graph.view().compare(one.view()).is_ok());
     assert_eq!(
@@ -328,8 +340,10 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
         &[node("quote\" slash\\ line\n<angle>", None)],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     let before = graph.view().prefix(3).unwrap();
     let dot = before.to_dot();
     assert!(!dot.contains("revision"));
@@ -489,9 +503,11 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
         &[declaration(&schema)],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let schema_id = checked.added()[0];
-    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
+    checked.commit(&mut graph).unwrap();
     let resolved = graph.view().resolve(ids[0]).unwrap().type_definition;
     assert_eq!(
         resolved,
@@ -520,9 +536,11 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
         &[declaration(&duplicate)],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let duplicate_id = checked.added()[0];
-    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
+    checked.commit(&mut graph).unwrap();
     let ambiguous = graph.view().resolve(ids[0]).unwrap().type_definition;
     assert_eq!(
         ambiguous,
@@ -552,9 +570,11 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
         })],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let malformed_id = checked.added()[0];
-    checked.into_prepared().unwrap().commit(&mut graph).unwrap();
+    checked.commit(&mut graph).unwrap();
     let malformed = graph.view().resolve(ids[0]).unwrap().type_definition;
     assert!(
         matches!(&malformed, TypeResolution::Failed(ResolutionError::Malformed { id, .. }) if *id == malformed_id)

@@ -1009,7 +1009,8 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     let tokenless = waiting("tokenless", None);
     //A Give both writers time to start waiting on the held lock.
     std::thread::sleep(Duration::from_millis(200));
-    let mut snapshot = storage::read(&state).unwrap();
+    let mut locked = lock.read().unwrap();
+    let snapshot = locked.snapshot_mut();
     let mut runner = AnalysisRunner::default();
     runner
         .register_analyzer_kind(Box::new(TypeCheckFactory))
@@ -1029,14 +1030,15 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
         &mut runner,
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut snapshot.graph)
     .unwrap();
     snapshot.graph_revision = Uuid::new_v4();
-    let published = storage::publish(&state, &snapshot, &lock, storage::sync_directory);
+    let held_revision = snapshot.graph_revision;
+    let published = locked.publish(storage::sync_directory);
     assert!(matches!(published, Ok(Publication::Complete)));
-    drop(lock);
+    drop(locked);
     let Err(AppError::StaleBase { expected, actual }) = stale.join().unwrap() else {
         panic!("the old plan ID must be stale after the held publication")
     };
@@ -1045,7 +1047,7 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     //A The tokenless writer checked the held publication, not its own earlier
     //A view of the file.
     let applied = tokenless.join().unwrap().unwrap();
-    assert_eq!(applied.report.base_revision, Some(snapshot.graph_revision));
+    assert_eq!(applied.report.base_revision, Some(held_revision));
     assert_eq!(applied.report.base.end_exclusive, 5);
     let listed = scratch
         .service()
@@ -1080,20 +1082,24 @@ fn failed_publication_before_replacement_preserves_state() {
 }
 
 //A Replacement fails even for privileged users when the target is a
-//A non-empty directory, so this runs as root too.
+//A non-empty directory, so this runs as root too. The snapshot is read under
+//A the lock first; the path then turns into a directory before publication.
 #[test]
 fn publication_onto_a_directory_fails_before_replacement() {
     let scratch = Scratch::new();
     populated(&scratch);
-    let snapshot = storage::read(&scratch.state()).unwrap();
-    let blocked = StatePath::new(scratch.0.join("blocked"));
-    fs::create_dir(blocked.path()).unwrap();
-    fs::write(blocked.path().join("inside"), "kept").unwrap();
-    let lock = storage::lock(&blocked, Duration::ZERO).unwrap();
-    let result = storage::publish(&blocked, &snapshot, &lock, storage::sync_directory);
+    let state = scratch.state();
+    let locked = storage::lock(&state, Duration::ZERO)
+        .unwrap()
+        .read()
+        .unwrap();
+    fs::remove_file(state.path()).unwrap();
+    fs::create_dir(state.path()).unwrap();
+    fs::write(state.path().join("inside"), "kept").unwrap();
+    let result = locked.publish(storage::sync_directory);
     assert!(matches!(result, Err(AppError::PublicationFailed { .. })));
-    assert_eq!(fs::read(blocked.path().join("inside")).unwrap(), b"kept");
-    assert_eq!(fs::read_dir(blocked.path()).unwrap().count(), 1);
+    assert_eq!(fs::read(state.path().join("inside")).unwrap(), b"kept");
+    assert_eq!(fs::read_dir(state.path()).unwrap().count(), 1);
     assert_eq!(temporary_files(&scratch), 0);
 }
 
@@ -1104,7 +1110,7 @@ fn publish_new_refuses_a_path_that_appeared_after_the_check() {
     fs::write(target.path(), "someone else's file").unwrap();
     let lock = storage::lock(&target, Duration::ZERO).unwrap();
     let snapshot = Snapshot::new(LifeCoreList::default());
-    let result = storage::publish_new(&target, &snapshot, &lock, storage::sync_directory);
+    let result = lock.publish_new(&snapshot, storage::sync_directory);
     assert!(matches!(result, Err(AppError::DatabaseExists { .. })));
     assert_eq!(fs::read(target.path()).unwrap(), b"someone else's file");
     assert_eq!(temporary_files(&scratch), 0);

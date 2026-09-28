@@ -27,9 +27,9 @@ fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut AnalysisRunner::default())
         .unwrap()
-        .into_prepared()
+        .accepted()
         .unwrap();
-    let ids = plan.checked().added();
+    let ids = plan.added();
     plan.commit(graph).unwrap();
     ids
 }
@@ -184,8 +184,14 @@ fn ancestry_excludes_self_and_preserves_roots_and_current_descendants_in_each_pr
 fn identities_reject_other_databases_and_independent_candidate_suffixes() {
     let mut graph = LifeCoreList::default();
     let base = append(&mut graph, &[node("A", None)])[0];
-    let first = prepare(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
-    let second = prepare(&graph, &[node("B", None)], &mut AnalysisRunner::default()).unwrap();
+    let first = prepare(&graph, &[node("B", None)], &mut AnalysisRunner::default())
+        .unwrap()
+        .accepted()
+        .unwrap();
+    let second = prepare(&graph, &[node("B", None)], &mut AnalysisRunner::default())
+        .unwrap()
+        .accepted()
+        .unwrap();
     let a = first.added()[0];
     let b = second.added()[0];
     assert_eq!(a.position(), b.position());
@@ -284,6 +290,8 @@ fn entry_identity_ordering_traits_agree() {
         &[node("A", None), node("B", None)],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let [a, b] = candidate.added()[..] else {
         unreachable!()

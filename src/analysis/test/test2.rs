@@ -102,9 +102,12 @@ fn fixture() -> (LifeCoreList, EntryId) {
             intent: None,
         })
     });
-    let plan = prepare(&graph, &changes, &mut AnalysisRunner::default()).unwrap();
+    let plan = prepare(&graph, &changes, &mut AnalysisRunner::default())
+        .unwrap()
+        .accepted()
+        .unwrap();
     let future = plan.added()[2];
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     (graph, future)
 }
 fn suite(config: &str) -> SuiteConfig {
@@ -569,7 +572,7 @@ fn dismiss_restore_round_trips_all_reasons_and_notes_without_current_emission() 
         &mut AnalysisRunner::default(),
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -639,9 +642,11 @@ fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round
         ],
         &mut AnalysisRunner::default(),
     )
+    .unwrap()
+    .accepted()
     .unwrap();
     let ids = plan.added().to_vec();
-    plan.into_prepared().unwrap().commit(&mut graph).unwrap();
+    plan.commit(&mut graph).unwrap();
     let mut runner = advisory_runner(advisory_factory(), EvaluationInputs::default());
     for end_exclusive in [4, 5, 6, 7] {
         let at = graph.view().prefix(end_exclusive).unwrap();
@@ -952,7 +957,10 @@ fn explicit_suggestion_preserves_order_payloads_exact_references_and_requires_co
         ],
     );
     let mut runner = AnalysisRunner::new(timed_inputs());
-    let checked = prepare_suggestion(&graph, &observation, &mut runner).unwrap();
+    let checked = prepare_suggestion(&graph, &observation, &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
     assert_eq!(graph.view().len(), 3);
     let ids = checked.added().to_vec();
     assert_eq!(checked.view().node(ids[0]).unwrap().body, body);
@@ -963,11 +971,7 @@ fn explicit_suggestion_preserves_order_payloads_exact_references_and_requires_co
     assert!(checked.view().prefix(4).unwrap().get(ids[1]).is_none());
     assert_eq!(checked.analysis().inputs, *runner.inputs());
     let mut receiver = graph.clone();
-    checked
-        .into_prepared()
-        .unwrap()
-        .commit(&mut receiver)
-        .unwrap();
+    checked.commit(&mut receiver).unwrap();
     assert_eq!(receiver.view().len(), 5);
 }
 
@@ -996,7 +1000,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
         &mut AnalysisRunner::default(),
     )
     .unwrap()
-    .into_prepared()
+    .accepted()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -1066,7 +1070,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
         .unwrap();
     let rejected = suggestion::prepare_suggestion(&configured, &branch, &mut runner).unwrap();
     assert!(rejected.analysis().has_error());
-    assert!(rejected.into_prepared().is_err());
+    assert!(rejected.accepted().is_err());
 }
 
 #[derive(Clone)]
@@ -1350,15 +1354,14 @@ fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent()
         parent: None,
         intent: None,
     })];
-    let first = prepare(&graph, &change, &mut runner).unwrap();
+    let first = prepare(&graph, &change, &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
     let second = prepare(&graph, &change, &mut runner).unwrap();
     let observation = repair_observation(first.view(), vec![node(None, None)]);
     let mut receiver = graph.clone();
-    second
-        .into_prepared()
-        .unwrap()
-        .commit(&mut receiver)
-        .unwrap();
+    second.accepted().unwrap().commit(&mut receiver).unwrap();
     let before = receiver.clone();
     assert!(matches!(
         prepare_suggestion(&receiver, &observation, &mut runner),
@@ -1407,21 +1410,18 @@ fn suggestion_checks_an_invalid_intermediate_prefix_even_with_a_valid_final_view
         .unwrap();
     let before = graph.clone();
     let checked = prepare_suggestion(&graph, &observation, &mut runner).unwrap();
-    //A The rejected candidate remains inspectable at the intermediate and final
-    //A boundaries, and its complete output names only the invalid prefix.
-    let errors = checked.analysis().errors().collect::<Vec<_>>();
+    //A The rejection's complete output covers the final boundary and names
+    //A only the invalid intermediate prefix.
+    let Err(rejected) = checked.accepted() else {
+        panic!("the invalid intermediate prefix must prevent commit")
+    };
+    let errors = rejected.analysis().errors().collect::<Vec<_>>();
     assert_eq!(errors.len(), 1);
     let EvaluatedView::Prefix(view) = errors[0].evaluated_view else {
         panic!("expected the intermediate prefix")
     };
     assert_eq!(view.end_exclusive, 4);
-    assert_eq!(checked.view().prefix(4).unwrap().id(), view);
-    assert_eq!(checked.analysis().view, checked.view().id());
-    assert_eq!(checked.view().len(), 5);
-    assert_eq!(checked.analysis().implementations.len(), 1);
-    let Err(rejected) = checked.into_prepared() else {
-        panic!("the invalid intermediate prefix must prevent commit")
-    };
-    assert_eq!(rejected.view().len(), 5);
+    assert_eq!(rejected.analysis().view.end_exclusive, 5);
+    assert_eq!(rejected.analysis().implementations.len(), 1);
     assert_eq!(graph, before);
 }
