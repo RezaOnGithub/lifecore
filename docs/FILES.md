@@ -5,12 +5,14 @@ client, and the synchronous application service. [INTERFACES.md](INTERFACES.md)
 defines CLI/HTTP routing; [PLAN.md](PLAN.md) lists remaining implementation work.
 Section 8.1 fixes the application-owned snapshot and lock layout; section 2.2
 fixes the plan-ID encoding. Analysis outputs remain ephemeral.
-[SUGGESTIONS.md](SUGGESTIONS.md) details authenticated suggestion export, content
-binding, and atomic acknowledgment of findings.
+[SUGGESTIONS.md](SUGGESTIONS.md) defines suggestion export and the replay-verified
+acknowledgment of findings. Exact encodings here are provisional until the
+[first slice](PLAN.md#41-first-slice-change-files-storage-and-cli) exercises them;
+update this document with the implementation when they change.
 
 Change-file commands, browser authoring, atomic persistence, and bounded history
 inspection are in scope. Markdown document collections and durable application
-receipts are [backlogged](PLAN.md#5-backlog). Sections 4–7 and 8.2–8.4 retain those
+receipts are [backlogged](PLAN.md#6-backlog). Sections 4–7 and 8.2–8.4 retain those
 future contracts without making collection planning or retry recovery a
 prerequisite for the web application.
 
@@ -154,22 +156,23 @@ strings and decimal-string integers for the entire `i64` domain; see
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `format_version` | Yes | Proposal and value encoding version, initially `1`. |
-| `plan_id` | No | Ordinary base/proposal token or authenticated suggestion token binding the finding, source context, and proposal content. Both identify the database and exact graph/suite base. |
+| `plan_id` | No | Token identifying the database, exact graph/suite base, and proposal. |
+| `acknowledges` | No | Complete `FindingKey` of a suggestion these entries implement; see [SUGGESTIONS](SUGGESTIONS.md). |
 | `entries` | Yes | Ordered array of proposed entries; may be empty. |
 
 There is one value representation, with no separate value-profile selector.
 There are no separate `database` or `base` fields. The host selects the database
 through the [path rule](INTERFACES.md#4-database-selection-and-concurrency).
 A supplied token asserts that this database and its current base match.
-Authenticated suggestion tokens additionally determine automatic acknowledgment;
-there is no separate suggestion-origin field or arbitrary `dismissals` list.
+`acknowledges` is verified by replay and, on success, dismisses that finding
+atomically with the graph changes. There is no general `dismissals` list.
 
 This example assumes compatible type declarations and an existing current node
 with the illustrated exact identity:
 
 ```toml
 format_version = 1
-plan_id = "lc1:ordinary:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+plan_id = "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 [[entries]]
 name = "task_done"
@@ -201,12 +204,11 @@ application result. Returning that mapping does not require a durable receipt.
 
 #### Optional structured plan identity
 
-The ordinary token encoding is
-`lc1:ordinary:<database-uuid>:<graph-revision-uuid>:<proposal-uuid>`.
+The token encoding is
+`lc1:<database-uuid>:<graph-revision-uuid>:<proposal-uuid>`.
 The angle-bracket terms name three UUID components, each in lowercase hyphenated
-form. `lc1` is the token version; `ordinary` identifies a base expectation without
-suggestion provenance. Callers obtain a complete token from the shared mint
-operation and carry it verbatim.
+form, and `lc1` is the token version. Callers obtain a complete token from the
+shared mint operation and carry it verbatim.
 
 - The database UUID is the graph's persistent identity, independent of filename.
 - The graph revision UUID is stored in the snapshot envelope. Generate a fresh
@@ -216,16 +218,6 @@ operation and carry it verbatim.
   writes, and token minting leave this UUID unchanged.
 - The proposal UUID distinguishes proposals against the same database/base.
   Mint a fresh identity for changed operations.
-
-Authenticated suggestion tokens use
-`lc1:suggestion:<claims-base64url>:<mac-base64url>`. Claims contain those same
-three identities plus the complete `FindingKey` and source evaluation context.
-The full HMAC-SHA-256 binds token version/kind, claims, and canonical typed
-proposal content with only `plan_id` removed. The per-database secret key stays
-in the private storage envelope. No persistent report or token-to-finding lookup
-is needed. [SUGGESTIONS section 3](SUGGESTIONS.md#3-authenticated-plan-ids) defines
-the exact authenticated input and encoding rules. The initial contract replaces
-the preliminary untagged token spelling without a compatibility reader.
 
 The revision is an application-maintained generation identifier, not a content
 hash or a graph boundary. Verify the token's database/revision against the loaded
@@ -237,19 +229,18 @@ Direct edits of the stored snapshot that retain its revision are outside this
 guarantee; use change files and application operations to mutate it. The revision
 cannot detect arbitrary manual content changes that leave its metadata intact.
 
-Ordinary minting is available through HTTP/CLI RPC and the `plan-id` convenience
-command. It cannot grant suggestion provenance. Suggestion minting runs only on
-trusted service analyzer output and returns ready-made proposals with the exported
-observations. Browser-generated proposals include a token; other integrations
-are encouraged to include one. Minting neither appends nor reserves a base, rotates
-the secret, or dismisses a finding. Malformed, unsupported, or unauthenticated
-tokens are errors, never an absent field or a reason to downgrade the token.
+Minting is available through HTTP/CLI RPC and the `plan-id` convenience command.
+Browser-generated proposals, including exported suggestions, include a token;
+other integrations are encouraged to include one. Minting neither appends,
+reserves a base, nor dismisses a finding. Malformed or unsupported tokens are
+errors, never treated as an absent field.
 
 | Proposal | `check` and `apply` starting state |
 | --- | --- |
-| Ordinary `plan_id` | Require the selected database and current graph/suite state to match; no automatic dismissal. |
-| Authenticated suggestion `plan_id` | Verify authentication, content, source, and selected database/base. Successful apply also acknowledges the authenticated finding. |
-| Omits `plan_id` | Use the selected database's current state for that invocation; no automatic dismissal. |
+| Has `plan_id` | Require the selected database and current graph/suite state to match. |
+| Omits `plan_id` | Use the selected database's current state for that invocation. |
+
+Either form may carry `acknowledges`; the token does not affect acknowledgment.
 
 A one-off addition can omit the token:
 
@@ -306,6 +297,8 @@ An edge requires `name`, `kind = "edge"`, `type`, `from`, and `to`, with no payl
 or predecessor. Endpoint permissions and freshness are checked at its position.
 Type declarations are ordinary node proposals with `type = "Type"` and no
 bootstrap exemption. No delete, retarget, or in-place update operation exists.
+Proposals do not change the analyzer suite; that is the deliberate `add-analyzer`
+operation in [INTERFACES](INTERFACES.md#2-cli-surface).
 Explicit duplicates fail rather than being silently skipped.
 
 ## 3. Planning, checking, and applying
@@ -328,28 +321,16 @@ lifecore apply changes.json
 lifecore export changes.json --format toml
 ```
 
-Application suggestion export associates each trusted observation with its own
-ready-made proposal and authenticated token. A finding key may group several
-observations with different actions; select a particular attached proposal.
-A caller can extract it into a change file or serialize it in JSON/TOML through
-the shared export codec. Format conversion preserves its token verbatim and does
-not mint provenance, refresh a base, or check acceptance. Export neither applies
-operations nor dismisses findings. Bundles contain independent proposals against
-one base, not a sequence to apply automatically. The collection planner remains
+Analysis results pair each suggestion observation with a ready-made proposal, as
+described in [SUGGESTIONS](SUGGESTIONS.md#2-export). `export` converts any
+proposal between JSON and TOML, preserving `plan_id` and `acknowledges` verbatim;
+it neither refreshes a base nor checks acceptance. The collection planner remains
 deferred. `rpc` is independently the one-line request/response adapter specified
 in [INTERFACES](INTERFACES.md#2-cli-surface); it has no method
 argument or change-file option.
 
-Authenticate parsed, normalized proposal values, not source-file bytes. Whitespace,
-comments, key order, accepted integer shorthand, and equivalent parsed timestamps
-can survive format conversion; changed operation order/names, references, intents,
-or values fail authentication. Reject ambiguous duplicate keys and unknown fields.
-Use JCS over the shared canonical value encoding as specified in SUGGESTIONS.
-An edited suggestion may deliberately become an ordinary draft with no automatic
-dismissal, but never silently discard or replace a failed token.
-
 `check` does not append, rewrite the source, or mint a missing token. It freezes
-the decoded proposal, verifies any token/content/base, and evaluates every
+the decoded proposal, verifies any token/base, and evaluates every
 historical and proposed prefix under the selected suite and inputs. Reports
 include the selected database and exact
 base, ordered operations, exact references, provisional mappings, differences,
@@ -357,12 +338,11 @@ relevant operation/field locations, and complete analysis context. Structurally
 valid proposals with inconsistencies should retain their full analysis output
 for preview, including advisories, but must not be committable. Structural and
 analyzer execution errors remain distinct from emitted findings.
-Include the prospective acknowledgment for an authenticated suggestion, while
-saving neither effect. A check candidate's observations may reference provisional
-entries; do not mint directly applicable suggestion tokens from that candidate.
+Include the verified prospective acknowledgment, if any, while saving neither
+effect.
 
-Analysis outputs are ephemeral and may be cached in memory for the exact graph,
-suite, implementations, and inputs. The snapshot stores no report archive.
+Analysis outputs are ephemeral, and in-memory caching is deferred. The snapshot
+stores no report archive.
 After restart, analysis replays the requested history; history-mode selection
 is across prefixes within that run, not past runs at earlier evaluation times.
 Changed time or implementations may yield different findings. Persist dismissal
@@ -382,13 +362,9 @@ earlier standalone preview. Protect the concrete base and evaluation context
 through publication. Check exact original entries/count and ordered suite, not
 just matching boundaries. Return the actual analysis context and assigned IDs.
 
-For an authenticated suggestion, verify its claims/content/source with the stored
-key, check anew, and stage acknowledgment of the original complete finding key
-with the graph changes. Insert `Acknowledged` with no note if absent; preserve an
-existing reason/note and other records from the locked reload. Publish both effects
-in the same snapshot. Rejection dismisses nothing, and an existing dismissal is
-not proof of prior application. Applying under changed time/implementations still
-dismisses the original key only; show issuance and current contexts separately.
+When the proposal carries `acknowledges`, verify it against the same replay and
+publish the acknowledgment in the same snapshot as the graph changes, following
+[SUGGESTIONS](SUGGESTIONS.md#4-atomic-application).
 
 The complete plan publishes atomically after every prefix passes. Preserve writer
 exclusion from exact base verification through publication and synchronization.
@@ -701,7 +677,7 @@ link to it. A possible plan is:
 
 ```toml
 format_version = 1
-plan_id = "lc1:ordinary:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+plan_id = "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 [[entries]]
 name = "b"
@@ -781,21 +757,11 @@ Store one JSON snapshot at the selected state path, defaulting to
 | `graph_revision` | UUID identifying this graph/suite generation, as specified in section 2.2. |
 | `graph` | The complete graph: database identity, ordered entries, and exact ordered analyzer suite. |
 | `dismissals` | Exact finding keys, dismissal reasons, and optional notes. |
-| `proposal_auth_key` | Storage-only 256-bit random HMAC key, encoded as unpadded base64url. Never included in public results or proposal exports. |
 
-Graph, revision, key, and dismissals form one atomic publication unit. There is no
+Graph, revision, and dismissals form one atomic publication unit. There is no
 stored `AnalysisOutput` or report directory. Rewriting the full snapshot is an
 accepted initial cost. Reject malformed envelopes and structurally invalid
 graphs on load; ordinary inspection does not require installed analyzers.
-
-Generate the key at initialization and retain it across reloads, graph/dismissal
-writes, and token minting. Reject missing/malformed keys rather than regenerating
-them on load. Public service types must not expose the private snapshot envelope
-or leak the key through logs. A full state-file copy/backup includes the key;
-it is not secret from someone who can read that file. Replacing it invalidates
-outstanding suggestion tokens without changing ordinary base tokens. Key-rotation
-management is outside this round; [SUGGESTIONS](SUGGESTIONS.md#6-key-lifetime-and-the-boundary-of-the-guarantee)
-records lifecycle and copying behavior.
 
 Append `.lock` to the state path for the stable lock file, defaulting to
 `./LifeCoreState.json.lock`. Keep this file across publications; do not lock the
@@ -803,8 +769,8 @@ replaceable snapshot inode or delete/recreate the lock file on release. All
 cooperating writers use this target, including initialization and dismiss/restore.
 
 A mutation acquires writer exclusion, reloads the current snapshot, verifies
-the expected base and any suggestion authentication, checks/prepares the change,
-and stages any automatic acknowledgment alongside concurrent dismissal records.
+the expected base, checks/prepares the change, and stages any verified
+acknowledgment alongside concurrent dismissal records.
 Allocate a fresh graph revision only if graph/suite state changes.
 Write the complete candidate to a temporary file in the same directory, flush
 and synchronize it, then atomically replace the published snapshot. Synchronize
@@ -819,22 +785,21 @@ reopen the selected path; retaining an old open handle cannot observe replacemen
 
 - Exclude cooperating writers from exact base verification through publication;
   two candidates prepared against one base cannot both replace it.
-- Initialize without clobbering an existing database, and run structural plus
-  configured analyzer checks before publishing an imported graph.
+- Initialize a new empty database without clobbering an existing one.
 - Publish a whole checked plan atomically. Failures before publication preserve
   the previous stored state. Flush/synchronize required data before publication
   and synchronize the containing storage after publication.
 - Distinguish post-publication synchronization failure from rollback: the new
   state may already be visible, so acknowledgment can be uncertain.
-- Reload graph/suite, graph revision, key, and dismissal data without changing identities.
+- Reload graph/suite, graph revision, and dismissal data without changing identities.
   Dismiss/restore survives reload and absent current emission. Concurrent dismissal
   edits reread under writer exclusion and preserve other writers' records.
 - Validate a supplied token's database/base expectation before preparation and
   preserve the chosen concrete base through publication even when no token was
   supplied. Persist the base identity consistently with the graph/suite state.
-- For authenticated suggestions, publish graph changes and acknowledgment as one
-  unit. Invalid proposals and pre-publication failures preserve both. A
-  post-publication failure never justifies claiming that one half rolled back.
+- Publish graph changes and any acknowledgment as one unit. Invalid proposals
+  and pre-publication failures preserve both. A post-publication failure never
+  justifies claiming that one half rolled back.
 
 A failure before publication leaves the previous graph intact. After publication,
 failed synchronization or acknowledgment may leave the caller uncertain. Report
@@ -903,7 +868,7 @@ carry `plan_id`; omitted tokens carry no retry identity guarantee.
   not graph entries.
 
 The future design must cover empty plans as well as plans that change the graph.
-Authenticated suggestion tokens prove issuance/content, not prior use. An empty
+Replay-verified acknowledgment records nothing about prior use. An empty
 suggestion can acknowledge a finding without changing graph revision; restoring
 and reapplying it may acknowledge again. A dismissal record is not a receipt.
 Future recovery must include the combined graph/dismissal result and avoid
@@ -930,11 +895,6 @@ recovery scenarios below are explicitly deferred.
 | Rejected proposal has warnings as well as inconsistencies | Retain complete analysis context for display without exposing commit capability. |
 | A minted token is supplied and database identity differs despite matching IDs/count | Reject before mutation. |
 | A token is malformed or uses an unknown version | Reject; do not fall back to applying without a token. |
-| An authenticated suggestion's claims or content are altered | Reject authentication before mutation; do not silently convert it to an ordinary proposal. |
-| Equivalent JSON/TOML syntax represents the same suggestion proposal | Preserve its token and successful authentication through canonical typed encoding. |
-| A caller requests suggestion minting for an invented observation | Require trusted analyzer output; generic minting cannot confer suggestion provenance. |
-| A valid authenticated suggestion applies | Publish graph changes and acknowledgment of its full finding key together; preserve an existing dismissal's reason/note. |
-| A suggestion fails checking or publication before replacement | Save neither graph changes nor acknowledgment. |
 | Two proposals are minted against one database/base | Tokens share that database/base and have distinct proposal identities; minting leaves graph history unchanged. |
 | Supported writes change entries/suite, including equal-count divergence | Publish a fresh graph revision atomically and reject old tokens; require deliberate refresh/replanning. |
 | A dismissal changes, a no-op is written, or a token is minted | Preserve graph revision; existing plan bases remain valid. |
@@ -945,9 +905,8 @@ recovery scenarios below are explicitly deferred.
 | Publication fails before replacement | Leave prior state intact. |
 | Synchronization fails after publication | Report possible publication; permit state inspection and do not automatically retry. Receipt recovery is deferred. |
 | Dismissal is saved, reloaded, restored, or edited by concurrent frontends | Retain exact keys/reasons/notes and preserve each writer's update; never affect acceptance. |
-| A reader opens the snapshot during publication | Return one complete old/new snapshot, never mixed graph/revision/key/dismissal data. |
-| The application restarts | Reload graph/suite, key, and dismissals; recompute analysis without a persisted report registry. Exported suggestion tokens remain verifiable. |
-| A description, report, proposal export, or log is produced | Do not expose the private key. |
+| A reader opens the snapshot during publication | Return one complete old/new snapshot, never mixed graph/revision/dismissal data. |
+| The application restarts | Reload graph/suite and dismissals; recompute analysis without a persisted report registry. |
 | History mode is requested after evaluation time or implementations change | Show replayed observations under the displayed new context, not an archive of prior runs. |
 | Writer advances the base during checking | Reject under writer exclusion before publishing any operation. |
 | Analyzer changes, disappears, fails, or receives a new evaluation time | Check anew; changed inputs may change diagnostics, and missing or failed analyzers reject application. |
@@ -955,8 +914,8 @@ recovery scenarios below are explicitly deferred.
 | Payloads of independent new roots are identical | Apply the core duplicate rule; do not invent identity fields. |
 | Check is run twice with identical view/context/inputs | Produce equivalent operations, ordering, and findings, accounting for independently allocated provisional IDs. |
 
-See [SUGGESTIONS acceptance scenarios](SUGGESTIONS.md#8-focused-acceptance-scenarios)
-for issuance, token edits, source context, empty actions, and dismissal restoration.
+See [SUGGESTIONS acceptance scenarios](SUGGESTIONS.md#7-acceptance-scenarios)
+for export, acknowledgment verification, edits, empty actions, and restoration.
 
 Deferred collection scenarios:
 

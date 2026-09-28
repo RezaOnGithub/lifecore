@@ -1,74 +1,28 @@
 # AGENTS.md
 
 LifeCore is an experimental Rust database with an append-only, typed graph.
-Remaining work and open decisions are in [docs/PLAN.md](docs/PLAN.md).
-[docs/SPEC.md](docs/SPEC.md), [docs/FILES.md](docs/FILES.md), and
-[docs/INTERFACES.md](docs/INTERFACES.md) describe contracts, including proposed
-application behavior. [docs/SUGGESTIONS.md](docs/SUGGESTIONS.md) specifies
-authenticated suggestion export and atomic acknowledgment.
-Keep the graph/analyzer libraries and application service
-synchronous. Persistence belongs to the shared application layer; async HTTP
-and queues belong to the Rust server adapter. The frontend is React/TypeScript.
+Remaining work is in [docs/PLAN.md](docs/PLAN.md). [docs/SPEC.md](docs/SPEC.md)
+defines graph semantics, and [docs/MESSAGES.md](docs/MESSAGES.md) traces the
+current analyzer message flow. The proposed application is specified in
+[docs/INTERFACES.md](docs/INTERFACES.md) (commands, RPC, database selection,
+React), [docs/FILES.md](docs/FILES.md) (proposal encoding, plan IDs, snapshot
+publication), and [docs/SUGGESTIONS.md](docs/SUGGESTIONS.md) (suggestion export
+and acknowledgment). Read the relevant document before implementing that behavior.
 
-Share Serde requests, results, errors, and proposals across HTTP, CLI, and
-JSON/TOML change files. Keep dedicated check/apply, plan-ID minting, and proposal
-export commands. `rpc` reads one request line from stdin, writes one compact
-response line to stdout, and exits; it has no method arguments, file options,
-or request loop. `init` remains outside RPC and configures TypeCheck by default;
-`init --no-typecheck` opts out. Resolve `LIFECORE_STATE_FILE_PATH`
-when set, otherwise `./LifeCoreState.json`; a bad selected path never falls back.
-
-Canonical payload encoding uses native strings and arrays, with tagged
-objects/tables for integers, booleans, timestamps, and records. Integer envelopes
-use `kind = "integer"` and a decimal string `value`; accept bare `i64` integers
-as input shorthand in both JSON and TOML, but always export envelopes. Known
-potentially large control integers, including entry positions and view boundaries,
-use decimal strings without payload wrappers. Send raw browser file imports to
-the Rust codec before parsing numbers. Use Jiff's ordinary Serde timestamp strings
-in both formats, with no TOML datetime conversion or normalization profile.
-React must preserve full `i64` values and timestamp precision in its model/editors.
-
-The proposal envelope has one optional service-minted `plan_id` containing
-database identity, the exact graph/suite base, and proposal identity, with no
-separate `database` or `base` fields. With a token, verify its database/base;
-without one, use the host-selected current state. `apply` always checks anew
-and protects its concrete base through publication. A standalone check is a
-preview. Ordinary tokens are
-`lc1:ordinary:<database-uuid>:<graph-revision-uuid>:<proposal-uuid>`.
-Suggestion tokens are `lc1:suggestion:<claims-base64url>:<mac-base64url>`; bind
-the complete finding key, source context, database/base, proposal identity, and
-canonical proposal content with HMAC-SHA-256 as specified in SUGGESTIONS.
-Mint them only from trusted service analysis. Generic minting produces ordinary
-tokens. Return ready-made proposals alongside exported suggestion observations;
-clients select those proposals, not unsigned observations to be blindly signed.
-Preserve tokens on JSON/TOML conversion; reject altered content without fallback.
-Apply authenticates and checks anew, then publishes graph changes and an
-`Acknowledged` dismissal together; preserve an existing dismissal's reason/note.
-There is no arbitrary dismissal list in the proposal envelope.
-
-Persist one JSON snapshot containing format version, graph revision, graph/suite,
-dismissals, and a private `proposal_auth_key`. Never expose that key through
-public results, proposal exports, or logs; it is accessible to the state-file
-owner. Lock the stable `<state-path>.lock` file through reload, checking,
-atomic replacement, and synchronization. Rotate the revision UUID on graph or
-ordered-suite changes, not dismissal edits or minting. Snapshots are application
-owned; direct edits cannot preserve revision guarantees. Keep exact core base
-comparison. Analysis outputs are ephemeral, optionally cached in memory; history
-mode replays prefixes within a run, not archived runs. Durable report archives,
-receipts/retry recovery, and document collections are backlogged.
-
-The backlogged collection format uses YAML frontmatter with TOML metadata in a
-`lifecore` string, conventionally a literal block (`|`), followed by a CommonMark
-body with standard inline/reference links. Preserve unrelated YAML fields.
-YAML-native LifeCore metadata, custom-scheme clickability, and desktop URI-handler
-integration remain further backlog work. Existing URI destination and database
-context rules are unchanged.
+Keep the graph/analyzer libraries and the application service synchronous.
+Persistence belongs to the shared application layer; async HTTP and queues belong
+to the Rust server adapter. HTTP, the CLI, and JSON/TOML change files share one
+set of Serde requests, results, errors, and proposals. The frontend is
+React/TypeScript.
 
 ## Compatibility
 
 This is a sketch. Backwards compatibility is not a concern at all: APIs, formats,
 persisted representations, and commands may change freely within the requested
 scope. Do not add compatibility shims, legacy readers, or migration machinery.
+This explicitly includes file formats and encodings: the state snapshot, JSON/TOML
+change files, plan-ID tokens, and RPC payloads. Existing files may stop loading
+after a change; do not add version detection, fallbacks, or migrations for them.
 Preserve historical correctness under the chosen model and unrelated user work.
 
 ## Checks
@@ -165,5 +119,8 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
   alone unless their content needs changing.
 - Explain non-obvious invariants, boundary choices, and ordering constraints;
   avoid narrating self-explanatory code.
+- Give each documented contract one owning document; elsewhere, link to it
+  instead of restating it. Keep this file to guidance for every change and to
+  invariants the code already upholds.
 - Use `//A TODO:` for concrete deferred work and `//A HACK:` for a necessary
   workaround. Explain the impact and next step in the handoff when material.

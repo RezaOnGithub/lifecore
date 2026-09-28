@@ -3,8 +3,8 @@
 Status: proposed application contract. [PLAN.md](PLAN.md) lists remaining work.
 [SPEC.md](SPEC.md) defines graph semantics; [FILES.md](FILES.md) defines proposals,
 their JSON/TOML encoding, and publication requirements.
-[SUGGESTIONS.md](SUGGESTIONS.md) defines authenticated suggestion proposals and
-their atomic dismissal effect.
+[SUGGESTIONS.md](SUGGESTIONS.md) defines suggestion export and replay-verified
+acknowledgment.
 
 ## 1. Shared synchronous application
 
@@ -39,8 +39,11 @@ within the worker. Reuse domain types and semantics without leaking storage,
 HTTP types, or borrowed graph lifetimes into the public request contract.
 
 Async execution, HTTP, and queue dependencies belong to the server adapter.
-An ordinary worker thread constructs and owns the application state, including
-analyzer factories. Requests are initially processed sequentially. The core and
+An ordinary worker thread constructs and owns the analyzer factories. It handles
+each request the way a CLI invocation does: it reads the current snapshot,
+performs the operation, and keeps no graph or analysis state between requests.
+Requests are processed sequentially. In-memory caching in the worker is
+deferred. The core and
 application operations remain ordinary synchronous calls; a CLI invocation calls
 them directly. Package boundaries must preserve this dependency direction.
 
@@ -53,30 +56,33 @@ them directly. Package boundaries must preserve this dependency direction.
 | `lifecore rpc` | Read one request line from stdin, execute it locally, print one response line, exit. |
 | `lifecore check FILE` | Decode a JSON/TOML proposal and call shared proposal checking. |
 | `lifecore apply FILE` | Decode a JSON/TOML proposal and call shared checked application. |
-| `lifecore plan-id` | Mint an ordinary token for the selected current database/base without changing history or granting suggestion provenance. |
-| `lifecore export FILE --format json\|toml` | Serialize a proposal document in the chosen format, preserving its token. A selected suggestion is already a complete authenticated proposal. |
+| `lifecore plan-id` | Mint a token for the selected current database/base without changing history. |
+| `lifecore export FILE --format json\|toml` | Serialize a proposal document in the chosen format, preserving `plan_id` and `acknowledges`. |
+| `lifecore add-analyzer NAME [CONFIG]` | Append a registered analyzer with its configuration string, default `{}`, to the ordered suite. |
 
 These conveniences call the same operations and use the same data as RPC.
-Collection-specific planning remains backlogged.
+Collection-specific planning remains backlogged. `check`, `apply`, `plan-id`, and
+`add-analyzer` print the corresponding RPC result or error object as JSON on
+stdout and exit zero on success, nonzero on rejection or error. There is no
+separate human-readable renderer yet. `check`, `apply`, and `add-analyzer` take
+`--evaluation-time <timestamp>` or `--now`; without either, evaluation time is
+absent. `--now` captures one instant before evaluation and reports it.
+`init` creates an empty database only; it does not import an existing graph.
 
-Application analysis/export results associate each exported suggestion observation
-with a ready-made `Proposal` containing an authenticated `plan_id`. React selects
-that attached proposal; a CLI caller extracts the chosen proposal object into a
-change file and can convert it with `export`. The shared format-export operation
-takes a proposal and requested format. It preserves the token without minting,
-refreshing a base, or asserting that the token is valid. `check`/`apply` verify it.
+Changing the analyzer suite is a deliberate action, separate from proposals.
+`add-analyzer` and its RPC method build a one-operation transaction
+(`Change::AddAnalyzer`) against the current state and check it like any other
+mutation. The replay runs every prefix under the extended suite, so an analyzer
+that finds inconsistencies anywhere in existing history is rejected, with the
+analysis output reported as for `apply`. Success rotates the graph revision and
+invalidates outstanding plan IDs. There is no removal or reconfiguration.
 
-A `FindingKey` selects an issue for dismissal, but its observations may contain
-different actions. Do not select arbitrary actions by key alone. Mint suggestion
-tokens only from trusted service analysis of committed history; a client-supplied
-observation is not evidence that an analyzer emitted it. No persistent report-ID
-lookup is required. When returning several suggestions, give each its own proposal
-and token; the result is a set of alternatives against one base, not an apply batch.
-
-Export neither applies nor dismisses. Successful application of an authenticated
-suggestion publishes its graph changes and acknowledgment of the original finding
-together. Ordinary proposals have no automatic dismissal effect. A deliberate
-edit can become an ordinary draft; never silently re-sign changed actions.
+Analysis results pair each suggestion observation with a ready-made `Proposal`
+that names its finding in `acknowledges`. React selects that attached proposal; a
+CLI caller extracts it into a change file and can convert it with `export`.
+Several suggestions are alternatives against one base, not an apply batch.
+`check`/`apply` verify the acknowledgment against their own replay and publish it
+with the graph changes; see [SUGGESTIONS](SUGGESTIONS.md).
 
 Default initialization stores the registered `Type_Check` analyzer with the
 original configuration string `"{}"`. The opt-out omits that suite entry; it does
@@ -119,18 +125,18 @@ result serialization, and stable application-error details. A JSON-RPC ID
 correlates a call; it is distinct from a proposal's `plan_id` and from a receipt.
 
 The initial method families cover database description, entry selection and
-resolution, bounded comparisons, analyzer inspection/execution, proposal
-checking/application/export, plan-ID minting, and dismissal listing/update/restore.
+resolution, bounded comparisons, analyzer inspection/execution, analyzer suite
+append, proposal checking/application/export, plan-ID minting, and dismissal
+listing/update/restore. Entry listing and lookup come first, so the first
+[CLI slice](PLAN.md#41-first-slice-change-files-storage-and-cli) can find the
+exact identities proposals refer to.
 Freeze exact method names and fixtures before implementing clients. `init` and
 host filesystem-path selection are not RPC methods.
 
-Application result types associate exported observations with their authenticated
-proposals and report prospective/committed dismissal effects. Keep these types
-outside the core `Observation` and `AnalysisOutput`. A private storage envelope
-contains the authentication key; it must never be returned as a public database
-description. Generic minting has no option for signing arbitrary suggestion
-claims. Diagnostics for an uncommitted check candidate carry no directly applicable
-suggestion tokens; analyze the committed result again after apply.
+Application result types pair exported observations with their proposals and
+report prospective/committed dismissal effects. Keep these types outside the core
+`Observation` and `AnalysisOutput`. Diagnostics for an uncommitted check candidate
+carry no ready-made proposals; analyze the committed result again after apply.
 
 Change files serialize `Proposal`; check/apply parameters contain that same type
 plus explicit evaluation inputs. A file convenience command reads the file once
@@ -140,8 +146,8 @@ Structured editors send canonical proposals. Requests do not carry paths for
 the server to open. Source locations are optional diagnostic metadata, not
 proposal identity.
 
-Keep malformed transport data, invalid proposals, suggestion authentication
-failures, analyzer execution failures, stale bases, pre-publication failures,
+Keep malformed transport data, invalid proposals, unverified acknowledgments,
+analyzer execution failures, stale bases, pre-publication failures,
 and uncertain publication distinguishable.
 Checking a structurally valid rejected proposal should retain complete analysis
 context and advisories alongside blocking findings. Such a result must not
@@ -162,18 +168,16 @@ path. Failures to open an existing database remain errors. Only `init` creates
 one. Moving the file preserves database identity. Frontend requests never select
 arbitrary host files.
 
-The worker owns its in-memory state, but other CLI/server processes may write the
-same database. Current-state requests must reload or reliably validate their
-cache. Historical requests may use their pinned snapshot. Standalone reads/checks
+Other CLI/server processes may write the same database, so the worker keeps no
+state between requests: each request opens the selected snapshot afresh, and
+historical requests select a prefix of it. Standalone reads/checks
 open the selected JSON snapshot once and read that complete immutable file;
 atomic replacement gives them either the old or the new snapshot. They need no
 writer lock. A current-state reload opens the path again rather than retaining
 an old file handle. No lock spans standalone check and subsequent apply.
 
 The snapshot envelope contains `format_version`, `graph_revision`, `graph`
-(database identity, entries, and ordered analyzer suite), `dismissals`, and the
-private `proposal_auth_key`. Generate the key at initialization and preserve it
-on reload/writes. It never appears in public results or logs.
+(database identity, entries, and ordered analyzer suite), and `dismissals`.
 There are no persisted analysis outputs. Full-snapshot rewriting is acceptable
 for this initial implementation. [FILES](FILES.md#81-atomic-publication) defines
 the layout and publication sequence.
@@ -182,14 +186,16 @@ Initially mutations acquire writer exclusion, reload, verify the selected base,
 check, publish atomically, perform required synchronization, and release the
 lock. Dismissal edits reread and preserve other records under writer exclusion.
 Lock `<state-path>.lock`, a stable sibling file retained across snapshot
-replacement; the default is `LifeCoreState.json.lock`.
+replacement; the default is `LifeCoreState.json.lock`. Use the standard library's
+`File::lock`/`try_lock`. A writer that finds the lock held retries briefly, then
+returns a structured busy error instead of blocking indefinitely.
 Do not hold locks across browser editing or between standalone check and apply.
 An optimization that prepares outside the lock must compare the exact base
 again under writer exclusion before publication.
 
-`ViewId` describes a graph prefix; it does not include the analyzer suite. Both
-ordinary and authenticated suggestion plan IDs carry database/revision/proposal
-identities, using the [token formats](SUGGESTIONS.md#3-authenticated-plan-ids).
+`ViewId` describes a graph prefix; it does not include the analyzer suite. A
+plan ID carries database/revision/proposal identities, using the
+[token format](FILES.md#optional-structured-plan-identity).
 The stored revision UUID changes with every graph or ordered-suite change,
 including equal-count divergence, but not dismissal edits, no-ops, or token minting.
 Verify the token's database/revision against the snapshot; core commit still compares
@@ -197,11 +203,9 @@ database identity, original entry count/content, and the exact ordered suite.
 Revision maintenance assumes application-owned snapshots; hand-editing the
 graph while retaining its revision is outside that guarantee.
 
-For an authenticated suggestion, verify the MAC/content and source as well as
-the expected base before checking and publishing. Stage an `Acknowledged`
-dismissal only when the finding has no existing dismissal; retain existing
-reasons/notes. Publish it in the same snapshot as the checked graph changes.
-All current dismissal records must come from the reload under writer exclusion.
+A verified `acknowledges` stages an `Acknowledged` dismissal, retaining any
+existing reason/note, and publishes it in the same snapshot as the checked graph
+changes. All current dismissal records come from the reload under writer exclusion.
 
 Disconnecting a browser does not establish cancellation or rollback of an
 executing mutation. Preserve drafts, report uncertainty when acknowledgment is
@@ -214,8 +218,17 @@ on the same origin, with local binding and access controls at the HTTP adapter.
 The client owns editors, drafts, navigation, layouts, and presentation state;
 the backend owns resolution, analyzer grouping, validation, and publication.
 
-Generate TypeScript definitions from the shared Rust contracts and test actual
-runtime encoding against fixtures. Canonical integer payloads are
+Generate TypeScript definitions from the shared Rust contracts with
+[ts-rs](https://docs.rs/ts-rs), enabling its `uuid-impl`, `semver-impl`, and
+`jiff-impl` features, and commit the generated files. Core types that appear in
+the contract derive `TS` behind an optional `ts` feature, so the graph library
+does not depend on ts-rs by default. ts-rs follows derived Serde
+attributes but not hand-written `Serialize` implementations, and by default
+maps `usize` to `number` and `i64` to `bigint`. Declare the TypeScript shape of
+every custom-encoded type and field explicitly with `#[ts(as = "..")]` or
+`#[ts(type = "..")]`. Then guard the result: emit serialized Rust fixtures as
+typed TypeScript constants and require them to type-check against the generated
+definitions. Canonical integer payloads are
 `{"kind":"integer","value":"9223372036854775807"}`-shaped objects. Keep the decimal
 strings in model state, including inside lists/records, and use `bigint` only
 when arithmetic is needed; serialize back to strings. Known large control
@@ -235,13 +248,12 @@ references and stable local operation names. Preview identities are provisional;
 use returned operation-to-entry mappings after application. A stale proposal
 requires deliberate replanning, without silently refreshing its token.
 
-Selecting a suggestion selects its already authenticated proposal. Show its
-original observation/context and automatic acknowledgment alongside the graph
-preview. Download the proposal as JSON or convert it through the shared TOML
-codec, preserving the token. Editing its contents requires deliberate conversion
-to an ordinary draft with no automatic dismissal; do not ask generic minting to
-authenticate edited actions as suggestions. After graph-changing application,
-sibling proposals from the previous base need reconsideration.
+Selecting a suggestion selects its ready-made proposal. Show its original
+observation/context and the prospective acknowledgment alongside the graph
+preview, and apply it with the export's evaluation inputs unless the user changes
+them. Editing its operations requires removing `acknowledges`, turning it into an
+ordinary draft. After graph-changing application, sibling proposals from the
+previous base need reconsideration.
 
 Make evaluation time an explicit choice, defaulting to absent. If a user chooses
 current time, the host captures one timestamp before evaluation and reports it.
@@ -259,11 +271,10 @@ and specialized form builders can follow a working basic editor.
 ## 6. Analysis lifetime and dismissal persistence
 
 Return `AnalysisOutput` as an ephemeral result. The service does not save an
-analysis-output archive or issue durable report IDs. It may cache outputs in
-memory, provided reuse matches the exact graph/view, ordered suite, implementation
-identities, and evaluation inputs. Restart discards this cache; the next analysis
-replays the selected history. Display always includes the actual evaluation
-context, even when an output came from memory.
+analysis-output archive or issue durable report IDs. Each request replays the
+selected history. In-memory caching is deferred with worker caching; a future
+cache must match the exact graph/view, ordered suite, implementation identities,
+and evaluation inputs. Display always includes the actual evaluation context.
 
 History mode selects observations across prefixes replayed in that run. It does
 not retrieve previous runs at earlier host times or with older analyzer versions.
@@ -278,10 +289,8 @@ with the same complete key is still dismissed. Apply dismissals when presenting
 a result, not as part of analysis-cache identity or transaction acceptance.
 Persistent analysis archives are backlogged.
 
-An exported suggestion carries its full authenticated finding key and issuance
-context, so it can be checked/applied after this cache is lost. That token is
-neither a persisted report nor a receipt. Applying under a different evaluation
-context checks anew and dismisses the original key only. Restoring a dismissal
-does not undo the graph changes or revoke exported tokens. See
-[SUGGESTIONS](SUGGESTIONS.md#7-retries-and-empty-suggestions) for empty proposals
-and replay limits.
+An exported suggestion names its complete finding key, and apply verifies it by
+replay, so no cache or report registry is needed. Restoring a dismissal does not
+undo graph changes. See
+[SUGGESTIONS](SUGGESTIONS.md#5-display-retries-and-empty-suggestions) for empty
+proposals and retry limits.

@@ -366,10 +366,8 @@ state. A standalone check is a preview; apply always checks anew and fixes its
 concrete base and evaluation inputs through publication. Both paths preserve
 exact references and the core transaction checks above. The application stores
 one JSON snapshot with format version, graph revision UUID, graph/ordered suite,
-dismissals, and a private proposal authentication key, protected by a stable
-sibling lock file. Ordinary tokens assert a base; authenticated suggestion tokens
-also bind a full finding key, source context, and proposal content. The revision
-changes on graph/suite changes, not dismissal edits or minting. These application
+and dismissals, protected by a stable sibling lock file. The revision changes on
+graph/suite changes, not dismissal edits or minting. These application
 mechanisms do not replace the core's exact commit comparisons.
 [FILES](FILES.md#optional-structured-plan-identity) and [INTERFACES](INTERFACES.md)
 define these contracts and their publication requirements.
@@ -525,12 +523,12 @@ even when the finding is not currently emitted. Each record has a
 establishes resolution. Dismissal loading, writer exclusion, and atomic
 publication belong to the shared application service used by HTTP and CLI.
 
-Successful application of an authenticated suggestion atomically publishes the
-graph changes and acknowledgment of its complete finding key. Add `Acknowledged`
-with no note only when no dismissal already exists; preserve an existing record's
-reason/note. This acknowledges the issue across its observations without asserting
-resolution. A failed proposal must not dismiss anything. Ordinary proposals do
-not gain this effect merely by containing similar operations.
+A proposal may name the suggestion it implements. If the service's own replay of
+the committed base reproduces that suggestion with exactly these actions,
+successful application atomically publishes the graph changes and an
+`Acknowledged` dismissal of its complete finding key, preserving any existing
+record. This acknowledges the issue without asserting resolution. See
+[SUGGESTIONS.md](SUGGESTIONS.md).
 
 All inconsistencies remain visible across history regardless of advisory filters,
 report selection, or imported dismissal records. Dismiss operations reject
@@ -557,17 +555,9 @@ to the shared application layer. Timestamps use Jiff's ordinary Serde strings;
 no separate TOML datetime conversion profile is required. Durable receipts remain
 backlogged application work.
 
-The application exports suggestions directly from trusted analyzer output as
-ready-made `Proposal` objects. Their `plan_id` carries authenticated database/base
-and proposal identities, the complete finding key, and issuance context; an
-HMAC-SHA-256 binds those claims to canonical typed proposal content. Generic minting
-cannot authenticate arbitrary client observations. A token proves issuance and
-unchanged content, not transaction validity, present applicability, or resolution.
-Apply still checks every prefix using its selected context before publishing the
-graph/dismissal pair. The original key determines dismissal even if current
-inputs or implementations differ. The private key, token codecs, and atomic
-coordination stay in the application layer. See [SUGGESTIONS.md](SUGGESTIONS.md)
-for the full contract, editing behavior, and retry limits.
+The application pairs each suggestion observation with a ready-made `Proposal`
+naming its finding key. Acknowledgment verification, atomic publication, and
+retry limits are application-layer contracts in [SUGGESTIONS.md](SUGGESTIONS.md).
 
 ## 9. Inspection and queries
 
