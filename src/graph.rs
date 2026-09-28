@@ -30,7 +30,13 @@ pub struct LifeCoreList {
 //A The staleness index is derived from `entries`, so it takes no part in equality.
 impl PartialEq for LifeCoreList {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.entries == other.entries && self.suite == other.suite
+        let Self {
+            id,
+            entries,
+            suite,
+            staleness: _,
+        } = self;
+        *id == other.id && *entries == other.entries && *suite == other.suite
     }
 }
 impl Eq for LifeCoreList {}
@@ -41,9 +47,12 @@ impl Eq for LifeCoreList {}
 //A value with its own length. Only entries already validated against the prefix
 //A before them are indexed, so an invalid parent never marks an earlier node stale.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct StalenessIndex(pub(crate) Vec<Option<usize>>);
+pub(crate) struct StalenessIndex(Vec<Option<usize>>);
 
 impl StalenessIndex {
+    pub(crate) fn as_slice(&self) -> &[Option<usize>] {
+        &self.0
+    }
     fn push_validated(&mut self, entry: &Entry) {
         let position = self.0.len();
         if let Some(parent) = entry.as_node().and_then(|node| node.parent) {
@@ -92,26 +101,32 @@ impl Default for LifeCoreList {
 
 impl LifeCoreList {
     pub fn view(&self) -> View<'_> {
-        View::new(self.id, &self.entries, &self.staleness.0)
+        View::new(self.id, &self.entries, self.staleness.as_slice())
     }
     pub fn analysis_suite(&self) -> &SuiteConfig {
         &self.suite
     }
     //A Revalidates the whole history with a freshly built index; the stored one is
-    //A not consulted.
+    //A not consulted, but debug builds check that it still matches.
     pub fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
-        self.validate().map(drop)
+        let rebuilt = self.validate()?;
+        debug_assert_eq!(rebuilt, self.staleness, "stored staleness index diverged");
+        Ok(())
     }
     //A Staging appends one entry, validates the resulting history, and indexes the
     //A entry only after it passes. A failure leaves the receiver unchanged.
     pub(crate) fn stage(&mut self, entry: Entry) -> Result<(), BasicValidationFailure> {
         self.entries.push(entry);
-        if let Err(failure) = self.basic_validation() {
+        let rebuilt = match self.validate() {
+        Ok(rebuilt) => rebuilt,
+        Err(failure) => {
             self.entries.pop();
             return Err(failure);
         }
+        };
         self.staleness
             .push_validated(self.entries.last().expect("staged entry"));
+        debug_assert_eq!(rebuilt, self.staleness, "extended staleness index diverged");
         Ok(())
     }
     //A Validation and indexing share one pass: each entry is checked against the
@@ -128,7 +143,7 @@ impl LifeCoreList {
             }
             //A Every reference and duplicate decision uses the prefix immediately before
             //A this entry.
-            let before = View::new(self.id, &self.entries[..position], &staleness.0);
+            let before = View::new(self.id, &self.entries[..position], staleness.as_slice());
             let require_node = |target| {
                 before
                     .node(target)

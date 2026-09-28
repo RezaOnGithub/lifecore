@@ -49,9 +49,8 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 - Entry identity is separate from its interpretation in a bounded history view.
   Freshness and active type declarations depend on that view; never inspect a
   future suffix or cache resolved types without the source and boundary.
-  The staleness index (each node's first-child position) is derived, never
-  serialized, and extended only with validated entries; every query compares it
-  with the view boundary. Resolved types are still not cached.
+  The derived staleness index is never serialized, and every query compares it
+  with the view boundary ([SPEC §9](docs/SPEC.md#9-inspection-and-queries)).
   `View::resolve(id)` returns a `Resolution` holding the entry, freshness, and
   explicit `TypeResolution` outcome.
   Construct `ResolutionDifference` only from different resolutions of the same

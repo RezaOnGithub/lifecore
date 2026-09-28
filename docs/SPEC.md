@@ -130,7 +130,7 @@ The **current graph** is the graph induced by current nodes and current edges.
 It is derived from history. Current flags, active-edge lists, and cached type
 resolutions are not independent sources of truth. The implementation's staleness
 index ([section 9](#9-inspection-and-queries)) is likewise derived from validated
-history and never stored.
+history, and it is never serialized or persisted.
 
 All leaves of a revision tree may be current simultaneously. There is no
 automatic winner among siblings and no unique "latest version" of a split tree.

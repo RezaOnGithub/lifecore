@@ -24,7 +24,7 @@ pub enum ViewError {
     DifferentHistory,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct View<'a> {
     database: Uuid,
     //A Store only the visible slice. No analyzer operation can expand into a future suffix.
@@ -32,6 +32,22 @@ pub struct View<'a> {
     //A The staleness index narrowed to the same slice. A stored first-child position
     //A may lie beyond this view, so queries only compare it with `len()`.
     first_child: &'a [Option<usize>],
+}
+
+//A Debug output omits the staleness index: its values can name positions past
+//A this view, and printing them would expose the future suffix.
+impl std::fmt::Debug for View<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            database,
+            entries,
+            first_child: _,
+        } = self;
+        f.debug_struct("View")
+            .field("database", database)
+            .field("entries", entries)
+            .finish()
+    }
 }
 
 impl<'a> View<'a> {

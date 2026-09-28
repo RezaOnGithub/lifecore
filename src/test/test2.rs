@@ -430,6 +430,8 @@ fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary(
         let truncated: LifeCoreList = serde_json::from_value(stored).unwrap();
         let bounded = full.view().prefix(end_exclusive).unwrap();
         assert_eq!(bounded.id(), truncated.view().id());
+        //A Debug output must not reveal first-child positions past the boundary.
+        assert_eq!(format!("{bounded:?}"), format!("{:?}", truncated.view()));
         for id in &ids {
             assert_eq!(bounded.get(*id), truncated.view().get(*id));
             assert_eq!(bounded.is_stale(*id), truncated.view().is_stale(*id));
@@ -766,7 +768,7 @@ fn indexed_staleness_matches_the_scan_for_every_entry_at_every_prefix() {
     }
     assert_eq!(view.prefix(9).unwrap().is_stale(ids[9]), None);
     assert_eq!(
-        graph.staleness.0,
+        graph.staleness.as_slice(),
         [
             Some(5),
             Some(9),
@@ -833,15 +835,15 @@ fn staged_and_independent_candidates_extend_their_own_index() {
     let mut committed = graph.clone();
     staged.commit(&mut committed).unwrap();
     assert_eq!(
-        committed.staleness.0[..14],
+        committed.staleness.as_slice()[..14],
         {
-            let mut extended = before.0.clone();
+            let mut extended = before.as_slice().to_vec();
             extended[7] = Some(14);
             extended
         }[..]
     );
     assert_eq!(
-        committed.staleness.0[14..],
+        committed.staleness.as_slice()[14..],
         [Some(19), None, Some(17), None, None, None]
     );
     assert_staleness_matches_scan(committed.view(), &[]);
@@ -894,8 +896,8 @@ fn a_rejected_entry_is_never_indexed() {
             parent: Some(ids[10]),
         }))
         .unwrap();
-    assert_eq!(staged.staleness.0[10], Some(14));
-    assert_eq!(staged.staleness.0.len(), 15);
+    assert_eq!(staged.staleness.as_slice()[10], Some(14));
+    assert_eq!(staged.staleness.as_slice().len(), 15);
     let stale_edge = Entry::Edge(Edge {
         id: EntryId {
             origin: uuid::Uuid::new_v4(),
@@ -927,5 +929,14 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
     let mut injected = stored.clone();
     injected["staleness"] = serde_json::json!([null]);
     assert!(serde_json::from_value::<LifeCoreList>(injected).is_err());
-    assert!(LifeCoreList::default().staleness.0.is_empty());
+    assert!(LifeCoreList::default().staleness.as_slice().is_empty());
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "stored staleness index diverged")]
+fn debug_builds_catch_a_stored_index_that_diverges_from_its_history() {
+    let (mut graph, _) = staleness_fixture();
+    graph.staleness = crate::graph::StalenessIndex::default();
+    graph.basic_validation().unwrap();
 }
