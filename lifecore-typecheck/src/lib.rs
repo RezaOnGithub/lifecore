@@ -138,7 +138,10 @@ impl TypedAnalyzer for TypeCheck {
         //A A later schema cannot revoke a past transition. Each successor is judged
         //A once, at the prefix it ends, against the view immediately before its
         //A append. The runner replays every prefix, so every transition in history
-        //A is still judged, and its certificate omits the evaluated boundary.
+        //A is still judged, and its certificate omits the evaluated boundary. This
+        //A relies on every transition finding being an inconsistency, which current
+        //A reports select at any boundary; a nonsticky advisory judged only here
+        //A would drop out of later current reports.
         if let Some(child) = view.entries().next_back().and_then(Entry::as_node) {
             output.extend(Self::transition(view, child));
         }

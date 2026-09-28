@@ -12,7 +12,9 @@ use lifecore::{
         Reference::{Added, Existing},
         RevisionIntent, prepare,
     },
-    typing::{FieldDecl, FieldIssueKind, FieldStatus, Type, TypeDefinition, ValueType},
+    typing::{
+        FieldDecl, FieldIssueKind, FieldStatus, ResolutionError, Type, TypeDefinition, ValueType,
+    },
 };
 
 fn ty(name: &str) -> Type {
@@ -892,8 +894,99 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
     )));
 }
 
-//A The former transition loop, kept as a reference: every child in the view is
-//A judged against the prefix before it, at every prefix containing it.
+#[test]
+fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() {
+    let mut graph = LifeCoreList::default();
+    let mut other_a = ty("A");
+    other_a.outgoing.insert("link".into());
+    let child = append(
+        &mut graph,
+        &[
+            declaration(&ty("A"), None),
+            declaration(&other_a, None),
+            node("A", Body::new(), None),
+            node("A", Body::from([("v".into(), 1.into())]), Some(Added(2))),
+        ],
+    )[3];
+    assert!(findings(&graph, 4).iter().any(|f| matches!(
+        f,
+        TypeCheckMessage::DuplicateType { location, name }
+            if location.entry == Some(child) && name == "A"
+    )));
+
+    //A The built-in metatype permits only declaration successors.
+    let mut graph = LifeCoreList::default();
+    let child = append(
+        &mut graph,
+        &[
+            declaration(&ty("A"), None),
+            declaration(&ty("B"), None),
+            node("A", Body::new(), Some(Added(1))),
+        ],
+    )[2];
+    let report = findings(&graph, 3);
+    assert!(report.iter().any(|f| matches!(
+        f,
+        TypeCheckMessage::BadOverride { location, parent_type, child_type }
+            if location.entry == Some(child) && parent_type == "Type" && child_type == "A"
+    )));
+}
+
+//A The transition loop from a07483e, verbatim and independent of
+//A `TypeCheck::transition`: every child in the view is judged against the prefix
+//A before it, at every prefix containing it.
+fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
+    use TypeCheckMessage::*;
+    let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
+    let mut output = Vec::new();
+    for child in view.nodes().filter(|n| n.parent.is_some()) {
+        //A A later schema cannot revoke a past transition; each child is judged
+        //A immediately before its append.
+        let before = view
+            .prefix(child.id.position())
+            .expect("child is inside view");
+        let parent = before
+            .node(child.parent.expect("selected child"))
+            .expect("validated parent");
+        let allowed = match before.resolve_type(&parent.ty_name) {
+        Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
+        Ok(Some(TypeDefinition::Declared { schema, .. })) => {
+            child.ty_name == schema.name || schema.additional_override.contains(&child.ty_name)
+        }
+        Ok(None) => {
+            output.push(MissingType {
+                location: location(child.id),
+                name: parent.ty_name.clone(),
+            });
+            continue;
+        }
+        Err(ResolutionError::Malformed { error, .. }) => {
+            output.push(MalformedDeclaration {
+                location: location(child.id),
+                error,
+            });
+            continue;
+        }
+        Err(ResolutionError::Ambiguous { name, .. }) => {
+            output.push(DuplicateType {
+                location: location(child.id),
+                name,
+            });
+            continue;
+        }
+        };
+        if !allowed {
+            output.push(BadOverride {
+                location: location(child.id),
+                parent_type: parent.ty_name.clone(),
+                child_type: child.ty_name.clone(),
+            });
+        }
+    }
+    output
+}
+
+//A The former analyzer: unchanged current-state checks plus the loop above.
 struct AllChildrenTypeCheck;
 
 impl TypedAnalyzer for AllChildrenTypeCheck {
@@ -910,11 +1003,7 @@ impl TypedAnalyzer for AllChildrenTypeCheck {
         _inputs: &EvaluationInputs,
     ) -> Result<Vec<Self::MSG>, String> {
         let mut output = TypeCheck::current_state(view);
-        output.extend(
-            view.nodes()
-                .filter(|n| n.parent.is_some())
-                .filter_map(|child| TypeCheck::transition(view, child)),
-        );
+        output.extend(all_children_transitions(view));
         Ok(output)
     }
     fn convert_message(&self, finding: Self::MSG) -> Message {
@@ -959,6 +1048,22 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
     let mut repeated = 0;
     for end_exclusive in 0..=graph.view().len() {
         let view = graph.view().prefix(end_exclusive).unwrap();
+        //A At the typed level, each prefix yields the current-state findings plus
+        //A the former loop's judgment of the newest entry alone.
+        let newest_entry = view.entries().next_back().map(|entry| entry.id());
+        let mut expected = TypeCheck::current_state(view);
+        expected.extend(
+            all_children_transitions(view)
+                .into_iter()
+                .filter(|finding| finding.location().entry == newest_entry),
+        );
+        assert_eq!(
+            TypeCheck::default()
+                .analyze_inner(view, &Default::default())
+                .unwrap(),
+            expected,
+            "boundary {end_exclusive}"
+        );
         let newest = runner().run_view(view, &suite).unwrap();
         let reference = reference_runner.run_view(view, &suite).unwrap();
         assert_eq!(first_emissions(&newest), first_emissions(&reference));
@@ -1128,6 +1233,27 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             }),
             node("B", Body::new(), Some(Added(2))),
             declaration(&with_field("D"), None),
+        ],
+    );
+    graphs.push(graph);
+
+    //A A declaration revised into an ordinary node, immediately followed by an
+    //A edge from that node, so the prefix ending at the edge must not judge it.
+    let mut graph = LifeCoreList::default();
+    let linked = Type::new("A", &[], &["link"], &["link"], &[]);
+    append(
+        &mut graph,
+        &[
+            declaration(&linked, None),
+            declaration(&with_field("B"), None),
+            node("A", Body::new(), None),
+            node("A", Body::new(), Some(Added(1))),
+            Change::AddEdge(NewEdge {
+                from: Added(3),
+                ty_name: "link".into(),
+                to: Added(2),
+            }),
+            declaration(&with_field("C"), None),
         ],
     );
     graphs.push(graph);
