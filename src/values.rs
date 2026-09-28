@@ -4,9 +4,76 @@ use serde::{
     de::{self, IntoDeserializer, MapAccess, SeqAccess, Visitor},
     ser::SerializeStruct,
 };
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    ops::{Deref, DerefMut},
+};
 
-pub type Body = BTreeMap<String, Payload>;
+//A Field names to payload values. Its own `Deserialize` rejects repeated field
+//A names instead of keeping the last value, wherever a body appears.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct Body(BTreeMap<String, Payload>);
+
+impl Body {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Deref for Body {
+    type Target = BTreeMap<String, Payload>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Body {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<const N: usize> From<[(String, Payload); N]> for Body {
+    fn from(fields: [(String, Payload); N]) -> Self {
+        Self(BTreeMap::from(fields))
+    }
+}
+
+impl From<BTreeMap<String, Payload>> for Body {
+    fn from(fields: BTreeMap<String, Payload>) -> Self {
+        Self(fields)
+    }
+}
+
+impl FromIterator<(String, Payload)> for Body {
+    fn from_iter<I: IntoIterator<Item = (String, Payload)>>(fields: I) -> Self {
+        Self(fields.into_iter().collect())
+    }
+}
+
+impl IntoIterator for Body {
+    type Item = (String, Payload);
+    type IntoIter = std::collections::btree_map::IntoIter<String, Payload>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Body {
+    type Item = (&'a String, &'a Payload);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, Payload>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'de> Deserialize<'de> for Body {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(BodyVisitor)
+    }
+}
 
 //A Canonical encoding: text and lists are native; every other kind is a
 //A `{kind, value}` envelope, integers carrying decimal strings. Input also
@@ -79,11 +146,6 @@ impl<'de> Deserialize<'de> for Payload {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_any(PayloadVisitor)
     }
-}
-
-//A Records reject repeated field names instead of keeping the last value.
-pub fn deserialize_body<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Body, D::Error> {
-    deserializer.deserialize_map(BodyVisitor)
 }
 
 struct PayloadVisitor;
@@ -198,14 +260,14 @@ impl<'de> Visitor<'de> for BodyVisitor {
         f.write_str("a map of field names to payload values")
     }
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Body, A::Error> {
-        let mut body = Body::new();
+        let mut body = BTreeMap::new();
         while let Some((key, value)) = map.next_entry::<String, Payload>()? {
             if body.contains_key(&key) {
                 return Err(de::Error::custom(format!("duplicate field `{key}`")));
             }
             body.insert(key, value);
         }
-        Ok(body)
+        Ok(Body(body))
     }
 }
 

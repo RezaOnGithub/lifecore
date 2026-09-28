@@ -279,7 +279,7 @@ fn preparation_error(
         location: None,
         message,
     },
-    E::StaleBase | E::Inconsistent(_) => AppError::Internal { message },
+    E::StaleBase => AppError::Internal { message },
     }
 }
 
@@ -360,16 +360,12 @@ impl Service {
         report: ProposalReport,
         lock: &storage::WriterLock,
     ) -> Result<(Snapshot, ProposalReport), AppError> {
-        let prepared = match checked.into_prepared() {
-        Ok(prepared) => prepared,
-        Err(transaction::Error::Inconsistent(_)) => {
+        let Ok(prepared) = checked.into_prepared() else {
             return Err(AppError::Rejected(Box::new(report)));
-        }
-        Err(error) => return Err(preparation_error(error, None, 0)),
         };
         //A Every node, edge, or analyzer operation changes graph/suite state; an
         //A empty plan is a no-op that keeps the revision and skips publication.
-        let changed = !prepared.operations().is_empty();
+        let changed = !prepared.checked().operations().is_empty();
         prepared
             .commit(&mut snapshot.graph)
             .map_err(|error| preparation_error(error, None, 0))?;
@@ -397,9 +393,13 @@ impl Service {
             .collect::<Vec<_>>();
         //A The initial suite is added through the ordinary checked path, so
         //A missing factories and invalid configurations are rejected here too.
-        transaction::prepare(&graph, &changes, &mut self.runner(Default::default())?)
-            .and_then(CheckedCandidate::into_prepared)
-            .and_then(|prepared| prepared.commit(&mut graph))
+        let checked = transaction::prepare(&graph, &changes, &mut self.runner(Default::default())?)
+            .map_err(|error| preparation_error(error, None, 0))?;
+        let prepared = checked.into_prepared().map_err(|_| AppError::Internal {
+            message: "the initial suite emitted inconsistencies on an empty history".into(),
+        })?;
+        prepared
+            .commit(&mut graph)
             .map_err(|error| preparation_error(error, None, 0))?;
         let snapshot = Snapshot::new(graph);
         storage::publish_new(&self.state, &snapshot, &lock)?;

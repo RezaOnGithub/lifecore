@@ -24,7 +24,6 @@ impl EntryId {
 pub struct Node {
     pub id: EntryId,
     pub ty_name: String,
-    #[serde(deserialize_with = "crate::deserialize_body")]
     pub body: Body,
     pub parent: Option<EntryId>,
 }

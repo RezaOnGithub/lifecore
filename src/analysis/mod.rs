@@ -354,15 +354,6 @@ impl AnalysisOutput {
         self.observations()
             .filter(|o| o.kind.ty() == MessageType::Suggestion)
     }
-    pub fn into_result(self) -> Result<Self, LifeCoreError> {
-        if self.has_error() {
-            Err(LifeCoreError::SystemsError(
-                self.errors().cloned().collect(),
-            ))
-        } else {
-            Ok(self)
-        }
-    }
 }
 
 #[cfg(test)]

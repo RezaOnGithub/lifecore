@@ -345,8 +345,10 @@ additionally requires the predecessor to be current immediately before that
 append, including earlier operations of the same plan. Structural, reference,
 intent, and analyzer execution failures are errors. Otherwise `prepare` returns a
 `CheckedCandidate` that owns its complete `AnalysisOutput` and stays inspectable
-even when it contains inconsistencies; only `CheckedCandidate::into_prepared`
-without inconsistencies yields a committable `PreparedTransaction`.
+even when it contains inconsistencies. `CheckedCandidate::into_prepared` yields a
+committable `PreparedTransaction` only without inconsistencies; otherwise it
+returns the candidate itself, since an inconsistent candidate is a checked
+outcome rather than a preparation error.
 `PreparedTransaction::commit` replaces the receiver only when its
 database identity, original entry count and contents, and original ordered
 analyzer suite exactly match the prepared base. The candidate already retains

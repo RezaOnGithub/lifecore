@@ -12,7 +12,7 @@ pub mod typing;
 pub use entries::{Edge, Entry, EntryId, Node};
 pub use graph::{BasicValidationFailure, LifeCoreList};
 pub use jiff::Timestamp;
-pub use values::{Body, Payload, PayloadKind, deserialize_body};
+pub use values::{Body, Payload, PayloadKind};
 pub use view::{DiagnosticLocation, View, ViewError, ViewId};
 
 #[derive(Debug, thiserror::Error)]
@@ -28,8 +28,6 @@ pub enum LifeCoreError {
         analyzer_name: String,
         message: String,
     },
-    #[error("analysis emitted blocking inconsistencies")]
-    SystemsError(Vec<analysis::Observation>),
     #[error(transparent)]
     AnalyzerExecution(Box<analysis::ExecutionFailure>),
     #[error("invalid output from analyzer {analyzer:?}: {message}")]

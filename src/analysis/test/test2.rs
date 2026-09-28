@@ -175,14 +175,8 @@ fn changed_analyzer_rejects_an_old_prefix_and_does_not_only_check_the_head() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    assert!(report.into_result().is_err());
-    assert!(
-        AnalysisRunner::default()
-            .run(&graph)
-            .unwrap()
-            .into_result()
-            .is_ok()
-    );
+    assert!(report.has_error());
+    assert!(!AnalysisRunner::default().run(&graph).unwrap().has_error());
 }
 
 #[test]
@@ -798,7 +792,7 @@ fn display_and_even_imported_dismissals_cannot_hide_historical_inconsistencies()
             groups[0].selected[0].evaluated_view,
             EvaluatedView::Prefix(graph.view().prefix(1).unwrap().id())
         );
-        assert!(report.clone().into_result().is_err());
+        assert!(report.has_error());
     }
     assert_eq!(dismissals.records().count(), 0);
 }
@@ -1072,10 +1066,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
         .unwrap();
     let rejected = suggestion::prepare_suggestion(&configured, &branch, &mut runner).unwrap();
     assert!(rejected.analysis().has_error());
-    assert!(matches!(
-        rejected.into_prepared(),
-        Err(crate::transaction::Error::Inconsistent(_))
-    ));
+    assert!(rejected.into_prepared().is_err());
 }
 
 #[derive(Clone)]
@@ -1428,7 +1419,7 @@ fn suggestion_checks_an_invalid_intermediate_prefix_even_with_a_valid_final_view
     assert_eq!(checked.analysis().view, checked.view().id());
     assert_eq!(checked.view().len(), 5);
     assert_eq!(checked.analysis().implementations.len(), 1);
-    let Err(crate::transaction::Error::Inconsistent(rejected)) = checked.into_prepared() else {
+    let Err(rejected) = checked.into_prepared() else {
         panic!("the invalid intermediate prefix must prevent commit")
     };
     assert_eq!(rejected.view().len(), 5);

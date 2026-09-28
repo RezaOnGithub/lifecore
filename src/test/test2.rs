@@ -26,9 +26,10 @@ fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut AnalysisRunner::default())
-        .and_then(|checked| checked.into_prepared())
+        .unwrap()
+        .into_prepared()
         .unwrap();
-    let ids = plan.added().to_vec();
+    let ids = plan.checked().added();
     plan.commit(graph).unwrap();
     ids
 }
@@ -284,10 +285,10 @@ fn entry_identity_ordering_traits_agree() {
         &mut AnalysisRunner::default(),
     )
     .unwrap();
-    let [a, b] = candidate.added() else {
+    let [a, b] = candidate.added()[..] else {
         unreachable!()
     };
-    assert_eq!(a.partial_cmp(b), Some(a.cmp(b)));
+    assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
 }
 
 #[test]
@@ -510,6 +511,11 @@ fn malformed_payload_envelopes_and_integers_are_rejected_without_coercion() {
         r#"{"kind":"integer","value":"1.0"}"#,
         r#"{"kind":"integer","value":""}"#,
         r#"{"kind":"integer","value":"0x10"}"#,
+        r#"{"kind":"integer","value":"-0"}"#,
+        r#"{"kind":"integer","value":"00"}"#,
+        r#"{"kind":"integer","value":"007"}"#,
+        r#"{"kind":"integer","value":"-07"}"#,
+        "-0",
         r#"{"kind":"number","value":"1"}"#,
         r#"{"kind":"text","value":"x"}"#,
         r#"{"kind":"list","value":[]}"#,
@@ -529,6 +535,41 @@ fn malformed_payload_envelopes_and_integers_are_rejected_without_coercion() {
             "accepted {input}"
         );
     }
+    //A Zero has exactly one spelling in either input form.
+    for input in [r#"{"kind":"integer","value":"0"}"#, "0"] {
+        assert_eq!(
+            serde_json::from_str::<Payload>(input).unwrap(),
+            Payload::Integer(0)
+        );
+    }
+}
+
+#[test]
+fn bodies_reject_duplicate_fields_wherever_they_appear() {
+    let origin = uuid::Uuid::new_v4();
+    let duplicated = serde_json::json!({"a": "x"})
+        .to_string()
+        .replace('}', r#","a":"y"}"#);
+    let node = format!(
+        r#"{{"id":{{"origin":"{origin}","position":"0"}},"ty_name":"T","body":{duplicated},"parent":null}}"#
+    );
+    let new_node = format!(r#"{{"ty_name":"T","body":{duplicated},"parent":null,"intent":null}}"#);
+    let change = format!(r#"{{"AddNode":{new_node}}}"#);
+    let graph = format!(r#"{{"id":"{origin}","entries":[{{"Node":{node}}}],"suite":[]}}"#);
+    assert!(serde_json::from_str::<Body>(&duplicated).is_err());
+    assert!(serde_json::from_str::<crate::Node>(&node).is_err());
+    assert!(serde_json::from_str::<NewNode>(&new_node).is_err());
+    assert!(serde_json::from_str::<Change>(&change).is_err());
+    assert!(serde_json::from_str::<LifeCoreList>(&graph).is_err());
+    //A The same documents without the repeated field decode.
+    let single = |text: &str| text.replace(r#","a":"y""#, "");
+    assert_eq!(
+        serde_json::from_str::<Body>(&single(&duplicated)).unwrap(),
+        Body::from([("a".into(), "x".into())])
+    );
+    serde_json::from_str::<crate::Node>(&single(&node)).unwrap();
+    serde_json::from_str::<Change>(&single(&change)).unwrap();
+    serde_json::from_str::<LifeCoreList>(&single(&graph)).unwrap();
 }
 
 #[test]
@@ -577,7 +618,14 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
     );
     let stored = serde_json::to_value(&graph).unwrap();
     assert_eq!(stored["entries"][1]["Node"]["parent"]["position"], "0");
-    //A The static type bounds the range; bare numbers and signs are not accepted.
+    let mut zero = encoded.clone();
+    zero["position"] = "0".into();
+    assert_eq!(
+        serde_json::from_value::<EntryId>(zero).unwrap().position(),
+        0
+    );
+    //A The static type bounds the range; bare numbers, signs, and non-canonical
+    //A spellings are not accepted, since a position is part of an identity.
     let mut far = encoded.clone();
     far["position"] = usize::MAX.to_string().into();
     assert_eq!(
@@ -590,6 +638,9 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
         serde_json::json!("+1"),
         serde_json::json!("18446744073709551616"),
         serde_json::json!(""),
+        serde_json::json!("01"),
+        serde_json::json!("-0"),
+        serde_json::json!("00"),
     ] {
         let mut changed = encoded.clone();
         changed["position"] = position.clone();

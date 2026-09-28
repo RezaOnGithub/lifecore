@@ -351,9 +351,10 @@ fn revision_intent_is_checked_immediately_before_each_append() {
     let mut graph = LifeCoreList::default();
     let mut runner = AnalysisRunner::default();
     let committed = prepare(&graph, &[node("A")], &mut runner)
-        .and_then(|checked| checked.into_prepared())
+        .unwrap()
+        .into_prepared()
         .unwrap();
-    let root = committed.added()[0];
+    let root = committed.checked().added()[0];
     committed.commit(&mut graph).unwrap();
     let before = graph.clone();
     let intent = |changes: &[Change]| prepare(&graph, changes, &mut AnalysisRunner::default());
@@ -406,7 +407,8 @@ fn revision_intent_is_checked_immediately_before_each_append() {
         &[revision("A2", Existing(root), Some(RevisionIntent::Revise))],
         &mut runner,
     )
-    .and_then(|checked| checked.into_prepared())
+    .unwrap()
+    .into_prepared()
     .unwrap()
     .commit(&mut graph)
     .unwrap();
@@ -475,7 +477,8 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
         .register_analyzer_kind(Box::new(BoundaryAnalyzer(None)))
         .unwrap();
     prepare(&graph, &[node("Base")], &mut runner)
-        .and_then(|checked| checked.into_prepared())
+        .unwrap()
+        .into_prepared()
         .unwrap()
         .commit(&mut graph)
         .unwrap();
@@ -488,7 +491,7 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
             config: rejected_at.to_string(),
         });
         let checked = prepare(&graph, &changes, &mut runner).unwrap();
-        assert_eq!(checked.base_end_exclusive(), 1);
+        assert_eq!(checked.base_end_exclusive, 1);
         assert_eq!(checked.view().len(), 4);
         assert_eq!(checked.operations()[3], None);
         assert_eq!(
@@ -499,7 +502,7 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
                 .collect::<Vec<_>>(),
             checked.added()
         );
-        assert_eq!(checked.analysis_suite().0.len(), 1);
+        assert_eq!(checked.candidate.analysis_suite().0.len(), 1);
         let analysis = checked.analysis();
         assert_eq!(analysis.view, checked.view().id());
         assert_eq!(
@@ -515,7 +518,7 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
             blocked[0].evaluated_view,
             EvaluatedView::Prefix(checked.view().prefix(rejected_at).unwrap().id())
         );
-        let Err(Error::Inconsistent(returned)) = checked.into_prepared() else {
+        let Err(returned) = checked.into_prepared() else {
             panic!("an inconsistent candidate must not become committable")
         };
         assert_eq!(returned.analysis().errors().count(), 1);
@@ -524,7 +527,7 @@ fn rejected_candidates_remain_inspectable_but_cannot_commit() {
     let clean = prepare(&graph, &plan(), &mut runner).unwrap();
     assert!(!clean.analysis().has_error());
     let prepared = clean.into_prepared().unwrap();
-    assert_eq!(prepared.analysis().warnings().count(), 0);
+    assert_eq!(prepared.checked().analysis().warnings().count(), 0);
     prepared.commit(&mut graph).unwrap();
     assert_eq!(graph.view().len(), 4);
 }

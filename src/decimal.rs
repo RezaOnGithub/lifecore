@@ -12,12 +12,20 @@ pub fn deserialize<'de, T: FromStr, D: Deserializer<'de>>(deserializer: D) -> Re
     parse(&text).map_err(D::Error::custom)
 }
 
-//A Accept only an optional minus sign followed by ASCII digits. `FromStr` alone
-//A would also accept a leading plus sign.
+//A Accept only the canonical display spelling: `0`, or an optional minus sign
+//A and ASCII digits without a leading zero. Positions are identities, so
+//A `042` and `-0` must not name the same entry as `42` and `0`. `FromStr` alone
+//A would accept all of these and a leading plus sign.
 pub fn parse<T: FromStr>(text: &str) -> Result<T, String> {
     let digits = text.strip_prefix('-').unwrap_or(text);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("{text:?} is not a decimal integer string"));
+    let canonical = !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
+        && text != "-0";
+    if !canonical {
+        return Err(format!(
+            "{text:?} is not a canonical decimal integer string"
+        ));
     }
     text.parse()
         .map_err(|_| format!("{text:?} is outside the permitted integer range"))

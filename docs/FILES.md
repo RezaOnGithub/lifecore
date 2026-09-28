@@ -46,7 +46,9 @@ parses and which accepts every TOML 1.0 document; JSON uses ordinary JSON syntax
 Arrays preserve operation order. Object/table key order does not affect graph
 semantics. Files cannot execute code, interpolate environment variables, or fetch
 includes. Unknown envelope versions, control fields, and value tags are errors.
-Payload field names remain subject to contextual schema validation.
+Payload field names remain subject to contextual schema validation. A payload or
+record that repeats a field name is malformed wherever it appears, including
+stored snapshots; the last value never silently wins.
 
 Use one payload representation across files and RPC:
 
@@ -113,11 +115,13 @@ count = { kind = "integer", value = "9223372036854775807" }
 Deserialize either that envelope or a bare integer shorthand, such as TOML
 `count = 9223372036854775807` or JSON `{"count":9223372036854775807}`. Both formats
 accept the shorthand through the same Serde input type; exports always use the
-envelope. Decimal strings are an optional `-` followed by ASCII digits and must
-parse to `i64`; signs, whitespace, and other spellings are malformed. Malformed
-values and overflow in either input form are errors. Canonical output uses the integer's decimal display
-spelling. Outside an envelope, `"42"` remains text. Floating-point and exponent
-syntax do not stand in for integer payloads.
+envelope. Decimal strings use exactly the integer's decimal display spelling:
+`0`, or an optional `-` followed by ASCII digits without a leading zero, parsing
+to `i64`. A leading `+`, leading zeros, `-0`, whitespace, and other spellings are
+malformed, so each value has one spelling. Malformed values and overflow in
+either input form are errors. Canonical output uses that display spelling.
+Outside an envelope, `"42"` remains text. Floating-point and exponent syntax do
+not stand in for integer payloads.
 
 Use a canonical `Serialize` implementation and a deserialization helper accepting
 tagged values plus shorthand; no format detection is needed. The decimal-string

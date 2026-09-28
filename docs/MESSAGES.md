@@ -205,7 +205,7 @@ flowchart TD
     P -->|invalid structure, references or intent| E
     R -->|success| K --> G
     R -->|execution or normalization failure| E
-    G -->|yes: Inconsistent returns the candidate| E
+    G -->|yes: Err returns the inspectable candidate| E
     G -->|no| T --> C
     C -->|yes| OK
     C -->|no: StaleBase| E

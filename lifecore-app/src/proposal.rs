@@ -59,7 +59,6 @@ pub enum ProposalEntry {
         predecessor: Option<ProposalReference>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         intent: Option<RevisionIntent>,
-        #[serde(deserialize_with = "lifecore::deserialize_body")]
         payload: Body,
     },
     Edge {
@@ -91,7 +90,7 @@ struct RawEntry {
     predecessor: Option<ProposalReference>,
     #[serde(default, deserialize_with = "present")]
     intent: Option<RevisionIntent>,
-    #[serde(default, deserialize_with = "optional_body")]
+    #[serde(default, deserialize_with = "present")]
     payload: Option<Body>,
     #[serde(default, deserialize_with = "present")]
     from: Option<ProposalReference>,
@@ -105,10 +104,6 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
-}
-
-fn optional_body<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Body>, D::Error> {
-    lifecore::deserialize_body(deserializer).map(Some)
 }
 
 impl TryFrom<RawEntry> for ProposalEntry {
