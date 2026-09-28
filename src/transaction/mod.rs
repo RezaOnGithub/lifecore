@@ -175,7 +175,7 @@ pub fn prepare(
         };
         let id = EntryId {
             origin,
-            position: candidate.entries.len(),
+            position: candidate.view().len(),
         };
         let entry = match change {
         Change::AddNode(node) => Some(Entry::Node(Node {
@@ -191,7 +191,7 @@ pub fn prepare(
             to: resolve(edge.to)?,
         })),
         Change::AddAnalyzer { name, config } => {
-            candidate.suite.0.push(crate::analysis::Config {
+            candidate.stage_analyzer(crate::analysis::Config {
                 name: name.clone(),
                 config: config.clone(),
             });

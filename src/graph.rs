@@ -1,4 +1,7 @@
-use crate::{Entry, EntryId, View, analysis::SuiteConfig};
+use crate::{
+    Entry, EntryId, View,
+    analysis::{Config, SuiteConfig},
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -18,13 +21,15 @@ pub enum BasicValidationFailure {
     InvalidDatabase,
 }
 
+//A Fields stay private to this module: entries and the suite change only
+//A through the staging methods below, which keep the derived index in step.
 #[derive(Clone, Debug, Serialize)]
 pub struct LifeCoreList {
     id: Uuid,
-    pub(crate) entries: Vec<Entry>,
-    pub(crate) suite: SuiteConfig,
+    entries: Vec<Entry>,
+    suite: SuiteConfig,
     #[serde(skip)]
-    pub(crate) staleness: StalenessIndex,
+    staleness: StalenessIndex,
 }
 
 //A The staleness index is derived from `entries`, so it takes no part in equality.
@@ -47,10 +52,10 @@ impl Eq for LifeCoreList {}
 //A value with its own length. Only entries already validated against the prefix
 //A before them are indexed, so an invalid parent never marks an earlier node stale.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct StalenessIndex(Vec<Option<usize>>);
+struct StalenessIndex(Vec<Option<usize>>);
 
 impl StalenessIndex {
-    pub(crate) fn as_slice(&self) -> &[Option<usize>] {
+    fn as_slice(&self) -> &[Option<usize>] {
         &self.0
     }
     fn push_validated(&mut self, entry: &Entry) {
@@ -106,6 +111,10 @@ impl LifeCoreList {
     pub fn analysis_suite(&self) -> &SuiteConfig {
         &self.suite
     }
+    #[cfg(test)]
+    pub(crate) fn staleness(&self) -> &[Option<usize>] {
+        self.staleness.as_slice()
+    }
     //A Revalidates the whole history with a freshly built index; the stored one is
     //A not consulted, but debug builds check that it still matches.
     pub fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
@@ -128,6 +137,10 @@ impl LifeCoreList {
             .push_validated(self.entries.last().expect("staged entry"));
         debug_assert_eq!(rebuilt, self.staleness, "extended staleness index diverged");
         Ok(())
+    }
+    //A Staging appends one configuration to the suite; it adds no entry.
+    pub(crate) fn stage_analyzer(&mut self, config: Config) {
+        self.suite.0.push(config);
     }
     //A Validation and indexing share one pass: each entry is checked against the
     //A prefix before it, whose index holds only entries that already passed.

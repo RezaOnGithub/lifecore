@@ -768,7 +768,7 @@ fn indexed_staleness_matches_the_scan_for_every_entry_at_every_prefix() {
     }
     assert_eq!(view.prefix(9).unwrap().is_stale(ids[9]), None);
     assert_eq!(
-        graph.staleness.as_slice(),
+        graph.staleness(),
         [
             Some(5),
             Some(9),
@@ -791,7 +791,7 @@ fn indexed_staleness_matches_the_scan_for_every_entry_at_every_prefix() {
 #[test]
 fn staged_and_independent_candidates_extend_their_own_index() {
     let (graph, ids) = staleness_fixture();
-    let before = graph.staleness.clone();
+    let before = graph.staleness().to_vec();
     let staged = prepare(
         &graph,
         &[
@@ -818,7 +818,7 @@ fn staged_and_independent_candidates_extend_their_own_index() {
     assert_staleness_matches_scan(staged.view(), &independent.added());
     assert_staleness_matches_scan(independent.view(), &staged.added());
     //A Staging clones the base; neither candidate changes it or the other.
-    assert_eq!(graph.staleness, before);
+    assert_eq!(graph.staleness(), before);
     assert_eq!(graph.view().is_stale(ids[7]), Some(false));
     assert_eq!(graph.view().is_stale(ids[12]), Some(false));
     assert_eq!(staged.view().is_stale(ids[7]), Some(true));
@@ -835,15 +835,15 @@ fn staged_and_independent_candidates_extend_their_own_index() {
     let mut committed = graph.clone();
     staged.commit(&mut committed).unwrap();
     assert_eq!(
-        committed.staleness.as_slice()[..14],
+        committed.staleness()[..14],
         {
-            let mut extended = before.as_slice().to_vec();
+            let mut extended = before.clone();
             extended[7] = Some(14);
             extended
         }[..]
     );
     assert_eq!(
-        committed.staleness.as_slice()[14..],
+        committed.staleness()[14..],
         [Some(19), None, Some(17), None, None, None]
     );
     assert_staleness_matches_scan(committed.view(), &[]);
@@ -880,7 +880,7 @@ fn a_rejected_entry_is_never_indexed() {
             Err(crate::BasicValidationFailure::InvalidReference { .. })
         ));
         assert_eq!(staged, graph);
-        assert_eq!(staged.staleness, graph.staleness);
+        assert_eq!(staged.staleness(), graph.staleness());
     }
     //A The same shape with an exact parent is indexed once validated, and the
     //A next staged entry already sees that parent as stale.
@@ -896,8 +896,8 @@ fn a_rejected_entry_is_never_indexed() {
             parent: Some(ids[10]),
         }))
         .unwrap();
-    assert_eq!(staged.staleness.as_slice()[10], Some(14));
-    assert_eq!(staged.staleness.as_slice().len(), 15);
+    assert_eq!(staged.staleness()[10], Some(14));
+    assert_eq!(staged.staleness().len(), 15);
     let stale_edge = Entry::Edge(Edge {
         id: EntryId {
             origin: uuid::Uuid::new_v4(),
@@ -922,21 +922,12 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
         ["entries", "id", "suite"]
     );
     let loaded: LifeCoreList = serde_json::from_value(stored.clone()).unwrap();
-    assert_eq!(loaded.staleness, graph.staleness);
+    assert_eq!(loaded.staleness(), graph.staleness());
     assert_eq!(serde_json::to_value(&loaded).unwrap(), stored);
     assert_staleness_matches_scan(loaded.view(), &[]);
     //A A stored index cannot be supplied; a new graph starts with an empty one.
     let mut injected = stored.clone();
     injected["staleness"] = serde_json::json!([null]);
     assert!(serde_json::from_value::<LifeCoreList>(injected).is_err());
-    assert!(LifeCoreList::default().staleness.as_slice().is_empty());
-}
-
-#[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "stored staleness index diverged")]
-fn debug_builds_catch_a_stored_index_that_diverges_from_its_history() {
-    let (mut graph, _) = staleness_fixture();
-    graph.staleness = crate::graph::StalenessIndex::default();
-    graph.basic_validation().unwrap();
+    assert!(LifeCoreList::default().staleness().is_empty());
 }

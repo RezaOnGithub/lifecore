@@ -10,6 +10,14 @@ fn node(name: &str) -> Change {
     })
 }
 
+//A Imports a snapshot of `graph` under another suite. Deserialization is the
+//A import boundary: it validates structure but runs no analyzers.
+fn with_suite(graph: &LifeCoreList, suite: serde_json::Value) -> LifeCoreList {
+    let mut stored = serde_json::to_value(graph).unwrap();
+    stored["suite"] = suite;
+    serde_json::from_value(stored).unwrap()
+}
+
 fn plan() -> Vec<Change> {
     vec![
         node("A"),
@@ -132,7 +140,6 @@ fn exact_base_rejects_identity_content_count_and_suite_changes() {
 
 #[test]
 fn exact_base_includes_analyzer_names_original_configuration_and_order() {
-    use crate::analysis::Config;
     let mut graph = LifeCoreList::default();
     let mut runner = AnalysisRunner::default();
     for name in ["First", "Second"] {
@@ -140,22 +147,35 @@ fn exact_base_includes_analyzer_names_original_configuration_and_order() {
             .register_analyzer_kind(Box::new(EmptyAnalyzer(name)))
             .unwrap();
     }
-    graph.suite.0 = vec![
-        Config {
-            name: "First".into(),
-            config: "one".into(),
-        },
-        Config {
-            name: "Second".into(),
-            config: "two".into(),
-        },
-    ];
-    let mut renamed = graph.clone();
-    renamed.suite.0[0].name = "Renamed".into();
-    let mut reconfigured = graph.clone();
-    reconfigured.suite.0[0].config = " one ".into();
-    let mut reordered = graph.clone();
-    reordered.suite.0.reverse();
+    let configure = |name: &str, config: &str| Change::AddAnalyzer {
+        name: name.into(),
+        config: config.into(),
+    };
+    prepare(
+        &graph,
+        &[configure("First", "one"), configure("Second", "two")],
+        &mut runner,
+    )
+    .unwrap()
+    .accepted()
+    .unwrap()
+    .commit(&mut graph)
+    .unwrap();
+    let suite = |entries: [(&str, &str); 2]| {
+        serde_json::Value::Array(
+            entries
+                .iter()
+                .map(|(name, config)| serde_json::json!({"name": name, "config": config}))
+                .collect(),
+        )
+    };
+    assert_eq!(
+        serde_json::to_value(graph.analysis_suite()).unwrap(),
+        suite([("First", "one"), ("Second", "two")])
+    );
+    let renamed = with_suite(&graph, suite([("Renamed", "one"), ("Second", "two")]));
+    let reconfigured = with_suite(&graph, suite([("First", " one "), ("Second", "two")]));
+    let reordered = with_suite(&graph, suite([("Second", "two"), ("First", "one")]));
     for mut receiver in [renamed, reconfigured, reordered] {
         assert_eq!(receiver.view().id(), graph.view().id());
         let before = receiver.clone();
@@ -245,11 +265,10 @@ fn independent_candidates_cannot_overwrite_a_committed_suffix() {
 
 #[test]
 fn imported_configuration_cannot_bypass_the_preparation_gate() {
-    let mut graph = LifeCoreList::default();
-    graph.suite.0.push(crate::analysis::Config {
-        name: "Unavailable".into(),
-        config: String::new(),
-    });
+    let graph = with_suite(
+        &LifeCoreList::default(),
+        serde_json::json!([{"name": "Unavailable", "config": ""}]),
+    );
     let loaded: LifeCoreList =
         serde_json::from_slice(&serde_json::to_vec(&graph).unwrap()).unwrap();
     assert!(prepare(&loaded, &[], &mut AnalysisRunner::default()).is_err());
@@ -265,12 +284,10 @@ fn missing_analyzer_does_not_disable_committed_history_inspection() {
         .unwrap()
         .commit(&mut graph)
         .unwrap();
-    graph.suite.0.push(crate::analysis::Config {
-        name: "Unavailable".into(),
-        config: String::new(),
-    });
-    let loaded: LifeCoreList =
-        serde_json::from_slice(&serde_json::to_vec(&graph).unwrap()).unwrap();
+    let loaded = with_suite(
+        &graph,
+        serde_json::json!([{"name": "Unavailable", "config": ""}]),
+    );
     assert_eq!(loaded.view().nodes().next().unwrap().ty_name, "A");
     assert!(prepare(&loaded, &[], &mut AnalysisRunner::default()).is_err());
 }
