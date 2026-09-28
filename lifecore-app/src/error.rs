@@ -32,7 +32,7 @@ pub enum AppError {
         "the new state was published, but synchronization failed, so it may or may not persist: {message}"
     )]
     PublicationUncertain { message: String },
-    #[error("malformed {format:?} proposal: {error}", format = .0.format, error = .0)]
+    #[error("malformed {format} proposal: {error}", format = .0.format, error = .0)]
     MalformedProposal(DecodeError),
     #[error("invalid proposal{}: {message}", location.as_ref().map(|at| format!(" at entry {} ({:?})", at.operation, at.name)).unwrap_or_default())]
     InvalidProposal {

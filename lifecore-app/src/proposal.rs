@@ -5,6 +5,10 @@ use lifecore::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::{collections::HashMap, fmt, path::Path, str::FromStr};
+use toml::{
+    Spanned,
+    de::{DeTable, DeValue},
+};
 use uuid::Uuid;
 
 //A A small bounded version field that accepts exactly one value.
@@ -98,9 +102,9 @@ struct RawEntry {
     to: Option<ProposalReference>,
 }
 
-//A Optional control fields are either omitted or valid; JSON null is not an
-//A alternative spelling of absence.
-fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+//A Optional control fields and parameters are either omitted or valid; JSON
+//A null is not an alternative spelling of absence.
+pub(crate) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
@@ -253,52 +257,159 @@ impl Format {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-#[error("{message}")]
+impl fmt::Display for Format {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+        Self::Json => "JSON",
+        Self::Toml => "TOML",
+        })
+    }
+}
+
+//A `path` locates the failure inside the proposal, as in
+//A `entries[0].payload.n`; line and column are one-based positions in the
+//A decoded text when it is a whole document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecodeError {
     pub format: Format,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<usize>,
 }
 
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)?;
+        if let Some(path) = &self.path {
+            write!(f, " at {path}")?;
+        }
+        if let (Some(line), Some(column)) = (self.line, self.column) {
+            write!(f, " (line {line}, column {column})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+fn located_path(path: &serde_path_to_error::Path) -> Option<String> {
+    path.iter().next().is_some().then(|| path.to_string())
+}
+
 pub fn decode(text: &str, format: Format) -> Result<Proposal, DecodeError> {
     match format {
-    Format::Json => serde_json::from_str(text).map_err(|error| DecodeError {
-        format,
-        message: error.to_string(),
-        line: Some(error.line()),
-        column: Some(error.column()),
-    }),
-    Format::Toml => toml::from_str(text).map_err(|error| {
-        //A TOML reports byte spans; convert the start to a one-based line/column.
-        let (line, column) = error
-            .span()
-            .map(|span| {
-                let before = &text[..span.start.min(text.len())];
-                let line = before.matches('\n').count() + 1;
-                let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
-                (Some(line), Some(column))
-            })
-            .unwrap_or_default();
-        //A HACK: the toml crate presents native datetimes as a map with a
-        //A private marker key, which the payload decoder reports as an unknown
-        //A field. Name the actual mistake instead.
-        let message = if error.message().contains("$__toml_private_datetime") {
-            "native TOML datetimes are not payload values; write { kind = \"timestamp\", value = \"...\" }".into()
-        } else {
-            error.message().to_string()
+    Format::Json => {
+        let json_error = |path: Option<String>, error: &serde_json::Error| {
+            //A serde_json appends the position to its message; keep it only in
+            //A the structured fields, as for TOML.
+            let message = error.to_string();
+            let position = format!(" at line {} column {}", error.line(), error.column());
+            DecodeError {
+                format,
+                message: message
+                    .strip_suffix(&position)
+                    .unwrap_or(&message)
+                    .to_string(),
+                path,
+                line: Some(error.line()),
+                column: Some(error.column()),
+            }
         };
-        DecodeError {
-            format,
-            message,
-            line,
-            column,
-        }
-    }),
+        let mut deserializer = serde_json::Deserializer::from_str(text);
+        let proposal = serde_path_to_error::deserialize(&mut deserializer)
+            .map_err(|error| json_error(located_path(error.path()), error.inner()))?;
+        deserializer
+            .end()
+            .map_err(|error| json_error(None, &error))?;
+        Ok(proposal)
     }
+    Format::Toml => {
+        let toml_error = |path: Option<String>, error: &toml::de::Error| {
+            let (line, column) = error.span().map(|span| position(text, span.start)).unzip();
+            DecodeError {
+                format,
+                message: error.message().to_string(),
+                path,
+                line,
+                column,
+            }
+        };
+        let document = DeTable::parse(text).map_err(|error| toml_error(None, &error))?;
+        reject_toml_only_values(text, document.get_ref(), &mut String::new())?;
+        serde_path_to_error::deserialize(toml::de::Deserializer::from(document))
+            .map_err(|error| toml_error(located_path(error.path()), error.inner()))
+    }
+    }
+}
+
+//A TOML reports byte offsets; convert one to a one-based line and column.
+fn position(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..offset.min(text.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    (line, column)
+}
+
+//A Serde sees a native TOML datetime as a map under a private marker key, so a
+//A record or body would silently store it as a field. No proposal field takes
+//A one. A bare `-0` would silently become 0 where JSON rejects it as a float.
+//A Both are refused here, before Serde, with their source position.
+fn reject_toml_only_values(
+    text: &str,
+    table: &DeTable<'_>,
+    path: &mut String,
+) -> Result<(), DecodeError> {
+    for (key, value) in table.iter() {
+        let length = path.len();
+        if !path.is_empty() {
+            path.push('.');
+        }
+        path.push_str(key.get_ref());
+        reject_toml_only_value(text, value, path)?;
+        path.truncate(length);
+    }
+    Ok(())
+}
+
+fn reject_toml_only_value(
+    text: &str,
+    value: &Spanned<DeValue<'_>>,
+    path: &mut String,
+) -> Result<(), DecodeError> {
+    let message = match value.get_ref() {
+    DeValue::Datetime(_) => {
+        "native TOML dates and times are not accepted; write a timestamp payload as { kind = \"timestamp\", value = \"...\" }"
+    }
+    DeValue::Integer(integer)
+        if integer.as_str().starts_with('-')
+            && integer.as_str()[1..].bytes().all(|b| b == b'0') =>
+    {
+        "-0 is not an integer spelling; write 0"
+    }
+    DeValue::Array(values) => {
+        for (index, value) in values.iter().enumerate() {
+            let length = path.len();
+            path.push_str(&format!("[{index}]"));
+            reject_toml_only_value(text, value, path)?;
+            path.truncate(length);
+        }
+        return Ok(());
+    }
+    DeValue::Table(table) => return reject_toml_only_values(text, table, path),
+    _ => return Ok(()),
+    };
+    let (line, column) = position(text, value.span().start);
+    Err(DecodeError {
+        format: Format::Toml,
+        message: message.into(),
+        path: Some(path.clone()),
+        line: Some(line),
+        column: Some(column),
+    })
 }
 
 pub fn encode(proposal: &Proposal, format: Format) -> Result<String, String> {

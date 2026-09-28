@@ -1,6 +1,6 @@
 use crate::{
     AppError,
-    proposal::{PlanId, Proposal, ProposalLocation},
+    proposal::{PlanId, Proposal, ProposalLocation, present},
     storage::{self, Snapshot, StatePath},
 };
 use lifecore::{
@@ -31,11 +31,13 @@ pub struct Service {
 #[serde(deny_unknown_fields)]
 pub struct NoParams {}
 
+//A RPC decodes the proposal member separately, as raw JSON, so its failures
+//A report a location inside the proposal; see `rpc`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProposalRequest {
-    pub proposal: Proposal,
-    #[serde(default)]
+pub struct ProposalRequest<P = Proposal> {
+    pub proposal: P,
+    #[serde(default, deserialize_with = "present")]
     pub evaluation_time: Option<Timestamp>,
     #[serde(default)]
     pub now: bool,
@@ -47,7 +49,7 @@ pub struct AddAnalyzerRequest {
     pub name: String,
     #[serde(default = "empty_configuration")]
     pub configuration: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     pub evaluation_time: Option<Timestamp>,
     #[serde(default)]
     pub now: bool,
@@ -67,14 +69,14 @@ pub enum EntryKind {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntryListRequest {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     pub kind: Option<EntryKind>,
-    #[serde(default, rename = "type")]
+    #[serde(default, rename = "type", deserialize_with = "present")]
     pub ty_name: Option<String>,
     #[serde(default)]
     pub currentness: Currentness,
     //A Case-sensitive substring over node text values; edges have no payload.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     pub text: Option<String>,
 }
 

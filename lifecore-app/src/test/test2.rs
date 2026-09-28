@@ -291,6 +291,105 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
 }
 
 #[test]
+fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
+    let entry = |payload: &str| {
+        format!(
+            "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {payload}\n"
+        )
+    };
+    let datetime = "native TOML";
+    let zero = "-0 is not";
+    for (payload, path, token, message) in [
+        //A The whole payload, a record value, and a timestamp value.
+        (
+            "2026-09-30T17:00:00Z",
+            "entries[0].payload",
+            "2026",
+            datetime,
+        ),
+        (
+            "{ d = { kind = \"record\", value = 2026-09-30T17:00:00Z } }",
+            "entries[0].payload.d.value",
+            "2026",
+            datetime,
+        ),
+        (
+            "{ t = { kind = \"timestamp\", value = 2026-09-30T17:00:00Z } }",
+            "entries[0].payload.t.value",
+            "2026",
+            datetime,
+        ),
+        //A Local dates and times, and datetimes nested in lists.
+        (
+            "{ d = 2026-09-30 }",
+            "entries[0].payload.d",
+            "2026",
+            datetime,
+        ),
+        (
+            "{ l = [\"x\", [17:00:00]] }",
+            "entries[0].payload.l[1][0]",
+            "17",
+            datetime,
+        ),
+        ("{ n = -0 }", "entries[0].payload.n", "-0", zero),
+        (
+            "{ n = { kind = \"record\", value = { z = -0 } } }",
+            "entries[0].payload.n.value.z",
+            "-0",
+            zero,
+        ),
+    ] {
+        let error = proposal::decode(&entry(payload), Format::Toml).unwrap_err();
+        assert_eq!(error.path.as_deref(), Some(path), "{payload}: {error}");
+        let column = "payload = ".len() + payload.find(token).unwrap() + 1;
+        assert_eq!(
+            (error.line, error.column),
+            (Some(6), Some(column)),
+            "{payload}"
+        );
+        assert!(error.message.starts_with(message), "{error}");
+    }
+    //A Zero itself and quoted datetime text are ordinary values.
+    let decoded = proposal::decode(
+        &entry("{ n = 0, m = -1, t = \"2026-09-30T17:00:00Z\" }"),
+        Format::Toml,
+    )
+    .unwrap();
+    let proposal::ProposalEntry::Node { payload, .. } = &decoded.entries[0] else {
+        panic!("expected a node")
+    };
+    assert_eq!(payload["n"], Payload::Integer(0));
+    assert_eq!(payload["m"], Payload::Integer(-1));
+    assert_eq!(payload["t"], Payload::Text("2026-09-30T17:00:00Z".into()));
+    //A JSON rejects `-0` too; serde_json reads it as a float.
+    assert!(
+        proposal::decode(
+            r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":-0}}]}"#,
+            Format::Json
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn json_decode_errors_carry_a_path_and_position() {
+    let text = "{\"format_version\": 1, \"entries\": [\n  {\"name\": \"a\", \"kind\": \"node\", \"type\": \"T\",\n   \"payload\": {\"n\": 1, \"n\": 2}}]}";
+    let error = proposal::decode(text, Format::Json).unwrap_err();
+    assert_eq!(error.path.as_deref(), Some("entries[0].payload"));
+    assert_eq!(error.line, Some(3));
+    assert!(error.message.contains("duplicate field `n`"), "{error}");
+    let error =
+        proposal::decode("{\"format_version\": 1, \"entries\": []} []", Format::Json).unwrap_err();
+    assert_eq!(error.path, None);
+    assert_eq!(error.message, "trailing characters");
+    assert_eq!(
+        AppError::MalformedProposal(error).to_string(),
+        "malformed JSON proposal: trailing characters (line 1, column 38)"
+    );
+}
+
+#[test]
 fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
     use lifecore::transaction::{Change, Reference};
     let scratch = Scratch::new();
@@ -925,7 +1024,9 @@ fn rpc_envelope_rejects_invalid_calls_without_mutation() {
         (json!({"jsonrpc": "2.0", "id": 7, "method": "proposal.apply", "params": [apply]}).to_string(), -32600, json!(7)),
         (json!({"jsonrpc": "2.0", "id": 7, "method": "proposal.apply", "params": apply, "extra": 1}).to_string(), -32600, json!(7)),
         (json!({"jsonrpc": "2.0", "id": "x", "method": "init", "params": {}}).to_string(), -32601, json!("x")),
-        (json!({"jsonrpc": "2.0", "id": "x", "method": "proposal.apply", "params": {"proposal": {}}}).to_string(), -32602, json!("x")),
+        (json!({"jsonrpc": "2.0", "id": "x", "method": "proposal.apply", "params": {"proposal": {}}}).to_string(), 2001, json!("x")),
+        (json!({"jsonrpc": "2.0", "id": "x", "method": "proposal.apply", "params": {}}).to_string(), -32602, json!("x")),
+        (r#"{"jsonrpc":"2.0","id":1,"id":2,"method":"plan_id.mint"}"#.to_string(), -32600, Value::Null),
         (json!({"jsonrpc": "2.0", "id": "x", "method": "entries.get", "params": {"id": {"origin": Uuid::new_v4(), "position": 1}}}).to_string(), -32602, json!("x")),
     ] {
         let response = call(&line);
@@ -966,4 +1067,102 @@ fn rpc_envelope_rejects_invalid_calls_without_mutation() {
     assert_eq!(response["error"]["data"]["kind"], "invalid_proposal");
     assert_eq!(response["error"]["data"]["location"]["name"], "c");
     assert_eq!(response["id"], 4);
+}
+
+#[test]
+fn rpc_proposal_parameters_fail_like_change_files() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    let call = |method: &str, params: String| {
+        let line = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
+        serde_json::to_value(rpc::handle_line(&service, &line)).unwrap()
+    };
+    let bad = r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"Task","payload":{"n":1.5}}]}"#;
+    //A Raw text keeps a repeated payload field visible to the decoder.
+    let repeated = r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"Task","payload":{"title":"x","title":"y"}}]}"#;
+    let file_error = proposal::decode(bad, Format::Json).unwrap_err();
+    assert_eq!(file_error.path.as_deref(), Some("entries[0].payload.n"));
+    assert!(file_error.line.is_some());
+    for (proposal, path) in [
+        (bad, "entries[0].payload.n"),
+        (repeated, "entries[0].payload"),
+    ] {
+        for (method, extra) in [
+            ("proposal.check", ""),
+            ("proposal.apply", ""),
+            ("proposal.encode", r#","format":"toml""#),
+        ] {
+            let response = call(method, format!(r#"{{"proposal":{proposal}{extra}}}"#));
+            let error = &response["error"];
+            assert_eq!(error["code"], 2001, "{method} {response}");
+            assert_eq!(error["data"]["kind"], "malformed_proposal");
+            assert_eq!(error["data"]["decode"]["path"], path);
+            assert_eq!(error["data"]["decode"]["format"], "json");
+            //A Positions would count from the member, so only the path is given.
+            assert!(error["data"]["decode"].get("line").is_none());
+        }
+    }
+    let response = call("proposal.check", format!(r#"{{"proposal":{bad}}}"#));
+    assert_eq!(
+        response["error"]["data"]["decode"]["message"],
+        file_error.message
+    );
+    assert!(!file_error.message.contains("line"), "{file_error:?}");
+    //A Every other parameter failure, including null for an optional
+    //A parameter, is an invalid-parameters error.
+    let good = r#"{"format_version":1,"entries":[]}"#;
+    for (method, params) in [
+        (
+            "proposal.check",
+            format!(r#"{{"proposal":{good},"evaluation_time":null}}"#),
+        ),
+        (
+            "proposal.check",
+            format!(r#"{{"proposal":{good},"evaluation_time":"yesterday"}}"#),
+        ),
+        (
+            "proposal.apply",
+            format!(r#"{{"proposal":{good},"now":null}}"#),
+        ),
+        (
+            "proposal.apply",
+            format!(r#"{{"proposal":{good},"extra":1}}"#),
+        ),
+        (
+            "proposal.apply",
+            format!(r#"{{"proposal":{good},"proposal":{good}}}"#),
+        ),
+        (
+            "proposal.encode",
+            format!(r#"{{"proposal":{good},"format":"yaml"}}"#),
+        ),
+        ("entries.list", r#"{"kind":null}"#.into()),
+        ("entries.list", r#"{"type":null}"#.into()),
+        ("entries.list", r#"{"text":null}"#.into()),
+        ("entries.list", r#"{"currentness":null}"#.into()),
+        (
+            "analyzers.add",
+            r#"{"name":"DAG_Check","evaluation_time":null}"#.into(),
+        ),
+        (
+            "analyzers.add",
+            r#"{"name":"DAG_Check","configuration":null}"#.into(),
+        ),
+    ] {
+        let response = call(method, params.clone());
+        assert_eq!(
+            response["error"]["code"], -32602,
+            "{method} {params} {response}"
+        );
+    }
+    assert_eq!(scratch.bytes(), stored);
+    //A Surrounding whitespace is not part of the request.
+    let response = serde_json::to_value(rpc::handle_line(
+        &service,
+        r#"  {"jsonrpc":"2.0","id":9,"method":"plan_id.mint"}  "#,
+    ))
+    .unwrap();
+    assert!(response["result"]["plan_id"].is_string(), "{response}");
 }

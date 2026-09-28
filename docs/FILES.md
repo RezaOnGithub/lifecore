@@ -120,8 +120,9 @@ envelope. Decimal strings use exactly the integer's decimal display spelling:
 to `i64`. A leading `+`, leading zeros, `-0`, whitespace, and other spellings are
 malformed, so each value has one spelling. Malformed values and overflow in
 either input form are errors. Canonical output uses that display spelling.
-Outside an envelope, `"42"` remains text. Floating-point and exponent syntax do
-not stand in for integer payloads.
+Bare `-0` is rejected in both formats, as JSON reads it as a float. Outside an
+envelope, `"42"` remains text. Floating-point and exponent syntax do not stand in
+for integer payloads.
 
 Use a canonical `Serialize` implementation and a deserialization helper accepting
 tagged values plus shorthand; no format detection is needed. The decimal-string
@@ -143,7 +144,9 @@ numbers are not shorthand for them.
 
 Use `jiff::Timestamp`'s ordinary Serde string representation inside the timestamp
 wrapper in both formats. Quoted strings outside that wrapper remain text.
-Native TOML dates, times, and datetimes are not timestamp payload syntax.
+Native TOML dates, times, and datetimes are not timestamp payload syntax, and
+no proposal field takes one: they are rejected wherever they appear, including
+as a whole payload or an envelope's `value`, with their source location.
 Parsing, accepted range, precision, and formatting follow Jiff's Serde behavior;
 there is no application-specific datetime normalization or narrower TOML profile.
 This adopts Jiff's parser semantics, including any normalization it performs,

@@ -1,10 +1,14 @@
 use crate::{
     AppError, ErrorObject,
-    proposal::{self, Format, Proposal},
-    service::Service,
+    proposal::{self, DecodeError, Format, Proposal},
+    service::{ProposalRequest, Service},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{DeserializeOwned, MapAccess, Visitor},
+};
+use serde_json::{Value, value::RawValue};
+use std::{collections::BTreeMap, fmt};
 
 //A A restricted single-call JSON-RPC 2.0 profile: every request has a non-null
 //A ID and gets exactly one response. Batches and notifications are rejected
@@ -54,8 +58,8 @@ pub struct DecodeRequest {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EncodeRequest {
-    pub proposal: Proposal,
+pub struct EncodeRequest<P = Proposal> {
+    pub proposal: P,
     pub format: Format,
 }
 
@@ -74,6 +78,28 @@ pub fn encode_proposal(request: EncodeRequest) -> Result<Encoded, AppError> {
         .map_err(|message| AppError::Internal { message })
 }
 
+//A A `proposal` parameter is decoded on its own, from its raw text, so its
+//A failures are malformed proposals located by a path inside it, as for a
+//A change file, and repeated payload fields are still seen. Line and column
+//A are dropped because they would count from the member, not the request.
+fn embedded(proposal: &RawValue) -> Result<Proposal, AppError> {
+    proposal::decode(proposal.get(), Format::Json).map_err(|error| {
+        AppError::MalformedProposal(DecodeError {
+            line: None,
+            column: None,
+            ..error
+        })
+    })
+}
+
+fn proposal_request(request: ProposalRequest<Box<RawValue>>) -> Result<ProposalRequest, AppError> {
+    Ok(ProposalRequest {
+        proposal: embedded(&request.proposal)?,
+        evaluation_time: request.evaluation_time,
+        now: request.now,
+    })
+}
+
 enum DispatchError {
     MethodNotFound,
     Application(AppError),
@@ -86,10 +112,10 @@ impl From<AppError> for DispatchError {
 }
 
 fn call<P: DeserializeOwned, R: Serialize>(
-    params: Value,
+    params: &str,
     operation: impl FnOnce(P) -> Result<R, AppError>,
 ) -> Result<Value, DispatchError> {
-    let params = serde_json::from_value(params).map_err(|error| AppError::InvalidParams {
+    let params = serde_json::from_str(params).map_err(|error| AppError::InvalidParams {
         message: error.to_string(),
     })?;
     let result = operation(params)?;
@@ -103,32 +129,39 @@ fn call<P: DeserializeOwned, R: Serialize>(
 
 //A Method names are provisional until the RPC contract is frozen (PLAN 4.2).
 //A `init` and filesystem path selection are deliberately absent.
-fn dispatch(service: &Service, method: &str, params: Value) -> Result<Value, DispatchError> {
+fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, DispatchError> {
     match method {
     "database.describe" => call(params, |p| service.describe(p)),
     "entries.list" => call(params, |p| service.list_entries(p)),
     "entries.get" => call(params, |p| service.get_entry(p)),
     "plan_id.mint" => call(params, |p| service.mint_plan_id(p)),
-    "proposal.check" => call(params, |p| service.check(p)),
-    "proposal.apply" => call(params, |p| service.apply(p)),
+    "proposal.check" => call(params, |p| service.check(proposal_request(p)?)),
+    "proposal.apply" => call(params, |p| service.apply(proposal_request(p)?)),
     "proposal.decode" => call(params, decode_proposal),
-    "proposal.encode" => call(params, encode_proposal),
+    "proposal.encode" => call(params, |p: EncodeRequest<Box<RawValue>>| {
+        encode_proposal(EncodeRequest {
+            proposal: embedded(&p.proposal)?,
+            format: p.format,
+        })
+    }),
     "analyzers.add" => call(params, |p| service.add_analyzer(p)),
     _ => Err(DispatchError::MethodNotFound),
     }
 }
 
-//A A validated single call, ready for dispatch.
-#[derive(Clone, Debug, PartialEq)]
+//A A validated single call, ready for dispatch. Parameters stay raw JSON text
+//A until the method's own types decode them.
+#[derive(Clone, Debug)]
 pub struct Request {
     pub id: Value,
     pub method: String,
-    pub params: Value,
+    params: Option<Box<RawValue>>,
 }
 
 impl Request {
     pub fn respond(self, service: &Service) -> Response {
-        let outcome = match dispatch(service, &self.method, self.params) {
+        let params = self.params.as_deref().map_or("{}", RawValue::get);
+        let outcome = match dispatch(service, &self.method, params) {
         Ok(result) => Outcome::Result(result),
         Err(DispatchError::MethodNotFound) => Outcome::Error(protocol_error(
             -32601,
@@ -146,52 +179,102 @@ impl Request {
     }
 }
 
-//A Validate the envelope before dispatch, echoing a usable ID in protocol
-//A errors where the request supplied one.
-pub fn parse_value(request: Value) -> Result<Request, Response> {
-    let invalid = |id: Value, message: &str| {
-        Response::new(id, Outcome::Error(protocol_error(-32600, message)))
-    };
-    let mut request = match request {
-    Value::Object(request) => request,
-    Value::Array(_) => return Err(invalid(Value::Null, "batches are not supported")),
-    _ => return Err(invalid(Value::Null, "the request must be a JSON object")),
-    };
-    let id = match request.remove("id") {
-    Some(id @ (Value::String(_) | Value::Number(_))) => id,
-    None | Some(Value::Null) => {
-        return Err(invalid(
-            Value::Null,
-            "notifications are not supported; supply an id",
-        ));
+//A Request members in source order, so a repeated member is refused rather
+//A than silently replaced by the last one.
+struct Members(Vec<(String, Box<RawValue>)>);
+
+impl<'de> Deserialize<'de> for Members {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct MembersVisitor;
+        impl<'de> Visitor<'de> for MembersVisitor {
+            type Value = Members;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Members, A::Error> {
+                let mut members = vec![];
+                while let Some(member) = map.next_entry()? {
+                    members.push(member);
+                }
+                Ok(Members(members))
+            }
+        }
+        deserializer.deserialize_map(MembersVisitor)
     }
-    Some(_) => return Err(invalid(Value::Null, "the id must be a string or number")),
-    };
-    if request.remove("jsonrpc") != Some(Value::String("2.0".into())) {
-        return Err(invalid(id, "jsonrpc must be \"2.0\""));
-    }
-    let Some(Value::String(method)) = request.remove("method") else {
-        return Err(invalid(id, "method must be a string"));
-    };
-    let params = match request.remove("params") {
-    None => Value::Object(Map::new()),
-    Some(params @ Value::Object(_)) => params,
-    Some(_) => return Err(invalid(id, "params must be an object")),
-    };
-    if let Some(member) = request.keys().next() {
-        return Err(invalid(id, &format!("unknown request member {member:?}")));
-    }
-    Ok(Request { id, method, params })
 }
 
 pub fn parse_error(message: impl Into<String>) -> Response {
     Response::new(Value::Null, Outcome::Error(protocol_error(-32700, message)))
 }
 
-pub fn parse_line(line: &str) -> Result<Request, Response> {
-    let value = serde_json::from_str::<Value>(line)
+//A Validate the envelope before dispatch, echoing a usable ID in protocol
+//A errors where the request supplied one. HTTP bodies may span lines; the CLI
+//A passes exactly one line.
+pub fn parse_line(text: &str) -> Result<Request, Response> {
+    let invalid = |id: Value, message: String| {
+        Response::new(id, Outcome::Error(protocol_error(-32600, message)))
+    };
+    let request = serde_json::from_str::<&RawValue>(text)
         .map_err(|error| parse_error(format!("parse error: {error}")))?;
-    parse_value(value)
+    let listed = match request.get().as_bytes().first() {
+    Some(b'{') => {
+        serde_json::from_str::<Members>(request.get())
+            .map_err(|error| invalid(Value::Null, error.to_string()))?
+            .0
+    }
+    Some(b'[') => return Err(invalid(Value::Null, "batches are not supported".into())),
+    _ => {
+        return Err(invalid(
+            Value::Null,
+            "the request must be a JSON object".into(),
+        ));
+    }
+    };
+    let mut members = BTreeMap::new();
+    for (name, value) in listed {
+        if members.contains_key(&name) {
+            return Err(invalid(
+                Value::Null,
+                format!("duplicate request member {name:?}"),
+            ));
+        }
+        members.insert(name, value);
+    }
+    let mut member = |name: &str| {
+        members
+            .remove(name)
+            .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+    };
+    let id = match member("id") {
+    Some(id @ (Value::String(_) | Value::Number(_))) => id,
+    None | Some(Value::Null) => {
+        return Err(invalid(
+            Value::Null,
+            "notifications are not supported; supply an id".into(),
+        ));
+    }
+    Some(_) => {
+        return Err(invalid(
+            Value::Null,
+            "the id must be a string or number".into(),
+        ));
+    }
+    };
+    if member("jsonrpc") != Some(Value::String("2.0".into())) {
+        return Err(invalid(id, "jsonrpc must be \"2.0\"".into()));
+    }
+    let Some(Value::String(method)) = member("method") else {
+        return Err(invalid(id, "method must be a string".into()));
+    };
+    let params = match members.remove("params") {
+    None => None,
+    Some(params) if params.get().starts_with('{') => Some(params),
+    Some(_) => return Err(invalid(id, "params must be an object".into())),
+    };
+    if let Some(name) = members.keys().next() {
+        return Err(invalid(id, format!("unknown request member {name:?}")));
+    }
+    Ok(Request { id, method, params })
 }
 
 pub fn handle_line(service: &Service, line: &str) -> Response {

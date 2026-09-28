@@ -159,10 +159,18 @@ otherwise structurally valid database.
 ### 3.1 Provisional first-slice methods
 
 These names and shapes are provisional until section 4.2 of the plan freezes
-them. Unknown request members and unknown parameters are rejected (`-32602` for
-parameters). Evaluation-dependent methods take optional `evaluation_time` (a Jiff
-timestamp string) or `now: true`, not both; the host captures `now` once and the
-result's `analysis.inputs` reports the instant used.
+them. Unknown or repeated request members are rejected (`-32600`), as are
+unknown parameters (`-32602`). Parameters never accept `null`: omit an optional
+parameter instead, as for optional proposal fields. Results may carry `null`
+for absent optional values, such as `view.head` or `analysis.inputs.evaluation_time`.
+Evaluation-dependent methods take optional `evaluation_time` (a Jiff timestamp
+string) or `now: true`, not both; the host captures `now` once and the result's
+`analysis.inputs` reports the instant used.
+
+A `proposal` parameter is decoded on its own, exactly like a change file, so a
+malformed one fails with `malformed_proposal` (2001) and a `data.decode.path`
+inside it, such as `entries[0].payload.n`; failures of other parameters are
+`-32602`.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
@@ -195,7 +203,7 @@ a stable `data.kind`:
 | 1006 | `busy` | Another writer held the lock throughout the retry. |
 | 1007 | `publication_failed` | Failure before replacement; stored state unchanged. |
 | 1008 | `publication_uncertain` | Synchronization failed after replacement. |
-| 2001 | `malformed_proposal` | Decoding failed; `data.decode` has message, line, and column. |
+| 2001 | `malformed_proposal` | Decoding failed; `data.decode` has `format` and `message`, plus `path`, `line`, and `column` where known. |
 | 2002 | `invalid_proposal` | Names, references, intent, or structure; `data.location` names the entry and field where known. |
 | 2003 | `acknowledgment_unsupported` | `acknowledges` is present but not yet verified (plan section 4.4). |
 | 2004 | `foreign_database` | The plan ID names another database. |
