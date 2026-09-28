@@ -119,45 +119,45 @@ Goal: `lifecore init`, then `check` and `apply` a handwritten JSON or TOML file,
 look up entries through `rpc`, reload, and see the result. No HTTP, React, or
 suggestion export yet.
 
-- [ ] Add workspace members `lifecore-app` (shared contracts, JSON/TOML codecs,
-  storage, and the synchronous service; no async or HTTP dependencies),
-  `lifecore-server` (Axum adapter library), and `lifecore-cli` (the `lifecore`
-  binary, including `serve`).
-- [ ] Implement one `Proposal` representation for JSON and TOML, with optional
+- [x] Add workspace members `lifecore-app` (shared contracts, JSON/TOML codecs,
+  storage, and the synchronous service; no async or HTTP dependencies) and
+  `lifecore-cli` (the `lifecore` binary). `lifecore-server` and `serve` belong
+  to section 4.3.
+- [x] Implement one `Proposal` representation for JSON and TOML, with optional
   `plan_id` and `acknowledges`, over the core encoding from section 4.0. Omit
   absent optional fields in exports so both formats agree.
-- [ ] Lower proposals to core changes: unique operation names, exact existing
+- [x] Lower proposals to core changes: unique operation names, exact existing
   references, earlier-operation references, and revision intent.
-- [ ] Implement environment/cwd path resolution once. Reject empty, missing, or
+- [x] Implement environment/cwd path resolution once. Reject empty, missing, or
   unreadable selected paths for ordinary operations. Implement no-clobber `init`
   with TypeCheck configured by default and a `--no-typecheck` opt-out.
-- [ ] Implement the single JSON snapshot and stable sibling lock file specified
+- [x] Implement the single JSON snapshot and stable sibling lock file specified
   in FILES. Hold writer exclusion from reload and exact base verification through
   same-directory temporary-file publication and required synchronization.
   Preserve pre-publication rollback and distinguish post-publication
   synchronization failure. Start with locking around reload, check, and publication.
-- [ ] Mint and validate plan IDs, including foreign databases, equal-count
+- [x] Mint and validate plan IDs, including foreign databases, equal-count
   divergence, and suite-only changes. Persist fresh graph revision UUIDs
   atomically with changed graph/suite state; dismissals, no-ops, and minting
   preserve it.
-- [ ] Implement `check FILE`, `apply FILE`, `plan-id`, and `export FILE --format`
+- [x] Implement `check FILE`, `apply FILE`, `plan-id`, and `export FILE --format`
   with the output, exit-status, and evaluation-time options in
   [INTERFACES](INTERFACES.md#2-cli-surface).
-- [ ] Implement `add-analyzer NAME [CONFIG]` as a one-operation transaction
+- [x] Implement `add-analyzer NAME [CONFIG]` as a one-operation transaction
   against the current state, checked by full replay under the extended suite.
-- [ ] Define common request/result/error types and the single-call JSON-RPC-based
+- [x] Define common request/result/error types and the single-call JSON-RPC-based
   envelope described in INTERFACES, with dispatch shared by HTTP and the one-shot
   CLI; keep `init` outside dispatch. Implement `rpc`: one line in, one compact
   line out, then exit, with no request loop, method arguments, file options,
   notifications, or batches. Invalid input must not mutate the database.
-- [ ] Add read-only entry listing and lookup methods, returning exact identities
+- [x] Add read-only entry listing and lookup methods, returning exact identities
   with type, payload, and currentness. Method names stay provisional until
   section 4.2 freezes them.
-- [ ] Report rejected proposals with the complete analysis context from section
+- [x] Report rejected proposals with the complete analysis context from section
   4.0, with operation/field locations where available.
-- [ ] Return provisional operation-to-entry mappings for previews and actual
+- [x] Return provisional operation-to-entry mappings for previews and actual
   mappings after apply. Do not assume independent preparations reuse entry IDs.
-- [ ] Exercise equivalent JSON/TOML proposals, nested and empty values, timestamp
+- [x] Exercise equivalent JSON/TOML proposals, nested and empty values, timestamp
   round trips, both integer input forms and canonical output, malformed envelopes,
   invalid references, failed checks, revision intent at intermediate prefixes,
   both `init` paths, writer competition, stale tokens, publication failures, and
@@ -179,7 +179,8 @@ state unchanged.
 
 ### 4.3 Rust HTTP adapter and React client
 
-- [ ] Add `serve`, serving the React assets and one HTTP RPC endpoint over the
+- [ ] Add the `lifecore-server` workspace member (Axum adapter library) and
+  `serve`, serving the React assets and one HTTP RPC endpoint over the
   shared decoder/dispatcher. Resolve the database at startup. Keep initialization
   and filesystem path selection outside remote methods.
 - [ ] Run synchronous work on a dedicated thread. Construct analyzer factories

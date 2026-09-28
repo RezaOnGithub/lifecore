@@ -61,10 +61,12 @@ them directly. Package boundaries must preserve this dependency direction.
 | `lifecore add-analyzer NAME [CONFIG]` | Append a registered analyzer with its configuration string, default `{}`, to the ordered suite. |
 
 These conveniences call the same operations and use the same data as RPC.
-Collection-specific planning remains backlogged. `check`, `apply`, `plan-id`, and
-`add-analyzer` print the corresponding RPC result or error object as JSON on
-stdout and exit zero on success, nonzero on rejection or error. There is no
-separate human-readable renderer yet. `check`, `apply`, and `add-analyzer` take
+Collection-specific planning remains backlogged. `init`, `check`, `apply`,
+`plan-id`, and `add-analyzer` print the corresponding RPC result or error object
+as JSON on stdout, adding a one-line diagnostic on stderr for errors, and exit
+zero on success, nonzero on rejection or error. `export` prints the converted
+document. `FILE` arguments select JSON or TOML by their `.json` or `.toml`
+extension. There is no separate human-readable renderer yet. `check`, `apply`, and `add-analyzer` take
 `--evaluation-time <timestamp>` or `--now`; without either, evaluation time is
 absent. `--now` captures one instant before evaluation and reports it.
 `init` creates an empty database only; it does not import an existing graph.

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "lifecore-app",
+    "lifecore-cli",
     "lifecore-dag-check",
     "lifecore-typecheck"
 ]
