@@ -258,42 +258,58 @@ Follow [SUGGESTIONS.md](SUGGESTIONS.md).
   aligned. Run workspace tests, nightly formatting, strict Clippy for changed Rust
   packages, and frontend type/build checks plus focused browser workflow tests.
 
-## 5. Upcoming: checking cost
+## 5. Checking cost
 
-Scheduled soon; not part of the first slice. Checking cost grows roughly with the
-cube of history length. Measured ad hoc on `d36cf22` (release build, TypeCheck
-configured, one type declaration plus root nodes, checking one appended node):
+At `a07483e`, checking cost grew faster than the cube of history length:
+`View::is_stale` scanned every visible node, and TypeCheck re-judged every revision
+transition in the view at every replayed prefix. Measured ad hoc with a release
+build of `lifecore-cli`. Each snapshot holds a `Task` type, tasks, revisions, and
+`DependsOn` edges, with TypeCheck configured. The measurements time
+`database.describe` through `rpc`, and `check` of a one-node proposal. Before is
+`a07483e`; after includes both completed items below. Where compared (describe
+and entry listings up to 2,000 entries, check up to 1,000), outputs matched the
+baseline apart from the new entry's random origin.
 
-| Entries | Load and validate | Check one appended node |
-| --- | --- | --- |
-| 500 | 24 ms | 93 ms |
-| 1,000 | 178 ms | 688 ms |
-| 2,000 | 1.6 s | 6.1 s |
+| Entries | describe before | describe after | check before | check after |
+| ---: | ---: | ---: | ---: | ---: |
+| 500 | 0.03 s | 0.004 s | 0.8 s | 0.016 s |
+| 1,000 | 0.3 s | 0.009 s | 21 s | 0.06 s |
+| 2,000 | 3.1 s | 0.03 s | 370 s | 0.25 s |
+| 4,000 | 33 s | 0.11 s | not run | 1.0 s |
 
-Every apply reloads and checks, and the web client checks drafts interactively,
-so this needs addressing before real use. Known causes:
+Cost is now roughly quadratic in history length.
 
-- `transaction::prepare` reruns `basic_validation` over the whole graph before
-  staging and after every staged entry, though the base was validated on load.
-  Only the appended suffix needs checking.
-- `View::is_stale` scans all nodes, making `fresh_nodes`, duplicate detection,
-  and TypeCheck's per-prefix work quadratic in prefix length.
-- The runner replays every prefix, multiplying per-prefix analyzer cost by
-  history length.
+- [x] Answer staleness in constant time from a derived index of each node's
+  first-child position, owned by `LifeCoreList`, rebuilt on load, extended by
+  `prepare` only with validated entries, and compared with each view's length
+  ([SPEC §9](SPEC.md#9-inspection-and-queries)).
+- [x] TypeCheck judges a revision transition only at the prefix whose newest
+  entry is the successor; full replay still judges every transition once, with
+  unchanged finding keys and acceptance
+  ([SPEC §7.2](SPEC.md#72-successor-type-permission)).
 
-Candidate direction: validate only the appended suffix; index each node's first
-child position so staleness in a view of length `L` is `first_child < L`, which
-answers exactly for every prefix without exposing the suffix; then profile
-analyzer replay separately. Caching or incremental checks must reproduce
-full-prefix results exactly ([SPEC A.5](SPEC.md#a5-failure-handling-and-cost)),
-keyed by exact base, suite, implementations, and inputs. The server worker
-reloads the snapshot for every request, so load cost matters there too; a later
-worker cache would need a freshness check on file metadata (inode, modification
-time, size), because dismissal edits change the snapshot without rotating the
-graph revision. Acknowledgment
-verification reads committed-base observations from the same replay, so an
-incremental checker must still provide them. Add a repeatable benchmark with
-this work.
+Backlogged, not scheduled:
+
+- Incremental `basic_validation`: `prepare` still revalidates the whole graph
+  before staging and after every staged entry; only the appended suffix needs it.
+- Hash-based duplicate checks: node and edge duplicate detection still scans the
+  prefix before each entry.
+- Adjacency indexes: `children`, `edges_of`, `descendants`, and
+  `fresh_successors` still scan the view.
+- TypeCheck type-table or parse caching: every prefix re-parses each current
+  declaration and rebuilds its type table.
+- Reuse of base-prefix observations: every check replays the committed base
+  prefixes again.
+- A repeatable benchmark in the repository, replacing these ad hoc measurements.
+
+Caching or incremental checks must reproduce full-prefix results exactly
+([SPEC A.5](SPEC.md#a5-failure-handling-and-cost)), keyed by exact base, suite,
+implementations, and inputs. The server worker reloads the snapshot for every
+request, so load cost matters there too; a later worker cache would need a
+freshness check on file metadata (inode, modification time, size), because
+dismissal edits change the snapshot without rotating the graph revision.
+Acknowledgment verification reads committed-base observations from the same
+replay, so an incremental checker must still provide them.
 
 ## 6. Backlog
 
