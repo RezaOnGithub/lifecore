@@ -1,5 +1,5 @@
 use lifecore::{
-    DiagnosticLocation, EntryId, LifeCoreError, View,
+    DiagnosticLocation, Entry, EntryId, LifeCoreError, Node, View,
     analysis::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, EvaluationInputs, InnerMessageType,
         Message, MessageKind, MessageType, TypedAnalyzer,
@@ -134,6 +134,43 @@ impl TypedAnalyzer for TypeCheck {
         view: View<'_>,
         _inputs: &EvaluationInputs,
     ) -> Result<Vec<Self::MSG>, String> {
+        let mut output = Self::current_state(view);
+        //A A later schema cannot revoke a past transition. Each successor is judged
+        //A once, at the prefix it ends, against the view immediately before its
+        //A append. The runner replays every prefix, so every transition in history
+        //A is still judged, and its certificate omits the evaluated boundary.
+        if let Some(child) = view.entries().next_back().and_then(Entry::as_node) {
+            output.extend(Self::transition(view, child));
+        }
+        Ok(output)
+    }
+    fn convert_message(&self, finding: Self::MSG) -> Message {
+        let location = finding.location();
+        let message = finding.description();
+        Message {
+            //A The typed variant skips its ordinary boundary; the exact
+            //A subject and distinguishing details still define identity.
+            analyzer_certificate: AnalyzerCertificate(
+                serde_json::to_string(&(&finding, location.entry))
+                    .expect("typed TypeCheck finding"),
+            ),
+            subjects: location.entry.into_iter().collect(),
+            offending_event: Some(location),
+            relevance: location.entry.into_iter().collect(),
+            message,
+            kind: match finding.ty() {
+            MessageType::Warning => MessageKind::Warning,
+            _ => MessageKind::Inconsistency,
+            },
+            sticky: false,
+        }
+    }
+}
+
+impl TypeCheck {
+    //A Declarations, missing types, fields, and edge endpoints of the current
+    //A graph in `view`.
+    fn current_state(view: View<'_>) -> Vec<TypeCheckMessage> {
         use TypeCheckMessage::*;
         let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
         let mut output = Vec::new();
@@ -207,72 +244,42 @@ impl TypedAnalyzer for TypeCheck {
                 }
             }
         }
-        for child in view.nodes().filter(|n| n.parent.is_some()) {
-            //A A later schema cannot revoke a past transition; each child is judged
-            //A immediately before its append.
-            let before = view
-                .prefix(child.id.position())
-                .expect("child is inside view");
-            let parent = before
-                .node(child.parent.expect("selected child"))
-                .expect("validated parent");
-            let allowed = match before.resolve_type(&parent.ty_name) {
-            Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
-            Ok(Some(TypeDefinition::Declared { schema, .. })) => {
-                child.ty_name == schema.name || schema.additional_override.contains(&child.ty_name)
-            }
-            Ok(None) => {
-                output.push(MissingType {
-                    location: location(child.id),
-                    name: parent.ty_name.clone(),
-                });
-                continue;
-            }
-            Err(ResolutionError::Malformed { error, .. }) => {
-                output.push(MalformedDeclaration {
-                    location: location(child.id),
-                    error,
-                });
-                continue;
-            }
-            Err(ResolutionError::Ambiguous { name, .. }) => {
-                output.push(DuplicateType {
-                    location: location(child.id),
-                    name,
-                });
-                continue;
-            }
-            };
-            if !allowed {
-                output.push(BadOverride {
-                    location: location(child.id),
-                    parent_type: parent.ty_name.clone(),
-                    child_type: child.ty_name.clone(),
-                });
-            }
-        }
-        Ok(output)
+        output
     }
-    fn convert_message(&self, finding: Self::MSG) -> Message {
-        let location = finding.location();
-        let message = finding.description();
-        Message {
-            //A The typed variant skips its ordinary boundary; the exact
-            //A subject and distinguishing details still define identity.
-            analyzer_certificate: AnalyzerCertificate(
-                serde_json::to_string(&(&finding, location.entry))
-                    .expect("typed TypeCheck finding"),
-            ),
-            subjects: location.entry.into_iter().collect(),
-            offending_event: Some(location),
-            relevance: location.entry.into_iter().collect(),
-            message,
-            kind: match finding.ty() {
-            MessageType::Warning => MessageKind::Warning,
-            _ => MessageKind::Inconsistency,
-            },
-            sticky: false,
+    //A Judges a successor against the view immediately before its append; the
+    //A finding is located at the child in `view`.
+    fn transition(view: View<'_>, child: &Node) -> Option<TypeCheckMessage> {
+        use TypeCheckMessage::*;
+        let location = view
+            .location(Some(child.id))
+            .expect("visible diagnostic subject");
+        let before = view
+            .prefix(child.id.position())
+            .expect("child is inside view");
+        let parent = before.node(child.parent?).expect("validated parent");
+        let allowed = match before.resolve_type(&parent.ty_name) {
+        Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
+        Ok(Some(TypeDefinition::Declared { schema, .. })) => {
+            child.ty_name == schema.name || schema.additional_override.contains(&child.ty_name)
         }
+        Ok(None) => {
+            return Some(MissingType {
+                location,
+                name: parent.ty_name.clone(),
+            });
+        }
+        Err(ResolutionError::Malformed { error, .. }) => {
+            return Some(MalformedDeclaration { location, error });
+        }
+        Err(ResolutionError::Ambiguous { name, .. }) => {
+            return Some(DuplicateType { location, name });
+        }
+        };
+        (!allowed).then(|| BadOverride {
+            location,
+            parent_type: parent.ty_name.clone(),
+            child_type: child.ty_name.clone(),
+        })
     }
 }
 

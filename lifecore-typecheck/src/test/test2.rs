@@ -1,8 +1,11 @@
 use crate::{TypeCheck, TypeCheckFactory, TypeCheckMessage};
 use lifecore::{
-    Body, EntryId, LifeCoreList, Payload,
+    Body, EntryId, LifeCoreError, LifeCoreList, Payload, View,
     analysis::{
-        AnalysisRunner, Analyzer, AnalyzerFactory, InnerMessageType, MessageType, TypedAnalyzer,
+        AnalysisOutput, AnalysisRunner, Analyzer, AnalyzerFactory, Config, EvaluatedView,
+        EvaluationInputs, FindingKey, InnerMessageType, Message, MessageType, SuiteConfig,
+        TypedAnalyzer,
+        presentation::{Dismissals, ReportOptions, ReportSelection},
     },
     transaction::{
         Change, NewEdge, NewNode,
@@ -682,4 +685,457 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
     );
     assert!(dismissals.restore(&key));
     assert_eq!(after.warnings().count(), 4);
+}
+
+fn apply_checked(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
+    let plan = prepare(graph, changes, &mut runner())
+        .unwrap()
+        .accepted()
+        .unwrap();
+    let ids = plan.added();
+    plan.commit(graph).unwrap();
+    ids
+}
+fn certificate(key: &FindingKey) -> serde_json::Value {
+    serde_json::from_str(&key.analyzer_certificate.0).unwrap()
+}
+fn boundary(view: EvaluatedView) -> Option<usize> {
+    match view {
+    EvaluatedView::Prefix(view) => Some(view.end_exclusive),
+    EvaluatedView::Initialization => None,
+    }
+}
+
+#[test]
+fn a_bad_transition_is_reported_once_at_its_own_prefix_and_rejects_the_plan() {
+    let mut graph = LifeCoreList::default();
+    let ids = apply_checked(
+        &mut graph,
+        &[
+            configure(),
+            declaration(&ty("A"), None),
+            declaration(&ty("B"), None),
+            node("A", Body::new(), None),
+        ],
+    );
+    //A Two further appends follow the bad transition at position 3.
+    let checked = prepare(
+        &graph,
+        &[
+            node("B", Body::new(), Some(Existing(ids[2]))),
+            declaration(&ty("C"), None),
+            node("C", Body::new(), None),
+        ],
+        &mut runner(),
+    )
+    .unwrap();
+    let child = checked.operations()[0].unwrap();
+    let analysis = checked.analysis();
+    assert_eq!(analysis.view.end_exclusive, 6);
+    let errors = analysis.errors().collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(boundary(errors[0].evaluated_view), Some(4));
+    assert_eq!(errors[0].offending_event.unwrap().view.end_exclusive, 4);
+    assert_eq!(errors[0].offending_event.unwrap().entry, Some(child));
+    assert_eq!(errors[0].subjects, [child].into());
+    assert_eq!(
+        certificate(&errors[0].key),
+        serde_json::json!([
+            {"BadOverride": {"parent_type": "A", "child_type": "B"}},
+            child,
+        ])
+    );
+    //A Inconsistencies are selected in a current report whatever their boundary.
+    let dismissals = Dismissals::default();
+    let groups = analysis.groups(&dismissals, ReportOptions::default());
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].key, &errors[0].key);
+    assert_eq!(groups[0].selected, errors);
+    assert!(checked.accepted().is_err());
+    assert_eq!(graph.view().len(), 3);
+}
+
+#[test]
+fn a_bad_transition_deep_in_history_still_blocks_configuring_typecheck() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&ty("A"), None),
+            declaration(&ty("B"), None),
+            node("A", Body::new(), None),
+        ],
+    );
+    let child = append(
+        &mut graph,
+        &[
+            node("B", Body::new(), Some(Existing(ids[2]))),
+            declaration(&ty("C"), None),
+            node("C", Body::new(), None),
+        ],
+    )[0];
+    //A The head view no longer judges the transition; replaying prefix 4 does.
+    assert!(findings(&graph, 6).is_empty());
+    let checked = prepare(&graph, &[configure()], &mut runner()).unwrap();
+    let errors = checked.analysis().errors().collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(boundary(errors[0].evaluated_view), Some(4));
+    assert_eq!(errors[0].subjects, [child].into());
+    assert_eq!(
+        certificate(&errors[0].key)[0],
+        serde_json::json!({"BadOverride": {"parent_type": "A", "child_type": "B"}})
+    );
+    assert!(checked.accepted().is_err());
+}
+
+#[test]
+fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
+    let mut graph = LifeCoreList::default();
+    let mut a = ty("A");
+    a.additional_override.insert("B".into());
+    let b = Type::new(
+        "B",
+        &[("n", (ValueType::Integer, FieldStatus::Optional))],
+        &[],
+        &[],
+        &[],
+    );
+    let ids = apply_checked(
+        &mut graph,
+        &[
+            configure(),
+            declaration(&a, None),
+            declaration(&b, None),
+            node("A", Body::new(), None),
+            node("B", Body::new(), Some(Added(3))),
+        ],
+    );
+    a.additional_override.clear();
+    let revoke = prepare(
+        &graph,
+        &[declaration(&a, Some(Existing(ids[0])))],
+        &mut runner(),
+    )
+    .unwrap();
+    assert!(!revoke.analysis().has_error());
+    revoke.accepted().unwrap().commit(&mut graph).unwrap();
+    //A The recorded transition at position 3 stays valid under full replay, but
+    //A a new one is judged under the revised declaration.
+    let accepted = runner().run(&graph).unwrap();
+    assert!(!accepted.has_error());
+    let checked = prepare(
+        &graph,
+        &[node(
+            "B",
+            Body::from([("n".into(), 1.into())]),
+            Some(Existing(ids[2])),
+        )],
+        &mut runner(),
+    )
+    .unwrap();
+    let errors = checked.analysis().errors().collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(boundary(errors[0].evaluated_view), Some(6));
+    assert_eq!(
+        certificate(&errors[0].key)[0],
+        serde_json::json!({"BadOverride": {"parent_type": "A", "child_type": "B"}})
+    );
+    assert!(checked.accepted().is_err());
+}
+
+#[test]
+fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
+    let mut graph = LifeCoreList::default();
+    let mut a = ty("A");
+    a.additional_override.insert("B".into());
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&a, None),
+            declaration(&ty("B"), None),
+            node("A", Body::new(), None),
+        ],
+    );
+    a.additional_override.clear();
+    let child = append(
+        &mut graph,
+        &[
+            declaration(&a, Some(Existing(ids[0]))),
+            node("B", Body::new(), Some(Existing(ids[2]))),
+            declaration(&ty("C"), None),
+        ],
+    )[1];
+    let bad_override = |end_exclusive| {
+        findings(&graph, end_exclusive)
+            .into_iter()
+            .filter(|f| matches!(f, TypeCheckMessage::BadOverride { .. }))
+            .collect::<Vec<_>>()
+    };
+    assert!(bad_override(4).is_empty());
+    let at_own_prefix = bad_override(5);
+    assert_eq!(at_own_prefix.len(), 1);
+    assert!(matches!(
+        &at_own_prefix[0],
+        TypeCheckMessage::BadOverride { location, parent_type, child_type }
+            if location.entry == Some(child) && location.view.end_exclusive == 5
+                && parent_type == "A" && child_type == "B"
+    ));
+    assert!(bad_override(6).is_empty());
+    //A The former loop judged it again at every later prefix.
+    let reference = AllChildrenTypeCheck
+        .analyze_inner(graph.view(), &Default::default())
+        .unwrap();
+    assert!(reference.iter().any(|f| matches!(
+        f,
+        TypeCheckMessage::BadOverride { location, .. }
+            if location.entry == Some(child) && location.view.end_exclusive == 6
+    )));
+}
+
+//A The former transition loop, kept as a reference: every child in the view is
+//A judged against the prefix before it, at every prefix containing it.
+struct AllChildrenTypeCheck;
+
+impl TypedAnalyzer for AllChildrenTypeCheck {
+    type MSG = TypeCheckMessage;
+    fn version(&self) -> semver::Version {
+        TypedAnalyzer::version(&TypeCheck::default())
+    }
+    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+        Ok(Vec::new())
+    }
+    fn analyze_inner(
+        &self,
+        view: View<'_>,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, String> {
+        let mut output = TypeCheck::current_state(view);
+        output.extend(
+            view.nodes()
+                .filter(|n| n.parent.is_some())
+                .filter_map(|child| TypeCheck::transition(view, child)),
+        );
+        Ok(output)
+    }
+    fn convert_message(&self, finding: Self::MSG) -> Message {
+        TypeCheck::default().convert_message(finding)
+    }
+}
+
+//A Registered under TypeCheck's name and version, so finding keys compare
+//A directly with TypeCheck's own.
+struct AllChildrenFactory;
+
+impl AnalyzerFactory for AllChildrenFactory {
+    fn analyzer_name(&self) -> &'static str {
+        TypeCheckFactory::name()
+    }
+    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        TypeCheckFactory.analyzer_with_config(config)?;
+        Ok(Box::new(AllChildrenTypeCheck))
+    }
+}
+
+//A Each finding key with the prefix that first emitted it, in first-emission order.
+fn first_emissions(output: &AnalysisOutput) -> Vec<(&FindingKey, EvaluatedView)> {
+    let mut first = Vec::<(&FindingKey, EvaluatedView)>::new();
+    for observation in output.observations() {
+        if !first.iter().any(|(key, _)| *key == &observation.key) {
+            first.push((&observation.key, observation.evaluated_view));
+        }
+    }
+    first
+}
+
+fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
+    let suite = SuiteConfig(vec![Config {
+        name: TypeCheckFactory::name().into(),
+        config: String::new(),
+    }]);
+    let mut reference_runner = AnalysisRunner::default();
+    reference_runner
+        .register_analyzer_kind(Box::new(AllChildrenFactory))
+        .unwrap();
+    let mut repeated = 0;
+    for end_exclusive in 0..=graph.view().len() {
+        let view = graph.view().prefix(end_exclusive).unwrap();
+        let newest = runner().run_view(view, &suite).unwrap();
+        let reference = reference_runner.run_view(view, &suite).unwrap();
+        assert_eq!(first_emissions(&newest), first_emissions(&reference));
+        assert_eq!(newest.has_error(), reference.has_error());
+        //A Newest-only replay drops only repeated judgments of older children.
+        assert!(
+            newest
+                .observations()
+                .all(|o| reference.observations().any(|r| r == o))
+        );
+        for selection in [ReportSelection::Current, ReportSelection::History] {
+            let options = ReportOptions {
+                selection,
+                ..Default::default()
+            };
+            let keys = |output: &AnalysisOutput| {
+                output
+                    .groups(&Dismissals::default(), options)
+                    .into_iter()
+                    .map(|g| g.key.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(keys(&newest), keys(&reference));
+        }
+        repeated = reference.observations().count() - newest.observations().count();
+    }
+    repeated
+}
+
+#[test]
+fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
+    let with_field = |name: &str| {
+        Type::new(
+            name,
+            &[("v", (ValueType::Integer, FieldStatus::Optional))],
+            &[],
+            &[],
+            &[],
+        )
+    };
+    let v = |n: i64| Body::from([("v".into(), n.into())]);
+    let mut graphs = vec![];
+
+    //A A valid transition, a revoked permission, then a bad transition and a
+    //A same-type revision of the valid child.
+    let mut graph = LifeCoreList::default();
+    let mut a = with_field("A");
+    a.additional_override.insert("B".into());
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&a, None),
+            declaration(&with_field("B"), None),
+            node("A", Body::new(), None),
+            node("B", Body::new(), Some(Added(2))),
+        ],
+    );
+    a.additional_override.clear();
+    append(
+        &mut graph,
+        &[
+            declaration(&a, Some(Existing(ids[0]))),
+            node("B", v(1), Some(Existing(ids[2]))),
+            node("A", v(1), None),
+            node("B", v(2), Some(Existing(ids[3]))),
+        ],
+    );
+    graphs.push(graph);
+
+    //A Missing parent types: a declared successor of an undeclared root, and a
+    //A branch from a stale node whose declaration was retired. When a child keeps
+    //A its parent's missing type, the repeated judgment equals the current-state
+    //A finding and deduplicates; the declared successor's does not.
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&with_field("A"), None),
+            node("X", Body::new(), None),
+            node("A", Body::new(), Some(Added(1))),
+            node("A", v(1), None),
+            node("A", v(2), Some(Added(3))),
+        ],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&with_field("B"), Some(Existing(ids[0]))),
+            node("A", v(3), Some(Existing(ids[3]))),
+            node("X", v(1), Some(Existing(ids[1]))),
+        ],
+    );
+    graphs.push(graph);
+
+    //A An ambiguous parent type, later disambiguated by renaming a declaration.
+    let mut graph = LifeCoreList::default();
+    let mut other_a = with_field("A");
+    other_a.outgoing.insert("link".into());
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&with_field("A"), None),
+            declaration(&other_a, None),
+            node("A", Body::new(), None),
+            node("A", v(1), Some(Added(2))),
+        ],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&with_field("C"), Some(Existing(ids[1]))),
+            node("A", v(2), Some(Existing(ids[3]))),
+        ],
+    );
+    graphs.push(graph);
+
+    //A A malformed declaration blocks resolving the parent type until repaired.
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&with_field("A"), None),
+            node("A", Body::new(), None),
+            node("Type", Body::new(), None),
+            node("A", v(1), Some(Added(1))),
+        ],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&with_field("B"), Some(Existing(ids[2]))),
+            node("A", v(2), Some(Existing(ids[3]))),
+        ],
+    );
+    graphs.push(graph);
+
+    //A Edges whose endpoints are superseded, a permitted change into a
+    //A declaration, and a forbidden change between ordinary types, followed by
+    //A an unrelated append.
+    let mut graph = LifeCoreList::default();
+    let a = Type::new("A", &[], &["link"], &[], &["Type"]);
+    let b = Type::new("B", &[], &[], &["link"], &[]);
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&a, None),
+            declaration(&b, None),
+            node("A", Body::new(), None),
+            node("B", Body::new(), None),
+            Change::AddEdge(NewEdge {
+                from: Added(2),
+                ty_name: "link".into(),
+                to: Added(3),
+            }),
+        ],
+    );
+    append(
+        &mut graph,
+        &[
+            declaration(&with_field("C"), Some(Existing(ids[2]))),
+            node("B", Body::new(), Some(Existing(ids[3]))),
+            node("A", Body::from([("x".into(), true.into())]), None),
+            Change::AddEdge(NewEdge {
+                from: Added(2),
+                ty_name: "link".into(),
+                to: Added(1),
+            }),
+            node("B", Body::new(), Some(Added(2))),
+            declaration(&with_field("D"), None),
+        ],
+    );
+    graphs.push(graph);
+
+    //A Each fixture has later prefixes at which the former loop repeated a
+    //A transition judgment.
+    for graph in &graphs {
+        assert!(!graph.view().is_empty());
+        assert!(assert_replay_matches_all_children(graph) > 0);
+    }
 }

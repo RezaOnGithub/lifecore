@@ -57,6 +57,11 @@ Then the first analyzer evaluates every prefix `0..=end_exclusive`, followed by
 the second analyzer's full replay, and so on. Prefix `n` contains entries `[0, n)`.
 Initialization and prefix zero are separate invocations, even for an empty graph.
 The same inputs are passed to every invocation; no clock is read implicitly.
+Because every prefix is evaluated, an analyzer can judge an event once, at the
+prefix whose newest entry it is. TypeCheck does so for revision transitions
+([SPEC §7.2](SPEC.md#72-successor-type-permission)): each judgment contributes one
+observation, at that boundary, and reports select it at any head as an
+inconsistency.
 
 | Information supplied by | Destination | Rule |
 | --- | --- | --- |

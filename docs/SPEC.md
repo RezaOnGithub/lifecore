@@ -310,6 +310,14 @@ This is a transition check, not a permanent constraint re-evaluated against
 later schemas. Revoking a permission does not retroactively invalidate an
 earlier replacement.
 
+TypeCheck judges each transition once, at the prefix whose newest entry is the
+successor, against the view immediately before it; later prefixes do not repeat
+the judgment. Full replay ([section 8.1](#81-execution-and-normalization))
+evaluates every prefix, so every transition in history is still judged and its
+inconsistency still rejects any plan whose replay includes it. The finding key
+omits the evaluated boundary, and reports select inconsistencies at any boundary
+([section 8.3](#83-presentation-and-dismissal)).
+
 Append ordering must make the declaration needed for each transition available
 before that transition occurs.
 
