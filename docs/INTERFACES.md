@@ -154,6 +154,54 @@ context and advisories alongside blocking findings. Such a result must not
 expose a commit capability. Missing analyzers must not prevent reading an
 otherwise structurally valid database.
 
+### 3.1 Provisional first-slice methods
+
+These names and shapes are provisional until section 4.2 of the plan freezes
+them. Unknown request members and unknown parameters are rejected (`-32602` for
+parameters). Evaluation-dependent methods take optional `evaluation_time` (a Jiff
+timestamp string) or `now: true`, not both; the host captures `now` once and the
+result's `analysis.inputs` reports the instant used.
+
+| Method | Parameters | Result |
+| --- | --- | --- |
+| `database.describe` | none | `database`, `graph_revision`, current `view`, ordered `suite` |
+| `entries.list` | optional `kind` (`node`/`edge`), `type`, `currentness` (`current` default, `historical`, `all`), `text` (node text search) | `database`, `graph_revision`, `view`, `entries` in append order |
+| `entries.get` | `id` (exact `EntryId`) | `view` and `entry` |
+| `plan_id.mint` | none | `plan_id` |
+| `proposal.check` | `proposal`, evaluation inputs | report: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |
+| `proposal.apply` | `proposal`, evaluation inputs | new `graph_revision` and the report with actual entry IDs |
+| `proposal.decode` | raw `text`, `format` (`json`/`toml`) | canonical `Proposal` |
+| `proposal.encode` | `proposal`, `format` | `text` |
+| `analyzers.add` | `name`, `configuration` (default `{}`), evaluation inputs | new `graph_revision`, `suite`, and the report |
+
+Each entry record carries `kind`, exact `id`, `type`, `current`, and either
+`predecessor` (when present) and `payload`, or `from` and `to`.
+
+A structurally valid proposal whose replay emits an inconsistency fails `check`
+and `apply` alike with the `rejected` error; its `data.report` is the complete
+report above, including advisories. `add-analyzer` rejects the same way, with no
+operations. Application errors use codes outside the reserved JSON-RPC range and
+a stable `data.kind`:
+
+| Code | `data.kind` | Meaning |
+| --- | --- | --- |
+| 1001 | `state_path_empty`, `working_directory` | The state path cannot be selected. |
+| 1002 | `database_missing` | No database at the selected path. |
+| 1003 | `database_unreadable` | The snapshot cannot be read or is invalid. |
+| 1004 | `database_exists` | `init` refuses to replace an existing path. |
+| 1005 | `lock_failed` | The lock file cannot be opened or locked. |
+| 1006 | `busy` | Another writer held the lock throughout the retry. |
+| 1007 | `publication_failed` | Failure before replacement; stored state unchanged. |
+| 1008 | `publication_uncertain` | Synchronization failed after replacement. |
+| 2001 | `malformed_proposal` | Decoding failed; `data.decode` has message, line, and column. |
+| 2002 | `invalid_proposal` | Names, references, intent, or structure; `data.location` names the entry and field where known. |
+| 2003 | `acknowledgment_unsupported` | `acknowledges` is present but not yet verified (plan section 4.4). |
+| 2004 | `foreign_database` | The plan ID names another database. |
+| 2005 | `stale_base` | The plan ID names an earlier graph revision. |
+| 2006 | `rejected` | Inconsistencies; `data.report` has the complete report. |
+| 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
+| 4001 | `entry_not_found` | The identity is not present in the selected view. |
+
 ## 4. Database selection and concurrency
 
 Resolve the database path in one synchronous host helper:
@@ -187,8 +235,11 @@ check, publish atomically, perform required synchronization, and release the
 lock. Dismissal edits reread and preserve other records under writer exclusion.
 Lock `<state-path>.lock`, a stable sibling file retained across snapshot
 replacement; the default is `LifeCoreState.json.lock`. Use the standard library's
-`File::lock`/`try_lock`. A writer that finds the lock held retries briefly, then
-returns a structured busy error instead of blocking indefinitely.
+`File::lock`/`try_lock`. A writer that finds the lock held retries briefly
+(currently for about a second), then returns a structured busy error instead of
+blocking indefinitely. Ordinary operations on a missing database fail without
+creating the snapshot or its lock file; `init` requires the containing directory
+to exist.
 Do not hold locks across browser editing or between standalone check and apply.
 An optimization that prepares outside the lock must compare the exact base
 again under writer exclusion before publication.

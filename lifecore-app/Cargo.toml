@@ -11,5 +11,9 @@ thiserror = "2.0.18"
 toml = "1.1"
 uuid = { version = "1.24.0", features = ["serde", "v4"] }
 
+[dev-dependencies]
+lifecore-dag-check = { path = "../lifecore-dag-check" }
+lifecore-typecheck = { path = "../lifecore-typecheck" }
+
 [lints]
 workspace = true

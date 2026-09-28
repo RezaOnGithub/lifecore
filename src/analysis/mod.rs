@@ -125,7 +125,7 @@ pub enum EvaluatedView {
     Prefix(ViewId),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, thiserror::Error)]
 #[error("analyzer {analyzer:?} failed at {evaluated_view:?}: {message}")]
 pub struct ExecutionFailure {
     pub analyzer: AnalyzerIdentity,

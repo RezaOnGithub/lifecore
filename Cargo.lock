@@ -201,6 +201,8 @@ name = "lifecore-app"
 version = "0.1.0"
 dependencies = [
  "lifecore",
+ "lifecore-dag-check",
+ "lifecore-typecheck",
  "serde",
  "serde_json",
  "thiserror",

@@ -5,7 +5,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Currentness {
     #[default]
     Current,

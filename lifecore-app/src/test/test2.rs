@@ -1,6 +1,124 @@
-use crate::proposal::{self, Format, PlanId, Proposal};
-use lifecore::{Body, Payload, Timestamp};
+use crate::{
+    AppError, Service,
+    proposal::{self, Format, PlanId, Proposal},
+    rpc,
+    service::{
+        AddAnalyzerRequest, EntryGetRequest, EntryListRequest, EntryRecord, NoParams,
+        ProposalRequest,
+    },
+    storage::{self, DEFAULT_STATE_FILE, StatePath},
+};
+use lifecore::{
+    Body, EntryId, Payload, Timestamp,
+    analysis::{AnalyzerFactory, Config, MessageType},
+    inspection::Currentness,
+    transaction::RevisionIntent,
+    typing::{FieldStatus, Type, ValueType},
+};
+use lifecore_dag_check::DagCheckFactory;
+use lifecore_typecheck::TypeCheckFactory;
 use serde_json::{Value, json};
+use std::{fs, path::PathBuf};
+use uuid::Uuid;
+
+//A A private directory per test, removed afterwards.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        let dir = std::env::temp_dir().join(format!("lifecore-app-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+    fn state(&self) -> StatePath {
+        StatePath::new(self.0.join(DEFAULT_STATE_FILE))
+    }
+    fn service(&self) -> Service {
+        service(self.state())
+    }
+    fn bytes(&self) -> Vec<u8> {
+        fs::read(self.state().path()).unwrap()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+fn service(state: StatePath) -> Service {
+    Service::new(
+        state,
+        Box::new(|| -> Vec<Box<dyn AnalyzerFactory>> {
+            vec![Box::new(TypeCheckFactory), Box::new(DagCheckFactory)]
+        }),
+    )
+}
+
+fn typecheck() -> Vec<Config> {
+    vec![Config {
+        name: TypeCheckFactory::name().into(),
+        config: "{}".into(),
+    }]
+}
+
+fn task_type() -> Body {
+    Type::new(
+        "Task",
+        &[
+            ("title", (ValueType::Text, FieldStatus::Mandatory)),
+            ("status", (ValueType::Text, FieldStatus::Optional)),
+            ("notes", (ValueType::Text, FieldStatus::Encouraged)),
+        ],
+        &["DependsOn"],
+        &["DependsOn"],
+        &[],
+    )
+    .to_body()
+}
+
+fn proposal(entries: Value) -> Proposal {
+    serde_json::from_value(json!({"format_version": 1, "entries": entries})).unwrap()
+}
+
+fn request(proposal: Proposal) -> ProposalRequest {
+    ProposalRequest {
+        proposal,
+        evaluation_time: None,
+        now: false,
+    }
+}
+
+fn task(name: &str, title: &str) -> Value {
+    json!({"name": name, "kind": "node", "type": "Task",
+        "payload": {"title": title, "notes": "n"}})
+}
+
+//A Initialize with TypeCheck, declare Task, and add two tasks and an edge.
+fn populated(scratch: &Scratch) -> Vec<EntryId> {
+    let service = scratch.service();
+    service.init(&typecheck()).unwrap();
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "task_type", "kind": "node", "type": "Type", "payload": task_type()},
+            task("a", "A"),
+            task("b", "B"),
+            {"name": "a_b", "kind": "edge", "type": "DependsOn",
+                "from": {"added": "a"}, "to": {"added": "b"}},
+        ]))))
+        .unwrap();
+    applied
+        .report
+        .operations
+        .iter()
+        .map(|operation| operation.entry)
+        .collect()
+}
+
+fn existing(id: EntryId) -> Value {
+    json!({"existing": serde_json::to_value(id).unwrap()})
+}
 
 const FILE_JSON: &str = r#"{
   "format_version": 1,
@@ -170,4 +288,682 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
             "accepted {text}"
         );
     }
+}
+
+#[test]
+fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
+    use lifecore::transaction::{Change, Reference};
+    let scratch = Scratch::new();
+    let ids = populated(&scratch);
+    let snapshot = storage::read(&scratch.state()).unwrap();
+    let base = snapshot.graph.view();
+    let lowered = proposal(json!([
+        {"name": "a2", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+            "intent": "revise", "payload": {"title": "A2"}},
+        {"name": "link", "kind": "edge", "type": "DependsOn",
+            "from": {"added": "a2"}, "to": existing(ids[2])},
+    ]))
+    .lower(base)
+    .unwrap();
+    let Change::AddNode(node) = &lowered[0] else {
+        panic!("expected a node")
+    };
+    assert_eq!(node.parent, Some(Reference::Existing(ids[1])));
+    assert_eq!(node.intent, Some(RevisionIntent::Revise));
+    let Change::AddEdge(edge) = &lowered[1] else {
+        panic!("expected an edge")
+    };
+    assert_eq!(
+        (edge.from, edge.to),
+        (Reference::Added(0), Reference::Existing(ids[2]))
+    );
+    let node = |name: &str, predecessor: Option<Value>| {
+        let mut entry = json!({"name": name, "kind": "node", "type": "Task", "payload": {}});
+        if let Some(predecessor) = predecessor {
+            entry["predecessor"] = predecessor;
+            entry["intent"] = "branch".into();
+        }
+        entry
+    };
+    let edge = |from: Value, to: Value| json!({"name": "e", "kind": "edge", "type": "DependsOn", "from": from, "to": to});
+    let mut missing = serde_json::to_value(ids[1]).unwrap();
+    missing["position"] = "999".into();
+    let cases = [
+        (json!([node("1bad", None)]), 0, "name"),
+        (json!([node("ok", None), node("ok", None)]), 1, "name"),
+        (
+            json!([
+                node("x", Some(json!({"added": "later"}))),
+                node("later", None)
+            ]),
+            0,
+            "predecessor",
+        ),
+        (
+            json!([
+                node("n", None),
+                node("m", None),
+                edge(json!({"added": "n"}), json!({"added": "m"})),
+                edge(json!({"added": "e"}), json!({"added": "n"}))
+            ]),
+            3,
+            "name",
+        ),
+        (
+            json!([
+                node("n", None),
+                edge(json!({"added": "n"}), json!({"existing": missing}))
+            ]),
+            1,
+            "to",
+        ),
+        (json!([node("n", Some(existing(ids[3])))]), 0, "predecessor"),
+    ];
+    for (entries, operation, field) in cases {
+        let (location, _) = proposal(entries.clone()).lower(base).unwrap_err();
+        assert_eq!(location.operation, operation, "{entries}");
+        assert_eq!(location.field.as_deref(), Some(field), "{entries}");
+    }
+    let (location, error) = proposal(json!([
+        node("n", None),
+        node("m", None),
+        {"name": "e", "kind": "edge", "type": "DependsOn", "from": {"added": "n"}, "to": {"added": "m"}},
+        node("child", Some(json!({"added": "e"}))),
+    ]))
+    .lower(base)
+    .unwrap_err();
+    assert_eq!((location.operation, location.name.as_str()), (3, "child"));
+    assert!(matches!(
+        error,
+        proposal::LoweringError::EdgeReference { .. }
+    ));
+}
+
+#[test]
+fn state_paths_use_the_variable_or_cwd_without_fallback() {
+    let cwd = PathBuf::from("/work/dir");
+    assert_eq!(
+        StatePath::resolve_from(None, &cwd).unwrap().path(),
+        cwd.join("LifeCoreState.json")
+    );
+    assert_eq!(
+        StatePath::resolve_from(Some("sub/db.json".into()), &cwd)
+            .unwrap()
+            .path(),
+        cwd.join("sub/db.json")
+    );
+    let absolute = StatePath::resolve_from(Some("/elsewhere/db.json".into()), &cwd).unwrap();
+    assert_eq!(absolute.path(), PathBuf::from("/elsewhere/db.json"));
+    assert_eq!(
+        absolute.lock_path(),
+        PathBuf::from("/elsewhere/db.json.lock")
+    );
+    assert!(matches!(
+        StatePath::resolve_from(Some("".into()), &cwd),
+        Err(AppError::EmptyStatePath)
+    ));
+}
+
+#[test]
+fn init_supports_both_suites_and_never_clobbers() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    assert!(matches!(
+        service.describe(NoParams {}),
+        Err(AppError::DatabaseMissing { .. })
+    ));
+    assert!(matches!(
+        service.apply(request(proposal(json!([])))),
+        Err(AppError::DatabaseMissing { .. })
+    ));
+    //A Ordinary operations never create the database or its lock file.
+    assert!(!scratch.state().path().exists());
+    assert!(!scratch.state().lock_path().exists());
+    let initialized = service.init(&typecheck()).unwrap();
+    assert_eq!(initialized.suite.0, typecheck());
+    assert!(scratch.state().lock_path().exists());
+    let before = scratch.bytes();
+    assert!(matches!(
+        service.init(&[]),
+        Err(AppError::DatabaseExists { .. })
+    ));
+    assert_eq!(scratch.bytes(), before);
+    let described = service.describe(NoParams {}).unwrap();
+    assert_eq!(described.database, initialized.database);
+    assert_eq!(described.graph_revision, initialized.graph_revision);
+    assert_eq!(described.view.end_exclusive, 0);
+
+    let bare = Scratch::new();
+    let initialized = bare.service().init(&[]).unwrap();
+    assert!(initialized.suite.0.is_empty());
+    assert!(matches!(
+        bare.service().init(&[Config {
+            name: "Missing".into(),
+            config: "{}".into()
+        }]),
+        Err(AppError::DatabaseExists { .. })
+    ));
+    let other = Scratch::new();
+    assert!(matches!(
+        other.service().init(&[Config {
+            name: TypeCheckFactory::name().into(),
+            config: "not json".into()
+        }]),
+        Err(AppError::Analyzer(_))
+    ));
+    assert!(!other.state().path().exists());
+    //A A directory or garbage at the selected path is an error, not a fallback.
+    fs::write(other.state().path(), "not a snapshot").unwrap();
+    assert!(matches!(
+        other.service().describe(NoParams {}),
+        Err(AppError::DatabaseUnreadable { .. })
+    ));
+}
+
+#[test]
+fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
+    let scratch = Scratch::new();
+    let ids = populated(&scratch);
+    let service = scratch.service();
+    let line = r#"{"jsonrpc":"2.0","id":"list","method":"entries.list","params":{"type":"Task"}}"#;
+    let response = serde_json::to_value(rpc::handle_line(&service, line)).unwrap();
+    assert_eq!(response["id"], "list");
+    let entries = response["result"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["id"], serde_json::to_value(ids[1]).unwrap());
+    assert_eq!(entries[0]["payload"]["title"], "A");
+    assert_eq!(entries[0]["current"], true);
+    assert_eq!(response["result"]["view"]["end_exclusive"], "4");
+    //A Revise A through the exact identity found above.
+    let a: EntryId = serde_json::from_value(entries[0]["id"].clone()).unwrap();
+    let before = service.describe(NoParams {}).unwrap();
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "a2", "kind": "node", "type": "Task", "predecessor": existing(a),
+                "intent": "revise", "payload": {"title": "A", "status": "done", "notes": "n"}},
+            {"name": "a2_b", "kind": "edge", "type": "DependsOn",
+                "from": {"added": "a2"}, "to": existing(ids[2])},
+        ]))))
+        .unwrap();
+    assert_ne!(applied.graph_revision, before.graph_revision);
+    assert_eq!(applied.report.base_revision, before.graph_revision);
+    assert_eq!(applied.report.base, before.view);
+    let names = applied
+        .report
+        .operations
+        .iter()
+        .map(|o| o.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["a2", "a2_b"]);
+    //A The reported mapping is the actual stored identity after reload.
+    let reloaded = service
+        .get_entry(EntryGetRequest {
+            id: applied.report.operations[0].entry,
+        })
+        .unwrap();
+    let EntryRecord::Node {
+        predecessor,
+        payload,
+        current,
+        ..
+    } = reloaded.entry
+    else {
+        panic!("expected a node")
+    };
+    assert_eq!(predecessor, Some(a));
+    assert_eq!(payload["status"], Payload::Text("done".into()));
+    assert!(current);
+    let old = service.get_entry(EntryGetRequest { id: a }).unwrap();
+    assert!(matches!(
+        old.entry,
+        EntryRecord::Node { current: false, .. }
+    ));
+    let historical = service
+        .list_entries(EntryListRequest {
+            currentness: Currentness::Historical,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        historical
+            .entries
+            .iter()
+            .map(|e| match e {
+            EntryRecord::Node { id, .. } | EntryRecord::Edge { id, .. } => *id,
+            })
+            .collect::<Vec<_>>(),
+        vec![ids[1], ids[3]]
+    );
+    //A A standalone check of a further revision previews without storing.
+    let stored = scratch.bytes();
+    let preview = service
+        .check(request(proposal(json!([
+            {"name": "a3", "kind": "node", "type": "Task",
+                "predecessor": existing(applied.report.operations[0].entry),
+                "intent": "revise", "payload": {"title": "A3", "notes": "n"}},
+        ]))))
+        .unwrap();
+    assert_eq!(preview.base_revision, applied.graph_revision);
+    assert_eq!(preview.operations.len(), 1);
+    assert_eq!(scratch.bytes(), stored);
+    assert!(matches!(
+        service.get_entry(EntryGetRequest {
+            id: preview.operations[0].entry
+        }),
+        Err(AppError::EntryNotFound { .. })
+    ));
+}
+
+#[test]
+fn revision_intent_is_enforced_at_intermediate_prefixes() {
+    let scratch = Scratch::new();
+    let ids = populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    let revise_twice = |second: &str| {
+        proposal(json!([
+            {"name": "first", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+                "intent": "revise", "payload": {"title": "1", "notes": "n"}},
+            {"name": "second", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+                "intent": second, "payload": {"title": "2", "notes": "n"}},
+        ]))
+    };
+    for result in [
+        service.check(request(revise_twice("revise"))),
+        service
+            .apply(request(revise_twice("revise")))
+            .map(|a| a.report),
+    ] {
+        let Err(AppError::InvalidProposal {
+            location: Some(location),
+            ..
+        }) = result
+        else {
+            panic!("the second revision must be rejected")
+        };
+        assert_eq!(location.operation, 1);
+        assert_eq!(location.name, "second");
+        assert_eq!(location.field.as_deref(), Some("intent"));
+    }
+    assert_eq!(scratch.bytes(), stored);
+    for (entry, message) in [
+        (
+            json!({"name": "r", "kind": "node", "type": "Task", "intent": "revise", "payload": {"title": "r", "notes": "n"}}),
+            "root",
+        ),
+        (
+            json!({"name": "r", "kind": "node", "type": "Task", "predecessor": existing(ids[1]), "payload": {"title": "r", "notes": "n"}}),
+            "without",
+        ),
+    ] {
+        let Err(AppError::InvalidProposal { message: text, .. }) =
+            service.check(request(proposal(json!([entry]))))
+        else {
+            panic!("inconsistent intent must be rejected")
+        };
+        assert!(text.contains(message), "{text}");
+    }
+    //A A split through `branch` is valid at the same intermediate prefix.
+    let split = service.apply(request(revise_twice("branch"))).unwrap();
+    assert_eq!(split.report.operations.len(), 2);
+}
+
+#[test]
+fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let with = |plan_id: PlanId, entries: Value| {
+        let mut proposal = proposal(entries);
+        proposal.plan_id = Some(plan_id);
+        request(proposal)
+    };
+    let described = service.describe(NoParams {}).unwrap();
+    let first = service.mint_plan_id(NoParams {}).unwrap().plan_id;
+    let second = service.mint_plan_id(NoParams {}).unwrap().plan_id;
+    //A Minting shares the base, distinguishes proposals, and changes nothing.
+    assert_eq!(
+        (first.database, first.graph_revision),
+        (second.database, second.graph_revision)
+    );
+    assert_ne!(first.proposal, second.proposal);
+    assert_eq!(first.graph_revision, described.graph_revision);
+    assert_eq!(service.describe(NoParams {}).unwrap(), described);
+    //A A matching token checks; an empty apply is a no-op keeping the revision.
+    service.check(with(first, json!([task("c", "C")]))).unwrap();
+    let before = scratch.bytes();
+    let noop = service.apply(with(first, json!([]))).unwrap();
+    assert_eq!(noop.graph_revision, described.graph_revision);
+    assert_eq!(scratch.bytes(), before);
+    let foreign = PlanId {
+        database: Uuid::new_v4(),
+        ..first
+    };
+    assert!(matches!(
+        service.apply(with(foreign, json!([task("c", "C")]))),
+        Err(AppError::ForeignDatabase { .. })
+    ));
+    //A Keep a copy of this state to build an equal-count divergent history.
+    let copy = scratch.bytes();
+    let applied = service.apply(with(first, json!([task("c", "C")]))).unwrap();
+    let stored = scratch.bytes();
+    for plan_id in [first, second] {
+        assert!(matches!(
+            service.check(with(plan_id, json!([task("d", "D")]))),
+            Err(AppError::StaleBase { .. })
+        ));
+        assert!(matches!(
+            service.apply(with(plan_id, json!([task("d", "D")]))),
+            Err(AppError::StaleBase { .. })
+        ));
+    }
+    assert_eq!(scratch.bytes(), stored);
+    let current = service.mint_plan_id(NoParams {}).unwrap().plan_id;
+    assert_eq!(current.graph_revision, applied.graph_revision);
+    fs::write(scratch.state().path(), &copy).unwrap();
+    let divergent = service
+        .apply(request(proposal(json!([task("x", "X")]))))
+        .unwrap();
+    assert_eq!(
+        divergent.report.analysis.view.end_exclusive,
+        applied.report.analysis.view.end_exclusive
+    );
+    assert!(matches!(
+        service.apply(with(current, json!([task("d", "D")]))),
+        Err(AppError::StaleBase { .. })
+    ));
+    //A A suite-only change also rotates the revision.
+    let before_suite = service.mint_plan_id(NoParams {}).unwrap().plan_id;
+    let added = service
+        .add_analyzer(AddAnalyzerRequest {
+            name: DagCheckFactory::name().into(),
+            configuration: r#"{"on_cycle":"warning"}"#.into(),
+            evaluation_time: None,
+            now: false,
+        })
+        .unwrap();
+    assert_ne!(added.graph_revision, before_suite.graph_revision);
+    assert_eq!(added.suite.0.len(), 2);
+    assert!(matches!(
+        service.apply(with(before_suite, json!([task("d", "D")]))),
+        Err(AppError::StaleBase { .. })
+    ));
+}
+
+#[test]
+fn rejected_proposals_report_full_context_and_store_nothing() {
+    let scratch = Scratch::new();
+    let ids = populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    //A The second task lacks its mandatory title; the first lacks encouraged notes.
+    let rejected = || {
+        request(proposal(json!([
+            {"name": "ok", "kind": "node", "type": "Task", "payload": {"title": "ok"}},
+            {"name": "bad", "kind": "node", "type": "Task", "payload": {"notes": "n"}},
+            {"name": "link", "kind": "edge", "type": "DependsOn",
+                "from": {"added": "ok"}, "to": existing(ids[2])},
+        ])))
+    };
+    for result in [
+        service.check(rejected()),
+        service.apply(rejected()).map(|a| a.report),
+    ] {
+        let Err(AppError::Rejected(report)) = result else {
+            panic!("an inconsistent proposal must be rejected")
+        };
+        assert_eq!(report.base.end_exclusive, 4);
+        assert_eq!(report.operations.len(), 3);
+        let analysis = &report.analysis;
+        assert_eq!(analysis.view.end_exclusive, 7);
+        assert_eq!(analysis.implementations[0].name, "Type_Check");
+        let errors = analysis.errors().collect::<Vec<_>>();
+        assert!(!errors.is_empty());
+        assert!(
+            errors
+                .iter()
+                .all(|o| o.subjects.contains(&report.operations[1].entry))
+        );
+        assert!(
+            analysis
+                .warnings()
+                .any(|o| o.subjects.contains(&report.operations[0].entry))
+        );
+        let object = AppError::Rejected(report.clone()).to_object();
+        assert_eq!(object.data.as_ref().unwrap()["kind"], "rejected");
+        assert_eq!(
+            object.data.as_ref().unwrap()["report"]["operations"][1]["name"],
+            "bad"
+        );
+    }
+    assert_eq!(scratch.bytes(), stored);
+}
+
+#[test]
+fn add_analyzer_replays_history_and_rejects_an_old_cycle() {
+    let scratch = Scratch::new();
+    let ids = populated(&scratch);
+    let service = scratch.service();
+    //A Close a cycle, then revise B so the current graph is acyclic again.
+    service
+        .apply(request(proposal(json!([
+            {"name": "b_a", "kind": "edge", "type": "DependsOn",
+                "from": existing(ids[2]), "to": existing(ids[1])},
+            {"name": "b2", "kind": "node", "type": "Task", "predecessor": existing(ids[2]),
+                "intent": "revise", "payload": {"title": "B2", "notes": "n"}},
+        ]))))
+        .unwrap();
+    let stored = scratch.bytes();
+    let add = |configuration: &str| {
+        service.add_analyzer(AddAnalyzerRequest {
+            name: DagCheckFactory::name().into(),
+            configuration: configuration.into(),
+            evaluation_time: None,
+            now: false,
+        })
+    };
+    let Err(AppError::Rejected(report)) = add(r#"{"on_cycle":"inconsistency"}"#) else {
+        panic!("a historical cycle must reject the analyzer")
+    };
+    assert!(report.operations.is_empty());
+    let boundaries = report
+        .analysis
+        .errors()
+        .map(|o| o.offending_event.unwrap().view.end_exclusive)
+        .collect::<Vec<_>>();
+    assert_eq!(boundaries, vec![5]);
+    assert_eq!(scratch.bytes(), stored);
+    assert!(matches!(add("not json"), Err(AppError::Analyzer(_))));
+    assert!(matches!(
+        service.add_analyzer(AddAnalyzerRequest {
+            name: "Missing".into(),
+            configuration: "{}".into(),
+            evaluation_time: None,
+            now: false,
+        }),
+        Err(AppError::Analyzer(_))
+    ));
+    assert_eq!(scratch.bytes(), stored);
+    let added = add(r#"{"on_cycle":"warning"}"#).unwrap();
+    assert_eq!(added.suite.0[1].name, "DAG_Check");
+    assert!(
+        added
+            .report
+            .analysis
+            .warnings()
+            .any(|o| o.key.kind == MessageType::Warning)
+    );
+}
+
+#[test]
+fn competing_writers_get_a_busy_error_and_no_mutation() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    let holder = fs::File::options()
+        .write(true)
+        .open(scratch.state().lock_path())
+        .unwrap();
+    holder.lock().unwrap();
+    assert!(matches!(
+        service.apply(request(proposal(json!([task("c", "C")])))),
+        Err(AppError::Busy { .. })
+    ));
+    assert!(matches!(service.init(&[]), Err(AppError::Busy { .. })));
+    //A Readers and standalone checks need no lock.
+    service
+        .check(request(proposal(json!([task("c", "C")]))))
+        .unwrap();
+    assert_eq!(scratch.bytes(), stored);
+    //A A writer that releases within the retry window lets the apply proceed.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        drop(holder);
+    });
+    service
+        .apply(request(proposal(json!([task("c", "C")]))))
+        .unwrap();
+    release.join().unwrap();
+}
+
+#[test]
+fn failed_publication_before_replacement_preserves_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o555)).unwrap();
+    //A Privileged users bypass directory permissions; nothing to observe then.
+    let enforced = fs::write(scratch.0.join("probe"), "").is_err();
+    let result = service.apply(request(proposal(json!([task("c", "C")]))));
+    fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o755)).unwrap();
+    if enforced {
+        assert!(matches!(result, Err(AppError::PublicationFailed { .. })));
+        assert_eq!(scratch.bytes(), stored);
+        assert_eq!(fs::read_dir(&scratch.0).unwrap().count(), 2);
+    }
+}
+
+#[test]
+fn acknowledgments_are_rejected_until_verification_exists() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    let described = service.describe(NoParams {}).unwrap();
+    let mut acknowledging = proposal(json!([task("c", "C")]));
+    acknowledging.acknowledges = Some(lifecore::analysis::FindingKey {
+        database: described.database,
+        analyzer: lifecore::analysis::AnalyzerIdentity {
+            name: "Type_Check".into(),
+            version: "0.1.0".parse().unwrap(),
+            configuration: "{}".into(),
+        },
+        kind: MessageType::Suggestion,
+        analyzer_certificate: lifecore::analysis::AnalyzerCertificate("x".into()),
+    });
+    assert!(matches!(
+        service.check(request(acknowledging.clone())),
+        Err(AppError::AcknowledgmentUnsupported)
+    ));
+    assert!(matches!(
+        service.apply(request(acknowledging)),
+        Err(AppError::AcknowledgmentUnsupported)
+    ));
+    assert_eq!(scratch.bytes(), stored);
+}
+
+#[test]
+fn evaluation_time_is_explicit_or_captured_once_by_the_host() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let absent = service.check(request(proposal(json!([])))).unwrap();
+    assert_eq!(absent.analysis.inputs.evaluation_time, None);
+    let at: Timestamp = "2026-01-02T03:04:05.000000006Z".parse().unwrap();
+    let explicit = service
+        .check(ProposalRequest {
+            evaluation_time: Some(at),
+            ..request(proposal(json!([])))
+        })
+        .unwrap();
+    assert_eq!(explicit.analysis.inputs.evaluation_time, Some(at));
+    let now = service
+        .check(ProposalRequest {
+            now: true,
+            ..request(proposal(json!([])))
+        })
+        .unwrap();
+    assert!(now.analysis.inputs.evaluation_time.is_some());
+    assert!(matches!(
+        service.check(ProposalRequest {
+            evaluation_time: Some(at),
+            now: true,
+            ..request(proposal(json!([])))
+        }),
+        Err(AppError::InvalidParams { .. })
+    ));
+}
+
+#[test]
+fn rpc_envelope_rejects_invalid_calls_without_mutation() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let stored = scratch.bytes();
+    let call = |line: &str| serde_json::to_value(rpc::handle_line(&service, line)).unwrap();
+    let apply = json!({"proposal": {"format_version": 1, "entries": [task("c", "C")]}});
+    for (line, code, id) in [
+        ("".to_string(), -32700, Value::Null),
+        ("{not json".to_string(), -32700, Value::Null),
+        (format!("[{}]", json!({"jsonrpc": "2.0", "id": 1, "method": "proposal.apply", "params": apply})), -32600, Value::Null),
+        (json!({"jsonrpc": "2.0", "method": "proposal.apply", "params": apply}).to_string(), -32600, Value::Null),
+        (json!({"jsonrpc": "2.0", "id": null, "method": "proposal.apply", "params": apply}).to_string(), -32600, Value::Null),
+        (json!({"jsonrpc": "1.0", "id": 7, "method": "proposal.apply", "params": apply}).to_string(), -32600, json!(7)),
+        (json!({"jsonrpc": "2.0", "id": 7, "method": "proposal.apply", "params": [apply]}).to_string(), -32600, json!(7)),
+        (json!({"jsonrpc": "2.0", "id": 7, "method": "proposal.apply", "params": apply, "extra": 1}).to_string(), -32600, json!(7)),
+        (json!({"jsonrpc": "2.0", "id": "x", "method": "init", "params": {}}).to_string(), -32601, json!("x")),
+        (json!({"jsonrpc": "2.0", "id": "x", "method": "proposal.apply", "params": {"proposal": {}}}).to_string(), -32602, json!("x")),
+        (json!({"jsonrpc": "2.0", "id": "x", "method": "entries.get", "params": {"id": {"origin": Uuid::new_v4(), "position": 1}}}).to_string(), -32602, json!("x")),
+    ] {
+        let response = call(&line);
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], id, "{line}");
+        assert_eq!(response["error"]["code"], code, "{line}");
+        assert!(response.get("result").is_none());
+    }
+    assert_eq!(scratch.bytes(), stored);
+    let response = call(
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "plan_id.mint", "params": {}}).to_string(),
+    );
+    assert!(
+        response["result"]["plan_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("lc1:")
+    );
+    let response = call(
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "proposal.decode",
+            "params": {"text": "format_version = 1\n[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Task\"\npayload = { big = 9223372036854775807 }\n", "format": "toml"}})
+        .to_string(),
+    );
+    assert_eq!(
+        response["result"]["entries"][0]["payload"]["big"],
+        json!({"kind": "integer", "value": "9223372036854775807"})
+    );
+    let response = call(
+        &json!({"jsonrpc": "2.0", "id": 3, "method": "proposal.apply", "params": apply})
+            .to_string(),
+    );
+    assert_eq!(response["result"]["report"]["operations"][0]["name"], "c");
+    let response = call(
+        &json!({"jsonrpc": "2.0", "id": 4, "method": "proposal.apply", "params": apply})
+            .to_string(),
+    );
+    assert_eq!(response["error"]["code"], 2002);
+    assert_eq!(response["error"]["data"]["kind"], "invalid_proposal");
+    assert_eq!(response["error"]["data"]["location"]["name"], "c");
+    assert_eq!(response["id"], 4);
 }
