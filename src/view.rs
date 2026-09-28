@@ -29,11 +29,22 @@ pub struct View<'a> {
     database: Uuid,
     //A Store only the visible slice. No analyzer operation can expand into a future suffix.
     entries: &'a [Entry],
+    //A The staleness index narrowed to the same slice. A stored first-child position
+    //A may lie beyond this view, so queries only compare it with `len()`.
+    first_child: &'a [Option<usize>],
 }
 
 impl<'a> View<'a> {
-    pub(crate) fn new(database: Uuid, entries: &'a [Entry]) -> Self {
-        Self { database, entries }
+    pub(crate) fn new(
+        database: Uuid,
+        entries: &'a [Entry],
+        first_child: &'a [Option<usize>],
+    ) -> Self {
+        Self {
+            database,
+            entries,
+            first_child: &first_child[..entries.len()],
+        }
     }
     pub fn id(self) -> ViewId {
         ViewId {
@@ -57,7 +68,7 @@ impl<'a> View<'a> {
                 requested: end_exclusive,
                 visible: self.len(),
             })?;
-        Ok(Self::new(self.database, entries))
+        Ok(Self::new(self.database, entries, self.first_child))
     }
     pub fn location(self, entry: Option<EntryId>) -> Option<DiagnosticLocation> {
         if let Some(id) = entry {
@@ -93,7 +104,10 @@ impl<'a> View<'a> {
     }
     pub fn is_stale(self, id: EntryId) -> Option<bool> {
         match self.get(id)? {
-        Entry::Node(_) => Some(self.nodes().any(|n| n.parent == Some(id))),
+        //A A node is stale exactly when its first child is visible.
+        Entry::Node(_) => {
+            Some(self.first_child[id.position].is_some_and(|child| child < self.len()))
+        }
         Entry::Edge(e) => Some(self.is_stale(e.from)? || self.is_stale(e.to)?),
         }
     }

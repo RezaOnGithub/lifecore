@@ -128,7 +128,9 @@ current.
 
 The **current graph** is the graph induced by current nodes and current edges.
 It is derived from history. Current flags, active-edge lists, and cached type
-resolutions are not independent sources of truth.
+resolutions are not independent sources of truth. The implementation's staleness
+index ([section 9](#9-inspection-and-queries)) is likewise derived from validated
+history and never stored.
 
 All leaves of a revision tree may be current simultaneously. There is no
 automatic winner among siblings and no unique "latest version" of a split tree.
@@ -628,7 +630,16 @@ altered contents under the same identity. Private fields and the read-only
 `at_base()` and `at_target()` accessors preserve those invariants.
 Comparisons support committed base/candidate views and reject unrelated sources,
 reversed boundaries, and divergent histories, even if boundary/head IDs match.
-No freshness or resolved-type cache is retained.
+Currentness is answered from a derived staleness index held by the graph: each
+node's slot records the position of its first direct successor. History is
+append-only, so a slot is set once and one index serves every view. A node is
+superseded in a view of length `L` exactly when its recorded position is less than
+`L`; an edge is historical when either endpoint is. A recorded position may lie
+beyond the view, so every query compares it with the view boundary and reveals
+nothing else. The index is never serialized. Deserialization rebuilds it in the
+same pass as structural validation, and `transaction::prepare` extends it for each
+staged entry only after that entry validates, so an invalid entry never affects an
+earlier boundary. Resolved types are not cached.
 
 `View::to_dot` exports all visible history as deterministic Graphviz text.
 Revision links are dashed blue; ordinary directed edges are solid. Stale nodes

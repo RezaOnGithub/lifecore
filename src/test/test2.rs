@@ -1,5 +1,5 @@
 use crate::{
-    Body, EntryId, LifeCoreList, Payload, ViewError,
+    Body, Edge, Entry, EntryId, LifeCoreList, Node, Payload, View, ViewError,
     analysis::AnalysisRunner,
     transaction::{
         Change, NewEdge, NewNode,
@@ -420,8 +420,14 @@ fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary(
         ],
     );
     for end_exclusive in 0..=full.view().len() {
-        let mut truncated = full.clone();
-        truncated.entries.truncate(end_exclusive);
+        //A Rebuild the truncated history through deserialization, so its derived
+        //A staleness index is built from the retained entries alone.
+        let mut stored = serde_json::to_value(&full).unwrap();
+        stored["entries"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(end_exclusive);
+        let truncated: LifeCoreList = serde_json::from_value(stored).unwrap();
         let bounded = full.view().prefix(end_exclusive).unwrap();
         assert_eq!(bounded.id(), truncated.view().id());
         for id in &ids {
@@ -657,4 +663,269 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
             "accepted {position}"
         );
     }
+}
+
+//A The scan `View::is_stale` used before the staleness index, kept as its reference.
+fn scanned_is_stale(view: View<'_>, id: EntryId) -> Option<bool> {
+    match view.get(id)? {
+    Entry::Node(_) => Some(view.nodes().any(|n| n.parent == Some(id))),
+    Entry::Edge(e) => Some(scanned_is_stale(view, e.from)? || scanned_is_stale(view, e.to)?),
+    }
+}
+
+//A Probes every identity known to the test, visible or not, at every prefix.
+fn assert_staleness_matches_scan(view: View<'_>, probes: &[EntryId]) {
+    for end_exclusive in 0..=view.len() {
+        let prefix = view.prefix(end_exclusive).unwrap();
+        for id in view.entries().map(Entry::id).chain(probes.iter().copied()) {
+            assert_eq!(
+                prefix.is_stale(id),
+                scanned_is_stale(prefix, id),
+                "{id:?} at boundary {end_exclusive}"
+            );
+        }
+        assert_eq!(
+            prefix.fresh_nodes().collect::<Vec<_>>(),
+            prefix
+                .nodes()
+                .filter(|n| scanned_is_stale(prefix, n.id) == Some(false))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            prefix.fresh_edges().collect::<Vec<_>>(),
+            prefix
+                .edges()
+                .filter(|e| scanned_is_stale(prefix, e.id) == Some(false))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+fn edge(from: crate::transaction::Reference, to: crate::transaction::Reference) -> Change {
+    Change::AddEdge(NewEdge {
+        from,
+        ty_name: "link".into(),
+        to,
+    })
+}
+
+//A Revisions, a split, branching from a stale node, and edges whose endpoints
+//A are superseded later, committed across two plans.
+fn staleness_fixture() -> (LifeCoreList, Vec<EntryId>) {
+    let mut graph = LifeCoreList::default();
+    let mut ids = append(
+        &mut graph,
+        &[
+            node("A", None),
+            node("B", None),
+            node("C", None),
+            edge(Added(0), Added(1)),
+            edge(Added(1), Added(2)),
+            node("A2", Some(Added(0))),
+            node("A3", Some(Added(0))),
+            node("A4", Some(Added(5))),
+            edge(Added(7), Added(1)),
+        ],
+    );
+    ids.extend(append(
+        &mut graph,
+        &[
+            node("B2", Some(Existing(ids[1]))),
+            node("B3", Some(Existing(ids[1]))),
+            edge(Existing(ids[2]), Added(0)),
+            node("C2", Some(Existing(ids[2]))),
+            edge(Existing(ids[6]), Added(3)),
+        ],
+    ));
+    (graph, ids)
+}
+
+#[test]
+fn indexed_staleness_matches_the_scan_for_every_entry_at_every_prefix() {
+    let (graph, ids) = staleness_fixture();
+    let mut other = LifeCoreList::default();
+    let foreign = append(&mut other, &[node("A", None), node("A2", Some(Added(0)))]);
+    assert_staleness_matches_scan(graph.view(), &foreign);
+    //A Spot checks around the relevant appends: A before and after its first
+    //A child at 5, a later sibling leaving that boundary unchanged, and edges 3
+    //A and 8 becoming stale through their source and target respectively.
+    let view = graph.view();
+    for (end_exclusive, a, b, edge_ab, edge_a4b) in [
+        (5, false, false, Some(false), None),
+        (6, true, false, Some(true), None),
+        (7, true, false, Some(true), None),
+        (9, true, false, Some(true), Some(false)),
+        (10, true, true, Some(true), Some(true)),
+        (14, true, true, Some(true), Some(true)),
+    ] {
+        let prefix = view.prefix(end_exclusive).unwrap();
+        assert_eq!(prefix.is_stale(ids[0]), Some(a));
+        assert_eq!(prefix.is_stale(ids[1]), Some(b));
+        assert_eq!(prefix.is_stale(ids[3]), edge_ab);
+        assert_eq!(prefix.is_stale(ids[8]), edge_a4b);
+    }
+    assert_eq!(view.prefix(9).unwrap().is_stale(ids[9]), None);
+    assert_eq!(
+        graph.staleness.0,
+        [
+            Some(5),
+            Some(9),
+            Some(12),
+            None,
+            None,
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+}
+
+#[test]
+fn staged_and_independent_candidates_extend_their_own_index() {
+    let (graph, ids) = staleness_fixture();
+    let before = graph.staleness.clone();
+    let staged = prepare(
+        &graph,
+        &[
+            node("A5", Some(Existing(ids[7]))),
+            edge(Added(0), Existing(ids[10])),
+            node("D", None),
+            node("D2", Some(Added(2))),
+            edge(Added(0), Added(3)),
+            node("A6", Some(Added(0))),
+        ],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap()
+    .accepted()
+    .unwrap();
+    let independent = prepare(
+        &graph,
+        &[node("C3", Some(Existing(ids[12])))],
+        &mut AnalysisRunner::default(),
+    )
+    .unwrap()
+    .accepted()
+    .unwrap();
+    assert_staleness_matches_scan(staged.view(), &independent.added());
+    assert_staleness_matches_scan(independent.view(), &staged.added());
+    //A Staging clones the base; neither candidate changes it or the other.
+    assert_eq!(graph.staleness, before);
+    assert_eq!(graph.view().is_stale(ids[7]), Some(false));
+    assert_eq!(graph.view().is_stale(ids[12]), Some(false));
+    assert_eq!(staged.view().is_stale(ids[7]), Some(true));
+    assert_eq!(staged.view().is_stale(ids[12]), Some(false));
+    assert_eq!(independent.view().is_stale(ids[7]), Some(false));
+    assert_eq!(independent.view().is_stale(ids[12]), Some(true));
+    let added = staged.added();
+    assert_eq!(
+        staged.view().prefix(19).unwrap().is_stale(added[0]),
+        Some(false)
+    );
+    assert_eq!(staged.view().is_stale(added[0]), Some(true));
+    assert_eq!(staged.view().is_stale(added[4]), Some(true));
+    let mut committed = graph.clone();
+    staged.commit(&mut committed).unwrap();
+    assert_eq!(
+        committed.staleness.0[..14],
+        {
+            let mut extended = before.0.clone();
+            extended[7] = Some(14);
+            extended
+        }[..]
+    );
+    assert_eq!(
+        committed.staleness.0[14..],
+        [Some(19), None, Some(17), None, None, None]
+    );
+    assert_staleness_matches_scan(committed.view(), &[]);
+}
+
+#[test]
+fn a_rejected_entry_is_never_indexed() {
+    let (graph, ids) = staleness_fixture();
+    let mut other = LifeCoreList::default();
+    let foreign = append(&mut other, &[node("A", None), node("B", None)])[1];
+    assert_eq!(foreign.position(), ids[1].position());
+    //A None of these parents is an exact earlier node: a foreign identity at B's
+    //A position, an edge, and a position past the history.
+    for parent in [
+        foreign,
+        ids[3],
+        EntryId {
+            origin: ids[0].origin,
+            position: 20,
+        },
+    ] {
+        let mut staged = graph.clone();
+        let entry = Entry::Node(Node {
+            id: EntryId {
+                origin: uuid::Uuid::new_v4(),
+                position: 14,
+            },
+            ty_name: "Invalid".into(),
+            body: Body::new(),
+            parent: Some(parent),
+        });
+        assert!(matches!(
+            staged.stage(entry),
+            Err(crate::BasicValidationFailure::InvalidReference { .. })
+        ));
+        assert_eq!(staged, graph);
+        assert_eq!(staged.staleness, graph.staleness);
+    }
+    //A The same shape with an exact parent is indexed once validated, and the
+    //A next staged entry already sees that parent as stale.
+    let mut staged = graph.clone();
+    staged
+        .stage(Entry::Node(Node {
+            id: EntryId {
+                origin: uuid::Uuid::new_v4(),
+                position: 14,
+            },
+            ty_name: "Valid".into(),
+            body: Body::new(),
+            parent: Some(ids[10]),
+        }))
+        .unwrap();
+    assert_eq!(staged.staleness.0[10], Some(14));
+    assert_eq!(staged.staleness.0.len(), 15);
+    let stale_edge = Entry::Edge(Edge {
+        id: EntryId {
+            origin: uuid::Uuid::new_v4(),
+            position: 15,
+        },
+        ty_name: "link".into(),
+        from: ids[10],
+        to: ids[12],
+    });
+    assert!(matches!(
+        staged.clone().stage(stale_edge),
+        Err(crate::BasicValidationFailure::StaleEndpoint { .. })
+    ));
+}
+
+#[test]
+fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
+    let (graph, _) = staleness_fixture();
+    let stored = serde_json::to_value(&graph).unwrap();
+    assert_eq!(
+        stored.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["entries", "id", "suite"]
+    );
+    let loaded: LifeCoreList = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(loaded.staleness, graph.staleness);
+    assert_eq!(serde_json::to_value(&loaded).unwrap(), stored);
+    assert_staleness_matches_scan(loaded.view(), &[]);
+    //A A stored index cannot be supplied; a new graph starts with an empty one.
+    let mut injected = stored.clone();
+    injected["staleness"] = serde_json::json!([null]);
+    assert!(serde_json::from_value::<LifeCoreList>(injected).is_err());
+    assert!(LifeCoreList::default().staleness.0.is_empty());
 }

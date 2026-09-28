@@ -203,9 +203,8 @@ pub fn prepare(
             continue;
         };
         let parent = entry.as_node().and_then(|node| node.parent);
-        candidate.entries.push(entry);
         candidate
-            .basic_validation()
+            .stage(entry)
             .map_err(LifeCoreError::BasicValidationFailure)?;
         //A Intent is judged in the view immediately before this append, which
         //A includes earlier operations of the same plan.

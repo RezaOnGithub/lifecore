@@ -18,11 +18,42 @@ pub enum BasicValidationFailure {
     InvalidDatabase,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct LifeCoreList {
     id: Uuid,
     pub(crate) entries: Vec<Entry>,
     pub(crate) suite: SuiteConfig,
+    #[serde(skip)]
+    pub(crate) staleness: StalenessIndex,
+}
+
+//A The staleness index is derived from `entries`, so it takes no part in equality.
+impl PartialEq for LifeCoreList {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.entries == other.entries && self.suite == other.suite
+    }
+}
+impl Eq for LifeCoreList {}
+
+//A Derived and never serialized: one slot per entry, holding the position of that
+//A node's first child. History is append-only, so a slot is set at most once and
+//A one index serves every prefix view and candidate clone; `View` compares each
+//A value with its own length. Only entries already validated against the prefix
+//A before them are indexed, so an invalid parent never marks an earlier node stale.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StalenessIndex(pub(crate) Vec<Option<usize>>);
+
+impl StalenessIndex {
+    fn push_validated(&mut self, entry: &Entry) {
+        let position = self.0.len();
+        if let Some(parent) = entry.as_node().and_then(|node| node.parent) {
+            let first_child = &mut self.0[parent.position];
+            if first_child.is_none() {
+                *first_child = Some(position);
+            }
+        }
+        self.0.push(None);
+    }
 }
 
 //A Deserialization is an import boundary. Invalid parents must never reach
@@ -37,12 +68,13 @@ impl<'de> Deserialize<'de> for LifeCoreList {
             suite: SuiteConfig,
         }
         let stored = Stored::deserialize(deserializer)?;
-        let graph = Self {
+        let mut graph = Self {
             id: stored.id,
             entries: stored.entries,
             suite: stored.suite,
+            staleness: StalenessIndex::default(),
         };
-        graph.basic_validation().map_err(serde::de::Error::custom)?;
+        graph.staleness = graph.validate().map_err(serde::de::Error::custom)?;
         Ok(graph)
     }
 }
@@ -53,21 +85,42 @@ impl Default for LifeCoreList {
             id: Uuid::new_v4(),
             entries: vec![],
             suite: SuiteConfig::default(),
+            staleness: StalenessIndex::default(),
         }
     }
 }
 
 impl LifeCoreList {
     pub fn view(&self) -> View<'_> {
-        View::new(self.id, &self.entries)
+        View::new(self.id, &self.entries, &self.staleness.0)
     }
     pub fn analysis_suite(&self) -> &SuiteConfig {
         &self.suite
     }
+    //A Revalidates the whole history with a freshly built index; the stored one is
+    //A not consulted.
     pub fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
+        self.validate().map(drop)
+    }
+    //A Staging appends one entry, validates the resulting history, and indexes the
+    //A entry only after it passes. A failure leaves the receiver unchanged.
+    pub(crate) fn stage(&mut self, entry: Entry) -> Result<(), BasicValidationFailure> {
+        self.entries.push(entry);
+        if let Err(failure) = self.basic_validation() {
+            self.entries.pop();
+            return Err(failure);
+        }
+        self.staleness
+            .push_validated(self.entries.last().expect("staged entry"));
+        Ok(())
+    }
+    //A Validation and indexing share one pass: each entry is checked against the
+    //A prefix before it, whose index holds only entries that already passed.
+    fn validate(&self) -> Result<StalenessIndex, BasicValidationFailure> {
         if self.id.is_nil() {
             return Err(BasicValidationFailure::InvalidDatabase);
         }
+        let mut staleness = StalenessIndex::default();
         for (position, entry) in self.entries.iter().enumerate() {
             let id = entry.id();
             if id.position != position || id.origin.is_nil() {
@@ -75,7 +128,7 @@ impl LifeCoreList {
             }
             //A Every reference and duplicate decision uses the prefix immediately before
             //A this entry.
-            let before = View::new(self.id, &self.entries[..position]);
+            let before = View::new(self.id, &self.entries[..position], &staleness.0);
             let require_node = |target| {
                 before
                     .node(target)
@@ -109,7 +162,8 @@ impl LifeCoreList {
                 }
             }
             }
+            staleness.push_validated(entry);
         }
-        Ok(())
+        Ok(staleness)
     }
 }
