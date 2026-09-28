@@ -268,7 +268,11 @@ build of `lifecore-cli`. Each snapshot holds a `Task` type, tasks, revisions, an
 `database.describe` through `rpc`, and `check` of a one-node proposal. Before is
 `a07483e`; after includes both completed items below. Where compared (describe
 and entry listings up to 2,000 entries, check up to 1,000), outputs matched the
-baseline apart from the new entry's random origin.
+baseline apart from the new entry's random origin, though that proposal yields no
+observations. On the 500-entry snapshot, a proposal that declares a type, revises
+a current Task into it, and appends two more nodes exits 1 on both: the baseline
+reports three `BadOverride` observations at boundaries 502–504, this branch one
+at 502, under the same key apart from the provisional entry origin.
 
 | Entries | describe before | describe after | check before | check after |
 | ---: | ---: | ---: | ---: | ---: |

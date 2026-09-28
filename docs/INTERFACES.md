@@ -250,9 +250,10 @@ Lock `<state-path>.lock`, a stable sibling file retained across snapshot
 replacement; the default is `LifeCoreState.json.lock`. Use the standard library's
 `File::lock`/`try_lock`. A writer that finds the lock held retries for a
 bounded window, then returns a structured busy error instead of blocking
-indefinitely. The window defaults to 10 seconds, since one check can take
-seconds on a large history ([PLAN](PLAN.md#5-upcoming-checking-cost)); hosts can
-change it with `Service::with_busy_retry`. Ordinary operations on a missing
+indefinitely. The window defaults to 10 seconds, leaving a margin over a
+competing apply's check, which takes about a second at 4,000 entries and grows
+roughly quadratically ([PLAN](PLAN.md#5-checking-cost)); hosts can change it with
+`Service::with_busy_retry`. Ordinary operations on a missing
 database fail without creating the snapshot or its lock file. `init` requires
 the containing directory to exist on a filesystem with hard links
 ([FILES](FILES.md#81-atomic-publication)), and a refused `init` creates no lock

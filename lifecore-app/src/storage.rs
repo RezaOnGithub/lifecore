@@ -13,8 +13,9 @@ use uuid::Uuid;
 
 pub const STATE_PATH_VARIABLE: &str = "LIFECORE_STATE_FILE_PATH";
 pub const DEFAULT_STATE_FILE: &str = "LifeCoreState.json";
-//A One check can take seconds at a few thousand entries (PLAN section 5), so a
-//A waiting writer must outlast a competing apply rather than a brief write.
+//A A check takes about a second at 4,000 entries and grows roughly quadratically
+//A (PLAN section 5), so a waiting writer must outlast a competing apply rather
+//A than a brief write.
 pub const DEFAULT_BUSY_RETRY: Duration = Duration::from_secs(10);
 const BUSY_POLL: Duration = Duration::from_millis(20);
 
