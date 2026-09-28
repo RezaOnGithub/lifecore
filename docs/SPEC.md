@@ -527,11 +527,24 @@ With fixed implementation, configuration, and inputs, replay recovers the earlie
 observation even if the analyzer emits nothing at the selected head. Sticky
 advisories from earlier prefixes are labeled historical with current applicability
 unconfirmed. The flag does not mean that a finding still applies, has been resolved,
-or should be automatically repaired. History mode admits all replayed observations,
-including nonsticky advisories, subject to category and dismissal filters. Grouping
-first collects all observations by complete finding key, then selects occurrences
-for display. Only groups with a nonempty selected subset are returned; each exposes
-all its observations as well as that subset, in deterministic first-emission order.
+or should be automatically repaired.
+
+An analyzer chooses the flag by what an advisory describes. Mark sticky an advisory
+about an event that the analyzer judges once, at the prefix that event ends, and
+that later prefixes do not re-emit; otherwise it would leave current reports as
+soon as history grows. Keep nonsticky an advisory about current state: it is
+emitted again at every prefix where it still holds, so it leaves current reports
+once resolved or superseded. TypeCheck's warnings (`UnknownOverrideType`, and
+encouraged or deprecated field issues) describe current declarations and current
+nodes, so they are nonsticky. Its once-judged transition findings are
+inconsistencies, which reports select at any boundary
+([section 7.2](#72-successor-type-permission)).
+
+History mode admits all replayed observations, including nonsticky advisories,
+subject to category and dismissal filters. Grouping first collects all observations
+by complete finding key, then selects occurrences for display. Only groups with a
+nonempty selected subset are returned; each exposes all its observations as well
+as that subset, in deterministic first-emission order.
 
 No generic resolution status is inferred. Non-emission, subject supersession,
 or reconnecting only one split branch cannot establish resolution. Historical
