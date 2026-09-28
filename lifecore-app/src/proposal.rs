@@ -52,6 +52,9 @@ pub struct Proposal {
     pub entries: Vec<ProposalEntry>,
 }
 
+//A The authoring form of an operation: named, with aliases to earlier
+//A operations, and limited to what an author may write. It lowers to
+//A `transaction::Change`; FILES §2.5 compares the entry-shaped types.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", try_from = "RawEntry")]
 pub enum ProposalEntry {
@@ -287,7 +290,8 @@ impl fmt::Display for DecodeError {
         if let Some(path) = &self.path {
             write!(f, " at {path}")?;
         }
-        if let (Some(line), Some(column)) = (self.line, self.column) {
+        //A serde_json's own message already names the position.
+        if let (Format::Toml, Some(line), Some(column)) = (self.format, self.line, self.column) {
             write!(f, " (line {line}, column {column})")?;
         }
         Ok(())
@@ -303,21 +307,12 @@ fn located_path(path: &serde_path_to_error::Path) -> Option<String> {
 pub fn decode(text: &str, format: Format) -> Result<Proposal, DecodeError> {
     match format {
     Format::Json => {
-        let json_error = |path: Option<String>, error: &serde_json::Error| {
-            //A serde_json appends the position to its message; keep it only in
-            //A the structured fields, as for TOML.
-            let message = error.to_string();
-            let position = format!(" at line {} column {}", error.line(), error.column());
-            DecodeError {
-                format,
-                message: message
-                    .strip_suffix(&position)
-                    .unwrap_or(&message)
-                    .to_string(),
-                path,
-                line: Some(error.line()),
-                column: Some(error.column()),
-            }
+        let json_error = |path: Option<String>, error: &serde_json::Error| DecodeError {
+            format,
+            message: error.to_string(),
+            path,
+            line: Some(error.line()),
+            column: Some(error.column()),
         };
         let mut deserializer = serde_json::Deserializer::from_str(text);
         let proposal = serde_path_to_error::deserialize(&mut deserializer)

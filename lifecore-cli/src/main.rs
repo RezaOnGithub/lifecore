@@ -169,10 +169,7 @@ fn read_line(input: &mut impl Read) -> io::Result<Vec<u8>> {
 //A after the request line. A duplicate of the descriptor reads the same open
 //A file unbuffered.
 fn raw_stdin() -> io::Result<File> {
-    #[cfg(unix)]
     let handle = std::os::fd::AsFd::as_fd(&io::stdin()).try_clone_to_owned()?;
-    #[cfg(windows)]
-    let handle = std::os::windows::io::AsHandle::as_handle(&io::stdin()).try_clone_to_owned()?;
     Ok(File::from(handle))
 }
 

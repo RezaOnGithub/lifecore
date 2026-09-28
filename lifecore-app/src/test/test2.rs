@@ -403,10 +403,10 @@ fn json_decode_errors_carry_a_path_and_position() {
     let error =
         proposal::decode("{\"format_version\": 1, \"entries\": []} []", Format::Json).unwrap_err();
     assert_eq!(error.path, None);
-    assert_eq!(error.message, "trailing characters");
+    assert_eq!((error.line, error.column), (Some(1), Some(38)));
     assert_eq!(
         AppError::MalformedProposal(error).to_string(),
-        "malformed JSON proposal: trailing characters (line 1, column 38)"
+        "malformed JSON proposal: trailing characters at line 1 column 38"
     );
 }
 
@@ -625,7 +625,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
         ]))))
         .unwrap();
     assert_ne!(applied.graph_revision, before.graph_revision);
-    assert_eq!(applied.report.base_revision, before.graph_revision);
+    assert_eq!(applied.report.base_revision, Some(before.graph_revision));
     assert_eq!(applied.report.base, before.view);
     let names = applied
         .report
@@ -683,7 +683,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
         ]))))
         .unwrap();
     assert!(preview.accepted);
-    assert_eq!(preview.report.base_revision, applied.graph_revision);
+    assert_eq!(preview.report.base_revision, Some(applied.graph_revision));
     assert_eq!(preview.report.operations.len(), 1);
     assert_eq!(scratch.bytes(), stored);
     assert!(matches!(
@@ -1045,7 +1045,7 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     //A The tokenless writer checked the held publication, not its own earlier
     //A view of the file.
     let applied = tokenless.join().unwrap().unwrap();
-    assert_eq!(applied.report.base_revision, snapshot.graph_revision);
+    assert_eq!(applied.report.base_revision, Some(snapshot.graph_revision));
     assert_eq!(applied.report.base.end_exclusive, 5);
     let listed = scratch
         .service()
@@ -1368,7 +1368,6 @@ fn rpc_proposal_parameters_fail_like_change_files() {
         response["error"]["data"]["decode"]["message"],
         file_error.message
     );
-    assert!(!file_error.message.contains("line"), "{file_error:?}");
     //A Every other parameter failure, including null for an optional
     //A parameter, is an invalid-parameters error.
     let good = r#"{"format_version":1,"entries":[]}"#;

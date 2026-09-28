@@ -5,6 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+//A The subset of `Change` an analyzer may suggest: never a suite change.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SuggestedAction {
     AddNode(NewNode),

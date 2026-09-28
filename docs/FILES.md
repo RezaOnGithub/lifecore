@@ -313,6 +313,20 @@ Proposals do not change the analyzer suite; that is the deliberate `add-analyzer
 operation in [INTERFACES](INTERFACES.md#2-cli-surface).
 Explicit duplicates fail rather than being silently skipped.
 
+### 2.5 Entry-shaped types
+
+Several types describe "an entry" at different stages. They differ in how they
+refer to other entries and in what they may contain, so none can stand in for
+another:
+
+| Type | Stage | Refers to other entries by | Why it is its own type |
+| --- | --- | --- | --- |
+| `ProposalEntry` (`lifecore-app`) | Authoring and transport: files, RPC, drafts | Operation name (`added = "name"`) or exact ID | Carries author-facing names and this document's vocabulary. Contains only what an author may write: no suite changes. Lowering checks names and resolves them to operation indexes. |
+| `transaction::Change` | Core staging input | Operation index (`Reference::Added(n)`) or exact ID | The core API, free of names and encodings. Also carries suite changes (`AddAnalyzer`). Has no identity yet; `prepare` assigns IDs. |
+| `SuggestedAction` | Analyzer output | Same as `Change` | Analyzers may suggest only node and edge operations, never suite changes. It shares `NewNode`/`NewEdge` with `Change`, so [acknowledgment](SUGGESTIONS.md#3-verification-by-replay) compares by equality. |
+| `Entry` (`Node`, `Edge`) | Stored history | Exact ID only | An immutable record with its own assigned `EntryId`, as stored in the snapshot. |
+| `EntryRecord` (`lifecore-app`) | Read results (`entries.list`, `entries.get`) | Exact ID | A stored entry plus its currentness in the selected view, in this document's vocabulary. Once the core serde names are aligned ([PLAN 4.2](PLAN.md#42-complete-rpc-contract)), it can become `Entry` plus `current`. |
+
 ## 3. Planning, checking, and applying
 
 The synchronous application service owns proposal parsing/export, plan-ID

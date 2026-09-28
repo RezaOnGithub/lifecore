@@ -38,6 +38,9 @@ pub struct NewEdge {
     pub to: Reference,
 }
 
+//A The core staging input: no names or encodings, earlier operations by index,
+//A and no identity until `prepare` assigns one. Unlike authoring entries and
+//A suggested actions, it can also change the analyzer suite.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Change {
     AddNode(NewNode),

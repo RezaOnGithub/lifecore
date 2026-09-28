@@ -206,12 +206,12 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 1006 | `busy` | Another writer held the lock throughout the retry. |
 | 1007 | `publication_failed` | Failure before replacement; stored state unchanged. |
 | 1008 | `publication_uncertain` | Synchronization failed after replacement; `data.outcome` is the result the call would have returned, such as the new `graph_revision` and report, so the caller can inspect the stored state. |
-| 2001 | `malformed_proposal` | Decoding failed; `data.decode` has `format` and `message`, plus `path`, `line`, and `column` where known. |
+| 2001 | `malformed_proposal` | Decoding failed; `data.decode` has `format` and `message`, plus `path`, `line`, and `column` where known. A JSON `message` is serde_json's own text, which names a position; for a `proposal` parameter that position counts from the start of the member. |
 | 2002 | `invalid_proposal` | Names, references, intent, or structure; `data.location` names the entry and field where known. |
 | 2003 | `acknowledgment_unsupported` | `acknowledges` is present but not yet verified (plan section 4.4). |
 | 2004 | `foreign_database` | The plan ID names another database. |
 | 2005 | `stale_base` | The plan ID names an earlier graph revision. |
-| 2006 | `rejected` | Inconsistencies; `data.report` has the complete report. |
+| 2006 | `rejected` | Inconsistencies; `data.report` has the complete report. For `init`, whose base was never published, the report omits `base_revision`. |
 | 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
 | 4001 | `entry_not_found` | The identity is not present in the selected view. |
 

@@ -81,7 +81,8 @@ pub fn encode_proposal(request: EncodeRequest) -> Result<Encoded, AppError> {
 //A A `proposal` parameter is decoded on its own, from its raw text, so its
 //A failures are malformed proposals located by a path inside it, as for a
 //A change file, and repeated payload fields are still seen. Line and column
-//A are dropped because they would count from the member, not the request.
+//A are dropped because they would count from the member, not the request;
+//A serde_json's message text still names that member-relative position.
 fn embedded(proposal: &RawValue) -> Result<Proposal, AppError> {
     proposal::decode(proposal.get(), Format::Json).map_err(|error| {
         AppError::MalformedProposal(DecodeError {

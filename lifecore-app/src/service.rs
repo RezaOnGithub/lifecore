@@ -121,7 +121,9 @@ pub struct OperationEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalReport {
     pub database: Uuid,
-    pub base_revision: Uuid,
+    //A Absent only for `init`, whose empty base was never published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<Uuid>,
     pub base: ViewId,
     pub operations: Vec<OperationEntry>,
     pub analysis: AnalysisOutput,
@@ -208,6 +210,9 @@ fn commit(
     Ok((report, changed))
 }
 
+//A A stored entry plus its currentness in the selected view, in proposal
+//A vocabulary. It can become `Entry` plus `current` once the core serde names
+//A are aligned (PLAN 4.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EntryRecord {
@@ -417,7 +422,7 @@ impl Service {
             .unwrap_or_default();
         let report = ProposalReport {
             database: database(&snapshot.graph),
-            base_revision: snapshot.graph_revision,
+            base_revision: Some(snapshot.graph_revision),
             base: base.id(),
             operations,
             analysis: checked.analysis().clone(),
@@ -466,7 +471,8 @@ impl Service {
             .collect::<Vec<_>>();
         //A The initial suite is added through the ordinary checked path, so
         //A missing factories and invalid configurations are rejected here too.
-        let (checked, report) = self.prepare(&snapshot, None, &changes, Default::default())?;
+        let (checked, mut report) = self.prepare(&snapshot, None, &changes, Default::default())?;
+        report.base_revision = None;
         commit(&mut snapshot, checked, report)?;
         let lock = storage::lock(&self.state, self.busy_retry)?;
         let publication = storage::publish_new(&self.state, &snapshot, &lock, self.sync_directory)?;
