@@ -142,7 +142,7 @@ Expected additions:
 | `types.list` | Type declarations as of a boundary. |
 | `views.compare` | Resolution differences between two boundaries. |
 | `views.dot` | DOT text for a view. |
-| Analysis and dismissal methods | Planned for the Findings stage ([PLAN §4.3.4](PLAN.md#433-findings)). |
+| Analysis and dismissal methods | Planned for the Findings stage ([PLAN §4.3.3](PLAN.md#433-findings)). |
 
 Nothing is frozen. Write client types only after the foundation aligns the
 core JSON names with the proposal vocabulary
@@ -189,8 +189,8 @@ These follow from the merged backend; the linked documents own the details.
 - **Identities and numbers.** Key records by `origin` plus `position`;
   positions and integer payloads are decimal strings.
 - **JSON vocabulary is not final.** Entry records use the proposal vocabulary
-  (`kind`, `type`, `payload`), but analysis output still uses core names
-  (`{"Node": …}`, `ty_name`). Write client types only after the PLAN §4.2
+  (`kind`, `type`, `payload`), but suggested actions in analysis output still
+  use core names (`{"AddNode": {… "ty_name" …}}`). Write client types only after the PLAN §4.2
   alignment.
 - **Type declarations.** They are written by hand as well as by forms: a field
   is a list of presence and shape words

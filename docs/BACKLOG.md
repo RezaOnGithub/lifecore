@@ -59,7 +59,7 @@ or non-string `lifecore` field, invalid YAML, or invalid embedded TOML is an err
 ---
 tags: [design]
 lifecore: |
-    document_id = "design-note"
+  document_id = "design-note"
   revision = { origin = "11111111-1111-4111-8111-111111111111", position = "42" }
   type = "Document"
   body_field = "body"
@@ -84,8 +84,7 @@ Compare [the experiment](./experiment.md).
 [underlying-concept]: lifecore:entry/96
 ```
 
-Inside the decoded TOML, `format_version`, `document_id`, `type`, and `body_field`
-are required. `payload` is a table, empty if omitted. For an existing document,
+Inside the decoded TOML, `document_id`, `type`, and `body_field` are required. `payload` is a table, empty if omitted. For an existing document,
 `revision` must agree with checkout metadata. For a new root it is absent.
 Split metadata is described in section 4.3.
 

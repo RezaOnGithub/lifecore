@@ -354,7 +354,7 @@ Make evaluation time an explicit choice, defaulting to absent. If a user chooses
 current time, the host captures one timestamp before evaluation and reports it.
 Freeze that input across initialization and replay. Each displayed analysis
 identifies its view, implementations, configuration strings, and evaluation
-inputs. Keep certificates opaque; use supplied subjects and locations for UI
+inputs. Keep certificates opaque; use supplied subjects and the focus entry for UI
 navigation. Dismissal and display filtering never change acceptance.
 
 The first complete workflow is browse, create/edit or import a draft, check,

@@ -452,7 +452,7 @@ must error when the required time is absent. All configured implementations are
 constructed first, initialized in suite order, then each replays boundaries
 `0..=end_exclusive` in suite order. Empty histories execute both initialization
 and prefix zero. Missing factories, invalid configuration, execution failures,
-and malformed subject/location output are errors.
+and malformed subject/focus output are errors.
 
 An observation records `evaluated_view: EvaluatedView`:
 `EvaluatedView::Initialization`, or `EvaluatedView::Prefixes { first, last }`,
@@ -527,7 +527,8 @@ soon as history grows. Keep nonsticky an advisory about current state: it is
 emitted again at every prefix where it still holds, so it leaves current reports
 once resolved or superseded. Re-emission costs nothing in output size, since the
 runner merges it into one range; sticky exists for conditions too costly to
-re-judge at every prefix, where the runner carries the advisory forward instead.
+re-judge at every prefix, where report selection keeps the single observation
+visible instead.
 TypeCheck's warnings (`UnknownSuccessorType`, and
 encouraged or deprecated field issues) describe current declarations and current
 nodes, so they are nonsticky. Its once-judged transition findings are

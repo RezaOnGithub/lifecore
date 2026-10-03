@@ -45,8 +45,12 @@ flowchart TD
     O --> D
     D -->|yes, ending at the preceding prefix| X
     D -->|yes, covering this prefix| DROP
-    D -->|no| P
+    D -->|no, or only ranges ending earlier| P
 ```
+
+Initialization messages have no prefix, so an identical one is dropped and
+never merges with a prefix observation. A diagnostic whose previous range ended
+more than one prefix ago starts a new observation, which is how a gap is kept.
 
 `AnalysisRunner` constructs all configured analyzers through `AnalyzerFactory`.
 The factory receives the original `Config.config` string unchanged. The runner

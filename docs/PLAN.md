@@ -308,9 +308,9 @@ Follow [SUGGESTIONS.md](SUGGESTIONS.md).
 - [ ] Pair each suggestion observation in analysis results with a ready-made
   proposal: a plan ID for the analyzed base, `acknowledges`, and the ordered
   actions. Do not produce them for uncommitted check candidates.
-- [ ] Verify `acknowledges` in `check`/`apply` against committed-base observations
-  from the same replay, comparing lowered operations exactly and ignoring
-  operation names. Reject unverified acknowledgments with a distinct error.
+- [ ] Verify `acknowledges` in `check`/`apply` against observations whose range
+  begins within the committed base, from the same replay, comparing lowered
+  operations exactly and ignoring operation names. Reject unverified acknowledgments with a distinct error.
 - [ ] Stage `Acknowledged` with the graph changes in one snapshot, preserving an
   existing reason/note and concurrent records. Preview it in `check`.
 - [ ] In React, select an observation's attached proposal, show original and
@@ -409,8 +409,8 @@ implementations, and inputs. The server reloads the snapshot for every request,
 so load cost matters there too; a later cache would need a freshness check,
 because dismissal edits change the snapshot without rotating the graph revision;
 see the backlogged change detection below.
-Acknowledgment verification reads committed-base observations from the same
-replay, so an incremental checker must still provide them.
+Acknowledgment verification reads observations beginning within the committed
+base from the same replay, so an incremental checker must still provide them.
 
 ## 6. Backlog
 

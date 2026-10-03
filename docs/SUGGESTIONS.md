@@ -65,16 +65,18 @@ base; applying one that changes the graph makes the others' tokens stale.
 the committed base reproduces the suggestion:
 
 1. The key's database is the selected database and its category is `Suggestion`.
-2. An observation evaluated at initialization, or over a prefix range within
-   the committed base, has exactly this key.
+2. An observation evaluated at initialization, or whose prefix range begins
+   within the committed base, has exactly this key. The range may extend into
+   the candidate's prefixes, since a suggestion that still holds after its own
+   first action is re-emitted there and merges into the same observation.
 3. Its ordered actions equal the proposal's entries after lowering to core
    changes: exact and earlier-operation references, types, payloads, and revision
    intents. Operation names are authoring handles and are not compared.
 
 This needs no extra analysis run. Preparing any proposal replays every prefix of
-the candidate, and the committed base's prefixes are among them. Observations at
-candidate prefixes do not count: they can refer to provisional entries and would
-let a proposal vouch for itself.
+the candidate, and the committed base's prefixes are among them. Observations
+that first appear at a candidate prefix do not count: they can refer to
+provisional entries and would let a proposal vouch for itself.
 
 If verification fails, reject the proposal before mutation with a distinct error;
 never apply it silently without the acknowledgment. The user can remove
@@ -149,7 +151,7 @@ requires it to hold under the current one.
 | An exported proposal is applied unchanged | Graph changes and acknowledgment publish together; an existing reason/note is kept. |
 | Actions are edited, or `acknowledges` names another finding | Reject before mutation. Without `acknowledges`, the same operations apply as an ordinary proposal and dismiss nothing. |
 | The proposal is converted between JSON and TOML, reformatted, or uses integer shorthand | Verification still succeeds; it compares typed values, not text. |
-| The suggestion is emitted only at a candidate prefix | Reject; only committed-base observations count. |
+| The suggestion first appears at a candidate prefix | Reject; only observations beginning within the committed base count. |
 | Two observations share a key but differ in actions | Each export verifies against its own observation; either acknowledges the same issue. |
 | The graph or suite changes after export | The stale `plan_id` rejects that export and its siblings. |
 | Evaluation time or an implementation changes and the suggestion no longer reproduces | Reject with a distinct error; the user re-exports. |
