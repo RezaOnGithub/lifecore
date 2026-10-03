@@ -33,7 +33,6 @@ a ready-made `Proposal`:
 
 ```json
 {
-  "format_version": 1,
   "plan_id": "lc1:<database-uuid>:<graph-revision-uuid>:<proposal-uuid>",
   "acknowledges": {
     "database": "<database-uuid>",
@@ -130,7 +129,7 @@ base is stale; that rejection cannot distinguish a completed retry from an
 intervening write, and an existing dismissal is not evidence of prior
 application. An empty suggestion publishes only its acknowledgment without
 changing the graph revision, so restoring and reapplying it acknowledges again.
-Durable receipts remain [backlogged](FILES.md#84-deferred-receipts-and-retry-recovery).
+Durable receipts remain [backlogged](BACKLOG.md#7-deferred-receipts-and-retry-recovery).
 
 ## 6. Why replay rather than a signature
 

@@ -9,7 +9,8 @@ CLI adapters use the same requests, proposal types, results, and errors.
 JSON and TOML change files remain first-class authoring inputs. Keep dedicated
 change-file commands alongside `init`, `serve`, and a minimal `rpc` command that
 reads one request line from stdin, prints one response line to stdout, and exits.
-The web server calls the application service directly through a worker thread.
+The web server calls the application service directly, one blocking task per
+request.
 
 Read [SPEC.md](SPEC.md) for graph semantics, [INTERFACES.md](INTERFACES.md) for
 application boundaries and commands, [FILES.md](FILES.md) for authoring and
@@ -20,66 +21,54 @@ remaining work, not claims of implemented behavior.
 
 ## 2. Selected direction
 
-- Use React with TypeScript for the browser. Serve its built assets and
-  `POST /rpc` from the Rust HTTP application, initially for a local user and one
-  selected database. Axum is the planned HTTP adapter.
-- Define shared Serde request, result, error, and proposal types. The synchronous
-  application service owns checking, application, storage, and dismissal updates.
-  Reuse core domain types where suitable; transport types must own their data.
-- Keep async execution, channels, and HTTP dependencies in the server adapter.
-  A dedicated ordinary thread owns the analyzer factories, takes requests from a
-  bounded queue, and handles each like a CLI invocation, keeping no state between
-  requests. CLI operations call the synchronous service directly without a
-  running server.
-- `rpc` accepts no method arguments or change-file options. It processes exactly
-  one JSON request line and returns exactly one compact JSON response line.
-  Diagnostics go to stderr. Dedicated `check`, `apply`, `plan-id`, and proposal
-  export commands remain conveniences over the shared service.
-- Keep `init` outside the RPC capability set. Only explicit initialization creates
-  a database; ordinary requests require one to exist. Add the TypeCheck
-  configuration by default; `init --no-typecheck` opts out. Resolve
-  `LIFECORE_STATE_FILE_PATH`, or `./LifeCoreState.json` when unset, relative to the
-  process working directory. A bad selected path is an error, never a fallback.
-- Change the analyzer suite only through a deliberate `add-analyzer` operation
-  (CLI command and RPC method), never through proposals. It appends; there is
-  no removal or reconfiguration.
-- Deserialize JSON and TOML change files into the same `Proposal`. Use native
-  strings and arrays; wrap integers, booleans, timestamps, and records in tagged
-  objects/tables. Integer envelopes carry decimal strings; accept bare `i64`
-  input shorthand in both formats and always export envelopes. Known large
-  control integers use decimal strings without wrappers. Use Jiff's ordinary
-  Serde timestamp strings, with no TOML datetime adapter or normalization profile.
-- Carry an optional service-minted `plan_id`,
-  `lc1:<database-uuid>:<graph-revision-uuid>:<proposal-uuid>`. Browser-generated
-  proposals include it. Without a token, select the current stored base for that
-  invocation. `apply` always checks anew and protects its concrete base through
-  publication.
-- Store one JSON snapshot containing `format_version`, `graph_revision`, `graph`
-  (including the ordered suite), and `dismissals`. Use a stable sibling
-  `<state-path>.lock` file and atomic whole-snapshot replacement. Rotate the
-  revision UUID on graph/suite changes, not dismissal edits, no-ops, or minting.
-  Keep the core's exact base comparisons; the application owns revision maintenance.
-- Pair each exported suggestion observation with a ready-made proposal whose
-  optional `acknowledges` field names its finding key. `check`/`apply` accept it
-  only if their own replay of the committed base emits that suggestion with
-  exactly these actions, then publish the graph changes and an `Acknowledged`
-  dismissal together. Nothing is signed or stored per export.
-- Keep analysis outputs ephemeral and recompute them per request; in-memory
-  caching is deferred. Show the complete evaluation context. History mode means prefixes
-  replayed in this run, not saved earlier runs. Persist dismissals independently.
-- Preserve exact references, explicit revision/branch intent, every-prefix
-  validation, frozen evaluation inputs, and the unfiltered inconsistency gate.
-  No adapter has an unchecked mutation path.
-- Acquire filesystem writer exclusion for mutations. Reads and standalone checks
-  open one complete immutable snapshot without a writer lock. Refresh
-  current-state requests after external writes. Do not hold a lock while a user
-  edits a draft or between standalone check and apply.
+Each line names the document that owns the decision; this list is a map, not a
+restatement.
+
+- React with TypeScript in the browser, served together with `POST /rpc` by a
+  Rust Axum application, for a local user and one selected database
+  ([INTERFACES §1](INTERFACES.md#1-shared-synchronous-application),
+  [§5](INTERFACES.md#5-react-client)).
+- One synchronous application service, shared by HTTP and CLI, owns checking,
+  application, storage, and dismissal updates. The HTTP adapter runs each
+  request on a blocking task; there is no worker thread, queue, or server-side
+  state, and the file lock serializes writers
+  ([INTERFACES §1](INTERFACES.md#1-shared-synchronous-application)).
+- Shared Serde requests, results, errors, and proposals, with hand-written
+  TypeScript types guarded by Rust-emitted fixtures
+  ([INTERFACES §3](INTERFACES.md#3-shared-rpc-envelope),
+  [§5](INTERFACES.md#5-react-client)).
+- A small Node toolchain in `lifecore-server/ui`, bundled by `build.rs` into the
+  server binary, with Playwright tests in Firefox
+  ([INTERFACES §5.1](INTERFACES.md#51-frontend-build-and-tests)). The UI is
+  delivered in stages that alternate UI and API work (section 4.3).
+- Loopback binding, a launch token, and `Host`, `Origin`, and content-type
+  checks before dispatch ([INTERFACES §3.2](INTERFACES.md#32-server-access)).
+- `rpc` processes exactly one JSON request line; `init` stays outside RPC; the
+  dedicated `check`, `apply`, `plan-id`, `export`, and `add-analyzer` commands
+  are conveniences over the same service
+  ([INTERFACES §2](INTERFACES.md#2-cli-surface)).
+- Database selection from `LIFECORE_STATE_FILE_PATH` or `./LifeCoreState.json`
+  with no fallback; one JSON snapshot, a stable sibling lock file, atomic
+  publication, and a graph revision UUID rotated on graph or suite changes
+  ([INTERFACES §4](INTERFACES.md#4-database-selection-and-concurrency),
+  [FILES §8.1](FILES.md#8-atomic-publication)).
+- JSON and TOML change files deserialize into one `Proposal` over the canonical
+  value encoding, with an optional service-minted `plan_id`
+  ([FILES §2](FILES.md#2-json-and-toml-change-files)).
+- Each suggestion observation pairs with a ready-made proposal whose
+  `acknowledges` is verified by replay ([SUGGESTIONS](SUGGESTIONS.md)).
+- Analysis outputs are ephemeral and recomputed per request; dismissals persist
+  independently
+  ([INTERFACES §6](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence)).
+- Every adapter preserves exact references, explicit revision intent,
+  every-prefix validation, frozen evaluation inputs, and the unfiltered
+  inconsistency gate ([SPEC §7](SPEC.md#7-mandatory-validation),
+  [§8](SPEC.md#8-analyzers)).
 
 ## 3. Decisions before dependent implementation
 
-| Decision | Required outcome |
-| --- | --- |
-| RPC method and result shapes | Freeze method names and Serde fixtures before building React forms (section 4.3), including observation/proposal pairing and preview/application dismissal effects. Preserve FILES references and operation-to-entry mappings. |
+None are open. RPC method and result shapes are not frozen up front: the UI
+stages in section 4.3 add and reshape methods as the screens need them.
 
 ## 4. Implementation sequence
 
@@ -114,6 +103,26 @@ Core API and encoding changes that the first slice builds on.
 - [x] Test intent, encoding round trips, and rejection contents at several
   boundaries, including before and after the relevant append.
 
+Before the foundation, a second core round consolidated what the UI will freeze
+into its fixtures:
+
+- [ ] Remove the `format_version` sentinel from proposals and the snapshot. The
+  project forbids version detection, and `deny_unknown_fields` already fails
+  loudly on a changed shape.
+- [ ] Encode type declarations as `fields`, `outgoing`, `incoming`, and
+  `successors`, each field a native list of presence followed by shape words
+  ([FILES §2.6](FILES.md#26-type-declaration-payloads)), so hand-written
+  declarations need no envelopes for scalar and list shapes.
+- [ ] Record an observation once per contiguous run of prefixes, with first and
+  last evaluated prefixes, a focus entry instead of a located view, one subject
+  set, and no copy of the frozen inputs
+  ([SPEC §8.2](SPEC.md#82-finding-identity-and-observations)). Without this, a
+  nonsticky warning about every current node produced n(n+1)/2 observations per
+  check (section 5).
+- [ ] Share one diagnostic struct between analyzer messages and observations,
+  and lower proposals and suggestions to one `EntryChange` type that cannot add
+  analyzers.
+
 ### 4.1 First slice: change files, storage, and CLI
 
 Goal: `lifecore init`, then `check` and `apply` a handwritten JSON or TOML file,
@@ -123,7 +132,7 @@ suggestion export yet.
 - [x] Add workspace members `lifecore-app` (shared contracts, JSON/TOML codecs,
   storage, and the synchronous service; no async or HTTP dependencies) and
   `lifecore-cli` (the `lifecore` binary). `lifecore-server` and `serve` belong
-  to section 4.3.
+  to section 4.2.
 - [x] Implement one `Proposal` representation for JSON and TOML, with optional
   `plan_id` and `acknowledges`, over the core encoding from section 4.0. Omit
   absent optional fields in exports so both formats agree.
@@ -152,8 +161,8 @@ suggestion export yet.
   line out, then exit, with no request loop, method arguments, file options,
   notifications, or batches. Invalid input must not mutate the database.
 - [x] Add read-only entry listing and lookup methods, returning exact identities
-  with type, payload, and currentness. Method names stay provisional until
-  section 4.2 freezes them.
+  with type, payload, and currentness. Method names stay provisional; the UI
+  stages in section 4.3 reshape them as needed.
 - [x] Report rejected proposals with the complete analysis context from section
   4.0, with operation/field locations where available.
 - [x] Return provisional operation-to-entry mappings for previews and actual
@@ -169,51 +178,127 @@ revision of one -> reload -> `check` works on real files; `add-analyzer` enables
 DagCheck on the result; a stale token and a rejected proposal leave the stored
 state unchanged.
 
-### 4.2 Complete RPC contract
+### 4.2 Foundation
 
-- [ ] Add inspection, comparison, analysis, analyzer suite append, and dismissal
-  list/update/restore methods. Dismissal edits reread under writer exclusion and
-  preserve concurrent records; reject inconsistencies as dismissal targets.
-- [ ] Return ephemeral analysis outputs with view, inputs, and implementations.
-  Keep dismissal loading independent of analyzer availability.
-- [ ] Align the core Serde vocabulary with the proposal vocabulary before the
-  fixtures freeze. Core types and snapshots still use `{"Node":{ty_name,body,parent}}`,
-  `{"AddNode":…}`, and `{"Existing":…}` beside the proposal's `kind`, `type`,
-  `payload`, `predecessor`, `existing`, and `added`; `EntryRecord` could then
-  become the core entry plus `current`.
-- [ ] Freeze method names and fixtures (section 3).
+Goal: a running skeleton on which the UI stages build. `lifecore serve` prints
+its URL; opening it in Firefox shows `database.describe` from a React page built
+by the frontend toolchain. No feature screens yet.
 
-### 4.3 Rust HTTP adapter and React client
-
+- [ ] Align the core Serde vocabulary with the proposal vocabulary before client
+  types are generated. Core types and snapshots still use
+  `{"Node":{ty_name,body,parent}}`, `{"AddNode":…}`, and `{"Existing":…}` beside
+  the proposal's `kind`, `type`, `payload`, `predecessor`, `existing`, and
+  `added`; `EntryRecord` could then become the core entry plus `current`.
 - [ ] Add the `lifecore-server` workspace member (Axum adapter library) and
-  `serve`, serving the React assets and one HTTP RPC endpoint over the
-  shared decoder/dispatcher. Resolve the database at startup. Keep initialization
-  and filesystem path selection outside remote methods.
-- [ ] Run synchronous work on a dedicated thread. Construct analyzer factories
-  there; send owned requests/results through a bounded queue. Handle each request
-  like the corresponding CLI invocation, reading the current snapshot and keeping
-  no state between requests. A queued request is not a lock. Do not add async traits or new cross-thread requirements to the
-  core for HTTP convenience.
-- [ ] Implement local binding and same-origin access controls, queue failure
-  handling, orderly shutdown, and structured busy/backend errors. An HTTP
-  disconnect must not be presented as a transaction rollback.
-- [ ] Generate TypeScript contracts with ts-rs as described in
-  [INTERFACES](INTERFACES.md#5-react-client), and type-check serialized Rust
-  fixtures against them, including integer envelopes, large control integers,
-  and timestamps. Keep integer model values as decimal strings; use `bigint`
-  only when arithmetic is needed. Keep certificate strings opaque.
-- [ ] Build browsing by type/currentness, entry details, relationships, revision
-  navigation, and bounded comparisons using backend resolution results.
-- [ ] Build a structured draft editor, JSON/TOML import/export, check preview,
-  explicit apply, and actual assigned-ID handling. Preserve unsaved drafts on
-  failure. Send raw imported file text to the Rust codec so bare large integers
-  are decoded before JavaScript can round them. Require deliberate replanning
-  after stale-base rejection.
+  `serve`, serving the embedded client and one HTTP RPC endpoint over the shared
+  decoder/dispatcher. Resolve the database at startup. Keep initialization and
+  filesystem path selection outside remote methods.
+- [ ] Run each request on a blocking task that calls the synchronous service
+  exactly as a CLI invocation does, reading the current snapshot and keeping no
+  state between requests. There is no worker thread, queue, or cache; the file
+  lock serializes writers. Do not add async traits or new cross-thread
+  requirements to the core for HTTP convenience; the service's factory
+  constructor only needs to be `Send + Sync`.
+- [ ] Implement the server access rules of
+  [INTERFACES §3.2](INTERFACES.md#32-server-access): loopback binding, a launch
+  token printed in the startup URL's fragment, and `Host`, `Origin`, and
+  content-type checks before dispatch. Also implement orderly shutdown and
+  structured busy/backend errors. A client disconnect does not cancel a running
+  task and must not be presented as a transaction rollback.
+- [ ] Set up the frontend project and build of
+  [INTERFACES §5.1](INTERFACES.md#51-frontend-build-and-tests): the Node project
+  in `lifecore-server/ui`, `build.rs` bundling into `OUT_DIR`, embedded assets,
+  `LIFECORE_UI=skip` for Node-free builds, a hard error with instructions when
+  `node_modules` is missing, and `serve --ui-dir` in every build.
+- [ ] Write the TypeScript contract by hand as described in
+  [INTERFACES §5](INTERFACES.md#5-react-client), and guard it with committed
+  fixtures emitted by a Rust test, covering integer envelopes, large control
+  integers, and timestamps. Keep integer model values as decimal strings; use
+  `bigint` only when arithmetic is needed. Keep certificate strings opaque.
+- [ ] Build the client shell: an RPC client that takes the launch token from the
+  URL fragment, keeps it in session storage, and sends it on every call;
+  structured error display; and one real call, `database.describe`.
+- [ ] Add a Playwright smoke test in Firefox that starts `serve` on a scratch
+  database, opens the printed URL, and sees the description.
+- [ ] Add the frontend checks to AGENTS.md "Checks", including
+  `LIFECORE_UI=skip` for Rust-only runs.
+
+Exit: `lifecore serve` prints a URL that opens in Firefox and shows the database
+description; requests without the token, without a JSON content type, from a
+foreign origin, or with a rebinding `Host` are rejected before dispatch; the smoke test and all Rust and
+frontend checks pass.
+
+### 4.3 Iterative UI stages
+
+Each stage runs UI → API → UI: sketch the screens against existing methods, add
+or reshape the methods they turn out to need, then finish the screens. RPC
+methods are not frozen. Each API change updates the
+[INTERFACES §3.1](INTERFACES.md#31-provisional-first-slice-methods) method
+table, the fixtures, and the committed generated types together; compatibility
+is not a concern, so a later stage may reshape an earlier method. Each stage ends
+with its workflow on real data in the browser, a Playwright test for it in
+Firefox, and its UI decisions moved from [UI-HANDOFF.md](UI-HANDOFF.md) into
+[INTERFACES §5](INTERFACES.md#5-react-client). The methods named below are
+expectations, not commitments. Authoring precedes Findings because a check
+preview needs only a flat list of findings; Views comes last because it is the
+largest and least settled stage and the demonstration in section 4.5 does not
+depend on it.
+
+#### 4.3.1 Browse
+
+- [ ] Browse by type and currentness in tables; inspect an entry's payload by
+  its type, its revision lineage, and its relationships with currentness.
+- [ ] Add the methods these screens need; expected: `entries.lineage`,
+  `entries.relationships`, and `types.list`.
+- [ ] Settle how rows are labeled.
+
+Exit: browse a real database, open an entry, and follow its lineage and
+relationships.
+
+#### 4.3.2 Authoring
+
+- [ ] Build a draft tray of ordered, named operations with JSON/TOML
+  import/export, check preview, explicit apply, and actual assigned-ID handling.
+  Attach check findings to operations through the report's operation mapping.
+  Preserve unsaved drafts on failure. Send raw imported file text to the Rust
+  codec so bare large integers are decoded before JavaScript can round them.
+  Require deliberate replanning after stale-base rejection.
+- [ ] Build forms from type declarations for payloads and for type declarations
+  themselves, keeping integers as decimal strings and timestamps at full
+  precision.
+- [ ] Assist reconnection after revisions and splits by proposing explicit edge
+  operations for the incident edges the user keeps.
+- [ ] Distinguish rejection, successful publication, and uncertain publication.
+  Never automatically replay a write after transport failure.
+
+Exit: author, check, and apply a revision with reconnected edges; a stale draft
+requires replanning.
+
+#### 4.3.3 Findings
+
+- [ ] Add analysis and dismissal methods. Return ephemeral analysis outputs with
+  view, inputs, and implementations, and keep dismissal loading independent of
+  analyzer availability. Dismissal list/update/restore rereads under writer
+  exclusion, preserves concurrent records, and rejects inconsistencies as targets.
 - [ ] Present analyzer groups, current/history selection, historical sticky
   labels, evaluation context, dismissal reasons/notes, and restore. Reuse backend
-  grouping and validation semantics.
-- [ ] Distinguish rejection, successful publication, and uncertain acknowledgment.
-  Never automatically replay a write after transport failure.
+  grouping and validation semantics. Show the analyzer suite and add analyzers
+  behind a confirmation that shows any rejection.
+
+Exit: run analysis, dismiss and restore an advisory, and add an analyzer.
+
+#### 4.3.4 Views
+
+- [ ] Build views as filter pipelines (seed, expand, refine) with an "as of"
+  boundary and comparison between boundaries, shown as tables or threads.
+  Render a view with Graphviz on demand only.
+- [ ] Add the methods these screens need; expected: `views.query`,
+  `views.compare`, and `views.dot`. The HTTP adapter runs `dot -Tsvg` as a
+  subprocess with a timeout.
+- [ ] Settle where saved views live and the thread display's details.
+
+Exit: build a filtered view, switch between table and thread, compare two
+boundaries, and render the view with Graphviz.
 
 ### 4.4 Suggestions and acknowledgment
 
@@ -229,16 +314,19 @@ Follow [SUGGESTIONS.md](SUGGESTIONS.md).
   existing reason/note and concurrent records. Preview it in `check`.
 - [ ] In React, select an observation's attached proposal, show original and
   matched contexts, and apply with the export's evaluation inputs by default.
+  Add a Playwright test in Firefox for the workflow.
 - [ ] Add DagCheck tests for cycles sharing a node and for cyclic components that
   grow, split, and shrink back, asserting certificate identity in each case.
   Acknowledgment makes analyzer certificates carry more weight.
 - [ ] Cover SUGGESTIONS' acceptance scenarios.
 
-### 4.5 End-to-end verification
+### 4.5 Final verification
+
+Each stage verifies its own workflow; these checks cut across stages.
 
 - [ ] Demonstrate: `init` -> browse -> author/import a proposal -> check -> apply
   -> reload -> inspect revisions and relationships, through both CLI and HTTP.
-  CLI and HTTP observe each other's committed writes.
+  After a refresh, CLI and HTTP observe each other's committed writes.
 - [ ] Compare the same request through CLI `rpc`, HTTP, and dedicated change-file
   commands. Results agree for fixed base/inputs, allowing transport correlation
   IDs and independently allocated provisional entry IDs to differ.
@@ -256,7 +344,7 @@ Follow [SUGGESTIONS.md](SUGGESTIONS.md).
   times or implementation versions.
 - [ ] Keep SPEC, FILES, INTERFACES, SUGGESTIONS, examples, and implementation
   aligned. Run workspace tests, nightly formatting, strict Clippy for changed Rust
-  packages, and frontend type/build checks plus focused browser workflow tests.
+  packages, and the frontend checks, including the Firefox workflow tests.
 
 ## 5. Checking cost
 
@@ -271,8 +359,8 @@ and entry listings up to 2,000 entries, check up to 1,000), outputs matched the
 baseline apart from the new entry's random origin, though that proposal yields no
 observations. On the 500-entry snapshot, a proposal that declares a type, revises
 a current Task into it, and appends two more nodes exits 1 on both: the baseline
-reports three `BadOverride` observations at boundaries 502–504, this branch one
-at 502, under the same key apart from the provisional entry origin.
+reports three `BadSuccessor` observations (then named `BadOverride`) at
+boundaries 502–504, this branch one at 502, under the same key apart from the provisional entry origin.
 
 | Entries | describe before | describe after | check before | check after |
 | ---: | ---: | ---: | ---: | ---: |
@@ -282,6 +370,13 @@ at 502, under the same key apart from the provisional entry origin.
 | 4,000 | 33 s | 0.11 s | not run | 1.0 s |
 
 Cost is now roughly quadratic in history length.
+
+Output size was a separate problem. A nonsticky warning about current state is
+re-emitted at every prefix where it holds, and each emission was a distinct
+observation, so a proposal of n tasks missing an encouraged field produced
+n(n+1)/2 observations: 20,100 observations and a 36 MB check result for 200
+tasks, at `b20673d`. The second core round in section 4.0 records one
+observation per contiguous run of prefixes instead.
 
 - [x] Answer staleness in constant time from a derived index of each node's
   first-child position, owned by `LifeCoreList`, rebuilt on load, extended by
@@ -308,10 +403,10 @@ Backlogged, not scheduled:
 
 Caching or incremental checks must reproduce full-prefix results exactly
 ([SPEC A.5](SPEC.md#a5-failure-handling-and-cost)), keyed by exact base, suite,
-implementations, and inputs. The server worker reloads the snapshot for every
-request, so load cost matters there too; a later worker cache would need a
-freshness check on file metadata (inode, modification time, size), because
-dismissal edits change the snapshot without rotating the graph revision.
+implementations, and inputs. The server reloads the snapshot for every request,
+so load cost matters there too; a later cache would need a freshness check,
+because dismissal edits change the snapshot without rotating the graph revision;
+see the backlogged change detection below.
 Acknowledgment verification reads committed-base observations from the same
 replay, so an incremental checker must still provide them.
 
@@ -319,14 +414,14 @@ replay, so an incremental checker must still provide them.
 
 ### Markdown document collections
 
-Preserve the [collection contract](FILES.md#4-document-collections) for later:
+Preserve the [collection contract](BACKLOG.md#1-document-collections) for later:
 checkout/reconciliation, document identities, relationship authority, retained
 historical link resolution, manifests, and recoverable source-file writeback.
 Collection planning and its `plan` workflow are not required for this web round.
 
 The selected format embeds TOML in a YAML frontmatter `lifecore` string and uses
 CommonMark body links. It reuses the shared payload encoding. URI destinations
-and inherited database context remain as specified in FILES. Collection
+and inherited database context remain as specified in BACKLOG. Collection
 writeback recovery depends on durable receipts.
 
 ### Further collection format and tooling work
@@ -337,7 +432,7 @@ fields when collection editing is implemented.
 
 ### Durable application receipts
 
-Preserve the [recovery contract](FILES.md#84-deferred-receipts-and-retry-recovery):
+Preserve the [recovery contract](BACKLOG.md#7-deferred-receipts-and-retry-recovery):
 atomically record proposal identity/content and application results, recognize
 identical retries before stale-base rejection, reject conflicting identity reuse,
 and recover collection writeback without overwriting newer text. Cover empty
@@ -350,3 +445,11 @@ Persistent analysis-output archives, remote multi-user hosting, multiple storage
 backends, general query languages, automatic repair/reconnection, and automatic
 split selection are outside this round. Keep improvements driven by concrete
 workflows.
+
+- Result limits and paging for list and query methods. The prototype returns
+  complete results.
+- Browser tests in Chromium. Firefox is the tested browser for now.
+- Snapshot change detection, e.g. a snapshot revision rotated on every
+  publication, including dismissal edits. For a single user, a page refresh
+  re-reads everything; revisit if dismissals grow large or a server cache is
+  added, which could otherwise check file metadata.

@@ -18,7 +18,7 @@ a subprocess or forwarding requests over stdio.
 flowchart TD
     Browser["React client"]
     HTTP["Rust HTTP adapter<br/>POST /rpc and static assets"]
-    Worker["Bounded queue<br/>Dedicated worker thread"]
+    Worker["Blocking task per request"]
     CLI["CLI rpc<br/>One request line, one response line"]
     Files["CLI check / apply / export<br/>JSON and TOML proposals"]
     App["Synchronous application dispatcher"]
@@ -35,24 +35,25 @@ flowchart TD
 
 The shared contract owns data that crosses a transport or thread boundary.
 Borrowed views and resolutions can be converted into owned results or serialized
-within the worker. Reuse domain types and semantics without leaking storage,
+within the request's task. Reuse domain types and semantics without leaking storage,
 HTTP types, or borrowed graph lifetimes into the public request contract.
 
-Async execution, HTTP, and queue dependencies belong to the server adapter.
-An ordinary worker thread constructs and owns the analyzer factories. It handles
-each request the way a CLI invocation does: it reads the current snapshot,
-performs the operation, and keeps no graph or analysis state between requests.
-Requests are processed sequentially. In-memory caching in the worker is
-deferred. The core and
-application operations remain ordinary synchronous calls; a CLI invocation calls
-them directly. Package boundaries must preserve this dependency direction.
+Async execution and HTTP dependencies belong to the server adapter. It runs
+each request on a blocking task that calls the synchronous service the way a CLI
+invocation does: it reads the current snapshot, performs the operation, and
+keeps no graph or analysis state between requests. Requests run concurrently;
+the file lock serializes writers exactly as it does between CLI processes, and a
+disconnected client does not cancel a running task. There is no worker thread,
+queue, or server-side cache. The core and application operations remain ordinary
+synchronous calls; a CLI invocation calls them directly. Package boundaries must
+preserve this dependency direction.
 
 ## 2. CLI surface
 
 | Command | Responsibility |
 | --- | --- |
 | `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out. This operation is outside RPC. |
-| `lifecore serve` | Serve the React assets and HTTP RPC endpoint for the selected database. |
+| `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database. `--ui-dir <dir>` serves the client from disk instead ([section 5.1](#51-frontend-build-and-tests)). |
 | `lifecore rpc` | Read one request line from stdin, execute it locally, print one response line, exit. |
 | `lifecore check FILE` | Decode a JSON/TOML proposal and call shared proposal checking. |
 | `lifecore apply FILE` | Decode a JSON/TOML proposal and call shared checked application. |
@@ -134,8 +135,10 @@ append, proposal checking/application/export, plan-ID minting, and dismissal
 listing/update/restore. Entry listing and lookup come first, so the first
 [CLI slice](PLAN.md#41-first-slice-change-files-storage-and-cli) can find the
 exact identities proposals refer to.
-Freeze exact method names and fixtures before implementing clients. `init` and
-host filesystem-path selection are not RPC methods.
+Method names and shapes are reshaped by the UI stages
+([PLAN §4.3](PLAN.md#43-iterative-ui-stages)); each change updates the method
+table and the fixtures together. `init` and host filesystem-path selection are
+not RPC methods.
 
 Application result types pair exported observations with their proposals and
 report prospective/committed dismissal effects. Keep these types outside the core
@@ -160,8 +163,8 @@ otherwise structurally valid database.
 
 ### 3.1 Provisional first-slice methods
 
-These names and shapes are provisional until section 4.2 of the plan freezes
-them. Unknown or repeated request members are rejected (`-32600`), as are
+These names and shapes are provisional; the UI stages reshape them as the
+screens need. Unknown or repeated request members are rejected (`-32600`), as are
 unknown parameters (`-32602`). Parameters never accept `null`: omit an optional
 parameter instead, as for optional proposal fields. Results may carry `null`
 for absent optional values, such as `view.head` or `analysis.inputs.evaluation_time`.
@@ -189,6 +192,9 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 Each entry record carries `kind`, exact `id`, `type`, `current`, and either
 `predecessor` (when present) and `payload`, or `from` and `to`.
 
+List and query results are complete. The prototype applies no result limits or
+paging; they are [backlogged](PLAN.md#other-deferred-work).
+
 A structurally valid proposal whose replay emits an inconsistency is still a
 `check` result, with `accepted: false` and the complete report, including
 advisories. `apply` refuses it with the `rejected` error, whose `data.report` is
@@ -215,6 +221,29 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
 | 4001 | `entry_not_found` | The identity is not present in the selected view. |
 
+### 3.2 Server access
+
+`lifecore serve` listens on the loopback interface only. At each start it
+generates a random launch token of at least 128 bits and prints the client URL
+with the token in the URL fragment, for example
+`http://127.0.0.1:<port>/#token=<token>`. A browser never sends the fragment to
+the server, so the token stays out of request lines and access logs.
+
+The client reads the token from the fragment, keeps it in session storage,
+removes it from the address bar, and sends it on every `POST /rpc` as
+`Authorization: Bearer <token>`. Before JSON-RPC dispatch, the adapter rejects
+with an HTTP error any request whose `Host` is not the bound address and port
+(`127.0.0.1:<port>` or `localhost:<port>`), whose `Origin`, when present, is not
+the served origin, whose `/rpc` call lacks the exact token, compared in
+constant time, or whose `/rpc` call does not declare a JSON content type. The
+`Host` check defeats DNS rebinding. The token, the `Origin` check, and the
+content-type requirement each defeat cross-site requests on their own: a form
+post cannot set a JSON content type, and a cross-origin fetch that sets it or
+the custom header forces a CORS preflight that the adapter never approves. Static assets carry no secrets and
+need no token. A restart issues a new token, so open pages must be reopened
+from the newly printed URL. The one-shot CLI `rpc` runs as the local user on
+the selected file and uses none of this.
+
 ## 4. Database selection and concurrency
 
 Resolve the database path in one synchronous host helper:
@@ -229,7 +258,7 @@ path. Failures to open an existing database remain errors. Only `init` creates
 one. Moving the file preserves database identity. Frontend requests never select
 arbitrary host files.
 
-Other CLI/server processes may write the same database, so the worker keeps no
+Other CLI/server processes may write the same database, so the server keeps no
 state between requests: each request opens the selected snapshot afresh, and
 historical requests select a prefix of it. Standalone reads/checks
 open the selected JSON snapshot once and read that complete immutable file;
@@ -237,10 +266,10 @@ atomic replacement gives them either the old or the new snapshot. They need no
 writer lock. A current-state reload opens the path again rather than retaining
 an old file handle. No lock spans standalone check and subsequent apply.
 
-The snapshot envelope contains `format_version`, `graph_revision`, `graph`
-(database identity, entries, and ordered analyzer suite), and `dismissals`.
+The snapshot envelope contains `graph_revision`, `graph` (database identity,
+entries, and ordered analyzer suite), and `dismissals`.
 There are no persisted analysis outputs. Full-snapshot rewriting is acceptable
-for this initial implementation. [FILES](FILES.md#81-atomic-publication) defines
+for this initial implementation. [FILES](FILES.md#8-atomic-publication) defines
 the layout and publication sequence.
 
 Initially mutations acquire writer exclusion, reload, verify the selected base,
@@ -256,7 +285,7 @@ roughly quadratically ([PLAN](PLAN.md#5-checking-cost)); hosts can change it wit
 `Service::with_busy_retry`. Ordinary operations on a missing
 database fail without creating the snapshot or its lock file. `init` requires
 the containing directory to exist on a filesystem with hard links
-([FILES](FILES.md#81-atomic-publication)), and a refused `init` creates no lock
+([FILES](FILES.md#8-atomic-publication)), and a refused `init` creates no lock
 file.
 Do not hold locks across browser editing or between standalone check and apply.
 An optimization that prepares outside the lock must compare the exact base
@@ -283,27 +312,24 @@ lost, and support state inspection. Durable retry recognition is backlogged.
 ## 5. React client
 
 The initial UI targets a local user and one database. Serve the client and RPC
-on the same origin, with local binding and access controls at the HTTP adapter.
+on the same origin, with the loopback binding, launch token, and `Host`/`Origin`
+checks of [section 3.2](#32-server-access) at the HTTP adapter.
 The client owns editors, drafts, navigation, layouts, and presentation state;
 the backend owns resolution, analyzer grouping, validation, and publication.
 
-Generate TypeScript definitions from the shared Rust contracts with
-[ts-rs](https://docs.rs/ts-rs), enabling its `uuid-impl`, `semver-impl`, and
-`jiff-impl` features, and commit the generated files. Core types that appear in
-the contract derive `TS` behind an optional `ts` feature, so the graph library
-does not depend on ts-rs by default. ts-rs follows derived Serde
-attributes but not hand-written `Serialize` implementations, and by default
-maps `usize` to `number` and `i64` to `bigint`. Declare the TypeScript shape of
-every custom-encoded type and field explicitly with `#[ts(as = "..")]` or
-`#[ts(type = "..")]`. Then guard the result: emit serialized Rust fixtures as
-typed TypeScript constants and require them to type-check against the generated
-definitions. Canonical integer payloads are
+Write the TypeScript definitions of the shared contract by hand in
+`ui/src/contract.ts`. The contract is small, its methods are reshaped by the
+stages, and the types that matter most have hand-written `Serialize`
+implementations that a generator could not follow. Guard it with fixtures: a
+Rust test serializes representative values of every request, result, error,
+and proposal shape into committed JSON files under `ui/src/fixtures/`, and the
+frontend type-check asserts that each fixture satisfies its declared type, so a
+changed Rust shape fails `tsc`. Canonical integer payloads are
 `{"kind":"integer","value":"9223372036854775807"}`-shaped objects. Keep the decimal
 strings in model state, including inside lists/records, and use `bigint` only
 when arithmetic is needed; serialize back to strings. Known large control
 integers, such as entry positions and view boundaries, are also decimal strings
-but need no payload wrapper. Small bounded protocol fields such as format
-versions and error codes can remain JSON numbers. Canonical responses can use
+but need no payload wrapper. Small bounded protocol fields such as error codes can remain JSON numbers. Canonical responses can use
 ordinary JSON parsing; no lossless-number JSON parser is required. Send raw
 JSON/TOML file imports to the Rust codec, which accepts bare `i64` shorthand
 and returns canonical envelopes. Never parse that shorthand through JavaScript
@@ -337,12 +363,43 @@ Include current/history report selection, sticky historical labels, dismissal
 reasons/notes, restore, and explicit suggestion selection. Elaborate graph layouts
 and specialized form builders can follow a working basic editor.
 
+### 5.1 Frontend build and tests
+
+The client lives in `lifecore-server/ui` as a small Node project: npm with a
+committed `package-lock.json`, esbuild for bundling, `tsc --noEmit` for
+type-checking, Biome for linting and formatting, `node --test` for the few unit
+tests, and Playwright Test for browser tests. It starts with React and ReactDOM;
+add libraries only when a stage needs them.
+
+`lifecore-server`'s `build.rs` bundles `ui/src/main.tsx` with the installed
+esbuild into a fixed-name `app.js` in `OUT_DIR` and copies the handwritten
+`ui/index.html` beside it; the server embeds both. It declares
+`rerun-if-changed` for `ui/src`, `ui/index.html`, and `ui/package-lock.json`. It
+never installs packages: when `ui/node_modules` is missing, it fails with an
+instruction to run `npm ci` in `lifecore-server/ui`. Setting `LIFECORE_UI=skip`
+embeds a placeholder page instead, for builds that do not touch the client, such
+as agents and CI running `cargo test --workspace` without Node.
+Type-checking, linting, and tests are separate checks, not part of the build.
+
+For quick iteration, `serve --ui-dir <dir>` serves the client from disk while
+`esbuild --watch` rebuilds it; a browser refresh
+picks up changes, and the launch token survives in session storage.
+
+The fixture test writes `ui/src/fixtures/` when Rust tests run, which is after
+`build.rs` has bundled, and fails when the committed copies are stale, so the
+build only reads committed files.
+
+Browser tests run in Firefox, the priority for compatibility; other browsers are
+[backlogged](PLAN.md#other-deferred-work). A global setup builds a scratch
+database, starts the built `lifecore serve`, reads the printed URL with its
+launch token from standard output, and opens it, so tests exercise the real
+access flow.
+
 ## 6. Analysis lifetime and dismissal persistence
 
 Return `AnalysisOutput` as an ephemeral result. The service does not save an
 analysis-output archive or issue durable report IDs. Each request replays the
-selected history. In-memory caching is deferred with worker caching; a future
-cache must match the exact graph/view, ordered suite, implementation identities,
+selected history. In-memory caching is deferred; a future cache must match the exact graph/view, ordered suite, implementation identities,
 and evaluation inputs. Display always includes the actual evaluation context.
 
 History mode selects observations across prefixes replayed in that run. It does

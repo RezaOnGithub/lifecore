@@ -163,24 +163,24 @@ payload describes:
 ```text
 TypeDeclaration:
     name: string
-    payload_schema
-    permitted_incoming_edge_types: set<string>
-    permitted_outgoing_edge_types: set<string>
-    additional_successor_types: set<string>
+    fields: map<string, field declaration>
+    incoming: set<string>
+    outgoing: set<string>
+    successors: set<string>
 ```
 
 `name` is the logical name used by ordinary nodes. It is distinct from the
 declaration node's own type, which is `Type`.
 
 A successor with the same type name is always permitted by the type-transition
-rule. `additional_successor_types` permits other type names in addition to that
-implicit permission. An empty set therefore allows only same-type successors; it
+rule. `successors` permits other type names in addition to that implicit
+permission. An empty set therefore allows only same-type successors; it
 does not forbid successors altogether.
 
-The payload schema defines accepted payloads, including each declared field's
-value shape and presence policy, and the policy for additional fields. The
-concrete schema language and value encoding are implementation choices. They
-must provide deterministic validation and equality for supported stored values.
+`fields` defines accepted payloads: each declared field's value shape and
+presence policy. Undeclared fields are rejected. The encoding of a declaration
+payload is fixed in [FILES §2.6](FILES.md#26-type-declaration-payloads); it
+provides deterministic validation and equality for supported stored values.
 
 Each declared field has one of four presence policies:
 
@@ -298,7 +298,7 @@ Immediately before appending a successor, resolve its predecessor's stored type
 name against the current declarations in the preceding committed view.
 
 The transition is permitted if the successor has the same type name, or its type
-name occurs in the predecessor declaration's `additional_successor_types`. The
+name occurs in the predecessor declaration's `successors`. The
 predecessor itself need not be current.
 
 The necessary declaration must resolve uniquely at this point. A missing or
@@ -388,8 +388,8 @@ fields. A supplied token must match. Without it, use the host-selected current
 state. A standalone check is a preview; apply always checks anew and fixes its
 concrete base and evaluation inputs through publication. Both paths preserve
 exact references and the core transaction checks above. The application stores
-one JSON snapshot with format version, graph revision UUID, graph/ordered suite,
-and dismissals, protected by a stable sibling lock file. The revision changes on
+one JSON snapshot with graph revision UUID, graph/ordered suite, and dismissals,
+protected by a stable sibling lock file. The revision changes on
 graph/suite changes, not dismissal edits or minting. These application
 mechanisms do not replace the core's exact commit comparisons.
 [FILES](FILES.md#optional-structured-plan-identity) and [INTERFACES](INTERFACES.md)
@@ -534,7 +534,7 @@ about an event that the analyzer judges once, at the prefix that event ends, and
 that later prefixes do not re-emit; otherwise it would leave current reports as
 soon as history grows. Keep nonsticky an advisory about current state: it is
 emitted again at every prefix where it still holds, so it leaves current reports
-once resolved or superseded. TypeCheck's warnings (`UnknownOverrideType`, and
+once resolved or superseded. TypeCheck's warnings (`UnknownSuccessorType`, and
 encouraged or deprecated field issues) describe current declarations and current
 nodes, so they are nonsticky. Its once-judged transition findings are
 inconsistencies, which reports select at any boundary
