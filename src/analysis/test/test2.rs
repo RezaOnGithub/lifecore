@@ -880,6 +880,63 @@ impl std::hash::Hasher for CollidingHasher {
 }
 
 #[test]
+fn colliding_content_hashes_neither_merge_observations_nor_extend_the_wrong_range() {
+    let graph = roots(6);
+    let first = graph.view().at(0).unwrap().id();
+    let message = move |certificate: &str, text: &str| {
+        let mut message = scripted_message(certificate, &[first], MessageKind::Warning, false);
+        message.diagnostic.message = text.into();
+        message
+    };
+    //A `a` and `b` differ only in key, `a` and `c` only in diagnostic; `a`
+    //A also recurs after a gap, so two equal observations share the bucket.
+    let script = move |view: View<'_>| {
+        let at = view.len();
+        let mut output = vec![];
+        if matches!(at, 1..=3 | 5..=6) {
+            output.push(message("a", "same"));
+        }
+        if matches!(at, 2..=3) {
+            output.push(message("b", "same"));
+        }
+        if matches!(at, 2 | 4) {
+            output.push(message("a", "other"));
+        }
+        output
+    };
+    let expected = [
+        ("a", "same", Some((1, 3))),
+        ("b", "same", Some((2, 3))),
+        ("a", "other", Some((2, 2))),
+        ("a", "other", Some((4, 4))),
+        ("a", "same", Some((5, 6))),
+    ];
+    let mut runner = scripted_runner(script);
+    let colliding = runner
+        .run_view_with_hasher(
+            graph.view(),
+            &scripted_suite(2),
+            std::hash::BuildHasherDefault::<CollidingHasher>::default(),
+        )
+        .unwrap();
+    let ordinary = runner.run_view(graph.view(), &scripted_suite(2)).unwrap();
+    for output in [&colliding, &ordinary] {
+        assert_eq!(
+            output
+                .observations()
+                .map(|o| (
+                    o.key.analyzer_certificate.0.as_str(),
+                    o.diagnostic.message.as_str(),
+                    boundaries(o)
+                ))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    assert_eq!(colliding, ordinary);
+}
+
+#[test]
 fn hash_collisions_do_not_merge_complete_opaque_keys_or_dismiss_other_findings() {
     let (graph, _) = fixture();
     let mut report = advisory_runner(advisory_factory(), EvaluationInputs::default())

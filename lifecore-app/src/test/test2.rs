@@ -10,7 +10,7 @@ use crate::{
 };
 use lifecore::{
     Body, EntryId, LifeCoreList, Payload, Timestamp,
-    analysis::{AnalysisRunner, AnalyzerFactory, Config, EvaluatedView, MessageKind, MessageType},
+    analysis::{AnalysisRunner, AnalyzerFactory, Config, EvaluatedView, MessageType},
     inspection::Currentness,
     transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
     typing::{FieldDecl, FieldStatus, Type, ValueType},
@@ -442,25 +442,24 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
         (edge.from, edge.to),
         (Reference::Added(0), Reference::Existing(ids[2]))
     );
-    //A A suggestion's actions have the same type, so acknowledgment can compare
-    //A them with a lowered proposal by plain equality.
-    let suggestion = MessageKind::Suggestion(vec![
-        EntryChange::AddNode(NewNode {
-            ty_name: "Task".into(),
-            body: Body::from([("title".into(), "A2".into())]),
-            parent: Some(Reference::Existing(ids[1])),
-            intent: Some(RevisionIntent::Revise),
-        }),
-        EntryChange::AddEdge(NewEdge {
-            from: Reference::Added(0),
-            ty_name: "DependsOn".into(),
-            to: Reference::Existing(ids[2]),
-        }),
-    ]);
-    let MessageKind::Suggestion(actions) = &suggestion else {
-        unreachable!()
-    };
-    assert_eq!(&lowered, actions);
+    //A A suggestion carries the same `Vec<EntryChange>`, so acknowledgment can
+    //A compare it with a lowered proposal by plain equality.
+    assert_eq!(
+        lowered,
+        vec![
+            EntryChange::AddNode(NewNode {
+                ty_name: "Task".into(),
+                body: Body::from([("title".into(), "A2".into())]),
+                parent: Some(Reference::Existing(ids[1])),
+                intent: Some(RevisionIntent::Revise),
+            }),
+            EntryChange::AddEdge(NewEdge {
+                from: Reference::Added(0),
+                ty_name: "DependsOn".into(),
+                to: Reference::Existing(ids[2]),
+            }),
+        ]
+    );
     let node = |name: &str, predecessor: Option<Value>| {
         let mut entry = json!({"name": name, "kind": "node", "type": "Task", "payload": {}});
         if let Some(predecessor) = predecessor {
@@ -827,13 +826,43 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     let current = service.mint_plan_id(NoParams {}).unwrap().plan_id;
     assert_eq!(current.graph_revision, applied.graph_revision);
     fs::write(scratch.state().path(), &copy).unwrap();
+    //A Without its encouraged notes, the divergent task draws one warning.
     let divergent = service
-        .apply(request(proposal(json!([task("x", "X")]))))
+        .apply(request(proposal(json!([
+            {"name": "x", "kind": "node", "type": "Task", "payload": {"title": "X"}}
+        ]))))
         .unwrap();
     assert_eq!(
         divergent.report.analysis.view.end_exclusive,
         applied.report.analysis.view.end_exclusive
     );
+    //A The report carries the analysis that certified the stored state.
+    let stored_graph = storage::read(&scratch.state()).unwrap().graph;
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(TypeCheckFactory))
+        .unwrap();
+    let analysis = &divergent.report.analysis;
+    assert_eq!(*analysis, runner.run(&stored_graph).unwrap());
+    assert_eq!(analysis.view, stored_graph.view().id());
+    let x = divergent.report.operations[0].entry;
+    let warnings = analysis.warnings().collect::<Vec<_>>();
+    assert_eq!(analysis.observations().count(), 1);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(
+        warnings[0].evaluated_view,
+        EvaluatedView::Prefixes {
+            first: analysis.view,
+            last: analysis.view,
+        }
+    );
+    assert_eq!(warnings[0].diagnostic.focus, Some(x));
+    assert_eq!(
+        serde_json::from_str::<Value>(&warnings[0].key.analyzer_certificate.0).unwrap(),
+        json!({"Field": {"subject": x,
+            "issue": {"path": [{"Field": "notes"}], "kind": "MissingEncouraged"}}})
+    );
+    assert_eq!(applied.report.analysis.observations().count(), 0);
     assert!(matches!(
         service.apply(with(current, json!([task("d", "D")]))),
         Err(AppError::StaleBase { .. })

@@ -141,7 +141,7 @@ impl View<'_> {
 //A bounded by the codecs' recursion limits. Parsing, dropping, and comparing a
 //A `ValueType` recurse once per level, so a long run of `list` words would
 //A otherwise overflow the stack instead of being reported.
-pub(crate) const MAX_SHAPE_DEPTH: usize = 64;
+const MAX_SHAPE_DEPTH: usize = 64;
 
 impl Type {
     pub const TYPE_NAME: &'static str = "Type";

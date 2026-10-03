@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Debug,
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash},
 };
 
 mod identity;
@@ -210,6 +210,15 @@ impl AnalysisRunner {
         view: View<'_>,
         suite: &SuiteConfig,
     ) -> Result<AnalysisOutput, LifeCoreError> {
+        self.run_view_with_hasher(view, suite, BuildHasherDefault::<DefaultHasher>::default())
+    }
+    //A Tests supply a colliding hasher to exercise complete-value comparison.
+    fn run_view_with_hasher<S: BuildHasher>(
+        &mut self,
+        view: View<'_>,
+        suite: &SuiteConfig,
+        hasher: S,
+    ) -> Result<AnalysisOutput, LifeCoreError> {
         let mut analyzers = vec![];
         let mut identities = vec![];
         for config in &suite.0 {
@@ -233,7 +242,11 @@ impl AnalysisRunner {
             implementations: identities,
             observations: vec![],
         };
-        let mut recorder = Recorder::default();
+        let mut recorder = Recorder {
+            observations: vec![],
+            index: HashMap::new(),
+            hasher,
+        };
         for (analyzer, identity) in analyzers.iter_mut().zip(&report.implementations) {
             let output = analyzer.initialize(&self.inputs).map_err(|message| {
                 LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
@@ -270,15 +283,16 @@ impl AnalysisRunner {
 //A next prefix extends the range of the observation with the same key and
 //A diagnostic instead of adding another, so a finding that holds from its
 //A append to the head is one observation rather than one per prefix.
-#[derive(Default)]
-struct Recorder {
+struct Recorder<S> {
     observations: Vec<Observation>,
     //A Indices by a hash of (key, diagnostic) rather than a second owned copy
-    //A of every diagnostic. A hash collision still compares complete values.
+    //A of every diagnostic. A hash collision still compares complete values,
+    //A both to deduplicate and to choose the range to extend.
     index: HashMap<u64, Vec<usize>>,
+    hasher: S,
 }
 
-impl Recorder {
+impl<S: BuildHasher> Recorder<S> {
     //A `prefix` is `None` for initialization.
     fn record(
         &mut self,
@@ -322,9 +336,8 @@ impl Recorder {
     }
 
     fn insert(&mut self, key: FindingKey, diagnostic: Diagnostic, prefix: Option<ViewId>) {
-        let mut hasher = DefaultHasher::new();
-        (&key, &diagnostic).hash(&mut hasher);
-        let positions = self.index.entry(hasher.finish()).or_default();
+        let hash = self.hasher.hash_one((&key, &diagnostic));
+        let positions = self.index.entry(hash).or_default();
         let same = positions
             .iter()
             .copied()

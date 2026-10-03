@@ -568,6 +568,21 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
         }
         assert_eq!(graph, before);
     }
+    //A Commit hands back the analysis that certified the plan.
+    let mut changes = plan();
+    changes.push(Change::AddAnalyzer {
+        name: "Boundary".into(),
+        config: String::new(),
+    });
+    let advised = prepare(&graph, &changes, &mut runner)
+        .unwrap()
+        .accepted()
+        .unwrap();
+    let certified = advised.analysis().clone();
+    assert_eq!(certified.warnings().count(), 1);
+    let mut receiver = graph.clone();
+    assert_eq!(advised.commit(&mut receiver).unwrap(), certified);
+    assert_eq!(receiver.view().id(), certified.view);
     let clean = prepare(&graph, &plan(), &mut runner)
         .unwrap()
         .accepted()
@@ -577,6 +592,7 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
     assert_eq!(prepared.analysis().warnings().count(), 0);
     assert_eq!(prepared.view().len(), 4);
     assert_eq!(prepared.analysis().view, prepared.view().id());
-    prepared.commit(&mut graph).unwrap();
+    let certified = prepared.analysis().clone();
+    assert_eq!(prepared.commit(&mut graph).unwrap(), certified);
     assert_eq!(graph.view().len(), 4);
 }
