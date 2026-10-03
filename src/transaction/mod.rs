@@ -19,8 +19,6 @@ pub enum RevisionIntent {
     Branch,
 }
 
-//A Node and edge operations are shared with suggested actions, so comparing a
-//A lowered proposal with a suggestion is plain equality.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NewNode {
@@ -38,14 +36,28 @@ pub struct NewEdge {
     pub to: Reference,
 }
 
-//A The core staging input: no names or encodings, earlier operations by index,
-//A and no identity until `prepare` assigns one. Unlike authoring entries and
-//A suggested actions, it can also change the analyzer suite.
+//A A node or edge operation, and never a suite change. A lowered proposal and
+//A a suggestion's actions are both `Vec<EntryChange>`, so comparing them is
+//A plain equality.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Change {
+pub enum EntryChange {
     AddNode(NewNode),
     AddEdge(NewEdge),
+}
+
+//A The core staging input: no names or encodings, earlier operations by index,
+//A and no identity until `prepare` assigns one. Only `init` and `add-analyzer`
+//A build `AddAnalyzer`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Change {
+    Entry(EntryChange),
     AddAnalyzer { name: String, config: String },
+}
+
+impl From<EntryChange> for Change {
+    fn from(change: EntryChange) -> Self {
+        Self::Entry(change)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,13 +190,13 @@ pub fn prepare(
             position: candidate.view().len(),
         };
         let entry = match change {
-        Change::AddNode(node) => Some(Entry::Node(Node {
+        Change::Entry(EntryChange::AddNode(node)) => Some(Entry::Node(Node {
             id,
             ty_name: node.ty_name.clone(),
             body: node.body.clone(),
             parent: node.parent.map(resolve).transpose()?,
         })),
-        Change::AddEdge(edge) => Some(Entry::Edge(Edge {
+        Change::Entry(EntryChange::AddEdge(edge)) => Some(Entry::Edge(Edge {
             id,
             ty_name: edge.ty_name.clone(),
             from: resolve(edge.from)?,
@@ -208,7 +220,7 @@ pub fn prepare(
             .map_err(LifeCoreError::BasicValidationFailure)?;
         //A Intent is judged in the view immediately before this append, which
         //A includes earlier operations of the same plan.
-        if let Change::AddNode(node) = change {
+        if let Change::Entry(EntryChange::AddNode(node)) = change {
             let before = candidate.view().prefix(id.position).expect("staged entry");
             match (parent, node.intent) {
             (Some(_), None) => return Err(Error::MissingIntent { operation }),

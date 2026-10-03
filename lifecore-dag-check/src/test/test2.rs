@@ -6,7 +6,7 @@ use lifecore::{
     Body, EntryId, LifeCoreList,
     analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, Config, MessageType, SuiteConfig},
     transaction::{
-        Change, NewEdge, NewNode,
+        Change, EntryChange, NewEdge, NewNode,
         Reference::{Added, Existing},
         RevisionIntent, prepare,
     },
@@ -21,19 +21,19 @@ fn config() -> DagCheckConfig {
     }
 }
 fn node(name: &str) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: name.into(),
         body: Body::new(),
         parent: None,
         intent: None,
-    })
+    }))
 }
 fn edge(a: usize, b: usize) -> Change {
-    Change::AddEdge(NewEdge {
+    Change::Entry(EntryChange::AddEdge(NewEdge {
         from: Added(a),
         ty_name: "link".into(),
         to: Added(b),
-    })
+    }))
 }
 fn graph() -> (LifeCoreList, Vec<EntryId>) {
     let mut graph = LifeCoreList::default();
@@ -119,12 +119,12 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
     assert!(check_dag(graph.view(), &filtered).components.is_empty());
     prepare(
         &graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "A2".into(),
             body: Body::new(),
             parent: Some(Existing(ids[0])),
             intent: Some(RevisionIntent::Branch),
-        })],
+        }))],
         &mut AnalysisRunner::default(),
     )
     .unwrap()
@@ -213,12 +213,12 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
         node("B"),
         edge(0, 1),
         edge(1, 0),
-        Change::AddNode(NewNode {
+        Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "A2".into(),
             body: Body::new(),
             parent: Some(Added(0)),
             intent: Some(RevisionIntent::Revise),
-        }),
+        })),
         Change::AddAnalyzer {
             name: DagCheckFactory::name().into(),
             config: r#"{"on_cycle":"inconsistency"}"#.into(),
@@ -343,12 +343,12 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     assert_ne!(filtered.warnings().next().unwrap().key, key);
     prepare(
         &graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "A2".into(),
             body: Body::new(),
             parent: Some(Existing(ids[0])),
             intent: Some(RevisionIntent::Branch),
-        })],
+        }))],
         &mut AnalysisRunner::default(),
     )
     .unwrap()

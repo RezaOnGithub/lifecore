@@ -1,4 +1,7 @@
-use crate::{DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId};
+use crate::{
+    DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
+    transaction::EntryChange,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -11,7 +14,6 @@ mod identity;
 pub mod presentation;
 pub mod suggestion;
 pub use identity::{AnalyzerCertificate, AnalyzerIdentity, EvaluationInputs, FindingKey};
-pub use suggestion::SuggestedAction;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);
@@ -33,7 +35,7 @@ pub enum MessageType {
 pub enum MessageKind {
     Inconsistency,
     Warning,
-    Suggestion(Vec<SuggestedAction>),
+    Suggestion(Vec<EntryChange>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -6,7 +6,7 @@ use crate::{
         TypeResolution,
     },
     transaction::{
-        Change, NewEdge, NewNode,
+        Change, EntryChange, NewEdge, NewNode,
         Reference::{Added, Existing},
         RevisionIntent, prepare,
     },
@@ -14,7 +14,7 @@ use crate::{
 };
 
 fn node(title: &str, parent: Option<crate::transaction::Reference>) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: "Note".into(),
         body: Body::from([
             ("title".into(), title.into()),
@@ -22,7 +22,7 @@ fn node(title: &str, parent: Option<crate::transaction::Reference>) -> Change {
         ]),
         parent,
         intent: parent.map(|_| RevisionIntent::Branch),
-    })
+    }))
 }
 
 fn fixture() -> (LifeCoreList, Vec<EntryId>) {
@@ -32,18 +32,18 @@ fn fixture() -> (LifeCoreList, Vec<EntryId>) {
         &[
             node("A", None),
             node("B", None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
-            }),
+            })),
             node("A one", Some(Added(0))),
             node("A two", Some(Added(0))),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(1),
-            }),
+            })),
         ],
         &mut AnalysisRunner::default(),
     )
@@ -150,12 +150,12 @@ fn field_presence_equality_and_recursive_text_are_literal_and_composable() {
     )]);
     let plan = prepare(
         &graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "Other".into(),
             body,
             parent: None,
             intent: None,
-        })],
+        }))],
         &mut AnalysisRunner::default(),
     )
     .unwrap()
@@ -240,12 +240,12 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     );
     let plan = prepare(
         &graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "Type".into(),
             body: ty.to_body(),
             parent: None,
             intent: None,
-        })],
+        }))],
         &mut AnalysisRunner::default(),
     )
     .unwrap()
@@ -268,12 +268,12 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     revised.fields.clear();
     let plan = prepare(
         &graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "Type".into(),
             body: revised.to_body(),
             parent: Some(Existing(declaration)),
             intent: Some(RevisionIntent::Branch),
-        })],
+        }))],
         &mut AnalysisRunner::default(),
     )
     .unwrap()
@@ -491,12 +491,12 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
     assert_eq!(edge, TypeResolution::NotApplicableToEdge);
     let schema = Type::new("Note", &[], &[], &[], &[]);
     let declaration = |schema: &Type| {
-        Change::AddNode(NewNode {
+        Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "Type".into(),
             body: schema.to_body(),
             parent: None,
             intent: None,
-        })
+        }))
     };
     let checked = prepare(
         &graph,
@@ -562,12 +562,12 @@ fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_bound
 
     let checked = prepare(
         &graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "Type".into(),
             body: Body::new(),
             parent: None,
             intent: None,
-        })],
+        }))],
         &mut AnalysisRunner::default(),
     )
     .unwrap()

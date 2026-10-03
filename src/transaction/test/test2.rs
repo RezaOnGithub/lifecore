@@ -1,13 +1,15 @@
-use super::super::{Change, Checked, Error, NewEdge, NewNode, Reference, RevisionIntent, prepare};
+use super::super::{
+    Change, Checked, EntryChange, Error, NewEdge, NewNode, Reference, RevisionIntent, prepare,
+};
 use crate::{Body, LifeCoreList, analysis::AnalysisRunner, transaction::Reference::Added};
 
 fn node(name: &str) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: name.into(),
         body: Body::default(),
         parent: None,
         intent: None,
-    })
+    }))
 }
 
 //A Imports a snapshot of `graph` under another suite. Deserialization is the
@@ -22,11 +24,11 @@ fn plan() -> Vec<Change> {
     vec![
         node("A"),
         node("B"),
-        Change::AddEdge(NewEdge {
+        Change::Entry(EntryChange::AddEdge(NewEdge {
             from: Added(0),
             ty_name: "link".into(),
             to: Added(1),
-        }),
+        })),
     ]
 }
 
@@ -364,12 +366,12 @@ fn suite_only_commit_checks_original_suite_and_blocks_an_older_candidate() {
 }
 
 fn revision(name: &str, parent: Reference, intent: Option<RevisionIntent>) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: name.into(),
         body: Body::default(),
         parent: Some(parent),
         intent,
-    })
+    }))
 }
 
 #[test]
@@ -386,7 +388,7 @@ fn revision_intent_is_checked_immediately_before_each_append() {
     let before = graph.clone();
     let intent = |changes: &[Change]| prepare(&graph, changes, &mut AnalysisRunner::default());
     let mut root_with_intent = node("C");
-    let Change::AddNode(new) = &mut root_with_intent else {
+    let Change::Entry(EntryChange::AddNode(new)) = &mut root_with_intent else {
         unreachable!()
     };
     new.intent = Some(RevisionIntent::Branch);

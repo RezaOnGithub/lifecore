@@ -1,7 +1,7 @@
 use lifecore::{
     Body, EntryId, View,
     analysis::FindingKey,
-    transaction::{Change, NewEdge, NewNode, Reference, RevisionIntent},
+    transaction::{EntryChange, NewEdge, NewNode, Reference, RevisionIntent},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::{collections::HashMap, fmt, path::Path, str::FromStr};
@@ -31,7 +31,7 @@ pub struct Proposal {
 
 //A The authoring form of an operation: named, with aliases to earlier
 //A operations, and limited to what an author may write. It lowers to
-//A `transaction::Change`; FILES §2.5 compares the entry-shaped types.
+//A `transaction::EntryChange`; FILES §2.5 compares the entry-shaped types.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", try_from = "RawEntry")]
 pub enum ProposalEntry {
@@ -427,7 +427,10 @@ impl Proposal {
     //A Lowering resolves names to operation indexes and checks that exact
     //A references exist in the base. All graph rules, including intent, are
     //A left to `transaction::prepare` at each prefix.
-    pub fn lower(&self, base: View<'_>) -> Result<Vec<Change>, (ProposalLocation, LoweringError)> {
+    pub fn lower(
+        &self,
+        base: View<'_>,
+    ) -> Result<Vec<EntryChange>, (ProposalLocation, LoweringError)> {
         let mut operations = HashMap::<&str, (usize, bool)>::new();
         let mut changes = Vec::with_capacity(self.entries.len());
         for (operation, entry) in self.entries.iter().enumerate() {
@@ -479,7 +482,7 @@ impl Proposal {
                 intent,
                 payload,
                 ..
-            } => Change::AddNode(NewNode {
+            } => EntryChange::AddNode(NewNode {
                 ty_name: ty_name.clone(),
                 body: payload.clone(),
                 parent: predecessor
@@ -490,7 +493,7 @@ impl Proposal {
             }),
             ProposalEntry::Edge {
                 ty_name, from, to, ..
-            } => Change::AddEdge(NewEdge {
+            } => EntryChange::AddEdge(NewEdge {
                 from: resolve(from, "from")?,
                 ty_name: ty_name.clone(),
                 to: resolve(to, "to")?,

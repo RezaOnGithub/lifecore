@@ -2,7 +2,7 @@ use crate::{
     Body, Edge, Entry, EntryId, LifeCoreList, Node, Payload, PayloadKind, View, ViewError,
     analysis::AnalysisRunner,
     transaction::{
-        Change, NewEdge, NewNode,
+        Change, EntryChange, NewEdge, NewNode,
         Reference::{Added, Existing},
         RevisionIntent, prepare,
     },
@@ -17,12 +17,12 @@ use std::{
 };
 
 fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: name.into(),
         body: Body::default(),
         parent,
         intent: parent.map(|_| RevisionIntent::Branch),
-    })
+    }))
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut AnalysisRunner::default())
@@ -63,18 +63,18 @@ fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
         &[
             node("A", None),
             node("B", None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
-            }),
+            })),
             node("A2", Some(Added(0))),
             node("A3", Some(Added(0))),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(1),
-            }),
+            })),
         ],
     );
     let view = graph.view();
@@ -113,11 +113,11 @@ fn ancestry_excludes_self_and_preserves_roots_and_current_descendants_in_each_pr
         &[
             node("A", None),
             node("B", None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
-            }),
+            })),
             node("Child", Some(Added(0))),
             node("Grandchild", Some(Added(3))),
             node("Branch", Some(Added(0))),
@@ -222,46 +222,46 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
         vec![node("A", None), node("A", None)],
         vec![
             node("A", None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(0),
-            }),
+            })),
         ],
         vec![node("A", Some(Added(0)))],
         vec![
             node("A", None),
             node("B", None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            }),
+            })),
             node("Child", Some(Added(2))),
         ],
         vec![
             node("A", None),
             node("B", None),
             node("A2", Some(Added(0))),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            }),
+            })),
         ],
         vec![
             node("A", None),
             node("B", None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            }),
-            Change::AddEdge(NewEdge {
+            })),
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
-            }),
+            })),
         ],
     ];
     for changes in cases {
@@ -886,11 +886,13 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
         r#"{{"id":{{"origin":"{origin}","position":"0"}},"ty_name":"T","body":{duplicated},"parent":null}}"#
     );
     let new_node = format!(r#"{{"ty_name":"T","body":{duplicated},"parent":null,"intent":null}}"#);
-    let change = format!(r#"{{"AddNode":{new_node}}}"#);
+    let entry_change = format!(r#"{{"AddNode":{new_node}}}"#);
+    let change = format!(r#"{{"Entry":{entry_change}}}"#);
     let graph = format!(r#"{{"id":"{origin}","entries":[{{"Node":{node}}}],"suite":[]}}"#);
     assert!(serde_json::from_str::<Body>(&duplicated).is_err());
     assert!(serde_json::from_str::<crate::Node>(&node).is_err());
     assert!(serde_json::from_str::<NewNode>(&new_node).is_err());
+    assert!(serde_json::from_str::<EntryChange>(&entry_change).is_err());
     assert!(serde_json::from_str::<Change>(&change).is_err());
     assert!(serde_json::from_str::<LifeCoreList>(&graph).is_err());
     //A The same documents without the repeated field decode.
@@ -900,6 +902,7 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
         Body::from([("a".into(), "x".into())])
     );
     serde_json::from_str::<crate::Node>(&single(&node)).unwrap();
+    serde_json::from_str::<EntryChange>(&single(&entry_change)).unwrap();
     serde_json::from_str::<Change>(&single(&change)).unwrap();
     serde_json::from_str::<LifeCoreList>(&single(&graph)).unwrap();
 }
@@ -1020,11 +1023,11 @@ fn assert_staleness_matches_scan(view: View<'_>, probes: &[EntryId]) {
 }
 
 fn edge(from: crate::transaction::Reference, to: crate::transaction::Reference) -> Change {
-    Change::AddEdge(NewEdge {
+    Change::Entry(EntryChange::AddEdge(NewEdge {
         from,
         ty_name: "link".into(),
         to,
-    })
+    }))
 }
 
 //A Revisions, a split, branching from a stale node, and edges whose endpoints

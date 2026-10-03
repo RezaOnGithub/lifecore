@@ -10,9 +10,9 @@ use crate::{
 };
 use lifecore::{
     Body, EntryId, LifeCoreList, Payload, Timestamp,
-    analysis::{AnalysisRunner, AnalyzerFactory, Config, MessageType},
+    analysis::{AnalysisRunner, AnalyzerFactory, Config, MessageKind, MessageType},
     inspection::Currentness,
-    transaction::{self, Change, NewNode, RevisionIntent},
+    transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
     typing::{FieldDecl, FieldStatus, Type, ValueType},
 };
 use lifecore_dag_check::DagCheckFactory;
@@ -417,7 +417,7 @@ fn json_decode_errors_carry_a_path_and_position() {
 
 #[test]
 fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
-    use lifecore::transaction::{Change, Reference};
+    use lifecore::transaction::Reference;
     let scratch = Scratch::new();
     let ids = populated(&scratch);
     let snapshot = storage::read(&scratch.state()).unwrap();
@@ -430,18 +430,37 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
     ]))
     .lower(base)
     .unwrap();
-    let Change::AddNode(node) = &lowered[0] else {
+    let EntryChange::AddNode(node) = &lowered[0] else {
         panic!("expected a node")
     };
     assert_eq!(node.parent, Some(Reference::Existing(ids[1])));
     assert_eq!(node.intent, Some(RevisionIntent::Revise));
-    let Change::AddEdge(edge) = &lowered[1] else {
+    let EntryChange::AddEdge(edge) = &lowered[1] else {
         panic!("expected an edge")
     };
     assert_eq!(
         (edge.from, edge.to),
         (Reference::Added(0), Reference::Existing(ids[2]))
     );
+    //A A suggestion's actions have the same type, so acknowledgment can compare
+    //A them with a lowered proposal by plain equality.
+    let suggestion = MessageKind::Suggestion(vec![
+        EntryChange::AddNode(NewNode {
+            ty_name: "Task".into(),
+            body: Body::from([("title".into(), "A2".into())]),
+            parent: Some(Reference::Existing(ids[1])),
+            intent: Some(RevisionIntent::Revise),
+        }),
+        EntryChange::AddEdge(NewEdge {
+            from: Reference::Added(0),
+            ty_name: "DependsOn".into(),
+            to: Reference::Existing(ids[2]),
+        }),
+    ]);
+    let MessageKind::Suggestion(actions) = &suggestion else {
+        unreachable!()
+    };
+    assert_eq!(&lowered, actions);
     let node = |name: &str, predecessor: Option<Value>| {
         let mut entry = json!({"name": name, "kind": "node", "type": "Task", "payload": {}});
         if let Some(predecessor) = predecessor {
@@ -1124,12 +1143,12 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     ]);
     transaction::prepare(
         &snapshot.graph,
-        &[Change::AddNode(NewNode {
+        &[Change::Entry(EntryChange::AddNode(NewNode {
             ty_name: "Task".into(),
             body: held,
             parent: None,
             intent: None,
-        })],
+        }))],
         &mut runner,
     )
     .unwrap()

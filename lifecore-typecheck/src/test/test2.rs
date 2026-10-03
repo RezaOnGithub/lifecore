@@ -8,7 +8,7 @@ use lifecore::{
         presentation::{Dismissals, ReportOptions, ReportSelection},
     },
     transaction::{
-        Change, NewEdge, NewNode,
+        Change, EntryChange, NewEdge, NewNode,
         Reference::{Added, Existing},
         RevisionIntent, prepare,
     },
@@ -22,20 +22,20 @@ fn ty(name: &str) -> Type {
     Type::new(name, &[], &[], &[], &[])
 }
 fn declaration(ty: &Type, parent: Option<lifecore::transaction::Reference>) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: "Type".into(),
         body: ty.to_body(),
         parent,
         intent: parent.map(|_| RevisionIntent::Branch),
-    })
+    }))
 }
 fn node(name: &str, body: Body, parent: Option<lifecore::transaction::Reference>) -> Change {
-    Change::AddNode(NewNode {
+    Change::Entry(EntryChange::AddNode(NewNode {
         ty_name: name.into(),
         body,
         parent,
         intent: parent.map(|_| RevisionIntent::Branch),
-    })
+    }))
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut AnalysisRunner::default())
@@ -495,11 +495,11 @@ fn both_endpoint_permissions_are_checked_in_the_selected_view() {
                 declaration(&b, None),
                 node("A", Body::new(), None),
                 node("B", Body::new(), None),
-                Change::AddEdge(NewEdge {
+                Change::Entry(EntryChange::AddEdge(NewEdge {
                     from: Added(2),
                     ty_name: "link".into(),
                     to: Added(3),
-                }),
+                })),
             ],
         );
         let report = findings(&graph, 5);
@@ -1290,11 +1290,11 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&b, None),
             node("A", Body::new(), None),
             node("B", Body::new(), None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(2),
                 ty_name: "link".into(),
                 to: Added(3),
-            }),
+            })),
         ],
     );
     append(
@@ -1303,11 +1303,11 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&with_field("C"), Some(Existing(ids[2]))),
             node("B", Body::new(), Some(Existing(ids[3]))),
             node("A", Body::from([("x".into(), true.into())]), None),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(2),
                 ty_name: "link".into(),
                 to: Added(1),
-            }),
+            })),
             node("B", Body::new(), Some(Added(2))),
             declaration(&with_field("D"), None),
         ],
@@ -1325,11 +1325,11 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&with_field("B"), None),
             node("A", Body::new(), None),
             node("A", Body::new(), Some(Added(1))),
-            Change::AddEdge(NewEdge {
+            Change::Entry(EntryChange::AddEdge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(2),
-            }),
+            })),
             declaration(&with_field("C"), None),
         ],
     );

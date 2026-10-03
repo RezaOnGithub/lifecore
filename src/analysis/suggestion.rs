@@ -1,25 +1,8 @@
 use super::{AnalysisRunner, EvaluatedView, MessageKind, Observation};
 use crate::{
     LifeCoreList, ViewError,
-    transaction::{self, Change, Checked, NewEdge, NewNode},
+    transaction::{self, Change, Checked},
 };
-use serde::{Deserialize, Serialize};
-
-//A The subset of `Change` an analyzer may suggest: never a suite change.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SuggestedAction {
-    AddNode(NewNode),
-    AddEdge(NewEdge),
-}
-
-impl From<SuggestedAction> for Change {
-    fn from(action: SuggestedAction) -> Self {
-        match action {
-        SuggestedAction::AddNode(node) => Change::AddNode(node),
-        SuggestedAction::AddEdge(edge) => Change::AddEdge(edge),
-        }
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -442,7 +442,10 @@ impl Service {
             .map_err(|(location, error)| AppError::InvalidProposal {
                 location: Some(location),
                 message: error.to_string(),
-            })?;
+            })?
+            .into_iter()
+            .map(Change::from)
+            .collect::<Vec<_>>();
         self.prepare(snapshot, Some(proposal), &changes, inputs)
     }
 
