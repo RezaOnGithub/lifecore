@@ -11,7 +11,7 @@ proposal, storage, and transport contracts.
 | Information | Role |
 | --- | --- |
 | `FindingKey` | Identifies an issue for grouping and dismissal: database, exact analyzer identity/configuration/version, category, and complete opaque certificate. |
-| `Observation` | One occurrence of that issue: evaluated view, inputs, wording, and, for a suggestion, its ordered actions. |
+| `Observation` | One occurrence of that issue: the contiguous range of prefixes at which it was emitted, wording, and, for a suggestion, its ordered actions. |
 | `Proposal` | Ordered graph operations with exact references and explicit revision intent, an optional `plan_id` base expectation, and an optional `acknowledges` finding key. |
 | `Dismissal` | Persistent display state for a whole finding key, with a reason and optional note. Not a resolution assertion or an application receipt. |
 
@@ -65,8 +65,8 @@ base; applying one that changes the graph makes the others' tokens stale.
 the committed base reproduces the suggestion:
 
 1. The key's database is the selected database and its category is `Suggestion`.
-2. An observation evaluated at initialization or at a prefix within the committed
-   base has exactly this key.
+2. An observation evaluated at initialization, or over a prefix range within
+   the committed base, has exactly this key.
 3. Its ordered actions equal the proposal's entries after lowering to core
    changes: exact and earlier-operation references, types, payloads, and revision
    intents. Operation names are authoring handles and are not compared.

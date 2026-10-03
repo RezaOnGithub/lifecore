@@ -364,7 +364,8 @@ graph, so a state that failed its checks can be neither committed nor inspected
 as history.
 `PreparedTransaction::commit` replaces the receiver only when its
 database identity, original entry count and contents, and original ordered
-analyzer suite exactly match the prepared base. The candidate already retains
+analyzer suite exactly match the prepared base, and returns the analysis that
+certified the candidate. The candidate already retains
 the original entry prefix; only the original suite needs a separate snapshot.
 There is no serialized-state fingerprint or digest-based acceptance guard.
 Every failed core mutation leaves its receiver unchanged.
@@ -423,9 +424,10 @@ implementations return `Vec<Message>` and are also supported. There is no shared
 
 Keep domain findings structured and assert their variants and details in analyzer
 tests; presentation text cannot substitute for that evidence. Factories and
-domain findings remain in their analyzer packages. Shared `Message` output
-contains an opaque `analyzer_certificate: AnalyzerCertificate`, exact subjects,
-optional diagnostic location, relevance set, text, `MessageKind`, and `sticky: bool`.
+domain findings remain in their analyzer packages. Shared `Message` output pairs
+an opaque `analyzer_certificate: AnalyzerCertificate` with a `Diagnostic`: the
+exact subject set, an optional focus entry, text, `MessageKind`, and
+`sticky: bool`. The same `Diagnostic` is carried unchanged into the observation.
 `AnalyzerCertificate` is a String newtype, serialized transparently as a string.
 
 Both analyzer traits return `version() -> semver::Version`. The runner constructs
@@ -452,14 +454,14 @@ constructed first, initialized in suite order, then each replays boundaries
 and prefix zero. Missing factories, invalid configuration, execution failures,
 and malformed subject/location output are errors.
 
-An observation or execution failure records `evaluated_view: EvaluatedView`.
-`EvaluatedView::Initialization` identifies initialization;
-`EvaluatedView::Prefix(view)` identifies the exact evaluated prefix, including
-zero. Failures also retain analyzer identity and frozen inputs.
-Initialization has no graph access or graph diagnostic location. Every replay
-location must identify an actual prefix of the evaluated view, with its subject
-visible there. Message subjects and relevance must be visible in the evaluated
-view. Initialization therefore cannot name graph entries.
+An observation records `evaluated_view: EvaluatedView`:
+`EvaluatedView::Initialization`, or `EvaluatedView::Prefixes { first, last }`,
+the contiguous range of exact prefixes, including zero, at which the analyzer
+emitted the same diagnostic under the same key ([section 8.2](#82-finding-identity-and-observations)).
+An execution failure records the single evaluated view it failed at, with
+analyzer identity and frozen inputs. Subjects and the focus entry must be
+visible in the evaluated prefix. Initialization has no graph access, so an
+initialization message has no focus and no subjects.
 
 ### 8.2 Finding identity and observations
 
@@ -477,40 +479,45 @@ empty text and empty JSON objects as equivalent behavior, but `""`, `" "`, and
 and empty filter/range records internally; order, duplicate, or whitespace
 changes in the original string still produce distinct analyzer identities.
 
-Built-ins deterministically JSON-encode their typed variants and distinguishing
-details. TypeCheck includes the variant, typed path/issue or schema details, and
-exact diagnostic subject while skipping the ordinary location boundary. DAG
-Check includes the cyclic-component variant and sorted exact node/edge identities.
-Typed domain data stays inside each analyzer; presentation wording is not a key.
+Built-ins deterministically JSON-encode their typed findings. TypeCheck's
+certificate names the variant, the typed path/issue or schema details, and the
+exact subject entry, and nothing about the boundary. DAG Check's names the
+cyclic-component variant with sorted exact node/edge identities. Typed domain
+data stays inside each analyzer; presentation wording is not a key.
 
-Ordinary evaluation boundaries, evaluation time, wording, relevance ordering,
-and suggested actions do not by themselves change finding identity. When a time
+Ordinary evaluation boundaries, evaluation time, wording, and suggested
+actions do not by themselves change finding identity. When a time
 threshold or transition distinguishes an issue, the analyzer must deliberately
 include that detail in its certificate. Different subjects, distinguishing details,
 versions, original configuration strings, categories, or databases stay distinct.
 Repeated observations of a dismissed key remain dismissed.
 
-The runner consumes each `Message`, moves its certificate into `FindingKey`, and
-stores occurrence and presentation fields directly on `Observation`: frozen
-inputs, evaluated view, subjects, location, relevance, wording, kind/actions, and
-sticky flag. It retains no second nested diagnostic containing the same key.
-Whole-observation equality controls deduplication; grouping by finding key is
-separate and retains distinct boundaries and presentation. Duplicate suite entries
-still execute in full. The runner returns `AnalysisOutput`, retaining the selected
-view, inputs, and ordered implementation identities even when no messages were
-emitted. It supports Serde round trips. Outputs are ephemeral;
+The runner consumes each `Message`, moves its certificate into the `FindingKey`,
+and keeps the `Diagnostic` beside that key and the evaluated view. The
+certificate lives only in the key, and the frozen inputs only on the output.
+Recording merges re-emission: a diagnostic equal in key and content to one
+recorded at the immediately preceding prefix extends that observation's `last`;
+one already covered by a recorded range is dropped; anything else starts a new
+observation. An advisory that holds from prefix 10 to 50 is one observation with
+that range, and one that holds again from 70 is a second, so the first prefix at
+which a finding appeared is always retained. Wording that names the boundary
+defeats merging, so analyzers keep boundaries out of message text. Grouping by
+finding key is separate and retains distinct ranges and presentation. Duplicate suite entries still
+execute in full and add nothing. The runner returns `AnalysisOutput`, retaining
+the selected view, inputs, and ordered implementation identities even when no
+messages were emitted. It supports Serde round trips. Outputs are ephemeral;
 [INTERFACES §6](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence)
 owns their lifetime and the independent persistence of dismissals.
 
 ### 8.3 Presentation and dismissal
 
-The default report selects initialization output, observations emitted at the
-selected boundary, and advisories with `sticky = true`. A sticky advisory stays
+The default report selects initialization output, observations whose range
+ends at the selected boundary, and advisories with `sticky = true`. A sticky advisory stays
 visible at later prefixes until dismissed or filtered; it has no automatic expiry.
 With fixed implementation, configuration, and inputs, replay recovers the earlier
 observation even if the analyzer emits nothing at the selected head. Sticky
-advisories from earlier prefixes are labeled historical with current applicability
-unconfirmed. The flag does not mean that a finding still applies, has been resolved,
+advisories whose range ends before the selected boundary are labeled historical
+with current applicability unconfirmed. The flag does not mean that a finding still applies, has been resolved,
 or should be automatically repaired.
 
 An analyzer chooses the flag by what an advisory describes. Mark sticky an advisory
@@ -518,7 +525,10 @@ about an event that the analyzer judges once, at the prefix that event ends, and
 that later prefixes do not re-emit; otherwise it would leave current reports as
 soon as history grows. Keep nonsticky an advisory about current state: it is
 emitted again at every prefix where it still holds, so it leaves current reports
-once resolved or superseded. TypeCheck's warnings (`UnknownSuccessorType`, and
+once resolved or superseded. Re-emission costs nothing in output size, since the
+runner merges it into one range; sticky exists for conditions too costly to
+re-judge at every prefix, where the runner carries the advisory forward instead.
+TypeCheck's warnings (`UnknownSuccessorType`, and
 encouraged or deprecated field issues) describe current declarations and current
 nodes, so they are nonsticky. Its once-judged transition findings are
 inconsistencies, which reports select at any boundary
@@ -556,8 +566,8 @@ errors, independently of dismissal reasons, notes, or presentation.
 `analysis::suggestion::prepare_suggestion(graph, observation, runner)` returns
 `Result<Checked, Error>` for an explicitly selected suggestion.
 It checks only that the observation source matches the supplied history and
-that the observation is a suggestion; its ordered actions, which share
-`Change`'s node/edge shapes, are then checked anew with `transaction::prepare`
+that the observation is a suggestion; its ordered actions, `EntryChange` values
+like a lowered proposal's, are then checked anew with `transaction::prepare`
 under the runner's frozen evaluation inputs, including historical and
 intermediate prefixes and the revision-intent rules of section 7.4. Exact
 existing references and earlier-operation references retain their meaning.

@@ -7,7 +7,9 @@ current analyzer message flow. The proposed application is specified in
 [docs/INTERFACES.md](docs/INTERFACES.md) (commands, RPC, database selection,
 React), [docs/FILES.md](docs/FILES.md) (proposal encoding, plan IDs, snapshot
 publication), and [docs/SUGGESTIONS.md](docs/SUGGESTIONS.md) (suggestion export
-and acknowledgment). Read the relevant document before implementing that behavior.
+and acknowledgment); [docs/BACKLOG.md](docs/BACKLOG.md) keeps the backlogged
+collection and receipt contracts. Read the relevant document before implementing
+that behavior.
 
 Keep the graph/analyzer libraries and the application service synchronous.
 Persistence belongs to the shared application layer; async HTTP and queues belong
@@ -42,73 +44,59 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 
 ## Invariants
 
-- `LifeCoreList::view()` borrows immutable entries; `View::prefix(end_exclusive)`
-  only narrows `[0, end_exclusive)`. Lookups require an `EntryId`, not a position.
+[SPEC](docs/SPEC.md) owns the graph and analyzer contracts and
+[FILES](docs/FILES.md) the application ones; this list names the hazards an edit
+is most likely to trip, with the owning section.
+
+- Views are bounded. `View::prefix(end_exclusive)` only narrows `[0, end_exclusive)`;
+  lookups require an `EntryId`, not a position; a prefix-bounded value reveals
+  nothing past its boundary through any channel, including `Debug`, `Serialize`,
+  `PartialEq`, `Hash`, ordering, and error text. The derived staleness index is
+  never serialized, and every query compares it with the view boundary
+  ([SPEC §9](docs/SPEC.md#9-inspection-and-queries)).
+- Entry identity is separate from its interpretation in a view. Freshness and
+  active declarations depend on the view; never inspect a future suffix or cache
+  resolved types without the source and boundary. Edges keep exact endpoints and
+  are never retargeted ([SPEC §4](docs/SPEC.md#4-edges-and-the-relationship-graph),
+  [§5](docs/SPEC.md#5-current-and-historical-data)).
+- `ancestors` starts at the parent, `descendants` excludes the start, `root_of`
+  returns a root's own identity, and `fresh_successors` includes a current start.
   `ResolutionComparison` exposes `base_view` and `target_view`; appended positions
-  are `[base_view.end_exclusive, target_view.end_exclusive)`.
-- Entry identity is separate from its interpretation in a bounded history view.
-  Freshness and active type declarations depend on that view; never inspect a
-  future suffix or cache resolved types without the source and boundary.
-  The derived staleness index is never serialized, and every query compares it
-  with the view boundary ([SPEC §9](docs/SPEC.md#9-inspection-and-queries)).
-  `View::resolve(id)` returns a `Resolution` holding the entry, freshness, and
-  explicit `TypeResolution` outcome.
-  Construct `ResolutionDifference` only from different resolutions of the same
-  immutable entry; its read-only accessors preserve that invariant.
-- `ancestors` starts at the parent and walks toward the root; `descendants` also
-  excludes the starting revision. `root_of` returns a root's own identity, and
-  `fresh_successors` includes the starting revision when current. All traversals
-  use exact identities visible in the selected view.
-- Edges retain exact endpoint identities. Superseding an endpoint makes an edge
-  stale in views containing the successor; it does not retarget the edge.
-- Test history-sensitive changes at multiple boundaries, including before and
-  after the relevant append.
-- All mutations go through `transaction::prepare` and a `PreparedTransaction` commit.
-  `prepare` returns `Checked`: `Accepted(PreparedTransaction)`, the only
-  committable form, or `Rejected(Rejection)`, which keeps the analysis and
-  operation mapping but no candidate graph.
-  `Reference::Added(n)` addresses an earlier operation within that plan;
-  `Reference::Existing(id)` retains exact identity across views.
+  are `[base_view.end_exclusive, target_view.end_exclusive)`. Construct
+  `ResolutionDifference` only from different resolutions of the same entry
+  ([SPEC §9](docs/SPEC.md#9-inspection-and-queries)).
+- All mutations go through `transaction::prepare` and a `PreparedTransaction`
+  commit. `Checked::Rejected` keeps the analysis and operation mapping but no
+  graph. Core mutation failures leave the receiver unchanged; commit compares
+  database identity, original entries, and the exact ordered suite, never
+  serialization or hashes. `EntryChange` is the only operation shape a proposal
+  or suggestion can carry; `Change` adds the suite change.
+  `Reference::Added(n)` addresses an earlier operation of the plan
+  ([SPEC §7.4](docs/SPEC.md#74-failure-and-persistence)).
 - Only a `LockedSnapshot`, read under the writer lock for its own state path,
-  can replace a published snapshot; unlocked reads are for previews only.
-- Core mutation failures leave the receiver unchanged. Preserve atomic composite
-  writes and every-prefix checks through shared staging and validation. Commit
-  compares database identity, the original entry count/content, and the exact
-  original ordered analyzer suite; serialization and hashes do not define equality.
-  Graph deserialization validates structure before permitting inspection.
-- Keep structural validation failures distinct from analyzer diagnostics.
-  TypeCheck remains a configured analyzer. Its metatype is fixed and built in;
-  no bootstrap node is needed. Empty correctly shaped collections are present.
-- Preserve full-prefix analyzer execution, typed inner findings, normalization,
-  and third-party/dynamically dispatched implementations. Keep analyzers and
-  their private findings/factories together; shared orchestration uses traits.
-  Typed analyzers return `Vec<Self::MSG>` and own `convert_message`; the adapter
-  produces `Vec<Message>`. Assert typed variants and details in analyzer tests;
-  presentation text must not replace structured domain findings. The runner
-  returns `AnalysisOutput` with observations and the complete evaluation context.
-- Analyzer inspection is read-only and prefix-bounded. Initialization has no
-  database access. Results must be deterministic for fixed graph, implementation,
-  configuration, and evaluation inputs. `EvaluationInputs` contains only
-  `evaluation_time: Option<jiff::Timestamp>` and defaults to `None`. Freeze it
-  across initialization and replay; time-dependent analyzers error when absent.
-  Neither runner nor analyzer implicitly reads the clock. Missing factories are errors.
-  `EvaluatedView::Initialization` identifies initialization;
-  `EvaluatedView::Prefix(view)` identifies the exact prefix, including zero.
-- Dismissal and display filtering cannot affect the inconsistency gate.
-  Non-emission or supersession alone does not establish resolution.
-- Finding equality compares database identity, registered analyzer name, exact
-  `semver::Version`, original configuration string, category, and complete opaque
-  `analyzer_certificate: AnalyzerCertificate`, a String newtype. Factories receive
-  configuration unchanged; behaviorally equivalent spellings still have distinct
-  identities. Built-ins parse their package versions
-  and deterministically JSON-encode typed variants, exact subjects, and details.
-  Normalize distinguishing domain details inside the analyzer. Shared code does
-  not parse finding keys or replace equality with digests. Ordinary boundaries,
-  wording, evaluation inputs, and suggested actions belong to observations.
-  `sticky` keeps historical advisories visible at later prefixes until dismissed
-  or filtered, with no automatic expiry. It does not assert current applicability
-  or resolution; nonsticky observations remain available in history mode.
-  Dismissal reasons and optional notes never establish resolution or affect acceptance.
+  can replace a published snapshot; unlocked reads are previews
+  ([FILES §8](docs/FILES.md#8-atomic-publication)).
+- Structural validation failures stay distinct from analyzer diagnostics.
+  TypeCheck is a configured analyzer with a fixed built-in metatype and no
+  bootstrap node. Empty, correctly shaped collections are present
+  ([SPEC §6.1](docs/SPEC.md#61-built-in-metatype), [§7](docs/SPEC.md#7-mandatory-validation)).
+- Analyzers are read-only, prefix-bounded, and deterministic for fixed graph,
+  implementation, configuration, and `EvaluationInputs`; nothing reads the clock
+  implicitly, and missing factories are errors. Keep full-prefix replay, typed
+  findings asserted structurally in tests, and third-party `dyn Analyzer`
+  implementations ([SPEC §8](docs/SPEC.md#8-analyzers),
+  [§8.1](docs/SPEC.md#81-execution-and-normalization)).
+- Finding identity is the complete `FindingKey`: database, registered name, exact
+  version, verbatim configuration string, category, and the opaque certificate.
+  Shared code never parses certificates or substitutes digests. Boundaries,
+  wording, and actions belong to the observation, which records the contiguous
+  prefix range over which its content was emitted
+  ([SPEC §8.2](docs/SPEC.md#82-finding-identity-and-observations)).
+- Dismissal, `sticky`, and display filtering never affect the inconsistency
+  gate; non-emission or supersession never establishes resolution
+  ([SPEC §8.3](docs/SPEC.md#83-presentation-and-dismissal)).
+- Test history-sensitive changes at several boundaries, including before and
+  after the relevant append.
 
 ## Editing conventions
 

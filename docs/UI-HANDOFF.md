@@ -181,6 +181,11 @@ These follow from the merged backend; the linked documents own the details.
   warnings describe current state and are nonsticky, so they leave current
   reports once fixed; a revision (transition) finding appears once, at its own
   prefix ([SPEC §8.3](SPEC.md#83-presentation-and-dismissal)).
+- **Observations are ranges.** Each observation covers the contiguous prefixes
+  at which its diagnostic was emitted ([SPEC §8.2](SPEC.md#82-finding-identity-and-observations)).
+  Current mode shows ranges ending at the head; `first` says when a finding
+  appeared, which is how the draft tray attaches it to the operation that
+  introduced it, and `focus` is the entry to navigate to.
 - **Identities and numbers.** Key records by `origin` plus `position`;
   positions and integer payloads are decimal strings.
 - **JSON vocabulary is not final.** Entry records use the proposal vocabulary

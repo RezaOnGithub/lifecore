@@ -84,9 +84,10 @@ Core API and encoding changes that the first slice builds on.
 - [x] Move revision intent into the core: `Change::AddNode` carries
   `Option<RevisionIntent>`, and `transaction::prepare` validates it at each
   prefix (a predecessor requires an intent, a root forbids one, and `revise`
-  requires a current predecessor immediately before the append). Give
-  `SuggestedAction` the same node/edge shapes as `Change`, so acknowledgment
-  matching is plain equality; `prepare_suggestion` keeps only its source check.
+  requires a current predecessor immediately before the append). Give suggested
+  actions the same node/edge shapes as `Change`, so acknowledgment matching is
+  plain equality (later one type, `EntryChange`); `prepare_suggestion` keeps
+  only its source check.
 - [x] Give core types the canonical encoding from FILES, so the snapshot, change
   files, and RPC share one representation without transport copies: `Payload`
   uses native strings and arrays, tagged integer/boolean/timestamp/record
@@ -113,13 +114,13 @@ into its fixtures:
   `successors`, each field a native list of presence followed by shape words
   ([FILES §2.6](FILES.md#26-type-declaration-payloads)), so hand-written
   declarations need no envelopes for scalar and list shapes.
-- [ ] Record an observation once per contiguous run of prefixes, with first and
+- [x] Record an observation once per contiguous run of prefixes, with first and
   last evaluated prefixes, a focus entry instead of a located view, one subject
   set, and no copy of the frozen inputs
   ([SPEC §8.2](SPEC.md#82-finding-identity-and-observations)). Without this, a
   nonsticky warning about every current node produced n(n+1)/2 observations per
   check (section 5).
-- [ ] Share one diagnostic struct between analyzer messages and observations,
+- [x] Share one diagnostic struct between analyzer messages and observations,
   and lower proposals and suggestions to one `EntryChange` type that cannot add
   analyzers.
 
@@ -376,7 +377,8 @@ re-emitted at every prefix where it holds, and each emission was a distinct
 observation, so a proposal of n tasks missing an encouraged field produced
 n(n+1)/2 observations: 20,100 observations and a 36 MB check result for 200
 tasks, at `b20673d`. The second core round in section 4.0 records one
-observation per contiguous run of prefixes instead.
+observation per contiguous run of prefixes instead: the same 200 tasks give 200
+observations and a 0.36 MB result, with the check at 0.05 s and 5 MB of memory.
 
 - [x] Answer staleness in constant time from a derived index of each node's
   first-child position, owned by `LifeCoreList`, rebuilt on load, extended by

@@ -23,14 +23,15 @@ flowchart TD
     C["convert_message<br/>Analyzer owns certificate encoding and presentation"]
     A["Direct Analyzer implementation"]
     M["Vec&lt;Message&gt;<br/>Order and duplicates preserved by typed adapter"]
-    V{"Runner record:<br/>subjects, relevance and location valid?"}
+    V{"Runner record:<br/>subjects and focus visible in the prefix?"}
     E["Err: InvalidAnalyzerOutput<br/>No AnalysisOutput returned"]
     K["FindingKey<br/>database + analyzer identity + category + certificate"]
     R["Runner context<br/>database, AnalyzerIdentity,<br/>EvaluationInputs, EvaluatedView"]
-    O["Observation<br/>Owns key and occurrence / presentation fields"]
-    D{"Whole Observation<br/>already recorded?"}
-    X["Discard exact duplicate<br/>Keep the first observation"]
-    P["AnalysisOutput.observations<br/>Append in emission order"]
+    O["Observation<br/>key, evaluated range, and the Diagnostic moved whole"]
+    D{"Same key and Diagnostic<br/>already recorded?"}
+    X["Extend that observation's last prefix"]
+    DROP["Drop: already covered"]
+    P["AnalysisOutput.observations<br/>Append with first = last = this prefix"]
 
     T --> C --> M
     A --> M
@@ -39,10 +40,11 @@ flowchart TD
     V -->|yes: move certificate; derive category| K
     R -->|database and analyzer identity| K
     K -->|owned key| O
-    V -->|yes: move other Message fields| O
-    R -->|frozen inputs and evaluated view| O
+    V -->|yes: move the Diagnostic| O
+    R -->|evaluated view| O
     O --> D
-    D -->|yes| X
+    D -->|yes, ending at the preceding prefix| X
+    D -->|yes, covering this prefix| DROP
     D -->|no| P
 ```
 
@@ -67,24 +69,22 @@ TypeCheck judges revision transitions this way.
 | --- | --- | --- |
 | `Message.analyzer_certificate` | `Observation.key.analyzer_certificate` | Move the complete `AnalyzerCertificate` string newtype, whether sticky or not. Shared code does not interpret its contents. |
 | Selected graph/view and factory identity | `Observation.key.database`, `.analyzer` | Add database identity, registered name, exact version and original configuration string. |
-| `Message.kind.ty()` | `Observation.key.kind` | Store only the `MessageType` category: inconsistency, warning or suggestion. |
-| `Message.kind` | `Observation.kind` | Keep the complete `MessageKind`, including a suggestion's ordered actions. |
-| `Message.subjects`, `.offending_event`, `.relevance`, `.message`, `.sticky` | Corresponding `Observation` fields | Move these fields directly; no nested `Message` remains. |
-| Runner inputs and invocation | `Observation.inputs`, `.evaluated_view` | Record frozen `EvaluationInputs` and either `Initialization` or `Prefix(ViewId)`. |
+| `Message.diagnostic.kind.ty()` | `Observation.key.kind` | Store only the `MessageType` category: inconsistency, warning or suggestion. |
+| `Message.diagnostic` | `Observation.diagnostic` | Move the whole `Diagnostic`: subjects, focus, text, `MessageKind` with a suggestion's ordered `EntryChange` actions, and `sticky`. |
+| Runner invocation | `Observation.evaluated_view` | `Initialization`, or `Prefixes { first, last }`, extended when the same key and diagnostic recur at the next prefix. Frozen inputs live only on the output. |
 | Selected view, frozen inputs, constructed identities | `AnalysisOutput.view`, `.inputs`, `.implementations` | Retain the run context even if no observations were emitted. Implementation identities preserve suite order and duplicates. |
 
-An initialization message must have no location, subjects or relevance entries.
-For replay, subjects and relevance entries must be visible in the evaluated
-prefix. An `offending_event`, if supplied, must match an actual location in that
-prefix or one of its earlier prefixes. It can describe an earlier event;
-`evaluated_view` records when the analyzer evaluated it.
+An initialization message has no focus and no subjects. For replay, the
+subjects and the focus entry must be visible in the evaluated prefix;
+`evaluated_view` records the prefixes at which the analyzer emitted it.
 
-Certificate encoding belongs to the analyzer. Built-ins encode typed variants,
-exact subjects and distinguishing domain details as deterministic JSON. The
-runner does not derive a certificate from the other `Message` fields. Evaluation
-boundaries, wording, actions and `sticky` are observation details, so changing
-them can produce distinct observations of the same finding key. Deduplication
-compares whole observations; grouping and dismissal compare whole finding keys.
+Certificate encoding belongs to the analyzer. Built-ins encode typed findings,
+including exact subjects and distinguishing domain details, as deterministic
+JSON. The runner does not derive a certificate from the diagnostic. Wording,
+focus, actions and `sticky` are diagnostic details, so changing them produces a
+distinct observation of the same finding key, while re-emitting the same
+diagnostic at the next prefix extends the existing observation's range. Merging
+compares key and diagnostic; grouping and dismissal compare whole finding keys.
 Neither comparison treats a hash collision as equality.
 
 Missing factories and invalid configuration return errors. If an analyzer
@@ -108,9 +108,9 @@ flowchart TD
     G["Find or create FindingGroup by complete FindingKey<br/>key = borrowed Observation.key"]
     DS["Dismissals<br/>FindingKey + reason + optional note"]
     ALL["Always append reference to group.observations"]
-    I{"Observation.kind<br/>is Inconsistency?"}
+    I{"Observation.diagnostic.kind<br/>is Inconsistency?"}
     C{"ReportOptions.advisories<br/>allows this category?"}
-    B{"History mode OR Initialization<br/>OR Prefix(AnalysisOutput.view)<br/>OR Observation.sticky?"}
+    B{"History mode OR Initialization<br/>OR last == AnalysisOutput.view<br/>OR sticky?"}
     D{"No group.dismissal<br/>OR include_dismissed?"}
     YES["Append reference to group.selected"]
     NO["Keep only in group.observations"]
@@ -146,16 +146,17 @@ must also match. Groups follow the order of their first observation.
 output, including occurrences excluded from `group.selected`. A selected
 occurrence keeps the group in the result even when other occurrences are hidden.
 `render` prints each returned group's category, analyzer name and certificate,
-then only its selected observations. A selected sticky occurrence from an earlier
-prefix is labeled “historical advisory; current applicability unconfirmed”.
+then only its selected observations. A selected sticky occurrence whose range
+ends before the selected view is labeled “historical advisory; current
+applicability unconfirmed”.
 
-For example, suppose a warning is emitted only at prefix 4 and the selected view
-is prefix 8. Its normalized observation remains in the output in every row below.
+For example, suppose a warning is emitted only at prefix 4, so its range is
+`[4, 4]`, and the selected view is prefix 8. Its normalized observation remains in the output in every row below.
 Assuming it is the key's **only occurrence**, these are the grouping outcomes:
 
 | Sticky | Selection | Advisory filter | Matching dismissal | Include dismissed | Selected and group returned? |
 | --- | --- | --- | --- | --- | --- |
-| No | Current | All | No | No | No: older nonsticky occurrence. |
+| No | Current | All | No | No | No: its range ends before the view. |
 | Yes | Current | All | No | No | Yes: sticky passes the boundary test. |
 | Yes | Current | All | Yes | No | No: dismissal hides it. |
 | Yes | Current | All | Yes | Yes | Yes: dismissed findings are requested. |
@@ -164,8 +165,10 @@ Assuming it is the key's **only occurrence**, these are the grouping outcomes:
 | Yes | History | All | Yes | No | No: history does not bypass dismissal. |
 
 Defaults are `Current`, `All`, and `include_dismissed = false`. Initialization
-observations and observations at the exact selected view pass the boundary test
-without `sticky`. Inconsistencies are always selected, regardless of boundary,
+observations and observations whose range ends at the selected view pass the
+boundary test without `sticky`. A nonsticky warning that still holds at the head
+has been re-emitted at every prefix since it appeared, so its range ends at the
+view and it is selected; its `first` prefix tells when it appeared. Inconsistencies are always selected, regardless of boundary,
 sticky flag, advisory filter or even an imported dismissal record.
 
 Sticky is a property of an occurrence, not its finding key. It has no automatic
@@ -193,7 +196,7 @@ being selected for display does not automatically apply its actions.
 flowchart TD
     O["Caller chooses an Observation"]
     S{"prepare_suggestion:<br/>matching source and kind = Suggestion?"}
-    A["Observation.kind = Suggestion(actions)<br/>SuggestedAction shares NewNode/NewEdge with Change"]
+    A["Observation.diagnostic.kind = Suggestion(actions)<br/>Vec&lt;EntryChange&gt;, the type a lowered proposal has"]
     P["transaction::prepare(graph, changes, runner)<br/>Stage; validate structure and revision intent at each prefix"]
     R["Runner checks all candidate prefixes<br/>Fresh unfiltered AnalysisOutput"]
     G{"Any Inconsistency?"}
@@ -219,8 +222,8 @@ flowchart TD
 This diagram follows the suggestion path; direct `transaction::prepare` behaves
 the same after staging, including the intent check. Preparation uses the supplied runner's frozen
 inputs, not automatically the selected observation's original inputs. Source
-checking uses `Observation.key.database` and, for a prefix observation, its
-`evaluated_view`. The opaque certificate is not an action or a commit receipt.
+checking uses `Observation.key.database` and, for a prefix observation, both
+ends of its `evaluated_view` range. The opaque certificate is not an action or a commit receipt.
 `sticky`, `ReportOptions` and `Dismissals` are not inputs to transaction acceptance.
 Warnings and suggestions do not block it. Commit checks the original database,
 entry count/content and ordered analyzer suite before replacing the graph.
