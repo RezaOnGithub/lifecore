@@ -106,10 +106,10 @@ Core API and encoding changes that the first slice builds on.
 Before the foundation, a second core round consolidated what the UI will freeze
 into its fixtures:
 
-- [ ] Remove the `format_version` sentinel from proposals and the snapshot. The
+- [x] Remove the `format_version` sentinel from proposals and the snapshot. The
   project forbids version detection, and `deny_unknown_fields` already fails
   loudly on a changed shape.
-- [ ] Encode type declarations as `fields`, `outgoing`, `incoming`, and
+- [x] Encode type declarations as `fields`, `outgoing`, `incoming`, and
   `successors`, each field a native list of presence followed by shape words
   ([FILES §2.6](FILES.md#26-type-declaration-payloads)), so hand-written
   declarations need no envelopes for scalar and list shapes.

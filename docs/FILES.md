@@ -331,17 +331,19 @@ A type declaration is an ordinary node proposal with `type = "Type"`
 | Field | Value |
 | --- | --- |
 | `name` | The logical type name, a string. |
-| `fields` | A record of field declarations, described below. |
+| `fields` | A record envelope whose fields are field declarations, described below. |
 | `outgoing` | List of permitted outgoing edge labels. |
 | `incoming` | List of permitted incoming edge labels. |
 | `successors` | List of type names permitted for successors besides the type itself. |
 
-A field declaration is a native list of strings: the presence policy
-(`mandatory`, `encouraged`, `deprecated`, or `optional`) followed by the shape
-words. A shape is `text`, `integer`, `boolean`, or `timestamp`; `list` followed
-by the element shape; or `record` followed by one record envelope whose fields
-are themselves field declarations. Scalar and list shapes therefore need no
-envelopes:
+A field declaration is a native list of words: the presence policy
+(`mandatory`, `encouraged`, `deprecated`, or `optional`) followed by the shape.
+A shape is `text`, `integer`, `boolean`, or `timestamp`; `list` followed by the
+element shape; or `record` followed by one record envelope whose fields are
+themselves field declarations, which is then the last element. Scalar and list
+shapes therefore need no envelopes; only `fields` itself, being a record-valued
+payload field, keeps the envelope that [section 2.1](#21-syntax-and-values)
+requires:
 
 ```toml
 [[entries]]
@@ -351,25 +353,25 @@ type = "Type"
 
 [entries.payload]
 name = "Task"
-fields = { title = ["mandatory", "text"], tags = ["optional", "list", "text"] }
+fields = { kind = "record", value = { title = ["mandatory", "text"], tags = ["optional", "list", "text"] } }
 outgoing = ["DependsOn"]
 incoming = ["DependsOn"]
 successors = ["Note"]
 ```
 
 A list of lists is `["optional", "list", "list", "integer"]`. A record-shaped
-field keeps one envelope for its sub-fields, which must be the last element:
+field is `["optional", "record", { kind = "record", value = { owner = ["mandatory", "text"] } }]`.
 
-```toml
-details = ["optional", "record", { kind = "record", value = { owner = ["mandatory", "text"] } }]
-```
-
-A missing presence or shape word, an unknown word, trailing elements, a
-non-string where a word is expected, a `record` not followed by exactly one
-record envelope, or a repeated permission is a malformed declaration, reported
-with the field path. Forms in the React client generate exactly this encoding,
+Malformed declarations are reported with the path of the offending element,
+using the list position for words: a missing presence or shape word (reported at
+the position where it was expected), an unknown word, a non-string where a word
+belongs, `record` followed by nothing, by something other than a record
+envelope, or by further elements, a repeated permission, or more than 64 nested
+`list` and `record` words, which bounds recursion on hostile input. Canonical
+output writes all five keys, with empty lists and an empty `fields` record where
+nothing is declared. Forms in the React client generate exactly this encoding,
 so a declaration written by hand and one built in the browser are the same
-payload.
+declaration.
 
 ## 3. Planning, checking, and applying
 

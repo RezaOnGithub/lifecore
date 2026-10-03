@@ -348,8 +348,9 @@ invalid endpoint permissions at its creation.
 
 The libraries own structural validation, analysis, serialization, and atomic
 in-memory transactions. `transaction::prepare` stages one candidate, checks every
-prefix structurally, and replays the analyzers. Node and edge changes use the
-`NewNode`/`NewEdge` shapes shared with suggested actions. A node change with a
+prefix structurally, and replays the analyzers. Node and edge changes are
+`EntryChange` values, the same type a suggestion's actions and a lowered proposal
+use; only `Change` additionally carries a suite change. A node change with a
 predecessor must state `revise` or `branch`, and a root must omit intent; `revise`
 additionally requires the predecessor to be current immediately before that
 append, including earlier operations of the same plan. Structural, reference,
@@ -373,27 +374,14 @@ A structurally valid import remains inspectable without installed analyzers;
 preparing any transaction still requires the configured analyzers and full replay.
 Deserializing a report does not certify a new transaction.
 
-Filesystem envelopes and publication belong to the synchronous application
-service shared by HTTP and CLI. It must preserve writer exclusion, exact
-stale-base rejection, no-clobber initialization, and atomic publication. Failures
-before publication leave stored state unchanged; synchronization failures after
-publication must report that state may already be visible. Durable receipts and
-automatic retry recovery are deferred. A plan token alone provides no retry
-recovery. The graph/analyzer libraries remain independent of storage and HTTP.
-
-JSON/TOML proposals and application requests share one Serde representation.
-Their optional service-minted `plan_id` combines database identity, an exact
-graph/suite base, and proposal identity, with no separate `database` or `base`
-fields. A supplied token must match. Without it, use the host-selected current
-state. A standalone check is a preview; apply always checks anew and fixes its
-concrete base and evaluation inputs through publication. Both paths preserve
-exact references and the core transaction checks above. The application stores
-one JSON snapshot with graph revision UUID, graph/ordered suite, and dismissals,
-protected by a stable sibling lock file. The revision changes on
-graph/suite changes, not dismissal edits or minting. These application
-mechanisms do not replace the core's exact commit comparisons.
-[FILES](FILES.md#optional-structured-plan-identity) and [INTERFACES](INTERFACES.md)
-define these contracts and their publication requirements.
+Filesystem envelopes, locking, and publication belong to the application service
+shared by HTTP and CLI ([FILES §8](FILES.md#8-atomic-publication)); the
+graph/analyzer libraries remain independent of storage and HTTP. Proposals, plan
+IDs, and the snapshot are application contracts
+([FILES §2](FILES.md#2-json-and-toml-change-files),
+[INTERFACES §4](INTERFACES.md#4-database-selection-and-concurrency)). They do
+not replace the core's exact commit comparisons: a plan ID matches a stored
+revision, while commit compares the entries and the suite themselves.
 
 ## 8. Analyzers
 
@@ -510,13 +498,9 @@ Whole-observation equality controls deduplication; grouping by finding key is
 separate and retains distinct boundaries and presentation. Duplicate suite entries
 still execute in full. The runner returns `AnalysisOutput`, retaining the selected
 view, inputs, and ordered implementation identities even when no messages were
-emitted. It supports Serde round trips. The application returns outputs
-ephemerally, with optional context-sensitive in-memory caching and no persistent
-report archive. After restart it recomputes analysis from stored history and the
-selected inputs/implementations. History mode selects prefixes in that run,
-not saved earlier runs; changed inputs or implementations may yield different
-observations. Dismissals persist independently. See
-[analysis lifetime](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence).
+emitted. It supports Serde round trips. Outputs are ephemeral;
+[INTERFACES §6](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence)
+owns their lifetime and the independent persistence of dismissals.
 
 ### 8.3 Presentation and dismissal
 
@@ -559,12 +543,8 @@ even when the finding is not currently emitted. Each record has a
 establishes resolution. Dismissal loading, writer exclusion, and atomic
 publication belong to the shared application service used by HTTP and CLI.
 
-A proposal may name the suggestion it implements. If the service's own replay of
-the committed base reproduces that suggestion with exactly these actions,
-successful application atomically publishes the graph changes and an
-`Acknowledged` dismissal of its complete finding key, preserving any existing
-record. This acknowledges the issue without asserting resolution. See
-[SUGGESTIONS.md](SUGGESTIONS.md).
+A proposal may name the suggestion it implements; applying it acknowledges the
+finding without asserting resolution ([SUGGESTIONS.md](SUGGESTIONS.md)).
 
 All inconsistencies remain visible across history regardless of advisory filters,
 report selection, or imported dismissal records. Dismiss operations reject
@@ -584,15 +564,8 @@ existing references and earlier-operation references retain their meaning.
 An accepted candidate and its prefixes can be inspected before explicit commit;
 a rejection carries only its analysis and operation mapping.
 Preparation neither applies the suggestion nor dismisses a finding or infers
-reconnections. All core values, including the full timestamp range, remain
-available. Proposal envelopes, plan IDs, JSON/TOML codecs, and persistence belong
-to the shared application layer. Timestamps use Jiff's ordinary Serde strings;
-no separate TOML datetime conversion profile is required. Durable receipts remain
-backlogged application work.
-
-The application pairs each suggestion observation with a ready-made `Proposal`
-naming its finding key. Acknowledgment verification, atomic publication, and
-retry limits are application-layer contracts in [SUGGESTIONS.md](SUGGESTIONS.md).
+reconnections. Exporting suggestions as proposals and verifying their
+acknowledgment are application contracts in [SUGGESTIONS.md](SUGGESTIONS.md).
 
 ## 9. Inspection and queries
 
@@ -745,13 +718,8 @@ one-shot RPC, and change-file conveniences. Shared application operations and
 core graph/analyzer APIs remain synchronous. Async execution belongs at the
 HTTP boundary. See [INTERFACES.md](INTERFACES.md) for ownership and execution.
 
-A shared Serde proposal/value representation serves JSON and TOML. Payload
-strings and arrays are native; integers, booleans, timestamps, and records use
-tagged objects/tables. Integer envelopes contain decimal strings and are always
-used for output; bare `i64` input shorthand is accepted in both formats. Known
-large control integers use decimal strings without payload wrappers. Timestamp
-strings follow Jiff's Serde behavior. Value encoding is specified in
-[FILES.md](FILES.md#21-syntax-and-values).
+The payload and control-integer encoding shared by files, RPC, and the snapshot
+is specified in [FILES §2.1](FILES.md#21-syntax-and-values).
 
 A custom storage engine, interning, general query language, schema hashing, or
 generic storage-backend interface is not required. Physical storage may differ
