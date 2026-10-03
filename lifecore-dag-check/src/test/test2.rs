@@ -4,7 +4,9 @@ use crate::{
 };
 use lifecore::{
     Body, EntryId, LifeCoreList,
-    analysis::{AnalysisRunner, Analyzer, AnalyzerFactory, Config, MessageType, SuiteConfig},
+    analysis::{
+        AnalysisRunner, Analyzer, AnalyzerFactory, Config, EvaluatedView, MessageType, SuiteConfig,
+    },
     transaction::{
         Change, EntryChange, NewEdge, NewNode,
         Reference::{Added, Existing},
@@ -155,30 +157,29 @@ fn index_range_selects_prefixes_without_cropping_membership() {
 }
 
 #[test]
-fn normalized_diagnostics_retain_boundaries_severity_and_relevance() {
+fn diagnostics_name_the_whole_component_and_focus_on_its_least_node() {
     let (graph, ids) = graph();
-    let analyzer = DagCheck { config: config() };
-    let output = analyzer.analyze(graph.view(), &Default::default()).unwrap();
-    let warning = output
-        .iter()
-        .find(|message| message.ty() == MessageType::Warning)
-        .unwrap();
-    assert_eq!(warning.offending_event.unwrap().view.end_exclusive, 6);
-    assert_eq!(warning.offending_event.unwrap().entry, Some(ids[0]));
-    assert_eq!(warning.relevance, ids.into_iter().collect());
-    let analyzer = DagCheck {
-        config: DagCheckConfig {
-            on_cycle: CycleDisposition::Inconsistency,
-            ..config()
-        },
-    };
-    assert!(
-        analyzer
-            .analyze(graph.view(), &Default::default())
-            .unwrap()
-            .iter()
-            .any(|message| message.ty() == MessageType::Inconsistency)
-    );
+    //A Both dispositions focus on the least node, not on the entry that closed
+    //A the cycle, so the focus is the same at every prefix.
+    for (on_cycle, ty) in [
+        (CycleDisposition::Warning, MessageType::Warning),
+        (CycleDisposition::Inconsistency, MessageType::Inconsistency),
+    ] {
+        let analyzer = DagCheck {
+            config: DagCheckConfig {
+                on_cycle,
+                ..config()
+            },
+        };
+        let output = analyzer.analyze(graph.view(), &Default::default()).unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].ty(), ty);
+        assert_eq!(output[0].diagnostic.focus, Some(ids[0]));
+        assert_eq!(
+            output[0].diagnostic.subjects,
+            ids.iter().copied().collect::<BTreeSet<_>>()
+        );
+    }
 }
 
 #[test]
@@ -231,11 +232,11 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
         .analysis()
         .errors()
         .map(|o| match o.evaluated_view {
-        lifecore::analysis::EvaluatedView::Prefix(view) => view.end_exclusive,
-        lifecore::analysis::EvaluatedView::Initialization => usize::MAX,
+        EvaluatedView::Prefixes { first, last } => (first.end_exclusive, last.end_exclusive),
+        EvaluatedView::Initialization => panic!("cycles have a prefix"),
         })
         .collect::<Vec<_>>();
-    assert_eq!(boundaries, vec![4]);
+    assert_eq!(boundaries, vec![(4, 4)]);
     assert!(checked.accepted().is_err());
     assert!(graph.view().is_empty());
 }
@@ -294,9 +295,17 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     let mut dismissals = Dismissals::default();
     let groups = plain.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].observations.len(), 2);
+    //A The cycle closes at prefix 6 and persists through the unrelated append.
+    assert_eq!(groups[0].observations.len(), 1);
     assert_eq!(
-        groups[0].observations[0].subjects,
+        groups[0].observations[0].evaluated_view,
+        EvaluatedView::Prefixes {
+            first: graph.view().prefix(6).unwrap().id(),
+            last: graph.view().id(),
+        }
+    );
+    assert_eq!(
+        groups[0].observations[0].diagnostic.subjects,
         ids.iter().copied().collect()
     );
     let key = groups[0].key.clone();
@@ -377,5 +386,14 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
             .len(),
         1
     );
-    assert_eq!(after.warnings().count(), 2);
+    //A Revising A ends the cycle at prefix 8; the range stops at 7.
+    let warnings = after.warnings().collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(
+        warnings[0].evaluated_view,
+        EvaluatedView::Prefixes {
+            first: graph.view().prefix(6).unwrap().id(),
+            last: graph.view().prefix(7).unwrap().id(),
+        }
+    );
 }

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lifecore::{
-    DiagnosticLocation, EntryId, LifeCoreError, View,
+    EntryId, LifeCoreError, View,
     analysis::{
-        Analyzer, AnalyzerCertificate, AnalyzerFactory, EvaluationInputs, InnerMessageType,
-        Message, MessageKind, MessageType, TypedAnalyzer,
+        Analyzer, AnalyzerCertificate, AnalyzerFactory, Diagnostic, EvaluationInputs,
+        InnerMessageType, Message, MessageKind, MessageType, TypedAnalyzer,
     },
 };
 use semver::Version;
@@ -263,8 +263,6 @@ fn cyclic_components(nodes: &BTreeSet<EntryId>, edges: &[SelectedEdge]) -> Vec<C
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct DagCheckMessage {
     disposition: CycleDisposition,
-    location: DiagnosticLocation,
-    relevance: Vec<EntryId>,
     component: CyclicComponent,
 }
 
@@ -287,17 +285,6 @@ pub struct DagCheck {
 }
 
 impl DagCheck {
-    fn warning_location(
-        view: View<'_>,
-        component: &CyclicComponent,
-        latest_node: Option<EntryId>,
-    ) -> DiagnosticLocation {
-        let location = latest_node
-            .filter(|latest| component.nodes.binary_search(latest).is_ok())
-            .unwrap_or(component.nodes[0]);
-        view.location(Some(location)).expect("visible cycle member")
-    }
-
     fn message_text(component: &CyclicComponent) -> String {
         let nodes = component
             .nodes
@@ -337,53 +324,40 @@ impl TypedAnalyzer for DagCheck {
             return Ok(Vec::new());
         }
 
-        let latest_node = view
-            .entries()
-            .next_back()
-            .and_then(|e| e.as_node())
-            .map(|n| n.id);
         Ok(report
             .components
             .into_iter()
-            .map(|component| {
-                let location = match self.config.on_cycle {
-                CycleDisposition::Inconsistency => view.location(None).expect("view location"),
-                CycleDisposition::Warning => Self::warning_location(view, &component, latest_node),
-                };
-                let mut relevance = component
-                    .nodes
-                    .iter()
-                    .chain(&component.edges)
-                    .copied()
-                    .collect::<Vec<_>>();
-                relevance.sort_unstable();
-                relevance.dedup();
-                DagCheckMessage {
-                    disposition: self.config.on_cycle,
-                    location,
-                    relevance,
-                    component,
-                }
+            .map(|component| DagCheckMessage {
+                disposition: self.config.on_cycle,
+                component,
             })
             .collect())
     }
 
     fn convert_message(&self, message: Self::MSG) -> Message {
-        let text = Self::message_text(&message.component);
+        let component = &message.component;
         Message {
             analyzer_certificate: AnalyzerCertificate(
-                serde_json::to_string(&DagFinding::CyclicComponent(&message.component))
+                serde_json::to_string(&DagFinding::CyclicComponent(component))
                     .expect("typed cycle finding"),
             ),
-            subjects: message.relevance.iter().copied().collect(),
-            offending_event: Some(message.location),
-            relevance: message.relevance.into_iter().collect(),
-            message: text,
-            kind: match message.disposition {
-            CycleDisposition::Inconsistency => MessageKind::Inconsistency,
-            CycleDisposition::Warning => MessageKind::Warning,
+            diagnostic: Diagnostic {
+                subjects: component
+                    .nodes
+                    .iter()
+                    .chain(&component.edges)
+                    .copied()
+                    .collect(),
+                //A The least node, not the newest entry, so the focus stays the same
+                //A at every prefix where the component persists and ranges merge.
+                focus: component.nodes.first().copied(),
+                message: Self::message_text(component),
+                kind: match message.disposition {
+                CycleDisposition::Inconsistency => MessageKind::Inconsistency,
+                CycleDisposition::Warning => MessageKind::Warning,
+                },
+                sticky: false,
             },
-            sticky: false,
         }
     }
 }

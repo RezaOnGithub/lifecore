@@ -13,7 +13,7 @@ pub use entries::{Edge, Entry, EntryId, Node};
 pub use graph::{BasicValidationFailure, LifeCoreList};
 pub use jiff::Timestamp;
 pub use values::{Body, Payload, PayloadKind};
-pub use view::{DiagnosticLocation, View, ViewError, ViewId};
+pub use view::{View, ViewError, ViewId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LifeCoreError {

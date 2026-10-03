@@ -155,8 +155,8 @@ fn the_former_envelope_encoding_is_a_malformed_declaration() {
         assert!(has_error(&report));
         assert!(report.iter().any(|f| matches!(
             f,
-            TypeCheckMessage::MalformedDeclaration { location, error }
-                if location.entry == Some(ids[0]) && *error == expected
+            TypeCheckMessage::MalformedDeclaration { subject, error }
+                if *subject == ids[0] && *error == expected
         )));
         assert!(matches!(
             graph.view().resolve_type("A"),
@@ -186,7 +186,9 @@ fn missing_and_duplicate_declarations_are_inconsistencies() {
     let first = append(&mut graph, &[declaration(&a, None)])[0];
     a.outgoing.insert("link".into());
     append(&mut graph, &[declaration(&a, None)]);
-    assert!(findings(&graph,3).iter().any(|f| matches!(f,TypeCheckMessage::DuplicateType {location,..} if location.entry != Some(first))));
+    assert!(findings(&graph, 3).iter().any(
+        |f| matches!(f, TypeCheckMessage::DuplicateType { subject, .. } if *subject != first)
+    ));
 }
 
 #[test]
@@ -479,7 +481,10 @@ fn branching_from_a_stale_parent_requires_its_type_to_still_resolve() {
             ),
         ],
     );
-    assert!(findings(&graph,5).iter().any(|f| matches!(f,TypeCheckMessage::MissingType { location,.. } if location.entry == graph.view().at(4).map(|e|e.id()))));
+    let revised = graph.view().at(4).unwrap().id();
+    assert!(findings(&graph, 5).iter().any(
+        |f| matches!(f, TypeCheckMessage::MissingType { subject, .. } if *subject == revised)
+    ));
 }
 
 #[test]
@@ -548,9 +553,9 @@ fn configured_typechecking_rejects_an_invalid_prefix_even_after_a_repair() {
         checked
             .analysis()
             .errors()
-            .map(|o| o.offending_event.unwrap().view.end_exclusive)
+            .map(|o| boundaries(o.evaluated_view))
             .collect::<Vec<_>>(),
-        vec![2]
+        vec![Some((2, 2))]
     );
     assert!(checked.accepted().is_err());
     assert!(graph.view().is_empty());
@@ -604,15 +609,8 @@ fn runner_combines_typed_warnings_and_inconsistencies_without_filtering() {
     assert_eq!(output.errors().count(), 1);
     assert_eq!(output.warnings().count(), 1);
     assert_eq!(
-        output
-            .errors()
-            .next()
-            .unwrap()
-            .offending_event
-            .unwrap()
-            .view
-            .end_exclusive,
-        2
+        boundaries(output.errors().next().unwrap().evaluated_view),
+        Some((2, 2))
     );
 }
 
@@ -679,20 +677,19 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
     let mut dismissals = Dismissals::default();
     let groups = report.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 2);
-    assert!(
-        groups
-            .iter()
-            .all(|g| g.observations.len() == 2 && g.selected.len() == 1)
-    );
+    //A Each warning holds at prefixes 2 and 3, so it is one observation.
+    assert!(groups.iter().all(|g| {
+        g.observations.len() == 1
+            && g.selected.len() == 1
+            && boundaries(g.observations[0].evaluated_view) == Some((2, 3))
+    }));
     let key = groups[0].key.clone();
-    let encoded: serde_json::Value = serde_json::from_str(&key.analyzer_certificate.0).unwrap();
+    //A The subject is inside the typed finding; no boundary is.
     assert_eq!(
-        encoded[0]["Field"]["issue"]["path"],
-        serde_json::json!([{ "Field": "first" }])
+        certificate(&key),
+        serde_json::json!({"Field": {"subject": ids[1],
+            "issue": {"path": [{"Field": "first"}], "kind": "MissingEncouraged"}}})
     );
-    assert_eq!(encoded[0]["Field"]["issue"]["kind"], "MissingEncouraged");
-    assert!(encoded[0]["Field"].get("location").is_none());
-    assert_eq!(encoded[1], serde_json::to_value(ids[1]).unwrap());
     assert_eq!(
         key.analyzer.version,
         env!("CARGO_PKG_VERSION")
@@ -762,7 +759,13 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
         2
     );
     assert!(dismissals.restore(&key));
-    assert_eq!(after.warnings().count(), 4);
+    //A Revising the node at prefix 4 ends both ranges at prefix 3.
+    assert_eq!(after.warnings().count(), 2);
+    assert!(
+        after
+            .warnings()
+            .all(|o| boundaries(o.evaluated_view) == Some((2, 3)))
+    );
 }
 
 fn apply_checked(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
@@ -777,9 +780,10 @@ fn apply_checked(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
 fn certificate(key: &FindingKey) -> serde_json::Value {
     serde_json::from_str(&key.analyzer_certificate.0).unwrap()
 }
-fn boundary(view: EvaluatedView) -> Option<usize> {
+//A The inclusive prefix boundaries; `None` at initialization.
+fn boundaries(view: EvaluatedView) -> Option<(usize, usize)> {
     match view {
-    EvaluatedView::Prefix(view) => Some(view.end_exclusive),
+    EvaluatedView::Prefixes { first, last } => Some((first.end_exclusive, last.end_exclusive)),
     EvaluatedView::Initialization => None,
     }
 }
@@ -812,16 +816,14 @@ fn a_bad_transition_is_reported_once_at_its_own_prefix_and_rejects_the_plan() {
     assert_eq!(analysis.view.end_exclusive, 6);
     let errors = analysis.errors().collect::<Vec<_>>();
     assert_eq!(errors.len(), 1);
-    assert_eq!(boundary(errors[0].evaluated_view), Some(4));
-    assert_eq!(errors[0].offending_event.unwrap().view.end_exclusive, 4);
-    assert_eq!(errors[0].offending_event.unwrap().entry, Some(child));
-    assert_eq!(errors[0].subjects, [child].into());
+    //A Judged once, at the prefix that appended the child, so the range does
+    //A not extend to the later boundaries.
+    assert_eq!(boundaries(errors[0].evaluated_view), Some((4, 4)));
+    assert_eq!(errors[0].diagnostic.focus, Some(child));
+    assert_eq!(errors[0].diagnostic.subjects, [child].into());
     assert_eq!(
         certificate(&errors[0].key),
-        serde_json::json!([
-            {"BadSuccessor": {"parent_type": "A", "child_type": "B"}},
-            child,
-        ])
+        serde_json::json!({"BadSuccessor": {"subject": child, "parent_type": "A", "child_type": "B"}})
     );
     //A Inconsistencies are selected in a current report whatever their boundary.
     let dismissals = Dismissals::default();
@@ -857,11 +859,11 @@ fn a_bad_transition_deep_in_history_still_blocks_configuring_typecheck() {
     let checked = prepare(&graph, &[configure()], &mut runner()).unwrap();
     let errors = checked.analysis().errors().collect::<Vec<_>>();
     assert_eq!(errors.len(), 1);
-    assert_eq!(boundary(errors[0].evaluated_view), Some(4));
-    assert_eq!(errors[0].subjects, [child].into());
+    assert_eq!(boundaries(errors[0].evaluated_view), Some((4, 4)));
+    assert_eq!(errors[0].diagnostic.subjects, [child].into());
     assert_eq!(
-        certificate(&errors[0].key)[0],
-        serde_json::json!({"BadSuccessor": {"parent_type": "A", "child_type": "B"}})
+        certificate(&errors[0].key),
+        serde_json::json!({"BadSuccessor": {"subject": child, "parent_type": "A", "child_type": "B"}})
     );
     assert!(checked.accepted().is_err());
 }
@@ -911,12 +913,13 @@ fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
         &mut runner(),
     )
     .unwrap();
+    let child = checked.operations()[0].unwrap();
     let errors = checked.analysis().errors().collect::<Vec<_>>();
     assert_eq!(errors.len(), 1);
-    assert_eq!(boundary(errors[0].evaluated_view), Some(6));
+    assert_eq!(boundaries(errors[0].evaluated_view), Some((6, 6)));
     assert_eq!(
-        certificate(&errors[0].key)[0],
-        serde_json::json!({"BadSuccessor": {"parent_type": "A", "child_type": "B"}})
+        certificate(&errors[0].key),
+        serde_json::json!({"BadSuccessor": {"subject": child, "parent_type": "A", "child_type": "B"}})
     );
     assert!(checked.accepted().is_err());
 }
@@ -954,9 +957,8 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
     assert_eq!(at_own_prefix.len(), 1);
     assert!(matches!(
         &at_own_prefix[0],
-        TypeCheckMessage::BadSuccessor { location, parent_type, child_type }
-            if location.entry == Some(child) && location.view.end_exclusive == 5
-                && parent_type == "A" && child_type == "B"
+        TypeCheckMessage::BadSuccessor { subject, parent_type, child_type }
+            if *subject == child && parent_type == "A" && child_type == "B"
     ));
     assert!(bad_successor(6).is_empty());
     //A The former loop judged it again at every later prefix.
@@ -965,9 +967,89 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
         .unwrap();
     assert!(reference.iter().any(|f| matches!(
         f,
-        TypeCheckMessage::BadSuccessor { location, .. }
-            if location.entry == Some(child) && location.view.end_exclusive == 6
+        TypeCheckMessage::BadSuccessor { subject, .. } if *subject == child
     )));
+    //A Emitted once, the finding's range stays at its own prefix in every
+    //A later view; only identical re-emissions would extend it.
+    let suite = SuiteConfig(vec![Config {
+        name: TypeCheckFactory::name().into(),
+        config: String::new(),
+    }]);
+    for end_exclusive in [5, 6] {
+        let output = runner()
+            .run_view(graph.view().prefix(end_exclusive).unwrap(), &suite)
+            .unwrap();
+        let errors = output.errors().collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(boundaries(errors[0].evaluated_view), Some((5, 5)));
+        assert_eq!(errors[0].diagnostic.focus, Some(child));
+    }
+}
+
+#[test]
+fn a_warning_that_holds_until_the_head_is_one_observation_per_subject() {
+    let task = Type::new(
+        "Task",
+        &[
+            ("title", (ValueType::Text, FieldStatus::Optional)),
+            ("notes", (ValueType::Text, FieldStatus::Encouraged)),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    let mut changes = vec![configure(), declaration(&task, None)];
+    changes.extend((0..20).map(|i| {
+        node(
+            "Task",
+            Body::from([("title".into(), format!("task {i}").into())]),
+            None,
+        )
+    }));
+    let graph = LifeCoreList::default();
+    let checked = prepare(&graph, &changes, &mut runner()).unwrap();
+    let tasks = checked.operations()[2..]
+        .iter()
+        .map(|id| id.unwrap())
+        .collect::<Vec<_>>();
+    let analysis = checked.analysis();
+    assert_eq!(analysis.view.end_exclusive, 21);
+    assert!(!analysis.has_error());
+    //A Without merging, task i would have one observation per later prefix.
+    assert_eq!(analysis.observations().count(), 20);
+    let warnings = analysis.warnings().collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 20);
+    for (warning, task) in warnings.iter().zip(&tasks) {
+        assert_eq!(warning.diagnostic.focus, Some(*task));
+        assert_eq!(
+            boundaries(warning.evaluated_view),
+            Some((task.position() + 1, 21))
+        );
+    }
+    let committed = {
+        let mut graph = graph;
+        checked.accepted().unwrap().commit(&mut graph).unwrap();
+        graph
+    };
+    //A An earlier view ends every range at its own boundary.
+    let suite = SuiteConfig(vec![Config {
+        name: TypeCheckFactory::name().into(),
+        config: String::new(),
+    }]);
+    let output = runner()
+        .run_view(committed.view().prefix(11).unwrap(), &suite)
+        .unwrap();
+    let ranges = output
+        .warnings()
+        .map(|o| boundaries(o.evaluated_view))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranges,
+        tasks[..10]
+            .iter()
+            .map(|task| Some((task.position() + 1, 11)))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -986,8 +1068,8 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
     )[3];
     assert!(findings(&graph, 4).iter().any(|f| matches!(
         f,
-        TypeCheckMessage::DuplicateType { location, name }
-            if location.entry == Some(child) && name == "A"
+        TypeCheckMessage::DuplicateType { subject, name }
+            if *subject == child && name == "A"
     )));
 
     //A The built-in metatype permits only declaration successors.
@@ -1003,18 +1085,17 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
     let report = findings(&graph, 3);
     assert!(report.iter().any(|f| matches!(
         f,
-        TypeCheckMessage::BadSuccessor { location, parent_type, child_type }
-            if location.entry == Some(child) && parent_type == "Type" && child_type == "A"
+        TypeCheckMessage::BadSuccessor { subject, parent_type, child_type }
+            if *subject == child && parent_type == "Type" && child_type == "A"
     )));
 }
 
-//A The transition loop from a07483e, verbatim apart from the later `successors`
-//A and `BadSuccessor` renames, and independent of `TypeCheck::transition`: every
-//A child in the view is judged against the prefix before it, at every prefix
-//A containing it.
+//A The transition loop from a07483e, verbatim apart from the later `successors`,
+//A `BadSuccessor`, and `subject` changes, and independent of
+//A `TypeCheck::transition`: every child in the view is judged against the
+//A prefix before it, at every prefix containing it.
 fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
     use TypeCheckMessage::*;
-    let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
     let mut output = Vec::new();
     for child in view.nodes().filter(|n| n.parent.is_some()) {
         //A A later schema cannot revoke a past transition; each child is judged
@@ -1032,21 +1113,21 @@ fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
         }
         Ok(None) => {
             output.push(MissingType {
-                location: location(child.id),
+                subject: child.id,
                 name: parent.ty_name.clone(),
             });
             continue;
         }
         Err(ResolutionError::Malformed { error, .. }) => {
             output.push(MalformedDeclaration {
-                location: location(child.id),
+                subject: child.id,
                 error,
             });
             continue;
         }
         Err(ResolutionError::Ambiguous { name, .. }) => {
             output.push(DuplicateType {
-                location: location(child.id),
+                subject: child.id,
                 name,
             });
             continue;
@@ -1054,7 +1135,7 @@ fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
         };
         if !allowed {
             output.push(BadSuccessor {
-                location: location(child.id),
+                subject: child.id,
                 parent_type: parent.ty_name.clone(),
                 child_type: child.ty_name.clone(),
             });
@@ -1102,15 +1183,26 @@ impl AnalyzerFactory for AllChildrenFactory {
     }
 }
 
-//A Each finding key with the prefix that first emitted it, in first-emission order.
-fn first_emissions(output: &AnalysisOutput) -> Vec<(&FindingKey, EvaluatedView)> {
-    let mut first = Vec::<(&FindingKey, EvaluatedView)>::new();
+//A Each finding key with the boundary that first emitted it, in first-emission
+//A order; `None` is initialization.
+fn first_emissions(output: &AnalysisOutput) -> Vec<(&FindingKey, Option<usize>)> {
+    let mut first = Vec::<(&FindingKey, Option<usize>)>::new();
     for observation in output.observations() {
         if !first.iter().any(|(key, _)| *key == &observation.key) {
-            first.push((&observation.key, observation.evaluated_view));
+            let at = boundaries(observation.evaluated_view).map(|(first, _)| first);
+            first.push((&observation.key, at));
         }
     }
     first
+}
+
+//A The number of (observation, prefix) emissions an output covers.
+fn covered(output: &AnalysisOutput) -> usize {
+    output
+        .observations()
+        .filter_map(|o| boundaries(o.evaluated_view))
+        .map(|(first, last)| last - first + 1)
+        .sum()
 }
 
 fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
@@ -1132,7 +1224,7 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
         expected.extend(
             all_children_transitions(view)
                 .into_iter()
-                .filter(|finding| finding.location().entry == newest_entry),
+                .filter(|finding| Some(finding.subject()) == newest_entry),
         );
         assert_eq!(
             TypeCheck::default()
@@ -1145,12 +1237,20 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
         let reference = reference_runner.run_view(view, &suite).unwrap();
         assert_eq!(first_emissions(&newest), first_emissions(&reference));
         assert_eq!(newest.has_error(), reference.has_error());
-        //A Newest-only replay drops only repeated judgments of older children.
-        assert!(
-            newest
-                .observations()
-                .all(|o| reference.observations().any(|r| r == o))
-        );
+        //A Newest-only replay drops only repeated judgments of older children,
+        //A which the former loop's ranges extend over.
+        assert!(newest.observations().all(|o| {
+            reference.observations().any(|r| {
+                r.key == o.key
+                    && r.diagnostic == o.diagnostic
+                    && match (boundaries(r.evaluated_view), boundaries(o.evaluated_view)) {
+                    (Some((r_first, r_last)), Some((o_first, o_last))) => {
+                        r_first <= o_first && o_last <= r_last
+                    }
+                    (r, o) => r == o,
+                    }
+            })
+        }));
         for selection in [ReportSelection::Current, ReportSelection::History] {
             let options = ReportOptions {
                 selection,
@@ -1165,7 +1265,7 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
             };
             assert_eq!(keys(&newest), keys(&reference));
         }
-        repeated = reference.observations().count() - newest.observations().count();
+        repeated = covered(&reference) - covered(&newest);
     }
     repeated
 }

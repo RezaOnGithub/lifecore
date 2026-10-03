@@ -189,25 +189,50 @@ fn settle<T: Into<Published>>(publication: Publication, result: T) -> Result<T, 
     }
 }
 
+//A A `ProposalReport` without its analysis, which is moved out of the checked
+//A plan once nothing else needs it, rather than copied.
+struct ReportContext {
+    database: Uuid,
+    base_revision: Option<Uuid>,
+    base: ViewId,
+    operations: Vec<OperationEntry>,
+}
+
+impl ReportContext {
+    fn report(self, analysis: AnalysisOutput) -> ProposalReport {
+        ProposalReport {
+            database: self.database,
+            base_revision: self.base_revision,
+            base: self.base,
+            operations: self.operations,
+            analysis,
+        }
+    }
+}
+
 //A Commit an accepted plan into the loaded snapshot, returning whether
 //A graph/suite state changed. Every node, edge, or analyzer operation does and
 //A gets a fresh revision; an empty plan is a no-op that keeps it.
 fn commit(
     snapshot: &mut Snapshot,
     checked: Checked,
-    report: ProposalReport,
+    context: ReportContext,
 ) -> Result<(ProposalReport, bool), AppError> {
-    let Checked::Accepted(prepared) = checked else {
+    let prepared = match checked {
+    Checked::Accepted(prepared) => prepared,
+    rejected => {
+        let report = context.report(rejected.into_analysis());
         return Err(AppError::Rejected(Box::new(report)));
+    }
     };
     let changed = !prepared.operations().is_empty();
-    prepared
+    let analysis = prepared
         .commit(&mut snapshot.graph)
         .map_err(|error| preparation_error(error, None, 0))?;
     if changed {
         snapshot.graph_revision = Uuid::new_v4();
     }
-    Ok((report, changed))
+    Ok((context.report(analysis), changed))
 }
 
 //A A stored entry plus its currentness in the selected view, in proposal
@@ -400,7 +425,7 @@ impl Service {
         proposal: Option<&Proposal>,
         changes: &[Change],
         inputs: EvaluationInputs,
-    ) -> Result<(Checked, ProposalReport), AppError> {
+    ) -> Result<(Checked, ReportContext), AppError> {
         let mut runner = self.runner(inputs)?;
         let base = snapshot.graph.view();
         let checked = transaction::prepare(&snapshot.graph, changes, &mut runner)
@@ -420,14 +445,13 @@ impl Service {
                     .collect()
             })
             .unwrap_or_default();
-        let report = ProposalReport {
+        let context = ReportContext {
             database: database(&snapshot.graph),
             base_revision: Some(snapshot.graph_revision),
             base: base.id(),
             operations,
-            analysis: checked.analysis().clone(),
         };
-        Ok((checked, report))
+        Ok((checked, context))
     }
 
     fn prepare_proposal(
@@ -435,7 +459,7 @@ impl Service {
         snapshot: &Snapshot,
         proposal: &Proposal,
         inputs: EvaluationInputs,
-    ) -> Result<(Checked, ProposalReport), AppError> {
+    ) -> Result<(Checked, ReportContext), AppError> {
         verify_plan_id(snapshot, proposal.plan_id)?;
         let changes = proposal
             .lower(snapshot.graph.view())
@@ -469,9 +493,9 @@ impl Service {
             .collect::<Vec<_>>();
         //A The initial suite is added through the ordinary checked path, so
         //A missing factories and invalid configurations are rejected here too.
-        let (checked, mut report) = self.prepare(&snapshot, None, &changes, Default::default())?;
-        report.base_revision = None;
-        commit(&mut snapshot, checked, report)?;
+        let (checked, mut context) = self.prepare(&snapshot, None, &changes, Default::default())?;
+        context.base_revision = None;
+        commit(&mut snapshot, checked, context)?;
         let lock = storage::lock(&self.state, self.busy_retry)?;
         let publication = lock.publish_new(&snapshot, self.sync_directory)?;
         let initialized = Initialized {
@@ -558,10 +582,10 @@ impl Service {
         }
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         let snapshot = storage::read(&self.state)?;
-        let (checked, report) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
+        let (checked, context) = self.prepare_proposal(&snapshot, &request.proposal, inputs)?;
         Ok(CheckResult {
             accepted: matches!(checked, Checked::Accepted(_)),
-            report,
+            report: context.report(checked.into_analysis()),
         })
     }
 
@@ -576,9 +600,9 @@ impl Service {
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         storage::require_existing(&self.state)?;
         let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
-        let (checked, report) =
+        let (checked, context) =
             self.prepare_proposal(locked.snapshot(), &request.proposal, inputs)?;
-        let (report, changed) = commit(locked.snapshot_mut(), checked, report)?;
+        let (report, changed) = commit(locked.snapshot_mut(), checked, context)?;
         let publication = self.publish(&locked, changed)?;
         let applied = ApplyResult {
             graph_revision: locked.snapshot().graph_revision,
@@ -597,8 +621,8 @@ impl Service {
             name: request.name,
             config: request.configuration,
         }];
-        let (checked, report) = self.prepare(locked.snapshot(), None, &changes, inputs)?;
-        let (report, changed) = commit(locked.snapshot_mut(), checked, report)?;
+        let (checked, context) = self.prepare(locked.snapshot(), None, &changes, inputs)?;
+        let (report, changed) = commit(locked.snapshot_mut(), checked, context)?;
         let publication = self.publish(&locked, changed)?;
         let snapshot = locked.snapshot();
         let added = AnalyzerAdded {

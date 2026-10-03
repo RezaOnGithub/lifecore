@@ -481,15 +481,16 @@ impl crate::analysis::Analyzer for BoundaryAnalyzer {
         view: crate::View<'_>,
         _inputs: &crate::analysis::EvaluationInputs,
     ) -> Result<Vec<crate::analysis::Message>, String> {
-        use crate::analysis::{AnalyzerCertificate, Message, MessageKind};
+        use crate::analysis::{AnalyzerCertificate, Diagnostic, Message, MessageKind};
         let message = |kind, certificate: &str| Message {
             analyzer_certificate: AnalyzerCertificate(certificate.into()),
-            subjects: Default::default(),
-            offending_event: view.location(None),
-            relevance: Default::default(),
-            message: certificate.into(),
-            kind,
-            sticky: false,
+            diagnostic: Diagnostic {
+                subjects: Default::default(),
+                focus: None,
+                message: certificate.into(),
+                kind,
+                sticky: false,
+            },
         };
         let mut output = vec![message(MessageKind::Warning, "advisory")];
         if self.0 == Some(view.len()) {
@@ -542,14 +543,24 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
             analysis.implementations[0].configuration,
             rejected_at.to_string()
         );
-        //A Advisories at every boundary stay alongside the blocking finding.
-        assert_eq!(analysis.warnings().count(), 5);
+        //A The advisory emitted at every boundary is one observation covering
+        //A them all, alongside the blocking finding.
+        let warnings = analysis.warnings().collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0].evaluated_view,
+            EvaluatedView::Prefixes {
+                first: graph.view().prefix(0).unwrap().id(),
+                last: analysis.view,
+            }
+        );
         let blocked = analysis.errors().collect::<Vec<_>>();
         assert_eq!(blocked.len(), 1);
         assert_eq!(blocked[0].key.kind, MessageType::Inconsistency);
-        let EvaluatedView::Prefix(at) = blocked[0].evaluated_view else {
+        let EvaluatedView::Prefixes { first: at, last } = blocked[0].evaluated_view else {
             panic!("the finding names its prefix")
         };
+        assert_eq!(at, last);
         assert_eq!(at.end_exclusive, rejected_at);
         //A Prefixes up to the base are the committed history itself.
         if rejected_at <= 1 {

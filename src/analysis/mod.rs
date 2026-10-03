@@ -1,7 +1,4 @@
-use crate::{
-    DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
-    transaction::EntryChange,
-};
+use crate::{EntryId, LifeCoreError, LifeCoreList, View, ViewId, transaction::EntryChange};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,15 +35,16 @@ pub enum MessageKind {
     Suggestion(Vec<EntryChange>),
 }
 
+//A What an analyzer says about one finding at one prefix, apart from its
+//A identity. Every subject and the focus must be visible in that prefix;
+//A initialization has neither.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Message {
-    pub analyzer_certificate: AnalyzerCertificate,
+pub struct Diagnostic {
     pub subjects: BTreeSet<EntryId>,
-    //A Setup has no graph location. Replay can describe an earlier transition,
-    //A but never a location outside the invocation prefix.
-    pub offending_event: Option<DiagnosticLocation>,
-    pub relevance: BTreeSet<EntryId>,
+    //A The entry a reader should look at first. Keep it stable while the finding
+    //A holds, so re-emissions at consecutive prefixes merge into one range.
+    pub focus: Option<EntryId>,
     pub message: String,
     pub kind: MessageKind,
     //A Sticky advisories stay visible at later prefixes until dismissed or filtered.
@@ -54,9 +52,16 @@ pub struct Message {
     pub sticky: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Message {
+    pub analyzer_certificate: AnalyzerCertificate,
+    pub diagnostic: Diagnostic,
+}
+
 impl Message {
     pub fn ty(&self) -> MessageType {
-        self.kind.ty()
+        self.diagnostic.kind.ty()
     }
 }
 
@@ -121,10 +126,22 @@ pub trait AnalyzerFactory {
     fn analyzer_name(&self) -> &'static str;
 }
 
+//A `Prefixes` is the contiguous range of replayed prefixes, both ends
+//A inclusive, at which an analyzer emitted the same diagnostic; `first` equals
+//A `last` for a single prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EvaluatedView {
     Initialization,
-    Prefix(ViewId),
+    Prefixes { first: ViewId, last: ViewId },
+}
+
+impl EvaluatedView {
+    pub(crate) fn prefix(view: ViewId) -> Self {
+        Self::Prefixes {
+            first: view,
+            last: view,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, thiserror::Error)]
@@ -136,18 +153,13 @@ pub struct ExecutionFailure {
     pub message: String,
 }
 
+//A The evaluation inputs are those of the enclosing `AnalysisOutput`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
     pub key: FindingKey,
-    pub inputs: EvaluationInputs,
     pub evaluated_view: EvaluatedView,
-    pub subjects: BTreeSet<EntryId>,
-    pub offending_event: Option<DiagnosticLocation>,
-    pub relevance: BTreeSet<EntryId>,
-    pub message: String,
-    pub kind: MessageKind,
-    pub sticky: bool,
+    pub diagnostic: Diagnostic,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,120 +233,149 @@ impl AnalysisRunner {
             implementations: identities,
             observations: vec![],
         };
-        let mut seen = HashMap::new();
+        let mut recorder = Recorder::default();
         for (analyzer, identity) in analyzers.iter_mut().zip(&report.implementations) {
-            let evaluated_view = EvaluatedView::Initialization;
             let output = analyzer.initialize(&self.inputs).map_err(|message| {
                 LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
                     analyzer: identity.clone(),
                     inputs: self.inputs.clone(),
-                    evaluated_view,
+                    evaluated_view: EvaluatedView::Initialization,
                     message,
                 }))
             })?;
-            record(
-                &mut report.observations,
-                &mut seen,
-                identity,
-                &self.inputs,
-                view.prefix(0).expect("empty prefix"),
-                evaluated_view,
-                output,
-            )?;
+            recorder.record(identity, view.id().database, None, output)?;
         }
         //A Preserve suite order and full replay, including the empty prefix.
         //A Deduplication never skips an invocation or the inconsistency gate.
         for (analyzer, identity) in analyzers.iter().zip(&report.implementations) {
             for end_exclusive in 0..=view.len() {
                 let prefix = view.prefix(end_exclusive).expect("bounded replay prefix");
-                let evaluated_view = EvaluatedView::Prefix(prefix.id());
                 let output = analyzer.analyze(prefix, &self.inputs).map_err(|message| {
                     LifeCoreError::AnalyzerExecution(Box::new(ExecutionFailure {
                         analyzer: identity.clone(),
                         inputs: self.inputs.clone(),
-                        evaluated_view,
+                        evaluated_view: EvaluatedView::prefix(prefix.id()),
                         message,
                     }))
                 })?;
-                record(
-                    &mut report.observations,
-                    &mut seen,
-                    identity,
-                    &self.inputs,
-                    prefix,
-                    evaluated_view,
-                    output,
-                )?;
+                recorder.record(identity, view.id().database, Some(prefix), output)?;
             }
         }
+        report.observations = recorder.observations;
         Ok(report)
     }
 }
 
-fn record(
-    observations: &mut Vec<Observation>,
-    seen: &mut HashMap<u64, Vec<usize>>,
-    identity: &AnalyzerIdentity,
-    inputs: &EvaluationInputs,
-    view: View<'_>,
-    evaluated_view: EvaluatedView,
-    output: Vec<Message>,
-) -> Result<(), LifeCoreError> {
-    for diagnostic in output {
-        let invalid = |message: &str| LifeCoreError::InvalidAnalyzerOutput {
-            analyzer: identity.name.clone(),
-            message: message.into(),
-        };
-        if let Some(location) = diagnostic.offending_event {
-            if evaluated_view == EvaluatedView::Initialization {
-                return Err(invalid("initialization cannot have a graph location"));
+//A Collects observations in emission order. A diagnostic re-emitted at the
+//A next prefix extends the range of the observation with the same key and
+//A diagnostic instead of adding another, so a finding that holds from its
+//A append to the head is one observation rather than one per prefix.
+#[derive(Default)]
+struct Recorder {
+    observations: Vec<Observation>,
+    //A Indices by a hash of (key, diagnostic) rather than a second owned copy
+    //A of every diagnostic. A hash collision still compares complete values.
+    index: HashMap<u64, Vec<usize>>,
+}
+
+impl Recorder {
+    //A `prefix` is `None` for initialization.
+    fn record(
+        &mut self,
+        identity: &AnalyzerIdentity,
+        database: uuid::Uuid,
+        prefix: Option<View<'_>>,
+        output: Vec<Message>,
+    ) -> Result<(), LifeCoreError> {
+        for message in output {
+            let invalid = |message: &str| LifeCoreError::InvalidAnalyzerOutput {
+                analyzer: identity.name.clone(),
+                message: message.into(),
+            };
+            let diagnostic = &message.diagnostic;
+            match prefix {
+            None if diagnostic.focus.is_some() || !diagnostic.subjects.is_empty() => {
+                return Err(invalid("initialization cannot name a focus or subjects"));
             }
-            let prefix = view
-                .prefix(location.view.end_exclusive)
-                .map_err(|_| invalid("diagnostic location exceeds invocation"))?;
-            if prefix.location(location.entry) != Some(location) {
+            Some(view)
+                if diagnostic
+                    .subjects
+                    .iter()
+                    .chain(&diagnostic.focus)
+                    .any(|id| view.get(*id).is_none()) =>
+            {
                 return Err(invalid(
-                    "diagnostic location is absent or belongs to another history",
+                    "finding subject or focus is outside the evaluated prefix",
                 ));
             }
-        }
-        if diagnostic
-            .subjects
-            .iter()
-            .chain(&diagnostic.relevance)
-            .any(|id| view.get(*id).is_none())
-        {
-            return Err(invalid(
-                "finding subject or relevance is outside invocation",
-            ));
-        }
-        let observation = Observation {
-            key: FindingKey {
-                database: view.id().database,
+            _ => {}
+            }
+            let key = FindingKey {
+                database,
                 analyzer: identity.clone(),
-                kind: diagnostic.ty(),
-                analyzer_certificate: diagnostic.analyzer_certificate,
-            },
-            inputs: inputs.clone(),
-            evaluated_view,
-            subjects: diagnostic.subjects,
-            offending_event: diagnostic.offending_event,
-            relevance: diagnostic.relevance,
-            message: diagnostic.message,
-            kind: diagnostic.kind,
-            sticky: diagnostic.sticky,
-        };
-        //A Keep indices instead of a second owned copy of every diagnostic.
-        //A A hash collision still compares the complete observation.
-        let mut hasher = DefaultHasher::new();
-        observation.hash(&mut hasher);
-        let positions = seen.entry(hasher.finish()).or_default();
-        if !positions.iter().any(|&i| observations[i] == observation) {
-            positions.push(observations.len());
-            observations.push(observation);
+                kind: message.ty(),
+                analyzer_certificate: message.analyzer_certificate,
+            };
+            self.insert(key, message.diagnostic, prefix.map(View::id));
         }
+        Ok(())
     }
-    Ok(())
+
+    fn insert(&mut self, key: FindingKey, diagnostic: Diagnostic, prefix: Option<ViewId>) {
+        let mut hasher = DefaultHasher::new();
+        (&key, &diagnostic).hash(&mut hasher);
+        let positions = self.index.entry(hasher.finish()).or_default();
+        let same = positions
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let observation = &self.observations[i];
+                observation.key == key && observation.diagnostic == diagnostic
+            })
+            .collect::<Vec<_>>();
+        let evaluated_view = match prefix {
+        None => {
+            if same
+                .iter()
+                .any(|&i| self.observations[i].evaluated_view == EvaluatedView::Initialization)
+            {
+                return;
+            }
+            EvaluatedView::Initialization
+        }
+        Some(at) => {
+            let mut adjacent = None;
+            for &i in &same {
+                let EvaluatedView::Prefixes { first, last } = self.observations[i].evaluated_view
+                else {
+                    continue;
+                };
+                //A A duplicated suite entry replays prefixes already covered.
+                if (first.end_exclusive..=last.end_exclusive).contains(&at.end_exclusive) {
+                    return;
+                }
+                if last.end_exclusive + 1 == at.end_exclusive {
+                    adjacent = Some(i);
+                }
+            }
+            if let Some(i) = adjacent {
+                if let EvaluatedView::Prefixes { last, .. } =
+                    &mut self.observations[i].evaluated_view
+                {
+                    *last = at;
+                }
+                return;
+            }
+            EvaluatedView::prefix(at)
+        }
+        };
+        positions.push(self.observations.len());
+        self.observations.push(Observation {
+            key,
+            evaluated_view,
+            diagnostic,
+        });
+    }
 }
 
 impl AnalysisOutput {
@@ -346,15 +387,15 @@ impl AnalysisOutput {
     }
     pub fn errors(&self) -> impl Iterator<Item = &Observation> {
         self.observations()
-            .filter(|o| o.kind.ty() == MessageType::Inconsistency)
+            .filter(|o| o.diagnostic.kind.ty() == MessageType::Inconsistency)
     }
     pub fn warnings(&self) -> impl Iterator<Item = &Observation> {
         self.observations()
-            .filter(|o| o.kind.ty() == MessageType::Warning)
+            .filter(|o| o.diagnostic.kind.ty() == MessageType::Warning)
     }
     pub fn suggestions(&self) -> impl Iterator<Item = &Observation> {
         self.observations()
-            .filter(|o| o.kind.ty() == MessageType::Suggestion)
+            .filter(|o| o.diagnostic.kind.ty() == MessageType::Suggestion)
     }
 }
 

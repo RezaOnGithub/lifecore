@@ -126,17 +126,22 @@ impl AnalysisOutput {
             });
             let group = &mut groups[position];
             group.observations.push(observation);
-            let inconsistency = observation.kind.ty() == MessageType::Inconsistency;
+            let ty = observation.diagnostic.kind.ty();
+            let inconsistency = ty == MessageType::Inconsistency;
             let category = match options.advisories {
             AdvisoryFilter::All => true,
-            AdvisoryFilter::Warnings => observation.kind.ty() == MessageType::Warning,
-            AdvisoryFilter::Suggestions => observation.kind.ty() == MessageType::Suggestion,
+            AdvisoryFilter::Warnings => ty == MessageType::Warning,
+            AdvisoryFilter::Suggestions => ty == MessageType::Suggestion,
             AdvisoryFilter::None => false,
             };
+            //A A current report shows what held at its own boundary, plus sticky
+            //A advisories whose range ended earlier.
             let boundary = options.selection == ReportSelection::History
-                || observation.evaluated_view == EvaluatedView::Initialization
-                || observation.evaluated_view == EvaluatedView::Prefix(self.view)
-                || observation.sticky;
+                || match observation.evaluated_view {
+                EvaluatedView::Initialization => true,
+                EvaluatedView::Prefixes { last, .. } => last == self.view,
+                }
+                || observation.diagnostic.sticky;
             if inconsistency
                 || (category
                     && boundary
@@ -171,16 +176,24 @@ impl AnalysisOutput {
             for observation in group.selected {
                 let at = match observation.evaluated_view {
                 EvaluatedView::Initialization => "initialization".to_string(),
-                EvaluatedView::Prefix(view) => format!("boundary {}", view.end_exclusive),
+                EvaluatedView::Prefixes { first, last } if first == last => {
+                    format!("boundary {}", first.end_exclusive)
+                }
+                EvaluatedView::Prefixes { first, last } => {
+                    format!(
+                        "boundaries {}\u{2013}{}",
+                        first.end_exclusive, last.end_exclusive
+                    )
+                }
                 };
-                let retained = if observation.sticky
-                    && matches!(observation.evaluated_view, EvaluatedView::Prefix(view) if view != self.view)
+                let retained = if observation.diagnostic.sticky
+                    && matches!(observation.evaluated_view, EvaluatedView::Prefixes { last, .. } if last != self.view)
                 {
                     " (historical advisory; current applicability unconfirmed)"
                 } else {
                     ""
                 };
-                writeln!(text, "  {at}{retained}: {}", observation.message).unwrap();
+                writeln!(text, "  {at}{retained}: {}", observation.diagnostic.message).unwrap();
             }
         }
         text

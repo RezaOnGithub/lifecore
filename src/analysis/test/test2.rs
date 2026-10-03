@@ -1,9 +1,9 @@
 use crate::{
-    Body, DiagnosticLocation, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
+    Body, EntryId, LifeCoreError, LifeCoreList, View, ViewId,
     analysis::{
         AnalysisRunner, Analyzer, AnalyzerCertificate, AnalyzerFactory, AnalyzerIdentity, Config,
-        EvaluatedView, EvaluationInputs, InnerMessageType, Message, MessageKind, MessageType,
-        SuiteConfig, TypedAnalyzer,
+        Diagnostic, EvaluatedView, EvaluationInputs, InnerMessageType, Message, MessageKind,
+        MessageType, SuiteConfig, TypedAnalyzer,
     },
     transaction::{Change, EntryChange, NewEdge, NewNode, RevisionIntent, prepare},
 };
@@ -11,9 +11,7 @@ use semver::Version;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Finding {
-    location: DiagnosticLocation,
-}
+struct Finding;
 impl InnerMessageType for Finding {
     fn ty(&self) -> MessageType {
         MessageType::Inconsistency
@@ -45,22 +43,21 @@ impl TypedAnalyzer for Probe {
         assert_eq!(view.entries().count(), view.len());
         assert!(view.entries().all(|e| e.id().position() < view.len()));
         Ok(if self.reject == Some(view.len()) {
-            vec![Finding {
-                location: view.location(None).unwrap(),
-            }]
+            vec![Finding]
         } else {
             vec![]
         })
     }
-    fn convert_message(&self, finding: Self::MSG) -> Message {
+    fn convert_message(&self, _finding: Self::MSG) -> Message {
         Message {
             analyzer_certificate: AnalyzerCertificate("rejected_prefix".into()),
-            subjects: Default::default(),
-            offending_event: Some(finding.location),
-            relevance: Default::default(),
-            message: "rejected prefix".into(),
-            kind: MessageKind::Inconsistency,
-            sticky: false,
+            diagnostic: Diagnostic {
+                subjects: Default::default(),
+                focus: None,
+                message: "rejected prefix".into(),
+                kind: MessageKind::Inconsistency,
+                sticky: false,
+            },
         }
     }
 }
@@ -172,11 +169,8 @@ fn changed_analyzer_rejects_an_old_prefix_and_does_not_only_check_the_head() {
         .unwrap();
     let report = runner.run_view(graph.view(), &suite("1")).unwrap();
     assert_eq!(
-        report
-            .errors()
-            .map(|e| e.offending_event.unwrap().view.end_exclusive)
-            .collect::<Vec<_>>(),
-        vec![1]
+        report.errors().map(boundaries).collect::<Vec<_>>(),
+        vec![Some((1, 1))]
     );
     assert!(report.has_error());
     assert!(!AnalysisRunner::default().run(&graph).unwrap().has_error());
@@ -222,7 +216,8 @@ type InvocationLog = Arc<Mutex<Vec<(i64, Option<usize>)>>>;
 struct AdvisoryFactory {
     version: &'static str,
     fail: Option<EvaluatedView>,
-    invalid: Option<DiagnosticLocation>,
+    //A A focus claimed at initialization, which has no graph.
+    invalid: Option<EntryId>,
     log: InvocationLog,
     received_configs: Arc<Mutex<Vec<String>>>,
 }
@@ -264,12 +259,13 @@ impl Analyzer for Advisories {
         }
         Ok(vec![Message {
             analyzer_certificate: local_certificate("setup", &[], ""),
-            subjects: BTreeSet::new(),
-            offending_event: self.factory.invalid,
-            relevance: BTreeSet::new(),
-            message: "configured".into(),
-            kind: MessageKind::Warning,
-            sticky: false,
+            diagnostic: Diagnostic {
+                subjects: BTreeSet::new(),
+                focus: self.factory.invalid,
+                message: "configured".into(),
+                kind: MessageKind::Warning,
+                sticky: false,
+            },
         }])
     }
     fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
@@ -278,25 +274,27 @@ impl Analyzer for Advisories {
             .lock()
             .unwrap()
             .push((self.config, Some(view.len())));
-        if self.factory.fail == Some(EvaluatedView::Prefix(view.id())) {
+        if self.factory.fail == Some(EvaluatedView::prefix(view.id())) {
             return Err("prefix failed".into());
         }
         let mut output = Vec::new();
         if let Some(node) = view.nodes().next()
             && view.is_stale(node.id) == Some(false)
         {
+            //A The wording names the boundary, so these do not merge into a range.
             let message = Message {
                 analyzer_certificate: local_certificate("missing_summary", &[node.id], "summary"),
-                subjects: BTreeSet::from([node.id]),
-                offending_event: view.location(Some(node.id)),
-                relevance: BTreeSet::from([node.id]),
-                message: format!(
-                    "Missing summary at {} with {:?}",
-                    view.len(),
-                    inputs.evaluation_time
-                ),
-                kind: MessageKind::Warning,
-                sticky: false,
+                diagnostic: Diagnostic {
+                    subjects: BTreeSet::from([node.id]),
+                    focus: Some(node.id),
+                    message: format!(
+                        "Missing summary at {} with {:?}",
+                        view.len(),
+                        inputs.evaluation_time
+                    ),
+                    kind: MessageKind::Warning,
+                    sticky: false,
+                },
             };
             output.extend([message.clone(), message]);
         }
@@ -309,17 +307,18 @@ impl Analyzer for Advisories {
                     &[parent, child.id],
                     "",
                 ),
-                subjects: BTreeSet::from([parent, child.id]),
-                offending_event: view.location(Some(child.id)),
-                relevance: BTreeSet::from([parent, child.id]),
-                message: "Decide which relationships this successor should retain".into(),
-                kind: MessageKind::Suggestion(vec![EntryChange::AddNode(NewNode {
-                    ty_name: "Review".into(),
-                    body: Body::new(),
-                    parent: None,
-                    intent: None,
-                })]),
-                sticky: true,
+                diagnostic: Diagnostic {
+                    subjects: BTreeSet::from([parent, child.id]),
+                    focus: Some(child.id),
+                    message: "Decide which relationships this successor should retain".into(),
+                    kind: MessageKind::Suggestion(vec![EntryChange::AddNode(NewNode {
+                        ty_name: "Review".into(),
+                        body: Body::new(),
+                        parent: None,
+                        intent: None,
+                    })]),
+                    sticky: true,
+                },
             });
         }
         Ok(output)
@@ -380,7 +379,7 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
     assert_eq!(warning.selected.len(), 1);
     assert_eq!(
         warning.selected[0].evaluated_view,
-        EvaluatedView::Prefix(graph.view().id())
+        EvaluatedView::prefix(graph.view().id())
     );
     assert_eq!(
         log.lock().unwrap().as_slice(),
@@ -419,7 +418,9 @@ fn observations_deduplicate_separately_from_findings_without_skipping_replay() {
     );
     let encoded = serde_json::to_value(&report).unwrap();
     let observation = &encoded["observations"][0];
-    assert!(observation.get("diagnostic").is_none());
+    assert!(observation["diagnostic"].is_object());
+    assert!(observation.get("inputs").is_none());
+    assert!(observation.get("message").is_none());
     assert!(observation.get("analyzer_certificate").is_none());
     assert!(observation["key"].get("finding").is_none());
     assert!(observation["key"]["analyzer_certificate"].is_string());
@@ -455,8 +456,8 @@ fn dismissal_identity_ignores_observation_details_but_distinguishes_complete_key
         .find(|o| o.key.analyzer_certificate.0.contains("missing_summary"))
         .unwrap();
     assert_eq!(observation.key, key);
-    assert_eq!(observation.inputs, inputs);
-    assert_ne!(observation.message, original.message);
+    assert_eq!(replay.inputs, inputs);
+    assert_ne!(observation.diagnostic.message, original.diagnostic.message);
     assert!(
         replay
             .groups(&dismissals, history_options())
@@ -660,7 +661,7 @@ fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round
         assert_eq!(events.len(), if end_exclusive == 4 { 1 } else { 2 });
         assert_eq!(
             events[0].observations[0].evaluated_view,
-            EvaluatedView::Prefix(graph.view().prefix(4).unwrap().id())
+            EvaluatedView::prefix(graph.view().prefix(4).unwrap().id())
         );
         if end_exclusive > 4 {
             assert!(
@@ -685,7 +686,8 @@ fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round
         .unwrap();
     let key = output.suggestions().next().unwrap().key.clone();
     assert!(output.suggestions().all(|observation| {
-        observation.sticky && observation.evaluated_view != EvaluatedView::Prefix(output.view)
+        observation.diagnostic.sticky
+            && !matches!(observation.evaluated_view, EvaluatedView::Prefixes { last, .. } if last == output.view)
     }));
     let encoded = serde_json::to_value(&output).unwrap();
     let loaded: crate::analysis::AnalysisOutput = serde_json::from_value(encoded.clone()).unwrap();
@@ -695,7 +697,7 @@ fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round
             .as_array()
             .unwrap()
             .iter()
-            .any(|o| o["sticky"] == true)
+            .any(|o| o["diagnostic"]["sticky"] == true)
     );
     let mut dismissals = Dismissals::default();
     dismissals
@@ -735,7 +737,7 @@ fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round
 
     let mut without_sticky = loaded.clone();
     for observation in &mut without_sticky.observations {
-        observation.sticky = false;
+        observation.diagnostic.sticky = false;
     }
     assert!(
         without_sticky
@@ -795,7 +797,7 @@ fn display_and_even_imported_dismissals_cannot_hide_historical_inconsistencies()
         assert_eq!(groups.len(), 1);
         assert_eq!(
             groups[0].selected[0].evaluated_view,
-            EvaluatedView::Prefix(graph.view().prefix(1).unwrap().id())
+            EvaluatedView::prefix(graph.view().prefix(1).unwrap().id())
         );
         assert!(report.has_error());
     }
@@ -808,8 +810,8 @@ fn execution_failures_record_inputs_and_prefix_and_never_publish_a_candidate() {
     let inputs = timed_inputs();
     for at in [
         EvaluatedView::Initialization,
-        EvaluatedView::Prefix(graph.view().prefix(0).unwrap().id()),
-        EvaluatedView::Prefix(graph.view().prefix(1).unwrap().id()),
+        EvaluatedView::prefix(graph.view().prefix(0).unwrap().id()),
+        EvaluatedView::prefix(graph.view().prefix(1).unwrap().id()),
     ] {
         let mut factory = advisory_factory();
         factory.fail = Some(at);
@@ -842,13 +844,20 @@ fn execution_failures_record_inputs_and_prefix_and_never_publish_a_candidate() {
 }
 
 #[test]
-fn initialization_cannot_claim_graph_locations_and_empty_history_still_executes() {
+fn initialization_cannot_claim_a_focus_or_subjects_and_empty_history_still_executes() {
     let (graph, _) = fixture();
+    let id = graph.view().at(0).unwrap().id();
     let mut factory = advisory_factory();
-    factory.invalid = graph.view().location(None);
+    factory.invalid = Some(id);
     assert!(matches!(
         advisory_runner(factory, EvaluationInputs::default())
             .run_view(graph.view(), &advisory_suite(&["7"])),
+        Err(LifeCoreError::InvalidAnalyzerOutput { .. })
+    ));
+    let mut subject = scripted_message("setup", &[], MessageKind::Warning, false);
+    subject.diagnostic.subjects.insert(id);
+    assert!(matches!(
+        setup_runner(vec![subject], |_| vec![]).run_view(graph.view(), &scripted_suite(1)),
         Err(LifeCoreError::InvalidAnalyzerOutput { .. })
     ));
     let factory = advisory_factory();
@@ -913,14 +922,14 @@ fn repair_observation(view: View<'_>, actions: Vec<EntryChange>) -> Observation 
             kind: MessageType::Suggestion,
             analyzer_certificate: AnalyzerCertificate("explicit_repair".into()),
         },
-        inputs: EvaluationInputs::default(),
-        evaluated_view: EvaluatedView::Prefix(view.id()),
-        subjects: BTreeSet::new(),
-        offending_event: view.location(None),
-        relevance: BTreeSet::new(),
-        message: "Explicit repair".into(),
-        kind: MessageKind::Suggestion(actions),
-        sticky: true,
+        evaluated_view: EvaluatedView::prefix(view.id()),
+        diagnostic: Diagnostic {
+            subjects: BTreeSet::new(),
+            focus: None,
+            message: "Explicit repair".into(),
+            kind: MessageKind::Suggestion(actions),
+            sticky: true,
+        },
     }
 }
 
@@ -1012,7 +1021,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
         ))
     ));
     let mut branch = stale_repair.clone();
-    let MessageKind::Suggestion(actions) = &mut branch.kind else {
+    let MessageKind::Suggestion(actions) = &mut branch.diagnostic.kind else {
         unreachable!()
     };
     let EntryChange::AddNode(NewNode { intent, .. }) = &mut actions[0] else {
@@ -1073,64 +1082,142 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     assert!(rejected.accepted().is_err());
 }
 
+//A Emits `setup` at initialization and what `script` returns for each prefix.
+type Script = Arc<dyn Fn(View<'_>) -> Vec<Message> + Send + Sync>;
+
 #[derive(Clone)]
-struct InvalidOutputFactory(Message);
-impl AnalyzerFactory for InvalidOutputFactory {
+struct Scripted {
+    setup: Vec<Message>,
+    script: Script,
+}
+impl AnalyzerFactory for Scripted {
     fn analyzer_name(&self) -> &'static str {
-        "InvalidOutput"
+        "Scripted"
     }
     fn analyzer_with_config(&mut self, _config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
         Ok(Box::new(self.clone()))
     }
 }
-impl Analyzer for InvalidOutputFactory {
+impl Analyzer for Scripted {
     fn version(&self) -> Version {
         Version::new(1, 0, 0)
     }
     fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
-        Ok(Vec::new())
+        Ok(self.setup.clone())
     }
-    fn analyze(&self, _view: View<'_>, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
-        Ok(vec![self.0.clone()])
+    fn analyze(&self, view: View<'_>, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok((self.script)(view))
+    }
+}
+fn scripted_runner(
+    script: impl Fn(View<'_>) -> Vec<Message> + Send + Sync + 'static,
+) -> AnalysisRunner {
+    setup_runner(vec![], script)
+}
+fn setup_runner(
+    setup: Vec<Message>,
+    script: impl Fn(View<'_>) -> Vec<Message> + Send + Sync + 'static,
+) -> AnalysisRunner {
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(Scripted {
+            setup,
+            script: Arc::new(script),
+        }))
+        .unwrap();
+    runner
+}
+fn scripted_message(
+    certificate: &str,
+    subjects: &[EntryId],
+    kind: MessageKind,
+    sticky: bool,
+) -> Message {
+    Message {
+        analyzer_certificate: AnalyzerCertificate(certificate.into()),
+        diagnostic: Diagnostic {
+            subjects: subjects.iter().copied().collect(),
+            focus: subjects.first().copied(),
+            message: certificate.into(),
+            kind,
+            sticky,
+        },
+    }
+}
+//A `count` root nodes, so prefixes run from 0 to `count`.
+fn roots(count: usize) -> LifeCoreList {
+    let mut graph = LifeCoreList::default();
+    let changes = (0..count)
+        .map(|i| {
+            Change::Entry(EntryChange::AddNode(NewNode {
+                ty_name: format!("N{i}"),
+                body: Body::new(),
+                parent: None,
+                intent: None,
+            }))
+        })
+        .collect::<Vec<_>>();
+    prepare(&graph, &changes, &mut AnalysisRunner::default())
+        .unwrap()
+        .accepted()
+        .unwrap()
+        .commit(&mut graph)
+        .unwrap();
+    graph
+}
+//A Each observation's certificate with its boundaries, in output order.
+fn ranges(output: &crate::analysis::AnalysisOutput) -> Vec<(&str, Option<(usize, usize)>)> {
+    output
+        .observations()
+        .map(|o| (o.key.analyzer_certificate.0.as_str(), boundaries(o)))
+        .collect()
+}
+//A `copies` identical suite entries.
+fn scripted_suite(copies: usize) -> SuiteConfig {
+    SuiteConfig(vec![
+        Config {
+            name: "Scripted".into(),
+            config: String::new(),
+        };
+        copies
+    ])
+}
+//A The inclusive prefix boundaries of an observation; `None` at initialization.
+fn boundaries(observation: &Observation) -> Option<(usize, usize)> {
+    match observation.evaluated_view {
+    EvaluatedView::Initialization => None,
+    EvaluatedView::Prefixes { first, last } => Some((first.end_exclusive, last.end_exclusive)),
     }
 }
 
 #[test]
-fn normalization_rejects_future_and_foreign_locations_subjects_and_relevance() {
+fn normalization_rejects_future_and_foreign_subjects_and_focus() {
     let (graph, future) = fixture();
-    let foreign = LifeCoreList::default();
+    let (other, _) = fixture();
+    let foreign = other.view().at(0).unwrap().id();
     let base = Message {
         analyzer_certificate: AnalyzerCertificate("opaque key".into()),
-        subjects: BTreeSet::new(),
-        offending_event: None,
-        relevance: BTreeSet::new(),
-        message: "invalid output".into(),
-        kind: MessageKind::Warning,
-        sticky: false,
+        diagnostic: Diagnostic {
+            subjects: BTreeSet::new(),
+            focus: None,
+            message: "invalid output".into(),
+            kind: MessageKind::Warning,
+            sticky: false,
+        },
     };
-    let mut bad_location = base.clone();
-    bad_location.offending_event = graph.view().location(Some(future));
-    let mut foreign_location = base.clone();
-    foreign_location.offending_event = foreign.view().location(None);
-    let mut bad_subject = base.clone();
-    bad_subject.offending_event = None;
-    bad_subject.subjects.insert(future);
-    let mut bad_relevance = base;
-    bad_relevance.offending_event = None;
-    bad_relevance.relevance.insert(future);
-    for diagnostic in [bad_location, foreign_location, bad_subject, bad_relevance] {
-        let mut runner = AnalysisRunner::default();
-        runner
-            .register_analyzer_kind(Box::new(InvalidOutputFactory(diagnostic)))
-            .unwrap();
+    let mut cases = vec![];
+    for id in [future, foreign] {
+        let mut subject = base.clone();
+        subject.diagnostic.subjects.insert(id);
+        let mut focus = base.clone();
+        focus.diagnostic.focus = Some(id);
+        cases.extend([subject, focus]);
+    }
+    for diagnostic in cases {
+        //A The future entry is visible in the head view, but not at earlier prefixes.
+        let mut runner = scripted_runner(move |_| vec![diagnostic.clone()]);
         assert!(matches!(
-            runner.run_view(
-                graph.view(),
-                &SuiteConfig(vec![Config {
-                    name: "InvalidOutput".into(),
-                    config: "".into()
-                }])
-            ),
+            runner.run_view(graph.view(), &scripted_suite(1)),
             Err(LifeCoreError::InvalidAnalyzerOutput { .. })
         ));
     }
@@ -1198,12 +1285,13 @@ impl TypedAnalyzer for TimedAnalyzer {
         assert_eq!(self.initialization_time, Some(finding.evaluation_time));
         Message {
             analyzer_certificate: AnalyzerCertificate("time advisory".into()),
-            subjects: BTreeSet::new(),
-            offending_event: None,
-            relevance: BTreeSet::new(),
-            message: format!("Evaluated at {}", finding.evaluation_time),
-            kind: MessageKind::Warning,
-            sticky: false,
+            diagnostic: Diagnostic {
+                subjects: BTreeSet::new(),
+                focus: None,
+                message: format!("Evaluated at {}", finding.evaluation_time),
+                kind: MessageKind::Warning,
+                sticky: false,
+            },
         }
     }
 }
@@ -1254,26 +1342,31 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
             .run_view(graph.view(), &suite)
             .unwrap()
     );
+    //A Initialization stays distinct from prefix zero; the same diagnostic at
+    //A every prefix is one range.
     let observations: Vec<_> = report.observations().collect();
-    assert_eq!(observations.len(), 5);
+    assert_eq!(observations.len(), 2);
     assert_eq!(
         observations[0].evaluated_view,
         EvaluatedView::Initialization
     );
     assert_eq!(
         observations[1].evaluated_view,
-        EvaluatedView::Prefix(graph.view().prefix(0).unwrap().id())
+        EvaluatedView::Prefixes {
+            first: graph.view().prefix(0).unwrap().id(),
+            last: graph.view().id(),
+        }
     );
     assert_eq!(observations[0].key, observations[1].key);
+    assert_eq!(observations[0].diagnostic, observations[1].diagnostic);
     assert_ne!(observations[0], observations[1]);
-    assert!(observations.iter().all(|o| o.inputs == inputs));
     let encoded = serde_json::to_value(&report).unwrap();
     assert_eq!(
         encoded["observations"][0]["evaluated_view"],
         "Initialization"
     );
     assert_eq!(
-        encoded["observations"][1]["evaluated_view"]["Prefix"],
+        encoded["observations"][1]["evaluated_view"]["Prefixes"]["first"],
         serde_json::to_value(graph.view().prefix(0).unwrap().id()).unwrap()
     );
     assert_eq!(report.inputs, inputs);
@@ -1367,9 +1460,25 @@ fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent()
         prepare_suggestion(&receiver, &observation, &mut runner),
         Err(Error::View(_))
     ));
+    //A Both ends of a range must be prefixes of the supplied graph.
+    let mut diverging = observation.clone();
+    diverging.evaluated_view = EvaluatedView::Prefixes {
+        first: graph.view().id(),
+        last: first.view().id(),
+    };
+    assert!(matches!(
+        prepare_suggestion(&receiver, &diverging, &mut runner),
+        Err(Error::View(_))
+    ));
+    let mut shared = observation.clone();
+    shared.evaluated_view = EvaluatedView::Prefixes {
+        first: graph.view().prefix(1).unwrap().id(),
+        last: graph.view().id(),
+    };
+    assert!(prepare_suggestion(&receiver, &shared, &mut runner).is_ok());
     assert_eq!(receiver, before);
     let mut ordinary_warning = repair_observation(graph.view(), vec![]);
-    ordinary_warning.kind = MessageKind::Warning;
+    ordinary_warning.diagnostic.kind = MessageKind::Warning;
     ordinary_warning.key.kind = MessageType::Warning;
     assert!(matches!(
         prepare_suggestion(&graph, &ordinary_warning, &mut runner),
@@ -1417,11 +1526,187 @@ fn suggestion_checks_an_invalid_intermediate_prefix_even_with_a_valid_final_view
     };
     let errors = rejected.analysis().errors().collect::<Vec<_>>();
     assert_eq!(errors.len(), 1);
-    let EvaluatedView::Prefix(view) = errors[0].evaluated_view else {
-        panic!("expected the intermediate prefix")
-    };
-    assert_eq!(view.end_exclusive, 4);
+    assert_eq!(boundaries(errors[0]), Some((4, 4)));
     assert_eq!(rejected.analysis().view.end_exclusive, 5);
     assert_eq!(rejected.analysis().implementations.len(), 1);
     assert_eq!(graph, before);
+}
+
+#[test]
+fn re_emission_extends_a_range_and_a_gap_starts_another_at_every_boundary() {
+    let graph = roots(6);
+    let first = graph.view().at(0).unwrap().id();
+    let script = move |view: View<'_>| {
+        let mut output = vec![];
+        if matches!(view.len(), 1..=3 | 5..=6) {
+            output.push(scripted_message(
+                "held",
+                &[first],
+                MessageKind::Warning,
+                false,
+            ));
+        }
+        if view.len() == 4 {
+            let twice = scripted_message("twice", &[first], MessageKind::Warning, false);
+            output.extend([twice.clone(), twice]);
+        }
+        output
+    };
+    let mut runner = scripted_runner(script);
+    for (end_exclusive, expected) in [
+        (0, vec![]),
+        (1, vec![("held", Some((1, 1)))]),
+        (3, vec![("held", Some((1, 3)))]),
+        (4, vec![("held", Some((1, 3))), ("twice", Some((4, 4)))]),
+        (
+            5,
+            vec![
+                ("held", Some((1, 3))),
+                ("twice", Some((4, 4))),
+                ("held", Some((5, 5))),
+            ],
+        ),
+        (
+            6,
+            vec![
+                ("held", Some((1, 3))),
+                ("twice", Some((4, 4))),
+                ("held", Some((5, 6))),
+            ],
+        ),
+    ] {
+        let view = graph.view().prefix(end_exclusive).unwrap();
+        let output = runner.run_view(view, &scripted_suite(1)).unwrap();
+        assert_eq!(ranges(&output), expected, "boundary {end_exclusive}");
+        //A Ranges name exact prefixes of the evaluated view.
+        for observation in output.observations() {
+            let EvaluatedView::Prefixes { first, last } = observation.evaluated_view else {
+                panic!("prefix observation")
+            };
+            assert_eq!(view.prefix(first.end_exclusive).unwrap().id(), first);
+            assert_eq!(view.prefix(last.end_exclusive).unwrap().id(), last);
+        }
+    }
+    let output = runner.run_view(graph.view(), &scripted_suite(1)).unwrap();
+    let dismissals = Dismissals::default();
+    //A Only the range that reaches the head is current.
+    let current = output.groups(&dismissals, ReportOptions::default());
+    assert_eq!(current.len(), 1);
+    assert_eq!(
+        current[0]
+            .selected
+            .iter()
+            .map(|o| boundaries(o))
+            .collect::<Vec<_>>(),
+        [Some((5, 6))]
+    );
+    assert_eq!(current[0].observations.len(), 2);
+    let history = output.render(&dismissals, history_options());
+    assert!(
+        history.contains("  boundaries 1\u{2013}3: held\n"),
+        "{history}"
+    );
+    assert!(history.contains("  boundary 4: twice\n"), "{history}");
+    assert!(
+        history.contains("  boundaries 5\u{2013}6: held\n"),
+        "{history}"
+    );
+    let reloaded: crate::analysis::AnalysisOutput =
+        serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
+    assert_eq!(reloaded, output);
+}
+
+#[test]
+fn a_duplicated_suite_entry_adds_no_observations_and_keeps_ranges() {
+    let graph = roots(4);
+    let first = graph.view().at(0).unwrap().id();
+    let script = move |view: View<'_>| {
+        let mut output = vec![scripted_message("always", &[], MessageKind::Warning, false)];
+        if view.len() != 2 && !view.is_empty() {
+            output.push(scripted_message(
+                "gapped",
+                &[first],
+                MessageKind::Warning,
+                false,
+            ));
+        }
+        output
+    };
+    let mut runner = scripted_runner(script);
+    let single = runner.run_view(graph.view(), &scripted_suite(1)).unwrap();
+    let doubled = runner.run_view(graph.view(), &scripted_suite(2)).unwrap();
+    assert_eq!(doubled.implementations.len(), 2);
+    assert_eq!(
+        ranges(&single),
+        [
+            ("always", Some((0, 4))),
+            ("gapped", Some((1, 1))),
+            ("gapped", Some((3, 4))),
+        ]
+    );
+    assert_eq!(
+        doubled.observations().collect::<Vec<_>>(),
+        single.observations().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_range_ending_before_the_view_is_current_only_when_sticky() {
+    let graph = roots(4);
+    let second = graph.view().at(1).unwrap().id();
+    let script = move |view: View<'_>| {
+        if view.len() != 2 {
+            return vec![];
+        }
+        vec![
+            scripted_message("sticky", &[second], MessageKind::Suggestion(vec![]), true),
+            scripted_message("transient", &[second], MessageKind::Warning, false),
+        ]
+    };
+    let mut runner = scripted_runner(script);
+    let dismissals = Dismissals::default();
+    let selected = |output: &crate::analysis::AnalysisOutput, options| {
+        output
+            .groups(&dismissals, options)
+            .iter()
+            .map(|g| g.key.analyzer_certificate.0.clone())
+            .collect::<Vec<_>>()
+    };
+    //A At its own boundary both are current and neither is historical.
+    let at_two = runner
+        .run_view(graph.view().prefix(2).unwrap(), &scripted_suite(1))
+        .unwrap();
+    assert_eq!(
+        selected(&at_two, ReportOptions::default()),
+        ["sticky", "transient"]
+    );
+    assert!(
+        !at_two
+            .render(&dismissals, ReportOptions::default())
+            .contains("historical")
+    );
+    for end_exclusive in [3, 4] {
+        let output = runner
+            .run_view(
+                graph.view().prefix(end_exclusive).unwrap(),
+                &scripted_suite(1),
+            )
+            .unwrap();
+        assert_eq!(
+            ranges(&output),
+            [("sticky", Some((2, 2))), ("transient", Some((2, 2)))]
+        );
+        assert_eq!(selected(&output, ReportOptions::default()), ["sticky"]);
+        assert_eq!(
+            selected(&output, history_options()),
+            ["sticky", "transient"]
+        );
+        let current = output.render(&dismissals, ReportOptions::default());
+        assert!(
+            current.contains(
+                "  boundary 2 (historical advisory; current applicability unconfirmed): sticky\n"
+            ),
+            "{current}"
+        );
+    }
 }

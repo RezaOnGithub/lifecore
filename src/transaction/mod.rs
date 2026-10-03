@@ -100,6 +100,13 @@ impl Checked {
         Self::Rejected(rejection) => &rejection.operations,
         }
     }
+    //A For a caller that reports the analysis without committing.
+    pub fn into_analysis(self) -> AnalysisOutput {
+        match self {
+        Self::Accepted(prepared) => prepared.analysis,
+        Self::Rejected(rejection) => rejection.analysis,
+        }
+    }
     pub fn accepted(self) -> Result<PreparedTransaction, Box<Rejection>> {
         match self {
         Self::Accepted(prepared) => Ok(prepared),
@@ -148,7 +155,9 @@ impl PreparedTransaction {
         self.operations.iter().flatten().copied().collect()
     }
 
-    pub fn commit(self, receiver: &mut LifeCoreList) -> Result<(), Error> {
+    //A Returns the analysis that certified the committed graph, so a caller can
+    //A report it without keeping a copy.
+    pub fn commit(self, receiver: &mut LifeCoreList) -> Result<AnalysisOutput, Error> {
         //A The candidate retains the exact original prefix, so only the original
         //A boundary and ordered suite need a separate snapshot. Compare contents,
         //A not serialization or hashes, including changes that append no entries.
@@ -159,7 +168,7 @@ impl PreparedTransaction {
             return Err(Error::StaleBase);
         }
         *receiver = self.candidate;
-        Ok(())
+        Ok(self.analysis)
     }
 }
 

@@ -10,7 +10,7 @@ use crate::{
 };
 use lifecore::{
     Body, EntryId, LifeCoreList, Payload, Timestamp,
-    analysis::{AnalysisRunner, AnalyzerFactory, Config, MessageKind, MessageType},
+    analysis::{AnalysisRunner, AnalyzerFactory, Config, EvaluatedView, MessageKind, MessageType},
     inspection::Currentness,
     transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
     typing::{FieldDecl, FieldStatus, Type, ValueType},
@@ -946,10 +946,11 @@ fn a_hand_written_toml_declaration_applies_and_typechecks_nodes() {
     assert_eq!(
         findings,
         [
-            json!([{"Field": {"issue": {"path": [{"Field": "details"}, {"Field": "owner"}],
-                "kind": "MissingMandatory"}}}, entry]),
-            json!([{"Field": {"issue": {"path": [{"Field": "grid"}, {"Index": 0}, {"Index": 0}],
-                "kind": {"TypeMismatch": {"expected": "Integer", "actual": "Text"}}}}}, entry]),
+            json!({"Field": {"subject": entry, "issue": {
+                "path": [{"Field": "details"}, {"Field": "owner"}], "kind": "MissingMandatory"}}}),
+            json!({"Field": {"subject": entry, "issue": {
+                "path": [{"Field": "grid"}, {"Index": 0}, {"Index": 0}],
+                "kind": {"TypeMismatch": {"expected": "Integer", "actual": "Text"}}}}}),
         ]
     );
 }
@@ -997,12 +998,12 @@ fn rejected_proposals_report_full_context_and_store_nothing() {
         assert!(
             errors
                 .iter()
-                .all(|o| o.subjects.contains(&report.operations[1].entry))
+                .all(|o| o.diagnostic.subjects.contains(&report.operations[1].entry))
         );
         assert!(
             analysis
                 .warnings()
-                .any(|o| o.subjects.contains(&report.operations[0].entry))
+                .any(|o| o.diagnostic.subjects.contains(&report.operations[0].entry))
         );
         let object = AppError::Rejected(report.clone()).to_object();
         assert_eq!(object.data.as_ref().unwrap()["kind"], "rejected");
@@ -1044,9 +1045,13 @@ fn add_analyzer_replays_history_and_rejects_an_old_cycle() {
     let boundaries = report
         .analysis
         .errors()
-        .map(|o| o.offending_event.unwrap().view.end_exclusive)
+        .map(|o| match o.evaluated_view {
+        EvaluatedView::Prefixes { first, last } => (first.end_exclusive, last.end_exclusive),
+        EvaluatedView::Initialization => panic!("cycles have a prefix"),
+        })
         .collect::<Vec<_>>();
-    assert_eq!(boundaries, vec![5]);
+    //A The revision appended after the closing edge ends the cycle.
+    assert_eq!(boundaries, vec![(5, 5)]);
     assert_eq!(scratch.bytes(), stored);
     assert!(matches!(add("not json"), Err(AppError::Analyzer(_))));
     assert!(matches!(

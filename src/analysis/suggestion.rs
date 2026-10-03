@@ -25,12 +25,14 @@ pub fn prepare_suggestion(
     if graph.view().id().database != observation.key.database {
         return Err(ViewError::DifferentHistory.into());
     }
-    if let EvaluatedView::Prefix(at) = observation.evaluated_view
-        && graph.view().prefix(at.end_exclusive)?.id() != at
-    {
-        return Err(ViewError::DifferentHistory.into());
+    if let EvaluatedView::Prefixes { first, last } = observation.evaluated_view {
+        for at in [first, last] {
+            if graph.view().prefix(at.end_exclusive)?.id() != at {
+                return Err(ViewError::DifferentHistory.into());
+            }
+        }
     }
-    let MessageKind::Suggestion(actions) = &observation.kind else {
+    let MessageKind::Suggestion(actions) = &observation.diagnostic.kind else {
         return Err(Error::NotSuggestion);
     };
     let changes: Vec<Change> = actions.iter().cloned().map(Change::from).collect();

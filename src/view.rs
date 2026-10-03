@@ -10,12 +10,6 @@ pub struct ViewId {
     pub head: Option<EntryId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct DiagnosticLocation {
-    pub view: ViewId,
-    pub entry: Option<EntryId>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ViewError {
     #[error("requested boundary {requested} exceeds visible boundary {visible}")]
@@ -85,15 +79,6 @@ impl<'a> View<'a> {
                 visible: self.len(),
             })?;
         Ok(Self::new(self.database, entries, self.first_child))
-    }
-    pub fn location(self, entry: Option<EntryId>) -> Option<DiagnosticLocation> {
-        if let Some(id) = entry {
-            self.get(id)?;
-        }
-        Some(DiagnosticLocation {
-            view: self.id(),
-            entry,
-        })
     }
     pub fn get(self, id: EntryId) -> Option<&'a Entry> {
         self.entries
