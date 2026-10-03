@@ -100,7 +100,7 @@ fn task_type() -> Body {
 }
 
 fn proposal(entries: Value) -> Proposal {
-    serde_json::from_value(json!({"format_version": 1, "entries": entries})).unwrap()
+    serde_json::from_value(json!({"entries": entries})).unwrap()
 }
 
 fn request(proposal: Proposal) -> ProposalRequest {
@@ -142,7 +142,6 @@ fn existing(id: EntryId) -> Value {
 }
 
 const FILE_JSON: &str = r#"{
-  "format_version": 1,
   "plan_id": "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   "entries": [
     {"name": "task_done", "kind": "node", "type": "Task", "intent": "revise",
@@ -158,7 +157,6 @@ const FILE_JSON: &str = r#"{
 }"#;
 
 const FILE_TOML: &str = r#"
-format_version = 1
 plan_id = "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 [[entries]]
@@ -261,48 +259,58 @@ fn acknowledges_and_plan_ids_are_preserved_across_formats() {
 fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
     let toml_cases = [
         //A A native TOML datetime is not timestamp payload syntax.
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = 2026-09-30T17:00:00Z }\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 9223372036854775808 }\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 1.5 }\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = { kind = \"integer\", value = 1 } }\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = { kind = \"float\", value = \"1\" } }\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\ncolor = \"red\"\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"edge\"\ntype = \"T\"\nfrom = { added = \"x\" }\nto = { added = \"y\" }\npayload = {}\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"delete\"\ntype = \"T\"\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\nintent = \"replace\"\n",
-        "format_version = 2\nentries = []\n",
-        "format_version = 1\n",
-        "format_version = 1\nentries = []\ndatabase = \"x\"\n",
-        "format_version = 1\nplan_id = \"lc2:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\nentries = []\n",
-        "format_version = 1\nplan_id = \"lc1:AAAAAAAA-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\nentries = []\n",
-        "format_version = 1\nplan_id = \"lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\"\nentries = []\n",
-        "format_version = 1\nplan_id = \"\"\nentries = []\n",
-        "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\npredecessor = { existing = { origin = \"11111111-1111-4111-8111-111111111111\", position = 42 } }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = 2026-09-30T17:00:00Z }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 9223372036854775808 }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 1.5 }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = { kind = \"integer\", value = 1 } }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = { kind = \"float\", value = \"1\" } }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\ncolor = \"red\"\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\n",
+        "[[entries]]\nname = \"a\"\nkind = \"edge\"\ntype = \"T\"\nfrom = { added = \"x\" }\nto = { added = \"y\" }\npayload = {}\n",
+        "[[entries]]\nname = \"a\"\nkind = \"delete\"\ntype = \"T\"\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\nintent = \"replace\"\n",
+        "",
+        "entries = []\ndatabase = \"x\"\n",
+        "plan_id = \"lc2:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\nentries = []\n",
+        "plan_id = \"lc1:AAAAAAAA-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\nentries = []\n",
+        "plan_id = \"lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\"\nentries = []\n",
+        "plan_id = \"\"\nentries = []\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\npredecessor = { existing = { origin = \"11111111-1111-4111-8111-111111111111\", position = 42 } }\n",
     ];
     for text in toml_cases {
         let error = proposal::decode(text, Format::Toml).unwrap_err();
         assert!(error.line.is_some(), "no location for {text}: {error}");
     }
     let error = proposal::decode(toml_cases[0], Format::Toml).unwrap_err();
-    assert_eq!(error.line, Some(6));
+    assert_eq!(error.line, Some(5));
+    //A A file that still carries the removed version field fails as unknown.
+    for (text, format) in [
+        ("format_version = 1\nentries = []\n", Format::Toml),
+        (r#"{"format_version":1,"entries":[]}"#, Format::Json),
+    ] {
+        let error = proposal::decode(text, format).unwrap_err();
+        assert_eq!(error.line, Some(1), "{text}");
+        assert!(
+            error.message.contains("unknown field `format_version`"),
+            "{error}"
+        );
+    }
     //A Plain timestamp-like and digit strings remain text.
-    let text = "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = \"2026-09-30T17:00:00Z\", n = \"42\" }\n";
+    let text = "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = \"2026-09-30T17:00:00Z\", n = \"42\" }\n";
     let decoded = proposal::decode(text, Format::Toml).unwrap();
     let proposal::ProposalEntry::Node { payload, .. } = &decoded.entries[0] else {
         panic!("expected a node")
     };
     assert_eq!(payload["at"], Payload::Text("2026-09-30T17:00:00Z".into()));
     assert_eq!(payload["n"], Payload::Text("42".into()));
-    let error =
-        proposal::decode("{\"format_version\": 1,\n \"entries\": [}", Format::Json).unwrap_err();
+    let error = proposal::decode("{\n \"entries\": [}", Format::Json).unwrap_err();
     assert_eq!(error.line, Some(2));
     for text in [
-        r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":18446744073709551615}}]}"#,
-        r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":null}}]}"#,
-        r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":1,"n":2}}]}"#,
-        r#"{"format_version":1,"plan_id":null,"entries":[]}"#,
-        r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"T","payload":{},"predecessor":null}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":18446744073709551615}}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":null}}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":1,"n":2}}]}"#,
+        r#"{"plan_id":null,"entries":[]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{},"predecessor":null}]}"#,
     ] {
         assert!(
             proposal::decode(text, Format::Json).is_err(),
@@ -314,9 +322,7 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
 #[test]
 fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
     let entry = |payload: &str| {
-        format!(
-            "format_version = 1\n[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {payload}\n"
-        )
+        format!("[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {payload}\n")
     };
     let datetime = "native TOML";
     let zero = "-0 is not";
@@ -366,7 +372,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
         let column = "payload = ".len() + payload.find(token).unwrap() + 1;
         assert_eq!(
             (error.line, error.column),
-            (Some(6), Some(column)),
+            (Some(5), Some(column)),
             "{payload}"
         );
         assert!(error.message.starts_with(message), "{error}");
@@ -386,7 +392,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
     //A JSON rejects `-0` too; serde_json reads it as a float.
     assert!(
         proposal::decode(
-            r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":-0}}]}"#,
+            r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":-0}}]}"#,
             Format::Json
         )
         .is_err()
@@ -395,18 +401,17 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
 
 #[test]
 fn json_decode_errors_carry_a_path_and_position() {
-    let text = "{\"format_version\": 1, \"entries\": [\n  {\"name\": \"a\", \"kind\": \"node\", \"type\": \"T\",\n   \"payload\": {\"n\": 1, \"n\": 2}}]}";
+    let text = "{\"entries\": [\n  {\"name\": \"a\", \"kind\": \"node\", \"type\": \"T\",\n   \"payload\": {\"n\": 1, \"n\": 2}}]}";
     let error = proposal::decode(text, Format::Json).unwrap_err();
     assert_eq!(error.path.as_deref(), Some("entries[0].payload"));
     assert_eq!(error.line, Some(3));
     assert!(error.message.contains("duplicate field `n`"), "{error}");
-    let error =
-        proposal::decode("{\"format_version\": 1, \"entries\": []} []", Format::Json).unwrap_err();
+    let error = proposal::decode("{\"entries\": []} []", Format::Json).unwrap_err();
     assert_eq!(error.path, None);
-    assert_eq!((error.line, error.column), (Some(1), Some(38)));
+    assert_eq!((error.line, error.column), (Some(1), Some(17)));
     assert_eq!(
         AppError::MalformedProposal(error).to_string(),
-        "malformed JSON proposal: trailing characters at line 1 column 38"
+        "malformed JSON proposal: trailing characters at line 1 column 17"
     );
 }
 
@@ -1144,7 +1149,7 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     populated(&scratch);
     let failing = scratch.service().with_sync_directory(failed_sync);
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": "proposal.apply",
-        "params": {"proposal": {"format_version": 1, "entries": [task("c", "C")]}}})
+        "params": {"proposal": {"entries": [task("c", "C")]}}})
     .to_string();
     let response = serde_json::to_value(rpc::handle_line(&failing, &line)).unwrap();
     let error = &response["error"];
@@ -1278,7 +1283,7 @@ fn rpc_envelope_rejects_invalid_calls_without_mutation() {
     let service = scratch.service();
     let stored = scratch.bytes();
     let call = |line: &str| serde_json::to_value(rpc::handle_line(&service, line)).unwrap();
-    let apply = json!({"proposal": {"format_version": 1, "entries": [task("c", "C")]}});
+    let apply = json!({"proposal": {"entries": [task("c", "C")]}});
     for (line, code, id) in [
         ("".to_string(), -32700, Value::Null),
         ("{not json".to_string(), -32700, Value::Null),
@@ -1312,7 +1317,7 @@ fn rpc_envelope_rejects_invalid_calls_without_mutation() {
     );
     let response = call(
         &json!({"jsonrpc": "2.0", "id": 2, "method": "proposal.decode",
-            "params": {"text": "format_version = 1\n[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Task\"\npayload = { big = 9223372036854775807 }\n", "format": "toml"}})
+            "params": {"text": "[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Task\"\npayload = { big = 9223372036854775807 }\n", "format": "toml"}})
         .to_string(),
     );
     assert_eq!(
@@ -1344,9 +1349,9 @@ fn rpc_proposal_parameters_fail_like_change_files() {
         let line = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
         serde_json::to_value(rpc::handle_line(&service, &line)).unwrap()
     };
-    let bad = r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"Task","payload":{"n":1.5}}]}"#;
+    let bad = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"n":1.5}}]}"#;
     //A Raw text keeps a repeated payload field visible to the decoder.
-    let repeated = r#"{"format_version":1,"entries":[{"name":"a","kind":"node","type":"Task","payload":{"title":"x","title":"y"}}]}"#;
+    let repeated = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"title":"x","title":"y"}}]}"#;
     let file_error = proposal::decode(bad, Format::Json).unwrap_err();
     assert_eq!(file_error.path.as_deref(), Some("entries[0].payload.n"));
     assert!(file_error.line.is_some());
@@ -1376,7 +1381,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
     );
     //A Every other parameter failure, including null for an optional
     //A parameter, is an invalid-parameters error.
-    let good = r#"{"format_version":1,"entries":[]}"#;
+    let good = r#"{"entries":[]}"#;
     for (method, params) in [
         (
             "proposal.check",

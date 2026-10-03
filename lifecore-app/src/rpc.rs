@@ -128,7 +128,7 @@ fn call<P: DeserializeOwned, R: Serialize>(
     })
 }
 
-//A Method names are provisional until the RPC contract is frozen (PLAN 4.2).
+//A Method names are provisional; the UI stages reshape them (PLAN 4.3).
 //A `init` and filesystem path selection are deliberately absent.
 fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, DispatchError> {
     match method {

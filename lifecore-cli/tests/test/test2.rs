@@ -45,7 +45,7 @@ fn rpc_leaves_the_line_after_its_request_unread() {
         .unwrap();
     assert!(init.status.success(), "{init:?}");
     let first = r#"{"jsonrpc":"2.0","id":1,"method":"plan_id.mint","params":{}}"#;
-    let second = r#"{"jsonrpc":"2.0","id":2,"method":"proposal.apply","params":{"proposal":{"format_version":1,"entries":[{"name":"n","kind":"node","type":"Type","payload":{}}]}}}"#;
+    let second = r#"{"jsonrpc":"2.0","id":2,"method":"proposal.apply","params":{"proposal":{"entries":[{"name":"n","kind":"node","type":"Type","payload":{}}]}}}"#;
     let requests = scratch.0.join("requests.jsonl");
     fs::write(&requests, format!("{first}\n{second}\n")).unwrap();
     let before = fs::read(&state).unwrap();
@@ -84,11 +84,11 @@ fn check_exits_nonzero_for_a_proposal_that_is_not_accepted() {
     };
     assert!(run(&["init"]).status.success());
     let empty = scratch.0.join("empty.json");
-    fs::write(&empty, r#"{"format_version":1,"entries":[]}"#).unwrap();
+    fs::write(&empty, r#"{"entries":[]}"#).unwrap();
     let untyped = scratch.0.join("untyped.toml");
     fs::write(
         &untyped,
-        "format_version = 1\n[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Undeclared\"\npayload = {}\n",
+        "[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Undeclared\"\npayload = {}\n",
     )
     .unwrap();
     for (file, accepted) in [(&empty, true), (&untyped, false)] {

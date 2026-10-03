@@ -1,4 +1,4 @@
-use crate::{AppError, proposal::FormatVersion};
+use crate::AppError;
 use lifecore::{LifeCoreList, analysis::presentation::Dismissals};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -71,7 +71,6 @@ impl StatePath {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
-    pub format_version: FormatVersion<1>,
     pub graph_revision: Uuid,
     pub graph: LifeCoreList,
     pub dismissals: Dismissals,
@@ -80,7 +79,6 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn new(graph: LifeCoreList) -> Self {
         Self {
-            format_version: FormatVersion,
             graph_revision: Uuid::new_v4(),
             graph,
             dismissals: Dismissals::default(),

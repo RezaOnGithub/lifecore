@@ -11,32 +11,9 @@ use toml::{
 };
 use uuid::Uuid;
 
-//A A small bounded version field that accepts exactly one value.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct FormatVersion<const V: u32>;
-
-impl<const V: u32> Serialize for FormatVersion<V> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u32(V)
-    }
-}
-
-impl<'de, const V: u32> Deserialize<'de> for FormatVersion<V> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let version = u32::deserialize(deserializer)?;
-        if version != V {
-            return Err(D::Error::custom(format!(
-                "unsupported format_version {version}; expected {V}"
-            )));
-        }
-        Ok(Self)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proposal {
-    pub format_version: FormatVersion<1>,
     #[serde(
         default,
         deserialize_with = "present",
