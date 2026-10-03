@@ -1,5 +1,5 @@
 use crate::{
-    Body, Edge, Entry, EntryId, LifeCoreList, Node, Payload, View, ViewError,
+    Body, Edge, Entry, EntryId, LifeCoreList, Node, Payload, PayloadKind, View, ViewError,
     analysis::AnalysisRunner,
     transaction::{
         Change, NewEdge, NewNode,
@@ -7,8 +7,8 @@ use crate::{
         RevisionIntent, prepare,
     },
     typing::{
-        FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaErrorKind, Type, TypeDefinition,
-        ValueType,
+        FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaError, SchemaErrorKind, Type,
+        TypeDefinition, ValueType,
     },
 };
 use std::{
@@ -389,6 +389,322 @@ fn schemas_round_trip_as_named_records_and_nested_shapes_report_precise_paths() 
         Type::from_body(&malformed).unwrap_err().kind,
         SchemaErrorKind::UnknownField
     );
+}
+
+//A A declaration list of words, optionally ending in a sub-field record.
+fn words(words: &[&str], fields: Option<Body>) -> Payload {
+    let mut list = words
+        .iter()
+        .map(|&word| word.into())
+        .collect::<Vec<Payload>>();
+    list.extend(fields.map(Payload::Record));
+    Payload::List(list)
+}
+
+//A `levels` record-shaped fields nested through a sub-field `r`, around a text.
+fn nested_records(levels: usize) -> Payload {
+    (0..levels).fold(words(&["optional", "text"], None), |inner, _| {
+        words(
+            &["optional", "record"],
+            Some(Body::from([("r".into(), inner)])),
+        )
+    })
+}
+
+#[test]
+fn declarations_encode_fields_as_word_lists_and_round_trip_every_shape() {
+    use FieldStatus::*;
+    use ValueType::*;
+    let list = |element| List(Box::new(element));
+    let owner = Record(
+        [(
+            "owner".into(),
+            FieldDecl {
+                ty: Text,
+                status: Mandatory,
+            },
+        )]
+        .into(),
+    );
+    let row = Record(
+        [(
+            "inner".into(),
+            FieldDecl {
+                ty: owner.clone(),
+                status: Encouraged,
+            },
+        )]
+        .into(),
+    );
+    let ty = Type::new(
+        "Task",
+        &[
+            ("title", (Text, Mandatory)),
+            ("count", (Integer, Encouraged)),
+            ("done", (Boolean, Deprecated)),
+            ("due", (Timestamp, Optional)),
+            ("tags", (list(Text), Optional)),
+            ("grid", (list(list(Integer)), Optional)),
+            ("details", (owner, Optional)),
+            ("rows", (list(row), Mandatory)),
+        ],
+        &["DependsOn"],
+        &["Explains"],
+        &["Note", "Task2"],
+    );
+    let owner_fields = || Body::from([("owner".into(), words(&["mandatory", "text"], None))]);
+    let expected = Body::from([
+        ("name".into(), "Task".into()),
+        (
+            "fields".into(),
+            Payload::Record(Body::from([
+                ("title".into(), words(&["mandatory", "text"], None)),
+                ("count".into(), words(&["encouraged", "integer"], None)),
+                ("done".into(), words(&["deprecated", "boolean"], None)),
+                ("due".into(), words(&["optional", "timestamp"], None)),
+                ("tags".into(), words(&["optional", "list", "text"], None)),
+                (
+                    "grid".into(),
+                    words(&["optional", "list", "list", "integer"], None),
+                ),
+                (
+                    "details".into(),
+                    words(&["optional", "record"], Some(owner_fields())),
+                ),
+                (
+                    "rows".into(),
+                    words(
+                        &["mandatory", "list", "record"],
+                        Some(Body::from([(
+                            "inner".into(),
+                            words(&["encouraged", "record"], Some(owner_fields())),
+                        )])),
+                    ),
+                ),
+            ])),
+        ),
+        ("outgoing".into(), words(&["DependsOn"], None)),
+        ("incoming".into(), words(&["Explains"], None)),
+        ("successors".into(), words(&["Note", "Task2"], None)),
+    ]);
+    assert_eq!(ty.to_body(), expected);
+    assert_eq!(Type::from_body(&expected).unwrap(), ty);
+    //A Every collection but the name may be omitted, and then is empty.
+    assert_eq!(
+        Type::from_body(&Body::from([("name".into(), "Bare".into())])).unwrap(),
+        Type::new("Bare", &[], &[], &[], &[])
+    );
+    //A The deepest accepted nesting, through lists and through records.
+    let deep = (0..64).fold(Text, |element, _| list(element));
+    let ty = Type::new("Deep", &[("d", (deep, Optional))], &[], &[], &[]);
+    assert_eq!(Type::from_body(&ty.to_body()).unwrap(), ty);
+    let body = Body::from([
+        ("name".into(), "Deep".into()),
+        (
+            "fields".into(),
+            Payload::Record(Body::from([("d".into(), nested_records(64))])),
+        ),
+    ]);
+    let ty = Type::from_body(&body).unwrap();
+    assert_eq!(ty.to_body()["fields"], body["fields"]);
+}
+
+#[test]
+fn malformed_declarations_report_the_offending_element_and_kind() {
+    use PathPart::{Field, Index};
+    use PayloadKind as K;
+    use SchemaErrorKind::*;
+    let wrong = |expected, actual| WrongShape { expected, actual };
+    let field = |name: &str| Field(name.into());
+    let at = |rest: &[PathPart]| [vec![field("fields"), field("a")], rest.to_vec()].concat();
+    let lists = |count: usize| {
+        let mut list = vec!["optional"];
+        list.extend(std::iter::repeat_n("list", count));
+        list.push("text");
+        words(&list, None)
+    };
+    let mut below_records = (0..64)
+        .flat_map(|_| [Index(2), field("r")])
+        .collect::<Vec<_>>();
+    below_records.push(Index(1));
+    let declarations = [
+        ("text".into(), at(&[]), wrong(K::List, K::Text)),
+        //A The per-field record that preceded word lists.
+        (
+            Payload::Record(Body::from([
+                (
+                    "shape".into(),
+                    Payload::Record(Body::from([("kind".into(), "text".into())])),
+                ),
+                ("presence".into(), "mandatory".into()),
+            ])),
+            at(&[]),
+            wrong(K::List, K::Record),
+        ),
+        (words(&[], None), at(&[Index(0)]), MissingPresence),
+        (
+            Payload::List(vec![1.into(), "text".into()]),
+            at(&[Index(0)]),
+            wrong(K::Text, K::Integer),
+        ),
+        (
+            words(&["required", "text"], None),
+            at(&[Index(0)]),
+            UnknownPresence("required".into()),
+        ),
+        //A Presence comes first, so a leading shape word is an unknown presence.
+        (
+            words(&["text", "optional"], None),
+            at(&[Index(0)]),
+            UnknownPresence("text".into()),
+        ),
+        (words(&["optional"], None), at(&[Index(1)]), MissingShape),
+        (
+            words(&["optional", "list"], None),
+            at(&[Index(2)]),
+            MissingShape,
+        ),
+        (
+            words(&["optional", "float"], None),
+            at(&[Index(1)]),
+            UnknownShape("float".into()),
+        ),
+        (
+            words(&["optional", "list", "Text"], None),
+            at(&[Index(2)]),
+            UnknownShape("Text".into()),
+        ),
+        (
+            Payload::List(vec!["optional".into(), true.into()]),
+            at(&[Index(1)]),
+            wrong(K::Text, K::Boolean),
+        ),
+        (
+            words(&["optional"], Some(Body::new())),
+            at(&[Index(1)]),
+            wrong(K::Text, K::Record),
+        ),
+        (
+            words(&["optional", "record"], None),
+            at(&[Index(2)]),
+            MissingRecordFields,
+        ),
+        (
+            words(&["optional", "record", "text"], None),
+            at(&[Index(2)]),
+            wrong(K::Record, K::Text),
+        ),
+        (
+            Payload::List(vec![
+                "optional".into(),
+                "record".into(),
+                Payload::List(vec![]),
+            ]),
+            at(&[Index(2)]),
+            wrong(K::Record, K::List),
+        ),
+        (
+            words(&["optional", "text", "text"], None),
+            at(&[Index(2)]),
+            TrailingElements,
+        ),
+        (
+            Payload::List(vec![
+                "optional".into(),
+                "record".into(),
+                Payload::Record(Body::new()),
+                Payload::Record(Body::new()),
+            ]),
+            at(&[Index(3)]),
+            TrailingElements,
+        ),
+        (
+            Payload::List(vec![
+                "optional".into(),
+                "record".into(),
+                Payload::Record(Body::new()),
+                "text".into(),
+            ]),
+            at(&[Index(3)]),
+            TrailingElements,
+        ),
+        //A Errors inside a sub-field record continue the path through it.
+        (
+            words(
+                &["optional", "list", "record"],
+                Some(Body::from([(
+                    "b".into(),
+                    words(&["sometimes", "text"], None),
+                )])),
+            ),
+            at(&[Index(3), field("b"), Index(0)]),
+            UnknownPresence("sometimes".into()),
+        ),
+        (lists(65), at(&[Index(65)]), TooDeep),
+        //A A flat list far deeper than the stack could recurse is still reported.
+        (lists(100_000), at(&[Index(65)]), TooDeep),
+        (nested_records(65), at(&below_records), TooDeep),
+    ];
+    for (declaration, path, kind) in declarations {
+        let body = Body::from([
+            ("name".into(), "T".into()),
+            (
+                "fields".into(),
+                Payload::Record(Body::from([("a".into(), declaration)])),
+            ),
+        ]);
+        assert_eq!(
+            Type::from_body(&body).unwrap_err(),
+            SchemaError { path, kind }
+        );
+    }
+    let named =
+        |key: &str, value: Payload| Body::from([("name".into(), "T".into()), (key.into(), value)]);
+    let bodies = [
+        (Body::new(), vec![field("name")], MissingField),
+        (
+            Body::from([("name".into(), 1.into())]),
+            vec![field("name")],
+            wrong(K::Text, K::Integer),
+        ),
+        (
+            named("fields", Payload::List(vec![])),
+            vec![field("fields")],
+            wrong(K::Record, K::List),
+        ),
+        (
+            named("outgoing", "A".into()),
+            vec![field("outgoing")],
+            wrong(K::List, K::Text),
+        ),
+        (
+            named("incoming", Payload::List(vec![1.into()])),
+            vec![field("incoming"), Index(0)],
+            wrong(K::Text, K::Integer),
+        ),
+        (
+            named("successors", words(&["A", "B", "A"], None)),
+            vec![field("successors"), Index(2)],
+            DuplicatePermission("A".into()),
+        ),
+        //A The former names of `fields` and `successors` are unknown keys.
+        (
+            named("body", Payload::Record(Body::new())),
+            vec![field("body")],
+            UnknownField,
+        ),
+        (
+            named("additional_override", Payload::List(vec![])),
+            vec![field("additional_override")],
+            UnknownField,
+        ),
+    ];
+    for (body, path, kind) in bodies {
+        assert_eq!(
+            Type::from_body(&body).unwrap_err(),
+            SchemaError { path, kind }
+        );
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use crate::{TypeCheck, TypeCheckFactory, TypeCheckMessage};
 use lifecore::{
-    Body, EntryId, LifeCoreError, LifeCoreList, Payload, View,
+    Body, EntryId, LifeCoreError, LifeCoreList, Payload, PayloadKind, View,
     analysis::{
         AnalysisOutput, AnalysisRunner, Analyzer, AnalyzerFactory, Config, EvaluatedView,
         EvaluationInputs, FindingKey, InnerMessageType, Message, MessageType, SuiteConfig,
@@ -13,7 +13,8 @@ use lifecore::{
         RevisionIntent, prepare,
     },
     typing::{
-        FieldDecl, FieldIssueKind, FieldStatus, ResolutionError, Type, TypeDefinition, ValueType,
+        FieldDecl, FieldIssueKind, FieldStatus, PathPart, ResolutionError, SchemaError,
+        SchemaErrorKind, Type, TypeDefinition, ValueType,
     },
 };
 
@@ -98,6 +99,81 @@ fn malformed_declarations_return_typed_findings() {
     ));
 }
 
+//A A declaration in the nested-envelope encoding `Type::to_body` produced
+//A before field declarations became word lists: one mandatory text field.
+fn former_declaration(fields_key: &str, successors_key: &str) -> Body {
+    let presence_and_shape = Payload::Record(Body::from([
+        (
+            "shape".into(),
+            Payload::Record(Body::from([("kind".into(), "text".into())])),
+        ),
+        ("presence".into(), "mandatory".into()),
+    ]));
+    Body::from([
+        ("name".into(), "A".into()),
+        (
+            fields_key.into(),
+            Payload::Record(Body::from([("title".into(), presence_and_shape)])),
+        ),
+        ("outgoing".into(), Payload::List(vec![])),
+        ("incoming".into(), Payload::List(vec![])),
+        (successors_key.into(), Payload::List(vec![])),
+    ])
+}
+
+#[test]
+fn the_former_envelope_encoding_is_a_malformed_declaration() {
+    use PathPart::Field;
+    let cases = [
+        (
+            former_declaration("body", "additional_override"),
+            SchemaError {
+                path: vec![Field("additional_override".into())],
+                kind: SchemaErrorKind::UnknownField,
+            },
+        ),
+        //A Even under the current keys, a per-field record is not a word list.
+        (
+            former_declaration("fields", "successors"),
+            SchemaError {
+                path: vec![Field("fields".into()), Field("title".into())],
+                kind: SchemaErrorKind::WrongShape {
+                    expected: PayloadKind::List,
+                    actual: PayloadKind::Record,
+                },
+            },
+        ),
+    ];
+    for (body, expected) in cases {
+        let changes = [
+            node("Type", body, None),
+            node("A", Body::from([("title".into(), "x".into())]), None),
+        ];
+        let mut graph = LifeCoreList::default();
+        let ids = append(&mut graph, &changes);
+        let report = findings(&graph, 2);
+        assert!(has_error(&report));
+        assert!(report.iter().any(|f| matches!(
+            f,
+            TypeCheckMessage::MalformedDeclaration { location, error }
+                if location.entry == Some(ids[0]) && *error == expected
+        )));
+        assert!(matches!(
+            graph.view().resolve_type("A"),
+            Err(ResolutionError::Malformed { id, error }) if id == ids[0] && error == expected
+        ));
+        //A With TypeCheck configured, the declaration is rejected, not stored.
+        let checked = prepare(
+            &LifeCoreList::default(),
+            &[configure(), changes[0].clone()],
+            &mut runner(),
+        )
+        .unwrap();
+        assert!(checked.analysis().has_error());
+        assert!(checked.accepted().is_err());
+    }
+}
+
 #[test]
 fn missing_and_duplicate_declarations_are_inconsistencies() {
     let mut graph = LifeCoreList::default();
@@ -127,13 +203,13 @@ fn replacing_a_declaration_uses_the_builtin_metatype() {
 fn unresolved_successor_types_are_advisory() {
     let mut graph = LifeCoreList::default();
     let mut a = ty("A");
-    a.additional_override.insert("Future".into());
+    a.successors.insert("Future".into());
     append(&mut graph, &[declaration(&a, None)]);
     let report = findings(&graph, 1);
     assert!(!has_error(&report));
     assert!(matches!(
         report[0],
-        TypeCheckMessage::UnknownOverrideType { .. }
+        TypeCheckMessage::UnknownSuccessorType { .. }
     ));
 }
 
@@ -348,7 +424,7 @@ fn active_type_changes_reinterpret_only_fresh_nodes_in_the_selected_view() {
 fn transition_permissions_are_checked_immediately_before_each_child() {
     let mut graph = LifeCoreList::default();
     let mut a = ty("A");
-    a.additional_override.insert("B".into());
+    a.successors.insert("B".into());
     let ids = append(
         &mut graph,
         &[
@@ -358,7 +434,7 @@ fn transition_permissions_are_checked_immediately_before_each_child() {
             node("B", Body::new(), Some(Added(2))),
         ],
     );
-    a.additional_override.clear();
+    a.successors.clear();
     append(&mut graph, &[declaration(&a, Some(Existing(ids[0])))]);
     assert!(!has_error(&findings(&graph, 5)));
     append(
@@ -372,12 +448,12 @@ fn transition_permissions_are_checked_immediately_before_each_child() {
     assert!(
         findings(&graph, 6)
             .iter()
-            .any(|f| matches!(f, TypeCheckMessage::BadOverride { .. }))
+            .any(|f| matches!(f, TypeCheckMessage::BadSuccessor { .. }))
     );
     assert!(
         !findings(&graph, 5)
             .iter()
-            .any(|f| matches!(f, TypeCheckMessage::BadOverride { .. }))
+            .any(|f| matches!(f, TypeCheckMessage::BadSuccessor { .. }))
     );
 }
 
@@ -743,7 +819,7 @@ fn a_bad_transition_is_reported_once_at_its_own_prefix_and_rejects_the_plan() {
     assert_eq!(
         certificate(&errors[0].key),
         serde_json::json!([
-            {"BadOverride": {"parent_type": "A", "child_type": "B"}},
+            {"BadSuccessor": {"parent_type": "A", "child_type": "B"}},
             child,
         ])
     );
@@ -785,7 +861,7 @@ fn a_bad_transition_deep_in_history_still_blocks_configuring_typecheck() {
     assert_eq!(errors[0].subjects, [child].into());
     assert_eq!(
         certificate(&errors[0].key)[0],
-        serde_json::json!({"BadOverride": {"parent_type": "A", "child_type": "B"}})
+        serde_json::json!({"BadSuccessor": {"parent_type": "A", "child_type": "B"}})
     );
     assert!(checked.accepted().is_err());
 }
@@ -794,7 +870,7 @@ fn a_bad_transition_deep_in_history_still_blocks_configuring_typecheck() {
 fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
     let mut graph = LifeCoreList::default();
     let mut a = ty("A");
-    a.additional_override.insert("B".into());
+    a.successors.insert("B".into());
     let b = Type::new(
         "B",
         &[("n", (ValueType::Integer, FieldStatus::Optional))],
@@ -812,7 +888,7 @@ fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
             node("B", Body::new(), Some(Added(3))),
         ],
     );
-    a.additional_override.clear();
+    a.successors.clear();
     let revoke = prepare(
         &graph,
         &[declaration(&a, Some(Existing(ids[0])))],
@@ -840,7 +916,7 @@ fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
     assert_eq!(boundary(errors[0].evaluated_view), Some(6));
     assert_eq!(
         certificate(&errors[0].key)[0],
-        serde_json::json!({"BadOverride": {"parent_type": "A", "child_type": "B"}})
+        serde_json::json!({"BadSuccessor": {"parent_type": "A", "child_type": "B"}})
     );
     assert!(checked.accepted().is_err());
 }
@@ -849,7 +925,7 @@ fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
 fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
     let mut graph = LifeCoreList::default();
     let mut a = ty("A");
-    a.additional_override.insert("B".into());
+    a.successors.insert("B".into());
     let ids = append(
         &mut graph,
         &[
@@ -858,7 +934,7 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
             node("A", Body::new(), None),
         ],
     );
-    a.additional_override.clear();
+    a.successors.clear();
     let child = append(
         &mut graph,
         &[
@@ -867,29 +943,29 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
             declaration(&ty("C"), None),
         ],
     )[1];
-    let bad_override = |end_exclusive| {
+    let bad_successor = |end_exclusive| {
         findings(&graph, end_exclusive)
             .into_iter()
-            .filter(|f| matches!(f, TypeCheckMessage::BadOverride { .. }))
+            .filter(|f| matches!(f, TypeCheckMessage::BadSuccessor { .. }))
             .collect::<Vec<_>>()
     };
-    assert!(bad_override(4).is_empty());
-    let at_own_prefix = bad_override(5);
+    assert!(bad_successor(4).is_empty());
+    let at_own_prefix = bad_successor(5);
     assert_eq!(at_own_prefix.len(), 1);
     assert!(matches!(
         &at_own_prefix[0],
-        TypeCheckMessage::BadOverride { location, parent_type, child_type }
+        TypeCheckMessage::BadSuccessor { location, parent_type, child_type }
             if location.entry == Some(child) && location.view.end_exclusive == 5
                 && parent_type == "A" && child_type == "B"
     ));
-    assert!(bad_override(6).is_empty());
+    assert!(bad_successor(6).is_empty());
     //A The former loop judged it again at every later prefix.
     let reference = AllChildrenTypeCheck
         .analyze_inner(graph.view(), &Default::default())
         .unwrap();
     assert!(reference.iter().any(|f| matches!(
         f,
-        TypeCheckMessage::BadOverride { location, .. }
+        TypeCheckMessage::BadSuccessor { location, .. }
             if location.entry == Some(child) && location.view.end_exclusive == 6
     )));
 }
@@ -927,14 +1003,15 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
     let report = findings(&graph, 3);
     assert!(report.iter().any(|f| matches!(
         f,
-        TypeCheckMessage::BadOverride { location, parent_type, child_type }
+        TypeCheckMessage::BadSuccessor { location, parent_type, child_type }
             if location.entry == Some(child) && parent_type == "Type" && child_type == "A"
     )));
 }
 
-//A The transition loop from a07483e, verbatim and independent of
-//A `TypeCheck::transition`: every child in the view is judged against the prefix
-//A before it, at every prefix containing it.
+//A The transition loop from a07483e, verbatim apart from the later `successors`
+//A and `BadSuccessor` renames, and independent of `TypeCheck::transition`: every
+//A child in the view is judged against the prefix before it, at every prefix
+//A containing it.
 fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
     use TypeCheckMessage::*;
     let location = |id| view.location(Some(id)).expect("visible diagnostic subject");
@@ -951,7 +1028,7 @@ fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
         let allowed = match before.resolve_type(&parent.ty_name) {
         Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
         Ok(Some(TypeDefinition::Declared { schema, .. })) => {
-            child.ty_name == schema.name || schema.additional_override.contains(&child.ty_name)
+            child.ty_name == schema.name || schema.successors.contains(&child.ty_name)
         }
         Ok(None) => {
             output.push(MissingType {
@@ -976,7 +1053,7 @@ fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
         }
         };
         if !allowed {
-            output.push(BadOverride {
+            output.push(BadSuccessor {
                 location: location(child.id),
                 parent_type: parent.ty_name.clone(),
                 child_type: child.ty_name.clone(),
@@ -1111,7 +1188,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     //A same-type revision of the valid child.
     let mut graph = LifeCoreList::default();
     let mut a = with_field("A");
-    a.additional_override.insert("B".into());
+    a.successors.insert("B".into());
     let ids = append(
         &mut graph,
         &[
@@ -1121,7 +1198,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             node("B", Body::new(), Some(Added(2))),
         ],
     );
-    a.additional_override.clear();
+    a.successors.clear();
     append(
         &mut graph,
         &[

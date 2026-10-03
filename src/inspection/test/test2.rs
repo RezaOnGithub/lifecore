@@ -265,7 +265,7 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     }
     plan.commit(&mut graph).unwrap();
     let mut revised = ty;
-    revised.body.clear();
+    revised.fields.clear();
     let plan = prepare(
         &graph,
         &[Change::AddNode(NewNode {

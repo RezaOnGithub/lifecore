@@ -13,7 +13,7 @@ use lifecore::{
     analysis::{AnalysisRunner, AnalyzerFactory, Config, MessageType},
     inspection::Currentness,
     transaction::{self, Change, NewNode, RevisionIntent},
-    typing::{FieldStatus, Type, ValueType},
+    typing::{FieldDecl, FieldStatus, Type, ValueType},
 };
 use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
@@ -835,6 +835,104 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
         service.apply(with(before_suite, json!([task("d", "D")]))),
         Err(AppError::StaleBase { .. })
     ));
+}
+
+//A A hand-written declaration in the FILES §2.6 form. `fields` is a record
+//A payload, so it keeps its envelope; scalar and list shapes need none.
+const DECLARATION_TOML: &str = r#"
+[[entries]]
+name = "task_type"
+kind = "node"
+type = "Type"
+
+[entries.payload]
+name = "Task"
+outgoing = ["DependsOn"]
+incoming = ["DependsOn"]
+
+[entries.payload.fields]
+kind = "record"
+
+[entries.payload.fields.value]
+title = ["mandatory", "text"]
+tags = ["optional", "list", "text"]
+grid = ["optional", "list", "list", "integer"]
+details = ["optional", "record", { kind = "record", value = { owner = ["mandatory", "text"] } }]
+"#;
+
+#[test]
+fn a_hand_written_toml_declaration_applies_and_typechecks_nodes() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&typecheck()).unwrap();
+    let declaration = proposal::decode(DECLARATION_TOML, Format::Toml).unwrap();
+    let proposal::ProposalEntry::Node { payload, .. } = &declaration.entries[0] else {
+        panic!("expected a node")
+    };
+    let owner = ValueType::Record(
+        [(
+            "owner".into(),
+            FieldDecl {
+                ty: ValueType::Text,
+                status: FieldStatus::Mandatory,
+            },
+        )]
+        .into(),
+    );
+    let list = |element| ValueType::List(Box::new(element));
+    let expected = Type::new(
+        "Task",
+        &[
+            ("title", (ValueType::Text, FieldStatus::Mandatory)),
+            ("tags", (list(ValueType::Text), FieldStatus::Optional)),
+            (
+                "grid",
+                (list(list(ValueType::Integer)), FieldStatus::Optional),
+            ),
+            ("details", (owner, FieldStatus::Optional)),
+        ],
+        &["DependsOn"],
+        &["DependsOn"],
+        &[],
+    );
+    assert_eq!(Type::from_body(payload).unwrap(), expected);
+    service.apply(request(declaration)).unwrap();
+    let task = |payload: Value| {
+        request(proposal(
+            json!([{"name": "t", "kind": "node", "type": "Task", "payload": payload}]),
+        ))
+    };
+    let passing = service
+        .check(task(
+            json!({"title": "T", "tags": ["a"], "grid": [[1, 2], []],
+            "details": {"kind": "record", "value": {"owner": "Teto"}}}),
+        ))
+        .unwrap();
+    assert!(passing.accepted);
+    assert_eq!(passing.report.analysis.errors().count(), 0);
+    assert_eq!(passing.report.analysis.warnings().count(), 0);
+    let failing = service
+        .check(task(json!({"title": "T", "grid": [["x"]],
+            "details": {"kind": "record", "value": {}}})))
+        .unwrap();
+    assert!(!failing.accepted);
+    let entry = failing.report.operations[0].entry;
+    let mut findings = failing
+        .report
+        .analysis
+        .errors()
+        .map(|o| serde_json::from_str::<Value>(&o.key.analyzer_certificate.0).unwrap())
+        .collect::<Vec<_>>();
+    findings.sort_by_key(|finding| finding.to_string());
+    assert_eq!(
+        findings,
+        [
+            json!([{"Field": {"issue": {"path": [{"Field": "details"}, {"Field": "owner"}],
+                "kind": "MissingMandatory"}}}, entry]),
+            json!([{"Field": {"issue": {"path": [{"Field": "grid"}, {"Index": 0}, {"Index": 0}],
+                "kind": {"TypeMismatch": {"expected": "Integer", "actual": "Text"}}}}}, entry]),
+        ]
+    );
 }
 
 #[test]

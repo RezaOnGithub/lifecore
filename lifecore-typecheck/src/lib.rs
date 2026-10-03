@@ -31,7 +31,7 @@ pub enum TypeCheckMessage {
         location: DiagnosticLocation,
         name: String,
     },
-    UnknownOverrideType {
+    UnknownSuccessorType {
         #[serde(skip)]
         location: DiagnosticLocation,
         name: String,
@@ -48,7 +48,7 @@ pub enum TypeCheckMessage {
         node_type: String,
         outgoing: bool,
     },
-    BadOverride {
+    BadSuccessor {
         #[serde(skip)]
         location: DiagnosticLocation,
         parent_type: String,
@@ -59,7 +59,7 @@ pub enum TypeCheckMessage {
 impl InnerMessageType for TypeCheckMessage {
     fn ty(&self) -> MessageType {
         match self {
-        Self::UnknownOverrideType { .. } => MessageType::Warning,
+        Self::UnknownSuccessorType { .. } => MessageType::Warning,
         Self::Field { issue, .. }
             if matches!(
                 issue.kind,
@@ -80,10 +80,10 @@ impl TypeCheckMessage {
         | Self::ReservedTypeName { location }
         | Self::DuplicateType { location, .. }
         | Self::MissingType { location, .. }
-        | Self::UnknownOverrideType { location, .. }
+        | Self::UnknownSuccessorType { location, .. }
         | Self::Field { location, .. }
         | Self::BadEdgeEndpoint { location, .. }
-        | Self::BadOverride { location, .. } => *location,
+        | Self::BadSuccessor { location, .. } => *location,
         }
     }
     fn description(&self) -> String {
@@ -96,7 +96,7 @@ impl TypeCheckMessage {
             format!("More than one active declaration names {name:?}")
         }
         Self::MissingType { name, .. } => format!("Type {name:?} is not declared in this view"),
-        Self::UnknownOverrideType { name, .. } => {
+        Self::UnknownSuccessorType { name, .. } => {
             format!("Permitted successor type {name:?} is not declared")
         }
         Self::Field { issue, .. } => format!("Field {:?}: {:?}", issue.path, issue.kind),
@@ -109,7 +109,7 @@ impl TypeCheckMessage {
             "Type {node_type:?} does not permit {} edge {edge_type:?}",
             if *outgoing { "outgoing" } else { "incoming" }
         ),
-        Self::BadOverride {
+        Self::BadSuccessor {
             parent_type,
             child_type,
             ..
@@ -203,9 +203,9 @@ impl TypeCheck {
             }
         }
         for (id, ty) in types.values() {
-            for name in &ty.additional_override {
+            for name in &ty.successors {
                 if name != Type::TYPE_NAME && !types.contains_key(name) {
-                    output.push(UnknownOverrideType {
+                    output.push(UnknownSuccessorType {
                         location: location(*id),
                         name: name.clone(),
                     });
@@ -263,7 +263,7 @@ impl TypeCheck {
         let allowed = match before.resolve_type(&parent.ty_name) {
         Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
         Ok(Some(TypeDefinition::Declared { schema, .. })) => {
-            child.ty_name == schema.name || schema.additional_override.contains(&child.ty_name)
+            child.ty_name == schema.name || schema.successors.contains(&child.ty_name)
         }
         Ok(None) => {
             return Some(MissingType {
@@ -278,7 +278,7 @@ impl TypeCheck {
             return Some(DuplicateType { location, name });
         }
         };
-        (!allowed).then(|| BadOverride {
+        (!allowed).then(|| BadSuccessor {
             location,
             parent_type: parent.ty_name.clone(),
             child_type: child.ty_name.clone(),

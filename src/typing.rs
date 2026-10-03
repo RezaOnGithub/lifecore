@@ -29,10 +29,10 @@ pub struct FieldDecl {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Type {
     pub name: String,
-    pub body: BTreeMap<String, FieldDecl>,
+    pub fields: BTreeMap<String, FieldDecl>,
     pub outgoing: BTreeSet<String>,
     pub incoming: BTreeSet<String>,
-    pub additional_override: BTreeSet<String>,
+    pub successors: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -74,8 +74,13 @@ pub enum SchemaErrorKind {
         expected: PayloadKind,
         actual: PayloadKind,
     },
-    UnknownKind(String),
-    UnknownStatus(String),
+    MissingPresence,
+    UnknownPresence(String),
+    MissingShape,
+    UnknownShape(String),
+    MissingRecordFields,
+    TrailingElements,
+    TooDeep,
     DuplicatePermission(String),
 }
 
@@ -132,6 +137,12 @@ impl View<'_> {
     }
 }
 
+//A Declaration lists are flat, so unlike nested payloads their depth is not
+//A bounded by the codecs' recursion limits. Parsing, dropping, and comparing a
+//A `ValueType` recurse once per level, so a long run of `list` words would
+//A otherwise overflow the stack instead of being reported.
+pub(crate) const MAX_SHAPE_DEPTH: usize = 64;
+
 impl Type {
     pub const TYPE_NAME: &'static str = "Type";
     pub fn new(
@@ -139,11 +150,11 @@ impl Type {
         fields: &[(&str, (ValueType, FieldStatus))],
         outgoing: &[&str],
         incoming: &[&str],
-        additional_override: &[&str],
+        successors: &[&str],
     ) -> Self {
         Self {
             name: name.into(),
-            body: fields
+            fields: fields
                 .iter()
                 .map(|(name, (ty, status))| {
                     (
@@ -157,7 +168,7 @@ impl Type {
                 .collect(),
             outgoing: outgoing.iter().map(|s| s.to_string()).collect(),
             incoming: incoming.iter().map(|s| s.to_string()).collect(),
-            additional_override: additional_override.iter().map(|s| s.to_string()).collect(),
+            successors: successors.iter().map(|s| s.to_string()).collect(),
         }
     }
     pub fn to_body(&self) -> Body {
@@ -166,42 +177,33 @@ impl Type {
         };
         Body::from([
             ("name".into(), self.name.clone().into()),
-            ("body".into(), fields_to_payload(&self.body)),
+            ("fields".into(), fields_to_payload(&self.fields)),
             ("outgoing".into(), strings(&self.outgoing)),
             ("incoming".into(), strings(&self.incoming)),
-            (
-                "additional_override".into(),
-                strings(&self.additional_override),
-            ),
+            ("successors".into(), strings(&self.successors)),
         ])
     }
     pub fn from_body(body: &Body) -> Result<Self, SchemaError> {
         keys(
             body,
-            &[
-                "name",
-                "body",
-                "outgoing",
-                "incoming",
-                "additional_override",
-            ],
+            &["name", "fields", "outgoing", "incoming", "successors"],
         )?;
         Ok(Self {
             name: text(required(body, "name")?)
                 .map_err(|e| e.field("name"))?
                 .into(),
-            body: match body.get("body") {
-            Some(v) => fields_from_payload(v).map_err(|e| e.field("body"))?,
+            fields: match body.get("fields") {
+            Some(v) => fields_from_payload(v, 0).map_err(|e| e.field("fields"))?,
             None => BTreeMap::new(),
             },
             outgoing: permissions(body, "outgoing")?,
             incoming: permissions(body, "incoming")?,
-            additional_override: permissions(body, "additional_override")?,
+            successors: permissions(body, "successors")?,
         })
     }
     pub fn check(&self, body: &Body) -> Vec<FieldIssue> {
         let mut issues = vec![];
-        check_fields(&self.body, body, &mut vec![], &mut issues);
+        check_fields(&self.fields, body, &mut vec![], &mut issues);
         issues
     }
 }
@@ -217,43 +219,57 @@ impl ValueType {
         Self::Record(_) => PayloadKind::Record,
         }
     }
-    fn to_payload(&self) -> Payload {
-        let (kind, detail) = match self {
-        Self::Text => ("text", None),
-        Self::Integer => ("integer", None),
-        Self::Boolean => ("boolean", None),
-        Self::Timestamp => ("timestamp", None),
-        Self::List(element) => ("list", Some(("element", element.to_payload()))),
-        Self::Record(fields) => ("record", Some(("fields", fields_to_payload(fields)))),
-        };
-        let mut body = Body::from([("kind".into(), kind.into())]);
-        if let Some((name, value)) = detail {
-            body.insert(name.into(), value);
+    fn push_words(&self, words: &mut Vec<Payload>) {
+        match self {
+        Self::Text => words.push("text".into()),
+        Self::Integer => words.push("integer".into()),
+        Self::Boolean => words.push("boolean".into()),
+        Self::Timestamp => words.push("timestamp".into()),
+        Self::List(element) => {
+            words.push("list".into());
+            element.push_words(words);
         }
-        Payload::Record(body)
+        Self::Record(fields) => {
+            words.push("record".into());
+            words.push(fields_to_payload(fields));
+        }
+        }
     }
-    fn from_payload(value: &Payload) -> Result<Self, SchemaError> {
-        let body = record(value)?;
-        let kind = text(required(body, "kind")?).map_err(|e| e.field("kind"))?;
-        let allowed = match kind {
-        "list" => &["kind", "element"][..],
-        "record" => &["kind", "fields"][..],
-        _ => &["kind"][..],
-        };
-        keys(body, allowed)?;
-        Ok(match kind {
-        "text" => Self::Text,
-        "integer" => Self::Integer,
-        "boolean" => Self::Boolean,
-        "timestamp" => Self::Timestamp,
-        "list" => Self::List(Box::new(
-            Self::from_payload(required(body, "element")?).map_err(|e| e.field("element"))?,
-        )),
-        "record" => Self::Record(
-            fields_from_payload(required(body, "fields")?).map_err(|e| e.field("fields"))?,
-        ),
+    //A Parses the shape that starts at `start` in a declaration list and returns
+    //A it with the index just after it. Indexes in errors are positions in that
+    //A list, so a caller adds only the field path. `depth` counts the `list` and
+    //A `record` words enclosing this shape, across nested records.
+    fn from_words(
+        words: &[Payload],
+        start: usize,
+        depth: usize,
+    ) -> Result<(Self, usize), SchemaError> {
+        let word = words
+            .get(start)
+            .ok_or_else(|| SchemaError::new(SchemaErrorKind::MissingShape).index(start))?;
+        let word = text(word).map_err(|e| e.index(start))?;
+        let next = start + 1;
+        if matches!(word, "list" | "record") && depth >= MAX_SHAPE_DEPTH {
+            return Err(SchemaError::new(SchemaErrorKind::TooDeep).index(start));
+        }
+        Ok(match word {
+        "text" => (Self::Text, next),
+        "integer" => (Self::Integer, next),
+        "boolean" => (Self::Boolean, next),
+        "timestamp" => (Self::Timestamp, next),
+        "list" => {
+            let (element, end) = Self::from_words(words, next, depth + 1)?;
+            (Self::List(Box::new(element)), end)
+        }
+        "record" => {
+            let fields = words.get(next).ok_or_else(|| {
+                SchemaError::new(SchemaErrorKind::MissingRecordFields).index(next)
+            })?;
+            let fields = fields_from_payload(fields, depth + 1).map_err(|e| e.index(next))?;
+            (Self::Record(fields), next + 1)
+        }
         other => {
-            return Err(SchemaError::new(SchemaErrorKind::UnknownKind(other.into())).field("kind"));
+            return Err(SchemaError::new(SchemaErrorKind::UnknownShape(other.into())).index(start));
         }
         })
     }
@@ -325,55 +341,57 @@ fn fields_to_payload(fields: &BTreeMap<String, FieldDecl>) -> Payload {
         fields
             .iter()
             .map(|(name, decl)| {
-                let status = match decl.status {
+                let presence = match decl.status {
                 FieldStatus::Mandatory => "mandatory",
                 FieldStatus::Encouraged => "encouraged",
                 FieldStatus::Deprecated => "deprecated",
                 FieldStatus::Optional => "optional",
                 };
-                (
-                    name.clone(),
-                    Payload::Record(Body::from([
-                        ("shape".into(), decl.ty.to_payload()),
-                        ("presence".into(), status.into()),
-                    ])),
-                )
+                let mut words = vec![presence.into()];
+                decl.ty.push_words(&mut words);
+                (name.clone(), Payload::List(words))
             })
             .collect(),
     )
 }
 
-fn fields_from_payload(value: &Payload) -> Result<BTreeMap<String, FieldDecl>, SchemaError> {
+fn fields_from_payload(
+    value: &Payload,
+    depth: usize,
+) -> Result<BTreeMap<String, FieldDecl>, SchemaError> {
     record(value)?
         .iter()
         .map(|(name, value)| {
-            let parse = || {
-                let body = record(value)?;
-                keys(body, &["shape", "presence"])?;
-                let status =
-                    match text(required(body, "presence")?).map_err(|e| e.field("presence"))? {
-                    "mandatory" => FieldStatus::Mandatory,
-                    "encouraged" => FieldStatus::Encouraged,
-                    "deprecated" => FieldStatus::Deprecated,
-                    "optional" => FieldStatus::Optional,
-                    other => {
-                        return Err(
-                            SchemaError::new(SchemaErrorKind::UnknownStatus(other.into()))
-                                .field("presence"),
-                        );
-                    }
-                    };
-                Ok(FieldDecl {
-                    ty: ValueType::from_payload(required(body, "shape")?)
-                        .map_err(|e| e.field("shape"))?,
-                    status,
-                })
-            };
-            parse()
+            field_from_payload(value, depth)
                 .map(|decl| (name.clone(), decl))
-                .map_err(|e: SchemaError| e.field(name))
+                .map_err(|e| e.field(name))
         })
         .collect()
+}
+
+//A A declaration is `[presence, shape words...]`; a `record` word takes the next
+//A element as its sub-field declarations, so it ends the list.
+fn field_from_payload(value: &Payload, depth: usize) -> Result<FieldDecl, SchemaError> {
+    let Payload::List(words) = value else {
+        return Err(wrong_shape(PayloadKind::List, value));
+    };
+    let presence = words
+        .first()
+        .ok_or_else(|| SchemaError::new(SchemaErrorKind::MissingPresence).index(0))?;
+    let status = match text(presence).map_err(|e| e.index(0))? {
+    "mandatory" => FieldStatus::Mandatory,
+    "encouraged" => FieldStatus::Encouraged,
+    "deprecated" => FieldStatus::Deprecated,
+    "optional" => FieldStatus::Optional,
+    other => {
+        return Err(SchemaError::new(SchemaErrorKind::UnknownPresence(other.into())).index(0));
+    }
+    };
+    let (ty, end) = ValueType::from_words(words, 1, depth)?;
+    if end < words.len() {
+        return Err(SchemaError::new(SchemaErrorKind::TrailingElements).index(end));
+    }
+    Ok(FieldDecl { ty, status })
 }
 
 fn keys(body: &Body, allowed: &[&str]) -> Result<(), SchemaError> {
