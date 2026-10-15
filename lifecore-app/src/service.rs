@@ -4,8 +4,7 @@ use crate::{
     storage::{self, LockedSnapshot, Publication, Snapshot, StatePath, SyncDirectory},
 };
 use lifecore::{
-    BasicValidationFailure, Body, Entry, EntryId, LifeCoreError, LifeCoreList, Timestamp, View,
-    ViewId,
+    BasicValidationFailure, Entry, EntryId, LifeCoreError, LifeCoreList, Timestamp, View, ViewId,
     analysis::{
         AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, SuiteConfig,
     },
@@ -235,49 +234,21 @@ fn commit(
     Ok((context.report(analysis), changed))
 }
 
-//A A stored entry plus its currentness in the selected view, in proposal
-//A vocabulary. It can become `Entry` plus `current` once the core serde names
-//A are aligned (PLAN 4.2).
+//A A stored entry plus its currentness in the selected view. The core entry
+//A already serializes in proposal vocabulary, so the record is that entry's
+//A fields with `current` beside them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EntryRecord {
-    Node {
-        id: EntryId,
-        #[serde(rename = "type")]
-        ty_name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        predecessor: Option<EntryId>,
-        payload: Body,
-        current: bool,
-    },
-    Edge {
-        id: EntryId,
-        #[serde(rename = "type")]
-        ty_name: String,
-        from: EntryId,
-        to: EntryId,
-        current: bool,
-    },
+pub struct EntryRecord {
+    #[serde(flatten)]
+    pub entry: Entry,
+    pub current: bool,
 }
 
 impl EntryRecord {
     fn new(view: View<'_>, entry: &Entry) -> Self {
-        let current = view.is_stale(entry.id()) == Some(false);
-        match entry {
-        Entry::Node(node) => Self::Node {
-            id: node.id,
-            ty_name: node.ty_name.clone(),
-            predecessor: node.parent,
-            payload: node.body.clone(),
-            current,
-        },
-        Entry::Edge(edge) => Self::Edge {
-            id: edge.id,
-            ty_name: edge.ty_name.clone(),
-            from: edge.from,
-            to: edge.to,
-            current,
-        },
+        Self {
+            entry: entry.clone(),
+            current: view.is_stale(entry.id()) == Some(false),
         }
     }
 }

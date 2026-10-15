@@ -9,7 +9,7 @@ use crate::{
     storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
 use lifecore::{
-    Body, EntryId, LifeCoreList, Payload, Timestamp,
+    Body, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp,
     analysis::{AnalysisRunner, AnalyzerFactory, Config, EvaluatedView, MessageType},
     inspection::Currentness,
     transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
@@ -663,22 +663,23 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
             id: applied.report.operations[0].entry,
         })
         .unwrap();
-    let EntryRecord::Node {
-        predecessor,
-        payload,
+    let EntryRecord {
+        entry: Entry::Node(Node { parent, body, .. }),
         current,
-        ..
     } = reloaded.entry
     else {
         panic!("expected a node")
     };
-    assert_eq!(predecessor, Some(a));
-    assert_eq!(payload["status"], Payload::Text("done".into()));
+    assert_eq!(parent, Some(a));
+    assert_eq!(body["status"], Payload::Text("done".into()));
     assert!(current);
     let old = service.get_entry(EntryGetRequest { id: a }).unwrap();
     assert!(matches!(
         old.entry,
-        EntryRecord::Node { current: false, .. }
+        EntryRecord {
+            entry: Entry::Node(_),
+            current: false
+        }
     ));
     let historical = service
         .list_entries(EntryListRequest {
@@ -690,9 +691,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
         historical
             .entries
             .iter()
-            .map(|e| match e {
-            EntryRecord::Node { id, .. } | EntryRecord::Edge { id, .. } => *id,
-            })
+            .map(|record| record.entry.id())
             .collect::<Vec<_>>(),
         vec![ids[1], ids[3]]
     );
@@ -1317,15 +1316,16 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     );
     let id: EntryId =
         serde_json::from_value(outcome["report"]["operations"][0]["entry"].clone()).unwrap();
-    let EntryRecord::Node { payload, .. } = scratch
+    let Entry::Node(node) = scratch
         .service()
         .get_entry(EntryGetRequest { id })
         .unwrap()
         .entry
+        .entry
     else {
         panic!("expected the applied node")
     };
-    assert_eq!(payload["title"], Payload::Text("C".into()));
+    assert_eq!(node.body["title"], Payload::Text("C".into()));
 }
 
 #[cfg(unix)]
@@ -1585,4 +1585,53 @@ fn rpc_proposal_parameters_fail_like_change_files() {
     ))
     .unwrap();
     assert!(response["result"]["plan_id"].is_string(), "{response}");
+}
+
+//A Records are the core entry, in proposal vocabulary, with `current` beside
+//A its fields; currentness is judged in the listed view, before and after the
+//A revision that supersedes a node and its edge.
+#[test]
+fn entry_records_are_core_entries_with_currentness_beside_them() {
+    let scratch = Scratch::new();
+    let ids = populated(&scratch);
+    let service = scratch.service();
+    let list = |service: &Service| {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "entries.list",
+            "params": {"currentness": "all"}})
+        .to_string();
+        serde_json::to_value(rpc::handle_line(service, &line)).unwrap()["result"]["entries"].clone()
+    };
+    let id = |id: EntryId| serde_json::to_value(id).unwrap();
+    let before = list(&service);
+    assert_eq!(
+        before[1],
+        json!({"kind": "node", "id": id(ids[1]), "type": "Task",
+            "payload": {"title": "A", "notes": "n"}, "current": true})
+    );
+    assert_eq!(
+        before[3],
+        json!({"kind": "edge", "id": id(ids[3]), "type": "DependsOn",
+            "from": id(ids[1]), "to": id(ids[2]), "current": true})
+    );
+    let revised = service
+        .apply(request(proposal(json!([
+            {"name": "a2", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+                "intent": "revise", "payload": {"title": "A2", "notes": "n"}},
+        ]))))
+        .unwrap()
+        .report
+        .operations[0]
+        .entry;
+    let after = list(&service);
+    assert_eq!(after[1]["current"], false);
+    assert_eq!(after[3]["current"], false);
+    assert_eq!(
+        after[4],
+        json!({"kind": "node", "id": id(revised), "type": "Task", "predecessor": id(ids[1]),
+            "payload": {"title": "A2", "notes": "n"}, "current": true})
+    );
+    //A The same shape decodes back into the record.
+    let record: EntryRecord = serde_json::from_value(after[4].clone()).unwrap();
+    assert_eq!(record.entry.id(), revised);
+    assert!(record.current);
 }

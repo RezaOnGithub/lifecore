@@ -15,9 +15,13 @@ pub use identity::{AnalyzerCertificate, AnalyzerIdentity, EvaluationInputs, Find
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);
 
+//A Serialized as `configuration`, the word `AnalyzerIdentity` and the
+//A `analyzers.add` request use for the same verbatim string.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub name: String,
+    #[serde(rename = "configuration")]
     pub config: String,
 }
 

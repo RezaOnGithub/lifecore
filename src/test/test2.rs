@@ -713,13 +713,13 @@ fn deserialization_rejects_cyclic_forward_and_mismatched_identities_before_inspe
     append(&mut graph, &[node("A", None), node("B", Some(Added(0)))]);
     let original = serde_json::to_value(&graph).unwrap();
     let mut cyclic = original.clone();
-    cyclic["entries"][0]["Node"]["parent"] = cyclic["entries"][0]["Node"]["id"].clone();
+    cyclic["entries"][0]["predecessor"] = cyclic["entries"][0]["id"].clone();
     assert!(serde_json::from_value::<LifeCoreList>(cyclic).is_err());
     let mut forward = original.clone();
-    forward["entries"][0]["Node"]["parent"] = forward["entries"][1]["Node"]["id"].clone();
+    forward["entries"][0]["predecessor"] = forward["entries"][1]["id"].clone();
     assert!(serde_json::from_value::<LifeCoreList>(forward).is_err());
     let mut wrong = original;
-    wrong["entries"][1]["Node"]["id"]["position"] = "99".into();
+    wrong["entries"][1]["id"]["position"] = "99".into();
     assert!(serde_json::from_value::<LifeCoreList>(wrong).is_err());
 }
 
@@ -883,12 +883,13 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
         .to_string()
         .replace('}', r#","a":"y"}"#);
     let node = format!(
-        r#"{{"id":{{"origin":"{origin}","position":"0"}},"ty_name":"T","body":{duplicated},"parent":null}}"#
+        r#"{{"id":{{"origin":"{origin}","position":"0"}},"type":"T","payload":{duplicated}}}"#
     );
-    let new_node = format!(r#"{{"ty_name":"T","body":{duplicated},"parent":null,"intent":null}}"#);
-    let entry_change = format!(r#"{{"AddNode":{new_node}}}"#);
-    let change = format!(r#"{{"Entry":{entry_change}}}"#);
-    let graph = format!(r#"{{"id":"{origin}","entries":[{{"Node":{node}}}],"suite":[]}}"#);
+    let new_node = format!(r#"{{"type":"T","payload":{duplicated}}}"#);
+    let entry_change = format!(r#"{{"kind":"node","type":"T","payload":{duplicated}}}"#);
+    let change = entry_change.clone();
+    let entry = node.replacen('{', r#"{"kind":"node","#, 1);
+    let graph = format!(r#"{{"id":"{origin}","entries":[{entry}],"suite":[]}}"#);
     assert!(serde_json::from_str::<Body>(&duplicated).is_err());
     assert!(serde_json::from_str::<crate::Node>(&node).is_err());
     assert!(serde_json::from_str::<NewNode>(&new_node).is_err());
@@ -952,7 +953,7 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
         view
     );
     let stored = serde_json::to_value(&graph).unwrap();
-    assert_eq!(stored["entries"][1]["Node"]["parent"]["position"], "0");
+    assert_eq!(stored["entries"][1]["predecessor"]["position"], "0");
     let mut zero = encoded.clone();
     zero["position"] = "0".into();
     assert_eq!(
@@ -1260,4 +1261,130 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
     injected["staleness"] = serde_json::json!([null]);
     assert!(serde_json::from_value::<LifeCoreList>(injected).is_err());
     assert!(LifeCoreList::default().staleness().is_empty());
+}
+
+//A Stored entries and core operations use the proposal vocabulary: `kind`,
+//A `type`, `predecessor`, `payload`, and lowercase `existing`/`added`
+//A references. A root has no `predecessor` member, and null is not accepted
+//A as its absence anywhere.
+#[test]
+fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
+    let mut graph = LifeCoreList::default();
+    let ids = append(&mut graph, &[node("A", None), node("B", None)]);
+    let child = append(&mut graph, &[node("A", Some(Existing(ids[0])))])[0];
+    let edge = append(
+        &mut graph,
+        &[Change::Entry(EntryChange::AddEdge(NewEdge {
+            ty_name: "Rel".into(),
+            from: Existing(child),
+            to: Existing(ids[1]),
+        }))],
+    )[0];
+    let id = |id: EntryId| serde_json::to_value(id).unwrap();
+    let stored = serde_json::to_value(&graph).unwrap();
+    assert_eq!(
+        stored["entries"],
+        serde_json::json!([
+            {"kind": "node", "id": id(ids[0]), "type": "A", "payload": {}},
+            {"kind": "node", "id": id(ids[1]), "type": "B", "payload": {}},
+            {"kind": "node", "id": id(child), "type": "A", "predecessor": id(ids[0]), "payload": {}},
+            {"kind": "edge", "id": id(edge), "type": "Rel", "from": id(child), "to": id(ids[1])},
+        ])
+    );
+    let changes = [
+        EntryChange::AddNode(NewNode {
+            ty_name: "A".into(),
+            body: Body::from([("n".into(), Payload::Integer(i64::MAX))]),
+            parent: Some(Existing(child)),
+            intent: Some(RevisionIntent::Revise),
+        }),
+        EntryChange::AddNode(NewNode {
+            ty_name: "C".into(),
+            body: Body::new(),
+            parent: None,
+            intent: None,
+        }),
+        EntryChange::AddEdge(NewEdge {
+            ty_name: "Rel".into(),
+            from: Added(0),
+            to: Added(1),
+        }),
+    ];
+    let encoded = serde_json::to_value(&changes).unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::json!([
+            {"kind": "node", "type": "A", "predecessor": {"existing": id(child)}, "intent": "revise",
+                "payload": {"n": {"kind": "integer", "value": "9223372036854775807"}}},
+            {"kind": "node", "type": "C", "payload": {}},
+            {"kind": "edge", "type": "Rel", "from": {"added": 0}, "to": {"added": 1}},
+        ])
+    );
+    assert_eq!(
+        serde_json::from_value::<Vec<EntryChange>>(encoded.clone()).unwrap(),
+        changes
+    );
+    //A `Change` adds only the suite operation; entry operations keep their shape.
+    let suite_change = Change::AddAnalyzer {
+        name: "Type_Check".into(),
+        config: "{}".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&suite_change).unwrap(),
+        serde_json::json!({"kind": "analyzer", "name": "Type_Check", "configuration": "{}"})
+    );
+    let wrapped = Change::Entry(changes[2].clone());
+    assert_eq!(serde_json::to_value(&wrapped).unwrap(), encoded[2]);
+    for change in [suite_change, wrapped] {
+        let text = serde_json::to_string(&change).unwrap();
+        assert_eq!(serde_json::from_str::<Change>(&text).unwrap(), change);
+    }
+    let suite = crate::analysis::SuiteConfig(vec![crate::analysis::Config {
+        name: "Type_Check".into(),
+        config: "{}".into(),
+    }]);
+    assert_eq!(
+        serde_json::to_value(&suite).unwrap(),
+        serde_json::json!([{"name": "Type_Check", "configuration": "{}"}])
+    );
+    //A Null absences, the former core spellings, and members of the other kind
+    //A are all rejected.
+    let mut nulls = vec![];
+    let mut root = stored.clone();
+    root["entries"][0]["predecessor"] = serde_json::Value::Null;
+    nulls.push(serde_json::from_value::<LifeCoreList>(root).is_err());
+    let mut change = encoded[1].clone();
+    change["intent"] = serde_json::Value::Null;
+    nulls.push(serde_json::from_value::<EntryChange>(change).is_err());
+    let mut change = encoded[1].clone();
+    change["predecessor"] = serde_json::Value::Null;
+    nulls.push(serde_json::from_value::<EntryChange>(change).is_err());
+    assert_eq!(nulls, [true, true, true]);
+    for rejected in [
+        serde_json::json!({"Node": {"id": id(ids[0]), "ty_name": "A", "body": {}, "parent": null}}),
+        serde_json::json!({"kind": "node", "id": id(ids[0]), "type": "A", "payload": {}, "from": id(ids[1])}),
+        serde_json::json!({"kind": "edge", "id": id(edge), "type": "Rel", "from": id(child), "to": id(ids[1]), "payload": {}}),
+        serde_json::json!({"kind": "Node", "id": id(ids[0]), "type": "A", "payload": {}}),
+    ] {
+        assert!(
+            serde_json::from_value::<Entry>(rejected.clone()).is_err(),
+            "accepted {rejected}"
+        );
+    }
+    for rejected in [
+        serde_json::json!({"AddNode": {"ty_name": "A", "body": {}, "parent": null, "intent": null}}),
+        serde_json::json!({"kind": "edge", "type": "Rel", "from": {"Added": 0}, "to": {"added": 1}}),
+        serde_json::json!({"kind": "edge", "type": "Rel", "from": {"added": "0"}, "to": {"added": 1}}),
+    ] {
+        assert!(
+            serde_json::from_value::<EntryChange>(rejected.clone()).is_err(),
+            "accepted {rejected}"
+        );
+    }
+    assert!(
+        serde_json::from_value::<crate::analysis::SuiteConfig>(
+            serde_json::json!([{"name": "Type_Check", "config": "{}"}])
+        )
+        .is_err()
+    );
 }

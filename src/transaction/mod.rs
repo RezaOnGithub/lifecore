@@ -3,12 +3,16 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Body, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, View,
     analysis::{AnalysisOutput, AnalysisRunner, SuiteConfig},
+    entries::present,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Reference {
     Existing(EntryId),
-    //A Zero-based operation index within this plan, resolved only after that operation succeeds.
+    //A Zero-based operation index within this plan, resolved only after that
+    //A operation succeeds. It is bounded by the size of one plan, so it stays a
+    //A JSON number, unlike entry positions.
     Added(usize),
 }
 
@@ -22,36 +26,61 @@ pub enum RevisionIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NewNode {
+    #[serde(rename = "type")]
     pub ty_name: String,
-    pub body: Body,
+    #[serde(
+        rename = "predecessor",
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
     pub parent: Option<Reference>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
     pub intent: Option<RevisionIntent>,
+    #[serde(rename = "payload")]
+    pub body: Body,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NewEdge {
-    pub from: Reference,
+    #[serde(rename = "type")]
     pub ty_name: String,
+    pub from: Reference,
     pub to: Reference,
 }
 
 //A A node or edge operation, and never a suite change. A lowered proposal and
 //A a suggestion's actions are both `Vec<EntryChange>`, so comparing them is
-//A plain equality.
+//A plain equality. It serializes like a proposal entry without its name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum EntryChange {
+    #[serde(rename = "node")]
     AddNode(NewNode),
+    #[serde(rename = "edge")]
     AddEdge(NewEdge),
 }
 
 //A The core staging input: no names or encodings, earlier operations by index,
 //A and no identity until `prepare` assigns one. Only `init` and `add-analyzer`
-//A build `AddAnalyzer`.
+//A build `AddAnalyzer`. Serde requires the untagged entry variant to be last;
+//A it carries its own `kind`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum Change {
+    #[serde(rename = "analyzer")]
+    AddAnalyzer {
+        name: String,
+        #[serde(rename = "configuration")]
+        config: String,
+    },
+    #[serde(untagged)]
     Entry(EntryChange),
-    AddAnalyzer { name: String, config: String },
 }
 
 impl From<EntryChange> for Change {

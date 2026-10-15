@@ -440,7 +440,7 @@ fn comparisons_use_exclusive_boundaries_and_retain_both_inspected_entries() {
     let empty = graph.view().prefix(0).unwrap();
     assert_eq!(empty.compare(base).unwrap().added.len(), 3);
     let mut encoded = serde_json::to_value(&graph).unwrap();
-    encoded["entries"][0]["Node"]["ty_name"] = serde_json::json!("Different");
+    encoded["entries"][0]["type"] = serde_json::json!("Different");
     let divergent: LifeCoreList = serde_json::from_value(encoded).unwrap();
     assert_eq!(base.id(), divergent.view().prefix(3).unwrap().id());
     assert_eq!(

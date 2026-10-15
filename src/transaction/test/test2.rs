@@ -113,16 +113,16 @@ fn exact_base_rejects_identity_content_count_and_suite_changes() {
     changed["id"] = serde_json::json!(uuid::Uuid::new_v4());
     variants.push(changed);
     let mut changed = original.clone();
-    changed["entries"][0]["Node"]["body"] = serde_json::json!({"title": "changed"});
+    changed["entries"][0]["payload"] = serde_json::json!({"title": "changed"});
     variants.push(changed);
     let mut changed = original.clone();
-    changed["entries"][2]["Edge"]["id"]["origin"] = serde_json::json!(uuid::Uuid::new_v4());
+    changed["entries"][2]["id"]["origin"] = serde_json::json!(uuid::Uuid::new_v4());
     variants.push(changed);
     let mut changed = original.clone();
     changed["entries"].as_array_mut().unwrap().pop();
     variants.push(changed);
     let mut changed = original;
-    changed["suite"] = serde_json::json!([{"name": "NewAnalyzer", "config": "{}"}]);
+    changed["suite"] = serde_json::json!([{"name": "NewAnalyzer", "configuration": "{}"}]);
     variants.push(changed);
 
     for encoded in variants {
@@ -167,7 +167,7 @@ fn exact_base_includes_analyzer_names_original_configuration_and_order() {
         serde_json::Value::Array(
             entries
                 .iter()
-                .map(|(name, config)| serde_json::json!({"name": name, "config": config}))
+                .map(|(name, config)| serde_json::json!({"name": name, "configuration": config}))
                 .collect(),
         )
     };
@@ -230,14 +230,14 @@ fn malformed_deserialization_is_rejected_before_traversal() {
     let original = serde_json::to_value(&graph).unwrap();
     let mut variants = vec![];
     let mut changed = original.clone();
-    changed["entries"][2]["Edge"]["from"]["position"] = serde_json::json!("9999");
+    changed["entries"][2]["from"]["position"] = serde_json::json!("9999");
     variants.push(changed);
     let mut changed = original.clone();
-    changed["entries"][0]["Node"]["parent"] =
+    changed["entries"][0]["predecessor"] =
         serde_json::to_value(graph.view().at(1).unwrap().id()).unwrap();
     variants.push(changed);
     let mut changed = original.clone();
-    changed["entries"][0]["Node"]["id"]["position"] = serde_json::json!("2");
+    changed["entries"][0]["id"]["position"] = serde_json::json!("2");
     variants.push(changed);
     let mut changed = original;
     changed["id"] = serde_json::json!(uuid::Uuid::nil());
@@ -269,7 +269,7 @@ fn independent_candidates_cannot_overwrite_a_committed_suffix() {
 fn imported_configuration_cannot_bypass_the_preparation_gate() {
     let graph = with_suite(
         &LifeCoreList::default(),
-        serde_json::json!([{"name": "Unavailable", "config": ""}]),
+        serde_json::json!([{"name": "Unavailable", "configuration": ""}]),
     );
     let loaded: LifeCoreList =
         serde_json::from_slice(&serde_json::to_vec(&graph).unwrap()).unwrap();
@@ -288,7 +288,7 @@ fn missing_analyzer_does_not_disable_committed_history_inspection() {
         .unwrap();
     let loaded = with_suite(
         &graph,
-        serde_json::json!([{"name": "Unavailable", "config": ""}]),
+        serde_json::json!([{"name": "Unavailable", "configuration": ""}]),
     );
     assert_eq!(loaded.view().nodes().next().unwrap().ty_name, "A");
     assert!(prepare(&loaded, &[], &mut AnalysisRunner::default()).is_err());
