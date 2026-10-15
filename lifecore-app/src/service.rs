@@ -74,7 +74,7 @@ pub enum EntryKind {
 pub struct EntryListRequest {
     #[serde(default, deserialize_with = "present")]
     pub kind: Option<EntryKind>,
-    #[serde(default, rename = "type", deserialize_with = "present")]
+    #[serde(default, deserialize_with = "present")]
     pub ty_name: Option<String>,
     #[serde(default)]
     pub currentness: Currentness,
@@ -462,7 +462,7 @@ impl Service {
             .iter()
             .map(|config| Change::AddAnalyzer {
                 name: config.name.clone(),
-                config: config.config.clone(),
+                configuration: config.configuration.clone(),
             })
             .collect::<Vec<_>>();
         // The initial suite is added through the ordinary checked path, so
@@ -593,7 +593,7 @@ impl Service {
         let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
         let changes = [Change::AddAnalyzer {
             name: request.name,
-            config: request.configuration,
+            configuration: request.configuration,
         }];
         let (checked, context) = self.prepare(locked.snapshot(), None, &changes, inputs)?;
         let (report, changed) = commit(locked.snapshot_mut(), checked, context)?;

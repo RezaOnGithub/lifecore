@@ -52,7 +52,7 @@ fn rpc_executes_exactly_one_line_and_prints_one_compact_response() {
     let scratch = Scratch::new();
     scratch.service().init(&[]).unwrap();
     let first = r#"{"jsonrpc":"2.0","id":1,"method":"plan_id.mint","params":{}}"#;
-    let second = r#"{"jsonrpc":"2.0","id":2,"method":"proposal.apply","params":{"proposal":{"entries":[{"name":"n","kind":"node","type":"T","payload":{}}]}}}"#;
+    let second = r#"{"jsonrpc":"2.0","id":2,"method":"proposal.apply","params":{"proposal":{"entries":[{"name":"n","kind":"node","ty_name":"T","payload":{}}]}}}"#;
     let before = fs::read(scratch.0.join("LifeCoreState.json")).unwrap();
     let (success, output, consumed) =
         call(&format!("{first}\n{second}\n"), || Ok(scratch.service()));

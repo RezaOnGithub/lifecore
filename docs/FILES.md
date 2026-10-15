@@ -194,7 +194,7 @@ plan_id = "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbb
 [[entries]]
 name = "task_done"
 kind = "node"
-type = "Task"
+ty_name = "Task"
 predecessor = { existing = { origin = "11111111-1111-4111-8111-111111111111", position = "42" } }
 intent = "revise"
 payload = { title = "Write proposal", status = "done" }
@@ -202,13 +202,13 @@ payload = { title = "Write proposal", status = "done" }
 [[entries]]
 name = "explanation"
 kind = "node"
-type = "Note"
+ty_name = "Note"
 payload = { title = "Why we changed direction", body = "The original approach depended on unavailable equipment." }
 
 [[entries]]
 name = "explanation_link"
 kind = "edge"
-type = "Explains"
+ty_name = "Explains"
 from = { added = "explanation" }
 to = { added = "task_done" }
 ```
@@ -265,7 +265,7 @@ A one-off addition can omit the token:
 [[entries]]
 name = "task"
 kind = "node"
-type = "Task"
+ty_name = "Task"
 payload = { title = "Buy groceries", status = "open" }
 ```
 
@@ -294,7 +294,7 @@ context are a separate [backlogged](BACKLOG.md#14-destinations) authoring concer
 
 ### 2.4 Node and edge operations
 
-A node entry requires `name`, `kind = "node"`, `type`, and complete `payload`.
+A node entry requires `name`, `kind = "node"`, `ty_name`, and complete `payload`.
 It may also have `predecessor` and `intent`:
 
 - No predecessor creates a root, and `intent` must be absent.
@@ -308,9 +308,9 @@ Omitting a field removes it from the successor payload, subject to schema rules.
 Patch/default/connection-preservation helpers must expand to complete nodes and
 explicit edges before checking. The format has no implicit reconnection.
 
-An edge requires `name`, `kind = "edge"`, `type`, `from`, and `to`, with no payload
+An edge requires `name`, `kind = "edge"`, `ty_name`, `from`, and `to`, with no payload
 or predecessor. Endpoint permissions and freshness are checked at its position.
-Type declarations are ordinary node proposals with `type = "Type"` and no
+Type declarations are ordinary node proposals with `ty_name = "Type"` and no
 bootstrap exemption. No delete, retarget, or in-place update operation exists.
 Proposals do not change the analyzer suite; that is the deliberate `add-analyzer`
 operation in [INTERFACES](INTERFACES.md#2-cli-surface).
@@ -321,7 +321,7 @@ Explicit duplicates fail rather than being silently skipped.
 Several types describe "an entry" at different stages. They differ in how they
 refer to other entries and in what they may contain, so none can stand in for
 another. All of them serialize in the vocabulary of
-[section 2.1](#21-syntax-and-values): `kind` (`node` or `edge`), `type`, and
+[section 2.1](#21-syntax-and-values): `kind` (`node` or `edge`), `ty_name`, and
 either `predecessor` (omitted for a root), `intent` where an operation carries
 one, and `payload`, or `from` and `to`; references are `existing` or `added`.
 They differ only in the members of their stage, shown below.
@@ -335,7 +335,7 @@ They differ only in the members of their stage, shown below.
 
 ### 2.6 Type declaration payloads
 
-A type declaration is an ordinary node proposal with `type = "Type"`
+A type declaration is an ordinary node proposal with `ty_name = "Type"`
 ([SPEC §6](SPEC.md#6-type-declarations)). Its payload has five fields; all but
 `name` are optional and empty when omitted:
 
@@ -360,7 +360,7 @@ requires:
 [[entries]]
 name = "task_type"
 kind = "node"
-type = "Type"
+ty_name = "Type"
 
 [entries.payload]
 name = "Task"

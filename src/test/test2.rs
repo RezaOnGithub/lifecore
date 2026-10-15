@@ -16,12 +16,12 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-fn node(name: &str, parent: Option<crate::transaction::Reference>) -> Change {
-    Change::Entry(EntryChange::AddNode(NewNode {
+fn node(name: &str, predecessor: Option<crate::transaction::Reference>) -> Change {
+    Change::Entry(EntryChange::Node(NewNode {
         ty_name: name.into(),
-        body: Body::default(),
-        parent,
-        intent: parent.map(|_| RevisionIntent::Branch),
+        payload: Body::default(),
+        predecessor,
+        intent: predecessor.map(|_| RevisionIntent::Branch),
     }))
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
@@ -63,14 +63,14 @@ fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
         &[
             node("A", None),
             node("B", None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
             })),
             node("A2", Some(Added(0))),
             node("A3", Some(Added(0))),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(1),
@@ -87,7 +87,7 @@ fn revision_split_and_exact_edges_are_interpreted_in_each_view() {
     let middle = view.prefix(4).unwrap();
     assert_eq!(middle.is_stale(ids[2]), Some(true));
     assert_eq!(middle.fresh_edges().count(), 0);
-    assert_eq!(middle.node(ids[3]).unwrap().parent, Some(ids[0]));
+    assert_eq!(middle.node(ids[3]).unwrap().predecessor, Some(ids[0]));
     assert_eq!(
         view.fresh_successors(ids[0])
             .map(|n| n.id)
@@ -113,7 +113,7 @@ fn ancestry_excludes_self_and_preserves_roots_and_current_descendants_in_each_pr
         &[
             node("A", None),
             node("B", None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
@@ -222,7 +222,7 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
         vec![node("A", None), node("A", None)],
         vec![
             node("A", None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(0),
@@ -232,7 +232,7 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
         vec![
             node("A", None),
             node("B", None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
@@ -243,7 +243,7 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
             node("A", None),
             node("B", None),
             node("A2", Some(Added(0))),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
@@ -252,12 +252,12 @@ fn duplicate_and_invalid_reference_rules_leave_the_published_graph_unchanged() {
         vec![
             node("A", None),
             node("B", None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
             })),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "x".into(),
                 to: Added(1),
@@ -883,10 +883,10 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
         .to_string()
         .replace('}', r#","a":"y"}"#);
     let node = format!(
-        r#"{{"id":{{"origin":"{origin}","position":"0"}},"type":"T","payload":{duplicated}}}"#
+        r#"{{"id":{{"origin":"{origin}","position":"0"}},"ty_name":"T","payload":{duplicated}}}"#
     );
-    let new_node = format!(r#"{{"type":"T","payload":{duplicated}}}"#);
-    let entry_change = format!(r#"{{"kind":"node","type":"T","payload":{duplicated}}}"#);
+    let new_node = format!(r#"{{"ty_name":"T","payload":{duplicated}}}"#);
+    let entry_change = format!(r#"{{"kind":"node","ty_name":"T","payload":{duplicated}}}"#);
     let entry = node.replacen('{', r#"{"kind":"node","#, 1);
     let graph = format!(r#"{{"id":"{origin}","entries":[{entry}],"suite":[]}}"#);
     assert!(serde_json::from_str::<Body>(&duplicated).is_err());
@@ -987,7 +987,7 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
 // The scan `View::is_stale` used before the staleness index, kept as its reference.
 fn scanned_is_stale(view: View<'_>, id: EntryId) -> Option<bool> {
     match view.get(id)? {
-    Entry::Node(_) => Some(view.nodes().any(|n| n.parent == Some(id))),
+    Entry::Node(_) => Some(view.nodes().any(|n| n.predecessor == Some(id))),
     Entry::Edge(e) => Some(scanned_is_stale(view, e.from)? || scanned_is_stale(view, e.to)?),
     }
 }
@@ -1021,7 +1021,7 @@ fn assert_staleness_matches_scan(view: View<'_>, probes: &[EntryId]) {
 }
 
 fn edge(from: crate::transaction::Reference, to: crate::transaction::Reference) -> Change {
-    Change::Entry(EntryChange::AddEdge(NewEdge {
+    Change::Entry(EntryChange::Edge(NewEdge {
         from,
         ty_name: "link".into(),
         to,
@@ -1189,8 +1189,8 @@ fn a_rejected_entry_is_never_indexed() {
                 position: 14,
             },
             ty_name: "Invalid".into(),
-            body: Body::new(),
-            parent: Some(parent),
+            payload: Body::new(),
+            predecessor: Some(parent),
         });
         assert!(matches!(
             staged.stage(entry),
@@ -1209,8 +1209,8 @@ fn a_rejected_entry_is_never_indexed() {
                 position: 14,
             },
             ty_name: "Valid".into(),
-            body: Body::new(),
-            parent: Some(ids[10]),
+            payload: Body::new(),
+            predecessor: Some(ids[10]),
         }))
         .unwrap();
     assert_eq!(staged.staleness()[10], Some(14));
@@ -1261,7 +1261,7 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
 }
 
 // Stored entries and core operations use the proposal vocabulary: `kind`,
-// `type`, `predecessor`, `payload`, and lowercase `existing`/`added`
+// `ty_name`, `predecessor`, `payload`, and lowercase `existing`/`added`
 // references. A root has no `predecessor` member, and null is not accepted
 // as its absence anywhere.
 #[test]
@@ -1271,7 +1271,7 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     let child = append(&mut graph, &[node("A", Some(Existing(ids[0])))])[0];
     let edge = append(
         &mut graph,
-        &[Change::Entry(EntryChange::AddEdge(NewEdge {
+        &[Change::Entry(EntryChange::Edge(NewEdge {
             ty_name: "Rel".into(),
             from: Existing(child),
             to: Existing(ids[1]),
@@ -1282,26 +1282,26 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     assert_eq!(
         stored["entries"],
         serde_json::json!([
-            {"kind": "node", "id": id(ids[0]), "type": "A", "payload": {}},
-            {"kind": "node", "id": id(ids[1]), "type": "B", "payload": {}},
-            {"kind": "node", "id": id(child), "type": "A", "predecessor": id(ids[0]), "payload": {}},
-            {"kind": "edge", "id": id(edge), "type": "Rel", "from": id(child), "to": id(ids[1])},
+            {"kind": "node", "id": id(ids[0]), "ty_name": "A", "payload": {}},
+            {"kind": "node", "id": id(ids[1]), "ty_name": "B", "payload": {}},
+            {"kind": "node", "id": id(child), "ty_name": "A", "predecessor": id(ids[0]), "payload": {}},
+            {"kind": "edge", "id": id(edge), "ty_name": "Rel", "from": id(child), "to": id(ids[1])},
         ])
     );
     let changes = [
-        EntryChange::AddNode(NewNode {
+        EntryChange::Node(NewNode {
             ty_name: "A".into(),
-            body: Body::from([("n".into(), Payload::Integer(i64::MAX))]),
-            parent: Some(Existing(child)),
+            payload: Body::from([("n".into(), Payload::Integer(i64::MAX))]),
+            predecessor: Some(Existing(child)),
             intent: Some(RevisionIntent::Revise),
         }),
-        EntryChange::AddNode(NewNode {
+        EntryChange::Node(NewNode {
             ty_name: "C".into(),
-            body: Body::new(),
-            parent: None,
+            payload: Body::new(),
+            predecessor: None,
             intent: None,
         }),
-        EntryChange::AddEdge(NewEdge {
+        EntryChange::Edge(NewEdge {
             ty_name: "Rel".into(),
             from: Added(0),
             to: Added(1),
@@ -1311,10 +1311,10 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     assert_eq!(
         encoded,
         serde_json::json!([
-            {"kind": "node", "type": "A", "predecessor": {"existing": id(child)}, "intent": "revise",
+            {"kind": "node", "ty_name": "A", "predecessor": {"existing": id(child)}, "intent": "revise",
                 "payload": {"n": {"kind": "integer", "value": "9223372036854775807"}}},
-            {"kind": "node", "type": "C", "payload": {}},
-            {"kind": "edge", "type": "Rel", "from": {"added": 0}, "to": {"added": 1}},
+            {"kind": "node", "ty_name": "C", "payload": {}},
+            {"kind": "edge", "ty_name": "Rel", "from": {"added": 0}, "to": {"added": 1}},
         ])
     );
     assert_eq!(
@@ -1323,7 +1323,7 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     );
     let suite = crate::analysis::SuiteConfig(vec![crate::analysis::Config {
         name: "Type_Check".into(),
-        config: "{}".into(),
+        configuration: "{}".into(),
     }]);
     assert_eq!(
         serde_json::to_value(&suite).unwrap(),
@@ -1344,9 +1344,10 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     assert_eq!(nulls, [true, true, true]);
     for rejected in [
         serde_json::json!({"Node": {"id": id(ids[0]), "ty_name": "A", "body": {}, "parent": null}}),
-        serde_json::json!({"kind": "node", "id": id(ids[0]), "type": "A", "payload": {}, "from": id(ids[1])}),
-        serde_json::json!({"kind": "edge", "id": id(edge), "type": "Rel", "from": id(child), "to": id(ids[1]), "payload": {}}),
-        serde_json::json!({"kind": "Node", "id": id(ids[0]), "type": "A", "payload": {}}),
+        serde_json::json!({"kind": "node", "id": id(ids[0]), "ty_name": "A", "payload": {}, "from": id(ids[1])}),
+        serde_json::json!({"kind": "edge", "id": id(edge), "ty_name": "Rel", "from": id(child), "to": id(ids[1]), "payload": {}}),
+        serde_json::json!({"kind": "Node", "id": id(ids[0]), "ty_name": "A", "payload": {}}),
+        serde_json::json!({"kind": "node", "id": id(ids[0]), "type": "A", "payload": {}}),
     ] {
         assert!(
             serde_json::from_value::<Entry>(rejected.clone()).is_err(),
@@ -1355,8 +1356,9 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     }
     for rejected in [
         serde_json::json!({"AddNode": {"ty_name": "A", "body": {}, "parent": null, "intent": null}}),
-        serde_json::json!({"kind": "edge", "type": "Rel", "from": {"Added": 0}, "to": {"added": 1}}),
-        serde_json::json!({"kind": "edge", "type": "Rel", "from": {"added": "0"}, "to": {"added": 1}}),
+        serde_json::json!({"kind": "edge", "ty_name": "Rel", "from": {"Added": 0}, "to": {"added": 1}}),
+        serde_json::json!({"kind": "edge", "ty_name": "Rel", "from": {"added": "0"}, "to": {"added": 1}}),
+        serde_json::json!({"kind": "edge", "type": "Rel", "from": {"added": 0}, "to": {"added": 1}}),
     ] {
         assert!(
             serde_json::from_value::<EntryChange>(rejected.clone()).is_err(),

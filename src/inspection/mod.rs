@@ -120,13 +120,15 @@ impl<'a> View<'a> {
             selection.ty_name.is_none_or(|name| name == node.ty_name)
                 && selection.currentness.includes(self, node.id)
                 && selection.fields.iter().all(|filter| match filter {
-                FieldFilter::Present(name) => node.body.contains_key(*name),
-                FieldFilter::Absent(name) => !node.body.contains_key(*name),
-                FieldFilter::Equal(name, value) => node.body.get(*name) == Some(*value),
+                FieldFilter::Present(name) => node.payload.contains_key(*name),
+                FieldFilter::Absent(name) => !node.payload.contains_key(*name),
+                FieldFilter::Equal(name, value) => node.payload.get(*name) == Some(*value),
                 })
-                && selection
-                    .text
-                    .is_none_or(|text| node.body.values().any(|value| contains_text(value, text)))
+                && selection.text.is_none_or(|text| {
+                    node.payload
+                        .values()
+                        .any(|value| contains_text(value, text))
+                })
         })
     }
 
@@ -234,7 +236,7 @@ impl<'a> View<'a> {
                 "@{} {}\n{}",
                 node.id.position(),
                 node.ty_name,
-                serde_json::to_string(&node.body).expect("payload JSON")
+                serde_json::to_string(&node.payload).expect("payload JSON")
             );
             let color = if self.is_stale(node.id) == Some(true) {
                 "gray"
@@ -250,11 +252,11 @@ impl<'a> View<'a> {
             .unwrap();
         }
         for node in self.nodes() {
-            if let Some(parent) = node.parent {
+            if let Some(predecessor) = node.predecessor {
                 writeln!(
                     dot,
                     "  n{} -> n{} [label=\"revision\", style=dashed, color=blue];",
-                    parent.position(),
+                    predecessor.position(),
                     node.id.position()
                 )
                 .unwrap();

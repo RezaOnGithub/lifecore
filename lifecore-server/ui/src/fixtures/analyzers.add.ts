@@ -129,7 +129,7 @@ export const response = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 }
               ],
               "focus": {
@@ -196,7 +196,7 @@ export const response = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 },
                 {
                   "from": {
@@ -209,7 +209,7 @@ export const response = {
                   "to": {
                     "added": 0
                   },
-                  "type": "DependsOn"
+                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {

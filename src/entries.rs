@@ -19,32 +19,26 @@ impl EntryId {
     }
 }
 
-// Entries serialize in the proposal vocabulary (FILES 2.5), so the snapshot,
-// analysis output, RPC results, and change files share one language:
-// `type`, `predecessor` (omitted for a root), and `payload`, tagged by `kind`
-// within `Entry`.
+// Entries serialize under their field names, the proposal vocabulary of FILES
+// 2.5, tagged by `kind` within `Entry`; a root omits `predecessor`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
     pub id: EntryId,
-    #[serde(rename = "type")]
     pub ty_name: String,
     #[serde(
-        rename = "predecessor",
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "present"
     )]
-    pub parent: Option<EntryId>,
-    #[serde(rename = "payload")]
-    pub body: Body,
+    pub predecessor: Option<EntryId>,
+    pub payload: Body,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
     pub id: EntryId,
-    #[serde(rename = "type")]
     pub ty_name: String,
     pub from: EntryId,
     pub to: EntryId,

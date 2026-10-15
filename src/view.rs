@@ -124,13 +124,13 @@ impl<'a> View<'a> {
         self.edges().filter(move |e| e.from == id || e.to == id)
     }
     pub fn children(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
-        self.nodes().filter(move |n| n.parent == Some(id))
+        self.nodes().filter(move |n| n.predecessor == Some(id))
     }
     // Roots and current endpoints need an inclusive walk; public ancestry starts
     // at the parent so a node is never its own ancestor.
     fn lineage(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         std::iter::successors(self.node(id), move |node| {
-            node.parent.and_then(|id| self.node(id))
+            node.predecessor.and_then(|id| self.node(id))
         })
     }
     pub fn ancestors(self, id: EntryId) -> impl Iterator<Item = &'a Node> {

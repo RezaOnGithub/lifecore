@@ -58,7 +58,7 @@ A node has the following logical fields:
 ```text
 Node:
     id
-    type_name: string
+    ty_name: string
     payload: map<string, value>
     predecessor: node ID or absent
 ```
@@ -90,7 +90,7 @@ An edge has the following logical fields:
 ```text
 Edge:
     id
-    type_name: string
+    ty_name: string
     from: node ID
     to: node ID
 ```
@@ -157,7 +157,7 @@ historical edges must distinguish them from current edges explicitly.
 
 ## 6. Type declarations
 
-A type declaration is a node whose `type_name` is the reserved name `Type`. Its
+A type declaration is a node whose `ty_name` is the reserved name `Type`. Its
 payload describes:
 
 ```text

@@ -80,7 +80,7 @@ fn service(state: StatePath) -> Service {
 fn typecheck() -> Vec<Config> {
     vec![Config {
         name: TypeCheckFactory::name().into(),
-        config: "{}".into(),
+        configuration: "{}".into(),
     }]
 }
 
@@ -112,7 +112,7 @@ fn request(proposal: Proposal) -> ProposalRequest {
 }
 
 fn task(name: &str, title: &str) -> Value {
-    json!({"name": name, "kind": "node", "type": "Task",
+    json!({"name": name, "kind": "node", "ty_name": "Task",
         "payload": {"title": title, "notes": "n"}})
 }
 
@@ -122,10 +122,10 @@ fn populated(scratch: &Scratch) -> Vec<EntryId> {
     service.init(&typecheck()).unwrap();
     let applied = service
         .apply(request(proposal(json!([
-            {"name": "task_type", "kind": "node", "type": "Type", "payload": task_type()},
+            {"name": "task_type", "kind": "node", "ty_name": "Type", "payload": task_type()},
             task("a", "A"),
             task("b", "B"),
-            {"name": "a_b", "kind": "edge", "type": "DependsOn",
+            {"name": "a_b", "kind": "edge", "ty_name": "DependsOn",
                 "from": {"added": "a"}, "to": {"added": "b"}},
         ]))))
         .unwrap();
@@ -144,14 +144,14 @@ fn existing(id: EntryId) -> Value {
 const FILE_JSON: &str = r#"{
   "plan_id": "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   "entries": [
-    {"name": "task_done", "kind": "node", "type": "Task", "intent": "revise",
+    {"name": "task_done", "kind": "node", "ty_name": "Task", "intent": "revise",
      "predecessor": {"existing": {"origin": "11111111-1111-4111-8111-111111111111", "position": "42"}},
      "payload": {"title": "Write proposal", "status": "done", "priority": 9223372036854775807,
        "deadline": {"kind": "timestamp", "value": "2026-09-30T17:00:00.000000001Z"},
        "tags": [], "details": {"kind": "record", "value": {"kind": "integer", "value": "1"}},
        "rows": [{"kind": "record", "value": {}}, [], -9223372036854775808],
        "done": {"kind": "boolean", "value": true}}},
-    {"name": "explanation_link", "kind": "edge", "type": "Explains",
+    {"name": "explanation_link", "kind": "edge", "ty_name": "Explains",
      "from": {"added": "task_done"}, "to": {"added": "task_done"}}
   ]
 }"#;
@@ -162,7 +162,7 @@ plan_id = "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbb
 [[entries]]
 name = "task_done"
 kind = "node"
-type = "Task"
+ty_name = "Task"
 predecessor = { existing = { origin = "11111111-1111-4111-8111-111111111111", position = "42" } }
 intent = "revise"
 
@@ -179,7 +179,7 @@ done = { kind = "boolean", value = true }
 [[entries]]
 kind = "edge"
 name = "explanation_link"
-type = "Explains"
+ty_name = "Explains"
 from = { added = "task_done" }
 to = { added = "task_done" }
 "#;
@@ -259,23 +259,25 @@ fn acknowledges_and_plan_ids_are_preserved_across_formats() {
 fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
     let toml_cases = [
         // A native TOML datetime is not timestamp payload syntax.
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = 2026-09-30T17:00:00Z }\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 9223372036854775808 }\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 1.5 }\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = { kind = \"integer\", value = 1 } }\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = { kind = \"float\", value = \"1\" } }\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\ncolor = \"red\"\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\n",
-        "[[entries]]\nname = \"a\"\nkind = \"edge\"\ntype = \"T\"\nfrom = { added = \"x\" }\nto = { added = \"y\" }\npayload = {}\n",
-        "[[entries]]\nname = \"a\"\nkind = \"delete\"\ntype = \"T\"\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\nintent = \"replace\"\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = { at = 2026-09-30T17:00:00Z }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = { n = 9223372036854775808 }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = { n = 1.5 }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = { n = { kind = \"integer\", value = 1 } }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = { n = { kind = \"float\", value = \"1\" } }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = {}\ncolor = \"red\"\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\n",
+        "[[entries]]\nname = \"a\"\nkind = \"edge\"\nty_name = \"T\"\nfrom = { added = \"x\" }\nto = { added = \"y\" }\npayload = {}\n",
+        "[[entries]]\nname = \"a\"\nkind = \"delete\"\nty_name = \"T\"\n",
+        // The entry type name is `ty_name`; `type` is an unknown field.
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = {}\nintent = \"replace\"\n",
         "",
         "entries = []\ndatabase = \"x\"\n",
         "plan_id = \"lc2:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\nentries = []\n",
         "plan_id = \"lc1:AAAAAAAA-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\nentries = []\n",
         "plan_id = \"lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\"\nentries = []\n",
         "plan_id = \"\"\nentries = []\n",
-        "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {}\npredecessor = { existing = { origin = \"11111111-1111-4111-8111-111111111111\", position = 42 } }\n",
+        "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = {}\npredecessor = { existing = { origin = \"11111111-1111-4111-8111-111111111111\", position = 42 } }\n",
     ];
     for text in toml_cases {
         let error = proposal::decode(text, Format::Toml).unwrap_err();
@@ -296,7 +298,7 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
         );
     }
     // Plain timestamp-like and digit strings remain text.
-    let text = "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = \"2026-09-30T17:00:00Z\", n = \"42\" }\n";
+    let text = "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = { at = \"2026-09-30T17:00:00Z\", n = \"42\" }\n";
     let decoded = proposal::decode(text, Format::Toml).unwrap();
     let proposal::ProposalEntry::Node { payload, .. } = &decoded.entries[0] else {
         panic!("expected a node")
@@ -306,11 +308,11 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
     let error = proposal::decode("{\n \"entries\": [}", Format::Json).unwrap_err();
     assert_eq!(error.line, Some(2));
     for text in [
-        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":18446744073709551615}}]}"#,
-        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":null}}]}"#,
-        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":1,"n":2}}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","ty_name":"T","payload":{"n":18446744073709551615}}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","ty_name":"T","payload":{"n":null}}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","ty_name":"T","payload":{"n":1,"n":2}}]}"#,
         r#"{"plan_id":null,"entries":[]}"#,
-        r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{},"predecessor":null}]}"#,
+        r#"{"entries":[{"name":"a","kind":"node","ty_name":"T","payload":{},"predecessor":null}]}"#,
     ] {
         assert!(
             proposal::decode(text, Format::Json).is_err(),
@@ -322,7 +324,9 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
 #[test]
 fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
     let entry = |payload: &str| {
-        format!("[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = {payload}\n")
+        format!(
+            "[[entries]]\nname = \"a\"\nkind = \"node\"\nty_name = \"T\"\npayload = {payload}\n"
+        )
     };
     let datetime = "native TOML";
     let zero = "-0 is not";
@@ -392,7 +396,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
     // JSON rejects `-0` too; serde_json reads it as a float.
     assert!(
         proposal::decode(
-            r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":-0}}]}"#,
+            r#"{"entries":[{"name":"a","kind":"node","ty_name":"T","payload":{"n":-0}}]}"#,
             Format::Json
         )
         .is_err()
@@ -401,7 +405,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
 
 #[test]
 fn json_decode_errors_carry_a_path_and_position() {
-    let text = "{\"entries\": [\n  {\"name\": \"a\", \"kind\": \"node\", \"type\": \"T\",\n   \"payload\": {\"n\": 1, \"n\": 2}}]}";
+    let text = "{\"entries\": [\n  {\"name\": \"a\", \"kind\": \"node\", \"ty_name\": \"T\",\n   \"payload\": {\"n\": 1, \"n\": 2}}]}";
     let error = proposal::decode(text, Format::Json).unwrap_err();
     assert_eq!(error.path.as_deref(), Some("entries[0].payload"));
     assert_eq!(error.line, Some(3));
@@ -423,19 +427,19 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
     let snapshot = storage::read(&scratch.state()).unwrap();
     let base = snapshot.graph.view();
     let lowered = proposal(json!([
-        {"name": "a2", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+        {"name": "a2", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]),
             "intent": "revise", "payload": {"title": "A2"}},
-        {"name": "link", "kind": "edge", "type": "DependsOn",
+        {"name": "link", "kind": "edge", "ty_name": "DependsOn",
             "from": {"added": "a2"}, "to": existing(ids[2])},
     ]))
     .lower(base)
     .unwrap();
-    let EntryChange::AddNode(node) = &lowered[0] else {
+    let EntryChange::Node(node) = &lowered[0] else {
         panic!("expected a node")
     };
-    assert_eq!(node.parent, Some(Reference::Existing(ids[1])));
+    assert_eq!(node.predecessor, Some(Reference::Existing(ids[1])));
     assert_eq!(node.intent, Some(RevisionIntent::Revise));
-    let EntryChange::AddEdge(edge) = &lowered[1] else {
+    let EntryChange::Edge(edge) = &lowered[1] else {
         panic!("expected an edge")
     };
     assert_eq!(
@@ -447,13 +451,13 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
     assert_eq!(
         lowered,
         vec![
-            EntryChange::AddNode(NewNode {
+            EntryChange::Node(NewNode {
                 ty_name: "Task".into(),
-                body: Body::from([("title".into(), "A2".into())]),
-                parent: Some(Reference::Existing(ids[1])),
+                payload: Body::from([("title".into(), "A2".into())]),
+                predecessor: Some(Reference::Existing(ids[1])),
                 intent: Some(RevisionIntent::Revise),
             }),
-            EntryChange::AddEdge(NewEdge {
+            EntryChange::Edge(NewEdge {
                 from: Reference::Added(0),
                 ty_name: "DependsOn".into(),
                 to: Reference::Existing(ids[2]),
@@ -461,14 +465,14 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
         ]
     );
     let node = |name: &str, predecessor: Option<Value>| {
-        let mut entry = json!({"name": name, "kind": "node", "type": "Task", "payload": {}});
+        let mut entry = json!({"name": name, "kind": "node", "ty_name": "Task", "payload": {}});
         if let Some(predecessor) = predecessor {
             entry["predecessor"] = predecessor;
             entry["intent"] = "branch".into();
         }
         entry
     };
-    let edge = |from: Value, to: Value| json!({"name": "e", "kind": "edge", "type": "DependsOn", "from": from, "to": to});
+    let edge = |from: Value, to: Value| json!({"name": "e", "kind": "edge", "ty_name": "DependsOn", "from": from, "to": to});
     let mut missing = serde_json::to_value(ids[1]).unwrap();
     missing["position"] = "999".into();
     let cases = [
@@ -510,7 +514,7 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
     let (location, error) = proposal(json!([
         node("n", None),
         node("m", None),
-        {"name": "e", "kind": "edge", "type": "DependsOn", "from": {"added": "n"}, "to": {"added": "m"}},
+        {"name": "e", "kind": "edge", "ty_name": "DependsOn", "from": {"added": "n"}, "to": {"added": "m"}},
         node("child", Some(json!({"added": "e"}))),
     ]))
     .lower(base)
@@ -582,7 +586,7 @@ fn init_supports_both_suites_and_never_clobbers() {
     assert!(matches!(
         bare.service().init(&[Config {
             name: "Missing".into(),
-            config: "{}".into()
+            configuration: "{}".into()
         }]),
         Err(AppError::DatabaseExists { .. })
     ));
@@ -590,7 +594,7 @@ fn init_supports_both_suites_and_never_clobbers() {
     assert!(matches!(
         other.service().init(&[Config {
             name: TypeCheckFactory::name().into(),
-            config: "not json".into()
+            configuration: "not json".into()
         }]),
         Err(AppError::Analyzer(_))
     ));
@@ -627,7 +631,8 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     let scratch = Scratch::new();
     let ids = populated(&scratch);
     let service = scratch.service();
-    let line = r#"{"jsonrpc":"2.0","id":"list","method":"entries.list","params":{"type":"Task"}}"#;
+    let line =
+        r#"{"jsonrpc":"2.0","id":"list","method":"entries.list","params":{"ty_name":"Task"}}"#;
     let response = serde_json::to_value(rpc::handle(&service, line)).unwrap();
     assert_eq!(response["id"], "list");
     let entries = response["result"]["entries"].as_array().unwrap();
@@ -641,9 +646,9 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     let before = service.describe(NoParams {}).unwrap();
     let applied = service
         .apply(request(proposal(json!([
-            {"name": "a2", "kind": "node", "type": "Task", "predecessor": existing(a),
+            {"name": "a2", "kind": "node", "ty_name": "Task", "predecessor": existing(a),
                 "intent": "revise", "payload": {"title": "A", "status": "done", "notes": "n"}},
-            {"name": "a2_b", "kind": "edge", "type": "DependsOn",
+            {"name": "a2_b", "kind": "edge", "ty_name": "DependsOn",
                 "from": {"added": "a2"}, "to": existing(ids[2])},
         ]))))
         .unwrap();
@@ -664,14 +669,19 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
         })
         .unwrap();
     let EntryRecord {
-        entry: Entry::Node(Node { parent, body, .. }),
+        entry:
+            Entry::Node(Node {
+                predecessor,
+                payload,
+                ..
+            }),
         current,
     } = reloaded.entry
     else {
         panic!("expected a node")
     };
-    assert_eq!(parent, Some(a));
-    assert_eq!(body["status"], Payload::Text("done".into()));
+    assert_eq!(predecessor, Some(a));
+    assert_eq!(payload["status"], Payload::Text("done".into()));
     assert!(current);
     let old = service.get_entry(EntryGetRequest { id: a }).unwrap();
     assert!(matches!(
@@ -699,7 +709,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     let stored = scratch.bytes();
     let preview = service
         .check(request(proposal(json!([
-            {"name": "a3", "kind": "node", "type": "Task",
+            {"name": "a3", "kind": "node", "ty_name": "Task",
                 "predecessor": existing(applied.report.operations[0].entry),
                 "intent": "revise", "payload": {"title": "A3", "notes": "n"}},
         ]))))
@@ -724,9 +734,9 @@ fn revision_intent_is_enforced_at_intermediate_prefixes() {
     let stored = scratch.bytes();
     let revise_twice = |second: &str| {
         proposal(json!([
-            {"name": "first", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+            {"name": "first", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]),
                 "intent": "revise", "payload": {"title": "1", "notes": "n"}},
-            {"name": "second", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+            {"name": "second", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]),
                 "intent": second, "payload": {"title": "2", "notes": "n"}},
         ]))
     };
@@ -752,11 +762,11 @@ fn revision_intent_is_enforced_at_intermediate_prefixes() {
     assert_eq!(scratch.bytes(), stored);
     for (entry, message) in [
         (
-            json!({"name": "r", "kind": "node", "type": "Task", "intent": "revise", "payload": {"title": "r", "notes": "n"}}),
+            json!({"name": "r", "kind": "node", "ty_name": "Task", "intent": "revise", "payload": {"title": "r", "notes": "n"}}),
             "root",
         ),
         (
-            json!({"name": "r", "kind": "node", "type": "Task", "predecessor": existing(ids[1]), "payload": {"title": "r", "notes": "n"}}),
+            json!({"name": "r", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]), "payload": {"title": "r", "notes": "n"}}),
             "without",
         ),
     ] {
@@ -828,7 +838,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     // Without its encouraged notes, the divergent task draws one warning.
     let divergent = service
         .apply(request(proposal(json!([
-            {"name": "x", "kind": "node", "type": "Task", "payload": {"title": "X"}}
+            {"name": "x", "kind": "node", "ty_name": "Task", "payload": {"title": "X"}}
         ]))))
         .unwrap();
     assert_eq!(
@@ -890,7 +900,7 @@ const DECLARATION_TOML: &str = r#"
 [[entries]]
 name = "task_type"
 kind = "node"
-type = "Type"
+ty_name = "Type"
 
 [entries.payload]
 name = "Task"
@@ -946,7 +956,7 @@ fn a_hand_written_toml_declaration_applies_and_typechecks_nodes() {
     service.apply(request(declaration)).unwrap();
     let task = |payload: Value| {
         request(proposal(
-            json!([{"name": "t", "kind": "node", "type": "Task", "payload": payload}]),
+            json!([{"name": "t", "kind": "node", "ty_name": "Task", "payload": payload}]),
         ))
     };
     let passing = service
@@ -992,9 +1002,9 @@ fn rejected_proposals_report_full_context_and_store_nothing() {
     // The second task lacks its mandatory title; the first lacks encouraged notes.
     let rejected = || {
         request(proposal(json!([
-            {"name": "ok", "kind": "node", "type": "Task", "payload": {"title": "ok"}},
-            {"name": "bad", "kind": "node", "type": "Task", "payload": {"notes": "n"}},
-            {"name": "link", "kind": "edge", "type": "DependsOn",
+            {"name": "ok", "kind": "node", "ty_name": "Task", "payload": {"title": "ok"}},
+            {"name": "bad", "kind": "node", "ty_name": "Task", "payload": {"notes": "n"}},
+            {"name": "link", "kind": "edge", "ty_name": "DependsOn",
                 "from": {"added": "ok"}, "to": existing(ids[2])},
         ])))
     };
@@ -1051,9 +1061,9 @@ fn add_analyzer_replays_history_and_rejects_an_old_cycle() {
     // Close a cycle, then revise B so the current graph is acyclic again.
     service
         .apply(request(proposal(json!([
-            {"name": "b_a", "kind": "edge", "type": "DependsOn",
+            {"name": "b_a", "kind": "edge", "ty_name": "DependsOn",
                 "from": existing(ids[2]), "to": existing(ids[1])},
-            {"name": "b2", "kind": "node", "type": "Task", "predecessor": existing(ids[2]),
+            {"name": "b2", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[2]),
                 "intent": "revise", "payload": {"title": "B2", "notes": "n"}},
         ]))))
         .unwrap();
@@ -1176,10 +1186,10 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     ]);
     transaction::prepare(
         &snapshot.graph,
-        &[Change::Entry(EntryChange::AddNode(NewNode {
+        &[Change::Entry(EntryChange::Node(NewNode {
             ty_name: "Task".into(),
-            body: held,
-            parent: None,
+            payload: held,
+            predecessor: None,
             intent: None,
         }))],
         &mut runner,
@@ -1326,7 +1336,7 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     else {
         panic!("expected the applied node")
     };
-    assert_eq!(node.body["title"], Payload::Text("C".into()));
+    assert_eq!(node.payload["title"], Payload::Text("C".into()));
 }
 
 #[cfg(unix)]
@@ -1469,7 +1479,7 @@ fn rpc_envelope_rejects_invalid_calls_without_mutation() {
     );
     let response = call(
         &json!({"jsonrpc": "2.0", "id": 2, "method": "proposal.decode",
-            "params": {"text": "[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Task\"\npayload = { big = 9223372036854775807 }\n", "format": "toml"}})
+            "params": {"text": "[[entries]]\nname = \"n\"\nkind = \"node\"\nty_name = \"Task\"\npayload = { big = 9223372036854775807 }\n", "format": "toml"}})
         .to_string(),
     );
     assert_eq!(
@@ -1501,9 +1511,9 @@ fn rpc_proposal_parameters_fail_like_change_files() {
         let line = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
         serde_json::to_value(rpc::handle(&service, &line)).unwrap()
     };
-    let bad = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"n":1.5}}]}"#;
+    let bad = r#"{"entries":[{"name":"a","kind":"node","ty_name":"Task","payload":{"n":1.5}}]}"#;
     // Raw text keeps a repeated payload field visible to the decoder.
-    let repeated = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"title":"x","title":"y"}}]}"#;
+    let repeated = r#"{"entries":[{"name":"a","kind":"node","ty_name":"Task","payload":{"title":"x","title":"y"}}]}"#;
     let file_error = proposal::decode(bad, Format::Json).unwrap_err();
     assert_eq!(file_error.path.as_deref(), Some("entries[0].payload.n"));
     assert!(file_error.line.is_some());
@@ -1560,7 +1570,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
             format!(r#"{{"proposal":{good},"format":"yaml"}}"#),
         ),
         ("entries.list", r#"{"kind":null}"#.into()),
-        ("entries.list", r#"{"type":null}"#.into()),
+        ("entries.list", r#"{"ty_name":null}"#.into()),
         ("entries.list", r#"{"text":null}"#.into()),
         ("entries.list", r#"{"currentness":null}"#.into()),
         (
@@ -1606,17 +1616,17 @@ fn entry_records_are_core_entries_with_currentness_beside_them() {
     let before = list(&service);
     assert_eq!(
         before[1],
-        json!({"kind": "node", "id": id(ids[1]), "type": "Task",
+        json!({"kind": "node", "id": id(ids[1]), "ty_name": "Task",
             "payload": {"title": "A", "notes": "n"}, "current": true})
     );
     assert_eq!(
         before[3],
-        json!({"kind": "edge", "id": id(ids[3]), "type": "DependsOn",
+        json!({"kind": "edge", "id": id(ids[3]), "ty_name": "DependsOn",
             "from": id(ids[1]), "to": id(ids[2]), "current": true})
     );
     let revised = service
         .apply(request(proposal(json!([
-            {"name": "a2", "kind": "node", "type": "Task", "predecessor": existing(ids[1]),
+            {"name": "a2", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]),
                 "intent": "revise", "payload": {"title": "A2", "notes": "n"}},
         ]))))
         .unwrap()
@@ -1628,7 +1638,7 @@ fn entry_records_are_core_entries_with_currentness_beside_them() {
     assert_eq!(after[3]["current"], false);
     assert_eq!(
         after[4],
-        json!({"kind": "node", "id": id(revised), "type": "Task", "predecessor": id(ids[1]),
+        json!({"kind": "node", "id": id(revised), "ty_name": "Task", "predecessor": id(ids[1]),
             "payload": {"title": "A2", "notes": "n"}, "current": true})
     );
     // The same shape decodes back into the record.

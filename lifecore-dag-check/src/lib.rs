@@ -372,8 +372,11 @@ impl DagCheckFactory {
 }
 
 impl AnalyzerFactory for DagCheckFactory {
-    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
-        let parsed = DagCheckConfig::from_json(config).map_err(|error| {
+    fn analyzer_with_config(
+        &mut self,
+        configuration: &str,
+    ) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        let parsed = DagCheckConfig::from_json(configuration).map_err(|error| {
             LifeCoreError::InvalidAnalyzerConfiguration {
                 analyzer_name: Self::name().to_string(),
                 message: error.to_string(),

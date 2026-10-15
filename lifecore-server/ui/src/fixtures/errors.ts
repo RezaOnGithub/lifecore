@@ -418,7 +418,7 @@ export const application = {
                               "position": "1"
                             }
                           },
-                          "type": "Task"
+                          "ty_name": "Task"
                         }
                       ],
                       "focus": {
@@ -485,7 +485,7 @@ export const application = {
                               "position": "1"
                             }
                           },
-                          "type": "Task"
+                          "ty_name": "Task"
                         },
                         {
                           "from": {
@@ -498,7 +498,7 @@ export const application = {
                           "to": {
                             "added": 0
                           },
-                          "type": "DependsOn"
+                          "ty_name": "DependsOn"
                         }
                       ],
                       "focus": {
@@ -764,7 +764,7 @@ export const application = {
                             "position": "1"
                           }
                         },
-                        "type": "Task"
+                        "ty_name": "Task"
                       }
                     ],
                     "focus": {
@@ -831,7 +831,7 @@ export const application = {
                             "position": "1"
                           }
                         },
-                        "type": "Task"
+                        "ty_name": "Task"
                       },
                       {
                         "from": {
@@ -844,7 +844,7 @@ export const application = {
                         "to": {
                           "added": 0
                         },
-                        "type": "DependsOn"
+                        "ty_name": "DependsOn"
                       }
                     ],
                     "focus": {

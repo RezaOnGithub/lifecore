@@ -47,7 +47,7 @@ export const request = {
               "position": "1"
             }
           },
-          "type": "Task"
+          "ty_name": "Task"
         },
         {
           "kind": "node",
@@ -60,7 +60,7 @@ export const request = {
             },
             "title": "Follow up"
           },
-          "type": "Task"
+          "ty_name": "Task"
         },
         {
           "from": {
@@ -71,7 +71,7 @@ export const request = {
           "to": {
             "added": "report_done"
           },
-          "type": "DependsOn"
+          "ty_name": "DependsOn"
         }
       ],
       "plan_id": "lc1:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000004:00000000-0000-4000-8000-000000000008"
@@ -190,7 +190,7 @@ export const response = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 }
               ],
               "focus": {
@@ -257,7 +257,7 @@ export const response = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 },
                 {
                   "from": {
@@ -270,7 +270,7 @@ export const response = {
                   "to": {
                     "added": 0
                   },
-                  "type": "DependsOn"
+                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {
@@ -334,7 +334,7 @@ export const response = {
                       "position": "2"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 }
               ],
               "focus": {
@@ -398,7 +398,7 @@ export const response = {
                       "position": "2"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 },
                 {
                   "from": {
@@ -411,7 +411,7 @@ export const response = {
                   "to": {
                     "added": 0
                   },
-                  "type": "DependsOn"
+                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {
@@ -518,7 +518,7 @@ export const rejectedRequest = {
           "payload": {
             "title": "Stray"
           },
-          "type": "Undeclared"
+          "ty_name": "Undeclared"
         }
       ]
     }
@@ -682,7 +682,7 @@ export const rejectedResponse = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 }
               ],
               "focus": {
@@ -749,7 +749,7 @@ export const rejectedResponse = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 },
                 {
                   "from": {
@@ -762,7 +762,7 @@ export const rejectedResponse = {
                   "to": {
                     "added": 0
                   },
-                  "type": "DependsOn"
+                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {

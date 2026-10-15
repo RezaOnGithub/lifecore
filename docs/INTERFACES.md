@@ -64,7 +64,7 @@ preserve this dependency direction.
 | `lifecore apply FILE` | Decode a JSON/TOML proposal and call shared checked application. |
 | `lifecore plan-id` | Mint a token for the selected current database/base without changing history. |
 | `lifecore export FILE --format json\|toml` | Serialize a proposal document in the chosen format, preserving `plan_id` and `acknowledges`. |
-| `lifecore add-analyzer NAME [CONFIG]` | Append a registered analyzer with its configuration string, default `{}`, to the ordered suite. |
+| `lifecore add-analyzer NAME [CONFIGURATION]` | Append a registered analyzer with its configuration string, default `{}`, to the ordered suite. |
 
 These conveniences call the same operations and use the same data as RPC.
 Collection-specific planning remains backlogged. `init`, `check`, `apply`,
@@ -187,7 +187,7 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | Method | Parameters | Result |
 | --- | --- | --- |
 | `database.describe` | none | `database`, `graph_revision`, current `view`, ordered `suite` |
-| `entries.list` | optional `kind` (`node`/`edge`), `type`, `currentness` (`current` default, `historical`, `all`), `text` (node text search) | `database`, `graph_revision`, `view`, `entries` in append order |
+| `entries.list` | optional `kind` (`node`/`edge`), `ty_name`, `currentness` (`current` default, `historical`, `all`), `text` (node text search) | `database`, `graph_revision`, `view`, `entries` in append order |
 | `entries.get` | `id` (exact `EntryId`) | `view` and `entry` |
 | `plan_id.mint` | none | `plan_id` |
 | `proposal.check` | `proposal`, evaluation inputs | `accepted` and `report`: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |

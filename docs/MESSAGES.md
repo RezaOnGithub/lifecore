@@ -53,7 +53,7 @@ never merges with a prefix observation. A diagnostic whose previous range ended
 more than one prefix ago starts a new observation, which is how a gap is kept.
 
 `AnalysisRunner` constructs all configured analyzers through `AnalyzerFactory`.
-The factory receives the original `Config.config` string unchanged. The runner
+The factory receives the original `Config.configuration` string unchanged. The runner
 builds each `AnalyzerIdentity` from the registered `Config.name`, the analyzer's
 `version()`, and that exact configuration string. Equivalent configuration
 spellings can therefore produce different finding keys.

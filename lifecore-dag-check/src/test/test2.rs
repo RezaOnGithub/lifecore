@@ -23,15 +23,15 @@ fn config() -> DagCheckConfig {
     }
 }
 fn node(name: &str) -> Change {
-    Change::Entry(EntryChange::AddNode(NewNode {
+    Change::Entry(EntryChange::Node(NewNode {
         ty_name: name.into(),
-        body: Body::new(),
-        parent: None,
+        payload: Body::new(),
+        predecessor: None,
         intent: None,
     }))
 }
 fn edge(a: usize, b: usize) -> Change {
-    Change::Entry(EntryChange::AddEdge(NewEdge {
+    Change::Entry(EntryChange::Edge(NewEdge {
         from: Added(a),
         ty_name: "link".into(),
         to: Added(b),
@@ -121,10 +121,10 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
     assert!(check_dag(graph.view(), &filtered).components.is_empty());
     prepare(
         &graph,
-        &[Change::Entry(EntryChange::AddNode(NewNode {
+        &[Change::Entry(EntryChange::Node(NewNode {
             ty_name: "A2".into(),
-            body: Body::new(),
-            parent: Some(Existing(ids[0])),
+            payload: Body::new(),
+            predecessor: Some(Existing(ids[0])),
             intent: Some(RevisionIntent::Branch),
         }))],
         &mut AnalysisRunner::default(),
@@ -191,7 +191,7 @@ fn factory_and_replay_respect_the_supplied_view() {
     runner.register_analyzer_kind(Box::new(factory)).unwrap();
     let suite = SuiteConfig(vec![Config {
         name: DagCheckFactory::name().into(),
-        config: r#"{"on_cycle":"inconsistency"}"#.into(),
+        configuration: r#"{"on_cycle":"inconsistency"}"#.into(),
     }]);
     assert!(
         !runner
@@ -214,15 +214,15 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
         node("B"),
         edge(0, 1),
         edge(1, 0),
-        Change::Entry(EntryChange::AddNode(NewNode {
+        Change::Entry(EntryChange::Node(NewNode {
             ty_name: "A2".into(),
-            body: Body::new(),
-            parent: Some(Added(0)),
+            payload: Body::new(),
+            predecessor: Some(Added(0)),
             intent: Some(RevisionIntent::Revise),
         })),
         Change::AddAnalyzer {
             name: DagCheckFactory::name().into(),
-            config: r#"{"on_cycle":"inconsistency"}"#.into(),
+            configuration: r#"{"on_cycle":"inconsistency"}"#.into(),
         },
     ];
     let checked = prepare(&graph, &changes, &mut runner).unwrap();
@@ -256,7 +256,7 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     let config = |raw: &str| {
         SuiteConfig(vec![Config {
             name: DagCheckFactory::name().into(),
-            config: raw.into(),
+            configuration: raw.into(),
         }])
     };
     let mut runner = AnalysisRunner::default();
@@ -352,10 +352,10 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     assert_ne!(filtered.warnings().next().unwrap().key, key);
     prepare(
         &graph,
-        &[Change::Entry(EntryChange::AddNode(NewNode {
+        &[Change::Entry(EntryChange::Node(NewNode {
             ty_name: "A2".into(),
-            body: Body::new(),
-            parent: Some(Existing(ids[0])),
+            payload: Body::new(),
+            predecessor: Some(Existing(ids[0])),
             intent: Some(RevisionIntent::Branch),
         }))],
         &mut AnalysisRunner::default(),

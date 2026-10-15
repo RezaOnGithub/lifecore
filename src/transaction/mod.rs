@@ -26,29 +26,25 @@ pub enum RevisionIntent {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NewNode {
-    #[serde(rename = "type")]
     pub ty_name: String,
     #[serde(
-        rename = "predecessor",
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "present"
     )]
-    pub parent: Option<Reference>,
+    pub predecessor: Option<Reference>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "present"
     )]
     pub intent: Option<RevisionIntent>,
-    #[serde(rename = "payload")]
-    pub body: Body,
+    pub payload: Body,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NewEdge {
-    #[serde(rename = "type")]
     pub ty_name: String,
     pub from: Reference,
     pub to: Reference,
@@ -58,12 +54,10 @@ pub struct NewEdge {
 // a suggestion's actions are both `Vec<EntryChange>`, so comparing them is
 // plain equality. It serializes like a proposal entry without its name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EntryChange {
-    #[serde(rename = "node")]
-    AddNode(NewNode),
-    #[serde(rename = "edge")]
-    AddEdge(NewEdge),
+    Node(NewNode),
+    Edge(NewEdge),
 }
 
 // The core staging input: no names or encodings, earlier operations by index,
@@ -72,7 +66,7 @@ pub enum EntryChange {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Change {
     Entry(EntryChange),
-    AddAnalyzer { name: String, config: String },
+    AddAnalyzer { name: String, configuration: String },
 }
 
 impl From<EntryChange> for Change {
@@ -220,22 +214,25 @@ pub fn prepare(
             position: candidate.view().len(),
         };
         let entry = match change {
-        Change::Entry(EntryChange::AddNode(node)) => Some(Entry::Node(Node {
+        Change::Entry(EntryChange::Node(node)) => Some(Entry::Node(Node {
             id,
             ty_name: node.ty_name.clone(),
-            body: node.body.clone(),
-            parent: node.parent.map(resolve).transpose()?,
+            payload: node.payload.clone(),
+            predecessor: node.predecessor.map(resolve).transpose()?,
         })),
-        Change::Entry(EntryChange::AddEdge(edge)) => Some(Entry::Edge(Edge {
+        Change::Entry(EntryChange::Edge(edge)) => Some(Entry::Edge(Edge {
             id,
             ty_name: edge.ty_name.clone(),
             from: resolve(edge.from)?,
             to: resolve(edge.to)?,
         })),
-        Change::AddAnalyzer { name, config } => {
+        Change::AddAnalyzer {
+            name,
+            configuration,
+        } => {
             candidate.stage_analyzer(crate::analysis::Config {
                 name: name.clone(),
-                config: config.clone(),
+                configuration: configuration.clone(),
             });
             None
         }
@@ -244,19 +241,19 @@ pub fn prepare(
             operations.push(None);
             continue;
         };
-        let parent = entry.as_node().and_then(|node| node.parent);
+        let predecessor = entry.as_node().and_then(|node| node.predecessor);
         candidate
             .stage(entry)
             .map_err(LifeCoreError::BasicValidationFailure)?;
         // Intent is judged in the view immediately before this append, which
         // includes earlier operations of the same plan.
-        if let Change::Entry(EntryChange::AddNode(node)) = change {
+        if let Change::Entry(EntryChange::Node(node)) = change {
             let before = candidate.view().prefix(id.position).expect("staged entry");
-            match (parent, node.intent) {
+            match (predecessor, node.intent) {
             (Some(_), None) => return Err(Error::MissingIntent { operation }),
             (None, Some(_)) => return Err(Error::UnexpectedIntent { operation }),
-            (Some(parent), Some(RevisionIntent::Revise))
-                if before.is_stale(parent) != Some(false) =>
+            (Some(predecessor), Some(RevisionIntent::Revise))
+                if before.is_stale(predecessor) != Some(false) =>
             {
                 return Err(Error::RevisesSuperseded { operation });
             }

@@ -8,7 +8,7 @@ export const request = {
   "method": "proposal.decode",
   "params": {
     "format": "toml",
-    "text": "plan_id = \"lc1:00000000-0000-4000-8000-00000000000b:00000000-0000-4000-8000-00000000000c:00000000-0000-4000-8000-00000000000d\"\n\n[[entries]]\nname = \"extremes\"\nkind = \"node\"\ntype = \"Task\"\n\n[entries.payload]\ntitle = \"Bare integers decode in Rust\"\nmaximum = 9223372036854775807\nminimum = -9223372036854775808\nnested = [1, { kind = \"record\", value = { at = { kind = \"timestamp\", value = \"2026-10-15T08:30:00.000000001Z\" } } }]\n\n[[entries]]\nname = \"extremes_link\"\nkind = \"edge\"\ntype = \"DependsOn\"\nfrom = { added = \"extremes\" }\nto = { existing = { origin = \"00000000-0000-4000-8000-00000000000a\", position = \"18446744073709551615\" } }\n"
+    "text": "plan_id = \"lc1:00000000-0000-4000-8000-00000000000b:00000000-0000-4000-8000-00000000000c:00000000-0000-4000-8000-00000000000d\"\n\n[[entries]]\nname = \"extremes\"\nkind = \"node\"\nty_name = \"Task\"\n\n[entries.payload]\ntitle = \"Bare integers decode in Rust\"\nmaximum = 9223372036854775807\nminimum = -9223372036854775808\nnested = [1, { kind = \"record\", value = { at = { kind = \"timestamp\", value = \"2026-10-15T08:30:00.000000001Z\" } } }]\n\n[[entries]]\nname = \"extremes_link\"\nkind = \"edge\"\nty_name = \"DependsOn\"\nfrom = { added = \"extremes\" }\nto = { existing = { origin = \"00000000-0000-4000-8000-00000000000a\", position = \"18446744073709551615\" } }\n"
   }
 } satisfies RpcRequest<"proposal.decode">;
 
@@ -46,7 +46,7 @@ export const response = {
           ],
           "title": "Bare integers decode in Rust"
         },
-        "type": "Task"
+        "ty_name": "Task"
       },
       {
         "from": {
@@ -60,7 +60,7 @@ export const response = {
             "position": "18446744073709551615"
           }
         },
-        "type": "DependsOn"
+        "ty_name": "DependsOn"
       }
     ],
     "plan_id": "lc1:00000000-0000-4000-8000-00000000000b:00000000-0000-4000-8000-00000000000c:00000000-0000-4000-8000-00000000000d"

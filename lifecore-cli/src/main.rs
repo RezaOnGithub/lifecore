@@ -76,7 +76,7 @@ enum Command {
     AddAnalyzer {
         name: String,
         #[arg(default_value = "{}")]
-        config: String,
+        configuration: String,
         #[command(flatten)]
         evaluation: Evaluation,
     },
@@ -269,7 +269,7 @@ fn main() -> ExitCode {
         } else {
             vec![Config {
                 name: TypeCheckFactory::name().into(),
-                config: "{}".into(),
+                configuration: "{}".into(),
             }]
         };
         emit(service().and_then(|service| service.init(&suite)))
@@ -326,12 +326,12 @@ fn main() -> ExitCode {
     }
     Command::AddAnalyzer {
         name,
-        config,
+        configuration,
         evaluation,
     } => emit(service().and_then(|service| {
         service.add_analyzer(AddAnalyzerRequest {
             name,
-            configuration: config,
+            configuration,
             evaluation_time: evaluation.evaluation_time,
             now: evaluation.now,
         })

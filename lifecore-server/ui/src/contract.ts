@@ -58,7 +58,7 @@ export interface ViewId {
 export interface NodeEntry {
   kind: "node";
   id: EntryId;
-  type: string;
+  ty_name: string;
   // Absent for a root.
   predecessor?: EntryId;
   payload: Body;
@@ -66,7 +66,7 @@ export interface NodeEntry {
 export interface EdgeEntry {
   kind: "edge";
   id: EntryId;
-  type: string;
+  ty_name: string;
   from: EntryId;
   to: EntryId;
 }
@@ -84,12 +84,12 @@ export type Reference = { existing: EntryId } | { added: number };
 export type EntryChange =
   | {
       kind: "node";
-      type: string;
+      ty_name: string;
       predecessor?: Reference;
       intent?: RevisionIntent;
       payload: Body;
     }
-  | { kind: "edge"; type: string; from: Reference; to: Reference };
+  | { kind: "edge"; ty_name: string; from: Reference; to: Reference };
 
 // ---- Analysis ----
 
@@ -153,7 +153,7 @@ export type ProposalEntry =
   | {
       name: string;
       kind: "node";
-      type: string;
+      ty_name: string;
       predecessor?: ProposalReference;
       intent?: RevisionIntent;
       payload: Body;
@@ -161,7 +161,7 @@ export type ProposalEntry =
   | {
       name: string;
       kind: "edge";
-      type: string;
+      ty_name: string;
       from: ProposalReference;
       to: ProposalReference;
     };
@@ -245,7 +245,7 @@ export interface EvaluationParams {
 }
 export interface EntryListParams {
   kind?: EntryKind;
-  type?: string;
+  ty_name?: string;
   currentness?: Currentness;
   text?: string;
 }

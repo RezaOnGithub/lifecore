@@ -81,7 +81,7 @@ export const response = {
           ],
           "successors": []
         },
-        "type": "Type"
+        "ty_name": "Type"
       },
       {
         "current": true,
@@ -97,7 +97,7 @@ export const response = {
           },
           "title": "Write the report"
         },
-        "type": "Task"
+        "ty_name": "Task"
       },
       {
         "current": true,
@@ -110,7 +110,7 @@ export const response = {
           "notes": "Ask Teto",
           "title": "Review the report"
         },
-        "type": "Task"
+        "ty_name": "Task"
       },
       {
         "current": true,
@@ -127,7 +127,7 @@ export const response = {
           "origin": "00000000-0000-4000-8000-000000000005",
           "position": "1"
         },
-        "type": "DependsOn"
+        "ty_name": "DependsOn"
       }
     ],
     "graph_revision": "00000000-0000-4000-8000-000000000004",
@@ -150,7 +150,7 @@ export const filteredRequest = {
     "currentness": "current",
     "kind": "node",
     "text": "report",
-    "type": "Task"
+    "ty_name": "Task"
   }
 } satisfies RpcRequest<"entries.list">;
 
@@ -174,7 +174,7 @@ export const filteredResponse = {
           },
           "title": "Write the report"
         },
-        "type": "Task"
+        "ty_name": "Task"
       },
       {
         "current": true,
@@ -187,7 +187,7 @@ export const filteredResponse = {
           "notes": "Ask Teto",
           "title": "Review the report"
         },
-        "type": "Task"
+        "ty_name": "Task"
       }
     ],
     "graph_revision": "00000000-0000-4000-8000-000000000004",

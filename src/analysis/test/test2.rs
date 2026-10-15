@@ -92,10 +92,10 @@ impl AnalyzerFactory for Factory {
 fn fixture() -> (LifeCoreList, EntryId) {
     let mut graph = LifeCoreList::default();
     let changes = ["A", "B", "C"].map(|name| {
-        Change::Entry(EntryChange::AddNode(NewNode {
+        Change::Entry(EntryChange::Node(NewNode {
             ty_name: name.into(),
-            body: Body::new(),
-            parent: None,
+            payload: Body::new(),
+            predecessor: None,
             intent: None,
         }))
     });
@@ -107,10 +107,10 @@ fn fixture() -> (LifeCoreList, EntryId) {
     plan.commit(&mut graph).unwrap();
     (graph, future)
 }
-fn suite(config: &str) -> SuiteConfig {
+fn suite(configuration: &str) -> SuiteConfig {
     SuiteConfig(vec![Config {
         name: "Probe".into(),
-        config: config.into(),
+        configuration: configuration.into(),
     }])
 }
 
@@ -299,22 +299,22 @@ impl Analyzer for Advisories {
             output.extend([message.clone(), message]);
         }
         if let Some(child) = view.entries().next_back().and_then(|entry| entry.as_node())
-            && let Some(parent) = child.parent
+            && let Some(predecessor) = child.predecessor
         {
             output.push(Message {
                 analyzer_certificate: local_certificate(
                     "review_connections",
-                    &[parent, child.id],
+                    &[predecessor, child.id],
                     "",
                 ),
                 diagnostic: Diagnostic {
-                    subjects: BTreeSet::from([parent, child.id]),
+                    subjects: BTreeSet::from([predecessor, child.id]),
                     focus: Some(child.id),
                     message: "Decide which relationships this successor should retain".into(),
-                    kind: MessageKind::Suggestion(vec![EntryChange::AddNode(NewNode {
+                    kind: MessageKind::Suggestion(vec![EntryChange::Node(NewNode {
                         ty_name: "Review".into(),
-                        body: Body::new(),
-                        parent: None,
+                        payload: Body::new(),
+                        predecessor: None,
                         intent: None,
                     })]),
                     sticky: true,
@@ -334,13 +334,13 @@ fn advisory_factory() -> AdvisoryFactory {
         received_configs: Arc::default(),
     }
 }
-fn advisory_suite(configs: &[&str]) -> SuiteConfig {
+fn advisory_suite(configurations: &[&str]) -> SuiteConfig {
     SuiteConfig(
-        configs
+        configurations
             .iter()
-            .map(|config| Config {
+            .map(|configuration| Config {
                 name: "Advisories".into(),
-                config: (*config).into(),
+                configuration: (*configuration).into(),
             })
             .collect(),
     )
@@ -564,10 +564,10 @@ fn dismiss_restore_round_trips_all_reasons_and_notes_without_current_emission() 
     let root = graph.view().nodes().next().unwrap().id;
     prepare(
         &graph,
-        &[Change::Entry(EntryChange::AddNode(NewNode {
+        &[Change::Entry(EntryChange::Node(NewNode {
             ty_name: "Revised".into(),
-            body: Body::new(),
-            parent: Some(Existing(root)),
+            payload: Body::new(),
+            predecessor: Some(Existing(root)),
             intent: Some(RevisionIntent::Branch),
         }))],
         &mut AnalysisRunner::default(),
@@ -614,12 +614,12 @@ fn dismiss_restore_round_trips_all_reasons_and_notes_without_current_emission() 
 #[test]
 fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round_trips() {
     let mut graph = LifeCoreList::default();
-    let node = |name: &str, parent| {
-        Change::Entry(EntryChange::AddNode(NewNode {
+    let node = |name: &str, predecessor| {
+        Change::Entry(EntryChange::Node(NewNode {
             ty_name: name.into(),
-            body: Body::new(),
-            parent,
-            intent: parent.map(|_| RevisionIntent::Branch),
+            payload: Body::new(),
+            predecessor,
+            intent: predecessor.map(|_| RevisionIntent::Branch),
         }))
     };
     let plan = prepare(
@@ -627,14 +627,14 @@ fn sticky_transition_advisories_survive_later_prefixes_and_dismiss_restore_round
         &[
             node("A", None),
             node("B", None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Added(1),
             })),
             node("A1", Some(Added(0))),
             node("A2", Some(Added(0))),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(1),
@@ -821,12 +821,12 @@ fn execution_failures_record_inputs_and_prefix_and_never_publish_a_candidate() {
             &[
                 Change::AddAnalyzer {
                     name: "Advisories".into(),
-                    config: "7".into(),
+                    configuration: "7".into(),
                 },
-                Change::Entry(EntryChange::AddNode(NewNode {
+                Change::Entry(EntryChange::Node(NewNode {
                     ty_name: "Candidate".into(),
-                    body: Body::new(),
-                    parent: None,
+                    payload: Body::new(),
+                    predecessor: None,
                     intent: None,
                 })),
             ],
@@ -1009,13 +1009,13 @@ fn explicit_suggestion_preserves_order_payloads_exact_references_and_requires_co
     let observation = repair_observation(
         graph.view(),
         vec![
-            EntryChange::AddNode(NewNode {
+            EntryChange::Node(NewNode {
                 ty_name: "Repaired".into(),
-                body: body.clone(),
-                parent: Some(Existing(root)),
+                payload: body.clone(),
+                predecessor: Some(Existing(root)),
                 intent: Some(RevisionIntent::Revise),
             }),
-            EntryChange::AddEdge(NewEdge {
+            EntryChange::Edge(NewEdge {
                 from: Added(0),
                 ty_name: "link".into(),
                 to: Existing(target),
@@ -1029,8 +1029,8 @@ fn explicit_suggestion_preserves_order_payloads_exact_references_and_requires_co
         .unwrap();
     assert_eq!(graph.view().len(), 3);
     let ids = checked.added().to_vec();
-    assert_eq!(checked.view().node(ids[0]).unwrap().body, body);
-    assert_eq!(checked.view().node(ids[0]).unwrap().parent, Some(root));
+    assert_eq!(checked.view().node(ids[0]).unwrap().payload, body);
+    assert_eq!(checked.view().node(ids[0]).unwrap().predecessor, Some(root));
     assert_eq!(checked.view().edge(ids[1]).unwrap().from, ids[0]);
     assert_eq!(checked.view().edge(ids[1]).unwrap().to, target);
     assert_eq!(checked.view().prefix(4).unwrap().is_stale(root), Some(true));
@@ -1048,19 +1048,19 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     let root = graph.view().at(0).unwrap().id();
     let stale_repair = repair_observation(
         graph.view(),
-        vec![EntryChange::AddNode(NewNode {
+        vec![EntryChange::Node(NewNode {
             ty_name: "Repair".into(),
-            body: Body::new(),
-            parent: Some(Existing(root)),
+            payload: Body::new(),
+            predecessor: Some(Existing(root)),
             intent: Some(RevisionIntent::Revise),
         })],
     );
     prepare(
         &graph,
-        &[Change::Entry(EntryChange::AddNode(NewNode {
+        &[Change::Entry(EntryChange::Node(NewNode {
             ty_name: "Successor".into(),
-            body: Body::new(),
-            parent: Some(Existing(root)),
+            payload: Body::new(),
+            predecessor: Some(Existing(root)),
             intent: Some(RevisionIntent::Branch),
         }))],
         &mut AnalysisRunner::default(),
@@ -1081,7 +1081,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     let MessageKind::Suggestion(actions) = &mut branch.diagnostic.kind else {
         unreachable!()
     };
-    let EntryChange::AddNode(NewNode { intent, .. }) = &mut actions[0] else {
+    let EntryChange::Node(NewNode { intent, .. }) = &mut actions[0] else {
         unreachable!()
     };
     *intent = Some(RevisionIntent::Branch);
@@ -1097,7 +1097,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     ));
     let forward = repair_observation(
         graph.view(),
-        vec![EntryChange::AddEdge(NewEdge {
+        vec![EntryChange::Edge(NewEdge {
             from: Added(0),
             ty_name: "link".into(),
             to: Existing(root),
@@ -1111,10 +1111,10 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     ));
     let out_of_profile = repair_observation(
         graph.view(),
-        vec![EntryChange::AddNode(NewNode {
+        vec![EntryChange::Node(NewNode {
             ty_name: "Time".into(),
-            body: Body::from([("at".into(), crate::Timestamp::MIN.into())]),
-            parent: None,
+            payload: Body::from([("at".into(), crate::Timestamp::MIN.into())]),
+            predecessor: None,
             intent: None,
         })],
     );
@@ -1206,10 +1206,10 @@ fn roots(count: usize) -> LifeCoreList {
     let mut graph = LifeCoreList::default();
     let changes = (0..count)
         .map(|i| {
-            Change::Entry(EntryChange::AddNode(NewNode {
+            Change::Entry(EntryChange::Node(NewNode {
                 ty_name: format!("N{i}"),
-                body: Body::new(),
-                parent: None,
+                payload: Body::new(),
+                predecessor: None,
                 intent: None,
             }))
         })
@@ -1234,7 +1234,7 @@ fn scripted_suite(copies: usize) -> SuiteConfig {
     SuiteConfig(vec![
         Config {
             name: "Scripted".into(),
-            config: String::new(),
+            configuration: String::new(),
         };
         copies
     ])
@@ -1358,7 +1358,7 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
     let (graph, _) = fixture();
     let suite = SuiteConfig(vec![Config {
         name: "Timed".into(),
-        config: "".into(),
+        configuration: "".into(),
     }]);
     let make_runner = |inputs| {
         let mut runner = AnalysisRunner::new(inputs);
@@ -1461,11 +1461,11 @@ fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent()
     let (graph, _) = fixture();
     let root = graph.view().at(0).unwrap().id();
     let mut runner = AnalysisRunner::default();
-    let node = |parent, intent| {
-        EntryChange::AddNode(NewNode {
+    let node = |predecessor, intent| {
+        EntryChange::Node(NewNode {
             ty_name: "Repair".into(),
-            body: Body::new(),
-            parent,
+            payload: Body::new(),
+            predecessor,
             intent,
         })
     };
@@ -1488,10 +1488,10 @@ fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent()
         graph.view(),
         vec![
             node(Some(Existing(root)), Some(RevisionIntent::Revise)),
-            EntryChange::AddNode(NewNode {
+            EntryChange::Node(NewNode {
                 ty_name: "Second repair".into(),
-                body: Body::new(),
-                parent: Some(Existing(root)),
+                payload: Body::new(),
+                predecessor: Some(Existing(root)),
                 intent: Some(RevisionIntent::Revise),
             }),
         ],
@@ -1502,10 +1502,10 @@ fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent()
             operation: 1
         }))
     ));
-    let change = [Change::Entry(EntryChange::AddNode(NewNode {
+    let change = [Change::Entry(EntryChange::Node(NewNode {
         ty_name: "Candidate".into(),
-        body: Body::new(),
-        parent: None,
+        payload: Body::new(),
+        predecessor: None,
         intent: None,
     }))];
     let first = prepare(&graph, &change, &mut runner)
@@ -1557,16 +1557,16 @@ fn suggestion_checks_an_invalid_intermediate_prefix_even_with_a_valid_final_view
     let observation = repair_observation(
         graph.view(),
         vec![
-            EntryChange::AddNode(NewNode {
+            EntryChange::Node(NewNode {
                 ty_name: "Intermediate".into(),
-                body: Body::new(),
-                parent: None,
+                payload: Body::new(),
+                predecessor: None,
                 intent: None,
             }),
-            EntryChange::AddNode(NewNode {
+            EntryChange::Node(NewNode {
                 ty_name: "Final".into(),
-                body: Body::new(),
-                parent: Some(Added(0)),
+                payload: Body::new(),
+                predecessor: Some(Added(0)),
                 intent: Some(RevisionIntent::Revise),
             }),
         ],
@@ -1780,10 +1780,10 @@ fn a_range_ending_before_the_view_is_current_only_when_sticky() {
 fn findings_serialize_in_the_lowercase_kind_vocabulary() {
     let (graph, future) = fixture();
     let view = graph.view();
-    let action = EntryChange::AddNode(NewNode {
+    let action = EntryChange::Node(NewNode {
         ty_name: "A".into(),
-        body: Body::new(),
-        parent: Some(Existing(future)),
+        payload: Body::new(),
+        predecessor: Some(Existing(future)),
         intent: Some(RevisionIntent::Revise),
     });
     let mut suggestion = repair_observation(view, vec![action.clone()]);

@@ -37,7 +37,6 @@ pub struct Proposal {
 pub enum ProposalEntry {
     Node {
         name: String,
-        #[serde(rename = "type")]
         ty_name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         predecessor: Option<ProposalReference>,
@@ -47,7 +46,6 @@ pub enum ProposalEntry {
     },
     Edge {
         name: String,
-        #[serde(rename = "type")]
         ty_name: String,
         from: ProposalReference,
         to: ProposalReference,
@@ -68,7 +66,6 @@ enum RawKind {
 struct RawEntry {
     name: String,
     kind: RawKind,
-    #[serde(rename = "type")]
     ty_name: String,
     #[serde(default, deserialize_with = "present")]
     predecessor: Option<ProposalReference>,
@@ -482,10 +479,10 @@ impl Proposal {
                 intent,
                 payload,
                 ..
-            } => EntryChange::AddNode(NewNode {
+            } => EntryChange::Node(NewNode {
                 ty_name: ty_name.clone(),
-                body: payload.clone(),
-                parent: predecessor
+                payload: payload.clone(),
+                predecessor: predecessor
                     .as_ref()
                     .map(|reference| resolve(reference, "predecessor"))
                     .transpose()?,
@@ -493,7 +490,7 @@ impl Proposal {
             }),
             ProposalEntry::Edge {
                 ty_name, from, to, ..
-            } => EntryChange::AddEdge(NewEdge {
+            } => EntryChange::Edge(NewEdge {
                 from: resolve(from, "from")?,
                 ty_name: ty_name.clone(),
                 to: resolve(to, "to")?,

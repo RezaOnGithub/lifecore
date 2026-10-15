@@ -119,7 +119,7 @@ impl View<'_> {
         }
         let mut found = vec![];
         for node in self.fresh_nodes().filter(|n| n.ty_name == Type::TYPE_NAME) {
-            let schema = Type::from_body(&node.body)
+            let schema = Type::from_body(&node.payload)
                 .map_err(|error| ResolutionError::Malformed { id: node.id, error })?;
             if schema.name == name {
                 found.push((node.id, schema));

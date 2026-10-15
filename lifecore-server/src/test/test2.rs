@@ -83,7 +83,7 @@ impl Drop for Scratch {
 fn configured(name: &str) -> Config {
     Config {
         name: name.into(),
-        config: "{}".into(),
+        configuration: "{}".into(),
     }
 }
 
@@ -141,22 +141,22 @@ impl Analyzer for Scripted {
 // Suggests revising the first current, unfinished Task to done, and making a
 // second one depend on the revision.
 fn suggest_done(view: View<'_>) -> Vec<Message> {
-    let mut open = view
-        .fresh_nodes()
-        .filter(|node| node.ty_name == "Task" && node.body.get("status") != Some(&"done".into()));
+    let mut open = view.fresh_nodes().filter(|node| {
+        node.ty_name == "Task" && node.payload.get("status") != Some(&"done".into())
+    });
     let Some(task) = open.next() else {
         return vec![];
     };
-    let mut body = task.body.clone();
-    body.insert("status".into(), "done".into());
-    let mut actions = vec![EntryChange::AddNode(NewNode {
+    let mut payload = task.payload.clone();
+    payload.insert("status".into(), "done".into());
+    let mut actions = vec![EntryChange::Node(NewNode {
         ty_name: "Task".into(),
-        body,
-        parent: Some(Reference::Existing(task.id)),
+        payload,
+        predecessor: Some(Reference::Existing(task.id)),
         intent: Some(RevisionIntent::Revise),
     })];
     if let Some(other) = open.next() {
-        actions.push(EntryChange::AddEdge(NewEdge {
+        actions.push(EntryChange::Edge(NewEdge {
             ty_name: "DependsOn".into(),
             from: Reference::Existing(other.id),
             to: Reference::Added(0),
@@ -217,7 +217,7 @@ fn declare(name: &str) -> String {
         "declare",
         "proposal.apply",
         json!({"proposal": {"entries": [
-            {"name": "declaration", "kind": "node", "type": "Type", "payload": {"name": name}},
+            {"name": "declaration", "kind": "node", "ty_name": "Type", "payload": {"name": name}},
         ]}}),
     )
 }
@@ -277,7 +277,7 @@ fn declared_types(service: &Service) -> Vec<String> {
     let line = call_text(
         "types",
         "entries.list",
-        json!({"type": "Type", "currentness": "all"}),
+        json!({"ty_name": "Type", "currentness": "all"}),
     );
     let listed = serde_json::to_value(rpc::handle(service, &line)).unwrap();
     listed["result"]["entries"]
@@ -1329,12 +1329,12 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "apply",
         "proposal.apply",
         json!({"proposal": {"plan_id": first_plan, "entries": [
-            {"name": "task_type", "kind": "node", "type": "Type", "payload": task_declaration()},
-            {"name": "report", "kind": "node", "type": "Task",
+            {"name": "task_type", "kind": "node", "ty_name": "Type", "payload": task_declaration()},
+            {"name": "report", "kind": "node", "ty_name": "Task",
                 "payload": {"title": "Write the report", "priority": {"kind": "integer", "value": "2"}}},
-            {"name": "review", "kind": "node", "type": "Task",
+            {"name": "review", "kind": "node", "ty_name": "Task",
                 "payload": {"title": "Review the report", "notes": "Ask Teto"}},
-            {"name": "review_after_report", "kind": "edge", "type": "DependsOn",
+            {"name": "review_after_report", "kind": "edge", "ty_name": "DependsOn",
                 "from": {"added": "review"}, "to": {"added": "report"}},
         ]}, "evaluation_time": EVALUATION_TIME}),
     );
@@ -1353,7 +1353,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
     let filtered = recorder.call(
         "filtered",
         "entries.list",
-        json!({"kind": "node", "type": "Task", "currentness": "current", "text": "report"}),
+        json!({"kind": "node", "ty_name": "Task", "currentness": "current", "text": "report"}),
     );
     modules.push(method_module(
         "entries.list",
@@ -1373,7 +1373,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "check",
         "proposal.check",
         json!({"proposal": {"plan_id": plan, "entries": [
-            {"name": "report_done", "kind": "node", "type": "Task",
+            {"name": "report_done", "kind": "node", "ty_name": "Task",
                 "predecessor": {"existing": report_id}, "intent": "revise",
                 "payload": {
                     "title": "Write the report",
@@ -1385,16 +1385,16 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
                     "tags": ["work", "writing"],
                     "details": {"kind": "record", "value": {"owner": "Teto"}},
                 }},
-            {"name": "follow_up", "kind": "node", "type": "Task",
+            {"name": "follow_up", "kind": "node", "ty_name": "Task",
                 "payload": {"title": "Follow up", "notes": "Later",
                     "priority": {"kind": "integer", "value": "9223372036854775807"}}},
-            {"name": "follow_up_after_report", "kind": "edge", "type": "DependsOn",
+            {"name": "follow_up_after_report", "kind": "edge", "ty_name": "DependsOn",
                 "from": {"added": "follow_up"}, "to": {"added": "report_done"}},
         ]}, "evaluation_time": EVALUATION_TIME}),
     );
     assert_eq!(accepted.1["result"]["accepted"], true, "{}", accepted.1);
     let undeclared = json!({"entries": [
-        {"name": "stray", "kind": "node", "type": "Undeclared", "payload": {"title": "Stray"}},
+        {"name": "stray", "kind": "node", "ty_name": "Undeclared", "payload": {"title": "Stray"}},
     ]});
     let rejected = recorder.call(
         "rejected",
@@ -1410,7 +1410,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         ],
     ));
 
-    let toml = "plan_id = \"lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\n\n[[entries]]\nname = \"extremes\"\nkind = \"node\"\ntype = \"Task\"\n\n[entries.payload]\ntitle = \"Bare integers decode in Rust\"\nmaximum = 9223372036854775807\nminimum = -9223372036854775808\nnested = [1, { kind = \"record\", value = { at = { kind = \"timestamp\", value = \"2026-10-15T08:30:00.000000001Z\" } } }]\n\n[[entries]]\nname = \"extremes_link\"\nkind = \"edge\"\ntype = \"DependsOn\"\nfrom = { added = \"extremes\" }\nto = { existing = { origin = \"11111111-1111-4111-8111-111111111111\", position = \"18446744073709551615\" } }\n";
+    let toml = "plan_id = \"lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:cccccccc-cccc-4ccc-8ccc-cccccccccccc\"\n\n[[entries]]\nname = \"extremes\"\nkind = \"node\"\nty_name = \"Task\"\n\n[entries.payload]\ntitle = \"Bare integers decode in Rust\"\nmaximum = 9223372036854775807\nminimum = -9223372036854775808\nnested = [1, { kind = \"record\", value = { at = { kind = \"timestamp\", value = \"2026-10-15T08:30:00.000000001Z\" } } }]\n\n[[entries]]\nname = \"extremes_link\"\nkind = \"edge\"\nty_name = \"DependsOn\"\nfrom = { added = \"extremes\" }\nto = { existing = { origin = \"11111111-1111-4111-8111-111111111111\", position = \"18446744073709551615\" } }\n";
     let decoded = recorder.call(
         "decode",
         "proposal.decode",
@@ -1468,16 +1468,16 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         assert!(response["error"].is_object(), "{method}: {response}");
         response
     };
-    let task = |name: &str| json!({"name": name, "kind": "node", "type": "Task", "payload": {"title": name}});
+    let task = |name: &str| json!({"name": name, "kind": "node", "ty_name": "Task", "payload": {"title": name}});
     // Decoding raw text keeps the line and column; an embedded `proposal`
     // parameter drops them.
     samples.push(call(
         recorder,
         "proposal.decode",
-        json!({"text": "[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Task\"\npayload = { n = { kind = \"integer\", value = \"01\" } }\n", "format": "toml"}),
+        json!({"text": "[[entries]]\nname = \"n\"\nkind = \"node\"\nty_name = \"Task\"\npayload = { n = { kind = \"integer\", value = \"01\" } }\n", "format": "toml"}),
     ));
     samples.push(call(recorder, "proposal.check", json!({"proposal": {"entries": [
-        {"name": "n", "kind": "node", "type": "Task", "payload": {"n": {"kind": "integer", "value": "01"}}},
+        {"name": "n", "kind": "node", "ty_name": "Task", "payload": {"n": {"kind": "integer", "value": "01"}}},
     ]}})));
     samples.push(call(
         recorder,
@@ -1519,7 +1519,7 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         recorder,
         "proposal.apply",
         json!({"proposal": {"entries": [
-            {"name": "stray", "kind": "node", "type": "Undeclared", "payload": {"title": "Stray"}},
+            {"name": "stray", "kind": "node", "ty_name": "Undeclared", "payload": {"title": "Stray"}},
         ]}}),
     ));
     samples.push(call(

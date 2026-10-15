@@ -77,8 +77,8 @@ impl StalenessIndex {
     }
     fn push_validated(&mut self, entry: &Entry) {
         let position = self.0.len();
-        if let Some(parent) = entry.as_node().and_then(|node| node.parent) {
-            let first_child = &mut self.0[parent.position];
+        if let Some(predecessor) = entry.as_node().and_then(|node| node.predecessor) {
+            let first_child = &mut self.0[predecessor.position];
             if first_child.is_none() {
                 *first_child = Some(position);
             }
@@ -181,11 +181,13 @@ impl LifeCoreList {
             };
             match entry {
             Entry::Node(n) => {
-                if let Some(parent) = n.parent {
-                    require_node(parent)?;
+                if let Some(predecessor) = n.predecessor {
+                    require_node(predecessor)?;
                 }
                 if before.fresh_nodes().any(|old| {
-                    old.ty_name == n.ty_name && old.parent == n.parent && old.body == n.body
+                    old.ty_name == n.ty_name
+                        && old.predecessor == n.predecessor
+                        && old.payload == n.payload
                 }) {
                     return Err(BasicValidationFailure::Duplicate { entry: id });
                 }

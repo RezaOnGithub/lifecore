@@ -169,7 +169,7 @@ impl TypeCheck {
         let mut output = Vec::new();
         let mut types = BTreeMap::<String, (EntryId, Type)>::new();
         for node in view.fresh_nodes().filter(|n| n.ty_name == Type::TYPE_NAME) {
-            match Type::from_body(&node.body) {
+            match Type::from_body(&node.payload) {
             Err(error) => output.push(MalformedDeclaration {
                 subject: node.id,
                 error,
@@ -210,7 +210,7 @@ impl TypeCheck {
                 });
                 continue;
             };
-            output.extend(ty.check(&node.body).into_iter().map(|issue| Field {
+            output.extend(ty.check(&node.payload).into_iter().map(|issue| Field {
                 subject: node.id,
                 issue,
             }));
@@ -247,8 +247,10 @@ impl TypeCheck {
         let before = view
             .prefix(child.id.position())
             .expect("child is inside view");
-        let parent = before.node(child.parent?).expect("validated parent");
-        let allowed = match before.resolve_type(&parent.ty_name) {
+        let predecessor = before
+            .node(child.predecessor?)
+            .expect("validated predecessor");
+        let allowed = match before.resolve_type(&predecessor.ty_name) {
         Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
         Ok(Some(TypeDefinition::Declared { schema, .. })) => {
             child.ty_name == schema.name || schema.successors.contains(&child.ty_name)
@@ -256,7 +258,7 @@ impl TypeCheck {
         Ok(None) => {
             return Some(MissingType {
                 subject,
-                name: parent.ty_name.clone(),
+                name: predecessor.ty_name.clone(),
             });
         }
         Err(ResolutionError::Malformed { error, .. }) => {
@@ -268,7 +270,7 @@ impl TypeCheck {
         };
         (!allowed).then(|| BadSuccessor {
             subject,
-            parent_type: parent.ty_name.clone(),
+            parent_type: predecessor.ty_name.clone(),
             child_type: child.ty_name.clone(),
         })
     }
@@ -285,9 +287,12 @@ impl AnalyzerFactory for TypeCheckFactory {
     fn analyzer_name(&self) -> &'static str {
         Self::name()
     }
-    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
-        if !config.trim().is_empty()
-            && !serde_json::from_str::<BTreeMap<String, serde_json::Value>>(config)
+    fn analyzer_with_config(
+        &mut self,
+        configuration: &str,
+    ) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        if !configuration.trim().is_empty()
+            && !serde_json::from_str::<BTreeMap<String, serde_json::Value>>(configuration)
                 .is_ok_and(|fields| fields.is_empty())
         {
             return Err(LifeCoreError::InvalidAnalyzerConfiguration {

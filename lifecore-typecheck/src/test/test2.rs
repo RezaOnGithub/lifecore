@@ -21,20 +21,24 @@ use lifecore::{
 fn ty(name: &str) -> Type {
     Type::new(name, &[], &[], &[], &[])
 }
-fn declaration(ty: &Type, parent: Option<lifecore::transaction::Reference>) -> Change {
-    Change::Entry(EntryChange::AddNode(NewNode {
+fn declaration(ty: &Type, predecessor: Option<lifecore::transaction::Reference>) -> Change {
+    Change::Entry(EntryChange::Node(NewNode {
         ty_name: "Type".into(),
-        body: ty.to_body(),
-        parent,
-        intent: parent.map(|_| RevisionIntent::Branch),
+        payload: ty.to_body(),
+        predecessor,
+        intent: predecessor.map(|_| RevisionIntent::Branch),
     }))
 }
-fn node(name: &str, body: Body, parent: Option<lifecore::transaction::Reference>) -> Change {
-    Change::Entry(EntryChange::AddNode(NewNode {
+fn node(
+    name: &str,
+    payload: Body,
+    predecessor: Option<lifecore::transaction::Reference>,
+) -> Change {
+    Change::Entry(EntryChange::Node(NewNode {
         ty_name: name.into(),
-        body,
-        parent,
-        intent: parent.map(|_| RevisionIntent::Branch),
+        payload,
+        predecessor,
+        intent: predecessor.map(|_| RevisionIntent::Branch),
     }))
 }
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
@@ -62,7 +66,7 @@ fn has_error(findings: &[TypeCheckMessage]) -> bool {
 fn configure() -> Change {
     Change::AddAnalyzer {
         name: TypeCheckFactory::name().into(),
-        config: String::new(),
+        configuration: String::new(),
     }
 }
 fn runner() -> AnalysisRunner {
@@ -500,7 +504,7 @@ fn both_endpoint_permissions_are_checked_in_the_selected_view() {
                 declaration(&b, None),
                 node("A", Body::new(), None),
                 node("B", Body::new(), None),
-                Change::Entry(EntryChange::AddEdge(NewEdge {
+                Change::Entry(EntryChange::Edge(NewEdge {
                     from: Added(2),
                     ty_name: "link".into(),
                     to: Added(3),
@@ -603,7 +607,7 @@ fn runner_combines_typed_warnings_and_inconsistencies_without_filtering() {
     );
     let suite = lifecore::analysis::SuiteConfig(vec![lifecore::analysis::Config {
         name: TypeCheckFactory::name().into(),
-        config: String::new(),
+        configuration: String::new(),
     }]);
     let output = runner().run_view(graph.view(), &suite).unwrap();
     assert_eq!(output.errors().count(), 1);
@@ -629,7 +633,7 @@ fn plan_local_references_count_operations_and_cannot_name_configuration_changes(
         .unwrap();
     assert_eq!(plan.added().len(), 3);
     assert_eq!(
-        plan.view().node(plan.added()[2]).unwrap().parent,
+        plan.view().node(plan.added()[2]).unwrap().predecessor,
         Some(plan.added()[1])
     );
     assert!(matches!(
@@ -670,7 +674,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
     let config = |raw: &str| {
         SuiteConfig(vec![Config {
             name: TypeCheckFactory::name().into(),
-            config: raw.into(),
+            configuration: raw.into(),
         }])
     };
     let report = runner().run_view(graph.view(), &config(" ")).unwrap();
@@ -973,7 +977,7 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
     // later view; only identical re-emissions would extend it.
     let suite = SuiteConfig(vec![Config {
         name: TypeCheckFactory::name().into(),
-        config: String::new(),
+        configuration: String::new(),
     }]);
     for end_exclusive in [5, 6] {
         let output = runner()
@@ -1034,7 +1038,7 @@ fn a_warning_that_holds_until_the_head_is_one_observation_per_subject() {
     // An earlier view ends every range at its own boundary.
     let suite = SuiteConfig(vec![Config {
         name: TypeCheckFactory::name().into(),
-        config: String::new(),
+        configuration: String::new(),
     }]);
     let output = runner()
         .run_view(committed.view().prefix(11).unwrap(), &suite)
@@ -1097,14 +1101,14 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
 fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
     use TypeCheckMessage::*;
     let mut output = Vec::new();
-    for child in view.nodes().filter(|n| n.parent.is_some()) {
+    for child in view.nodes().filter(|n| n.predecessor.is_some()) {
         // A later schema cannot revoke a past transition; each child is judged
         // immediately before its append.
         let before = view
             .prefix(child.id.position())
             .expect("child is inside view");
         let parent = before
-            .node(child.parent.expect("selected child"))
+            .node(child.predecessor.expect("selected child"))
             .expect("validated parent");
         let allowed = match before.resolve_type(&parent.ty_name) {
         Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
@@ -1208,7 +1212,7 @@ fn covered(output: &AnalysisOutput) -> usize {
 fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
     let suite = SuiteConfig(vec![Config {
         name: TypeCheckFactory::name().into(),
-        config: String::new(),
+        configuration: String::new(),
     }]);
     let mut reference_runner = AnalysisRunner::default();
     reference_runner
@@ -1390,7 +1394,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&b, None),
             node("A", Body::new(), None),
             node("B", Body::new(), None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(2),
                 ty_name: "link".into(),
                 to: Added(3),
@@ -1403,7 +1407,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&with_field("C"), Some(Existing(ids[2]))),
             node("B", Body::new(), Some(Existing(ids[3]))),
             node("A", Body::from([("x".into(), true.into())]), None),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(2),
                 ty_name: "link".into(),
                 to: Added(1),
@@ -1425,7 +1429,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&with_field("B"), None),
             node("A", Body::new(), None),
             node("A", Body::new(), Some(Added(1))),
-            Change::Entry(EntryChange::AddEdge(NewEdge {
+            Change::Entry(EntryChange::Edge(NewEdge {
                 from: Added(3),
                 ty_name: "link".into(),
                 to: Added(2),

@@ -4,10 +4,10 @@ use super::super::{
 use crate::{Body, LifeCoreList, analysis::AnalysisRunner, transaction::Reference::Added};
 
 fn node(name: &str) -> Change {
-    Change::Entry(EntryChange::AddNode(NewNode {
+    Change::Entry(EntryChange::Node(NewNode {
         ty_name: name.into(),
-        body: Body::default(),
-        parent: None,
+        payload: Body::default(),
+        predecessor: None,
         intent: None,
     }))
 }
@@ -24,7 +24,7 @@ fn plan() -> Vec<Change> {
     vec![
         node("A"),
         node("B"),
-        Change::Entry(EntryChange::AddEdge(NewEdge {
+        Change::Entry(EntryChange::Edge(NewEdge {
             from: Added(0),
             ty_name: "link".into(),
             to: Added(1),
@@ -57,7 +57,7 @@ fn missing_factory_does_not_publish_any_entries() {
     let mut changes = plan();
     changes.push(Change::AddAnalyzer {
         name: "missing".into(),
-        config: String::new(),
+        configuration: String::new(),
     });
     assert!(prepare(&graph, &changes, &mut AnalysisRunner::default()).is_err());
     assert!(graph.view().is_empty());
@@ -149,9 +149,9 @@ fn exact_base_includes_analyzer_names_original_configuration_and_order() {
             .register_analyzer_kind(Box::new(EmptyAnalyzer(name)))
             .unwrap();
     }
-    let configure = |name: &str, config: &str| Change::AddAnalyzer {
+    let configure = |name: &str, configuration: &str| Change::AddAnalyzer {
         name: name.into(),
-        config: config.into(),
+        configuration: configuration.into(),
     };
     prepare(
         &graph,
@@ -167,7 +167,9 @@ fn exact_base_includes_analyzer_names_original_configuration_and_order() {
         serde_json::Value::Array(
             entries
                 .iter()
-                .map(|(name, config)| serde_json::json!({"name": name, "configuration": config}))
+                .map(|(name, configuration)| {
+                    serde_json::json!({"name": name, "configuration": configuration})
+                })
                 .collect(),
         )
     };
@@ -341,7 +343,7 @@ fn suite_only_commit_checks_original_suite_and_blocks_an_older_candidate() {
         &graph,
         &[Change::AddAnalyzer {
             name: "First".into(),
-            config: " {} ".into(),
+            configuration: " {} ".into(),
         }],
         &mut runner,
     )
@@ -351,7 +353,7 @@ fn suite_only_commit_checks_original_suite_and_blocks_an_older_candidate() {
     .commit(&mut graph)
     .unwrap();
     assert_eq!(graph.view().id(), before);
-    assert_eq!(graph.analysis_suite().0[0].config, " {} ");
+    assert_eq!(graph.analysis_suite().0[0].configuration, " {} ");
     let snapshot = graph.clone();
     assert!(matches!(old.commit(&mut graph), Err(Error::StaleBase)));
     assert_eq!(graph, snapshot);
@@ -366,10 +368,10 @@ fn suite_only_commit_checks_original_suite_and_blocks_an_older_candidate() {
 }
 
 fn revision(name: &str, parent: Reference, intent: Option<RevisionIntent>) -> Change {
-    Change::Entry(EntryChange::AddNode(NewNode {
+    Change::Entry(EntryChange::Node(NewNode {
         ty_name: name.into(),
-        body: Body::default(),
-        parent: Some(parent),
+        payload: Body::default(),
+        predecessor: Some(parent),
         intent,
     }))
 }
@@ -388,7 +390,7 @@ fn revision_intent_is_checked_immediately_before_each_append() {
     let before = graph.clone();
     let intent = |changes: &[Change]| prepare(&graph, changes, &mut AnalysisRunner::default());
     let mut root_with_intent = node("C");
-    let Change::Entry(EntryChange::AddNode(new)) = &mut root_with_intent else {
+    let Change::Entry(EntryChange::Node(new)) = &mut root_with_intent else {
         unreachable!()
     };
     new.intent = Some(RevisionIntent::Branch);
@@ -520,7 +522,7 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
         let mut changes = plan();
         changes.push(Change::AddAnalyzer {
             name: "Boundary".into(),
-            config: rejected_at.to_string(),
+            configuration: rejected_at.to_string(),
         });
         let Checked::Rejected(rejection) = prepare(&graph, &changes, &mut runner).unwrap() else {
             panic!("an inconsistent candidate must not become committable")
@@ -572,7 +574,7 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
     let mut changes = plan();
     changes.push(Change::AddAnalyzer {
         name: "Boundary".into(),
-        config: String::new(),
+        configuration: String::new(),
     });
     let advised = prepare(&graph, &changes, &mut runner)
         .unwrap()

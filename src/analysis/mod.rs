@@ -15,14 +15,12 @@ pub use identity::{AnalyzerCertificate, AnalyzerIdentity, EvaluationInputs, Find
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);
 
-// Serialized as `configuration`, the word `AnalyzerIdentity` and the
-// `analyzers.add` request use for the same verbatim string.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub name: String,
-    #[serde(rename = "configuration")]
-    pub config: String,
+    // The verbatim configuration string, as in `AnalyzerIdentity`.
+    pub configuration: String,
 }
 
 // A finding's category, serialized in lowercase like every tag in the shared
@@ -185,7 +183,10 @@ impl<T: TypedAnalyzer> Analyzer for T {
 }
 
 pub trait AnalyzerFactory {
-    fn analyzer_with_config(&mut self, config: &str) -> Result<Box<dyn Analyzer>, LifeCoreError>;
+    fn analyzer_with_config(
+        &mut self,
+        configuration: &str,
+    ) -> Result<Box<dyn Analyzer>, LifeCoreError>;
     fn analyzer_name(&self) -> &'static str;
 }
 
@@ -311,11 +312,11 @@ impl AnalysisRunner {
                     name: config.name.clone(),
                 }
             })?;
-            let analyzer = factory.analyzer_with_config(&config.config)?;
+            let analyzer = factory.analyzer_with_config(&config.configuration)?;
             let identity = AnalyzerIdentity {
                 name: config.name.clone(),
                 version: analyzer.version(),
-                configuration: config.config.clone(),
+                configuration: config.configuration.clone(),
             };
             identities.push(identity);
             analyzers.push(analyzer);

@@ -193,7 +193,7 @@ These follow from the merged backend; the linked documents own the details.
 - **Identities and numbers.** Key records by `origin` plus `position`;
   positions and integer payloads are decimal strings.
 - **One JSON vocabulary.** Entry records, stored entries, and suggested actions
-  in analysis output all use the proposal vocabulary (`kind`, `type`,
+  in analysis output all use the proposal vocabulary (`kind`, `ty_name`,
   `predecessor`, `payload`, `existing`, `added`). A suggested action's `added`
   is the index of an earlier action, a number, where a proposal's is an
   operation name ([FILES §2.5](FILES.md#25-entry-shaped-types)). Findings follow

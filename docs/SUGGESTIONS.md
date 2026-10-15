@@ -44,7 +44,7 @@ a ready-made `Proposal`:
     {
       "name": "action_0",
       "kind": "node",
-      "type": "Task",
+      "ty_name": "Task",
       "predecessor": { "existing": { "origin": "<entry-origin-uuid>", "position": "42" } },
       "intent": "revise",
       "payload": { "title": "Write proposal", "status": "done" }

@@ -70,7 +70,7 @@ export const request = {
             ],
             "successors": []
           },
-          "type": "Type"
+          "ty_name": "Type"
         },
         {
           "kind": "node",
@@ -82,7 +82,7 @@ export const request = {
             },
             "title": "Write the report"
           },
-          "type": "Task"
+          "ty_name": "Task"
         },
         {
           "kind": "node",
@@ -91,7 +91,7 @@ export const request = {
             "notes": "Ask Teto",
             "title": "Review the report"
           },
-          "type": "Task"
+          "ty_name": "Task"
         },
         {
           "from": {
@@ -102,7 +102,7 @@ export const request = {
           "to": {
             "added": "report"
           },
-          "type": "DependsOn"
+          "ty_name": "DependsOn"
         }
       ],
       "plan_id": "lc1:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002:00000000-0000-4000-8000-000000000006"
@@ -221,7 +221,7 @@ export const response = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 }
               ],
               "focus": {
@@ -288,7 +288,7 @@ export const response = {
                       "position": "1"
                     }
                   },
-                  "type": "Task"
+                  "ty_name": "Task"
                 },
                 {
                   "from": {
@@ -301,7 +301,7 @@ export const response = {
                   "to": {
                     "added": 0
                   },
-                  "type": "DependsOn"
+                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {

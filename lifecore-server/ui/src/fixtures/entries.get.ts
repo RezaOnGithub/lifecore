@@ -33,7 +33,7 @@ export const response = {
         "origin": "00000000-0000-4000-8000-000000000005",
         "position": "1"
       },
-      "type": "DependsOn"
+      "ty_name": "DependsOn"
     },
     "view": {
       "database": "00000000-0000-4000-8000-000000000001",
