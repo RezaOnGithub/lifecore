@@ -7,6 +7,7 @@ import type {
 } from "../contract.ts";
 import { latest, schemaOf, useAsOf, useCall, useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
+import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, useOpen } from "../links.tsx";
 import { typeName } from "../model/labels.ts";
@@ -75,7 +76,7 @@ function ResolutionNote({
 export function TableScreen({ ty_name }: { ty_name: string }) {
   const asOf = useAsOf();
   const types = useTypes();
-  const { actions } = useDraft();
+  const { state, actions } = useDraft();
   const open = useOpen();
   const [currentness, setCurrentness] = useState<Currentness>("current");
   const [text, setText] = useState("");
@@ -111,9 +112,13 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
         {typeName(ty_name)}{" "}
         <button
           type="button"
-          onClick={() =>
-            open({ kind: "operation", name: actions.addNode(ty_name) })
-          }
+          disabled={frozen(state)}
+          onClick={() => {
+            const name = actions.addNode(ty_name);
+            if (name !== null) {
+              open({ kind: "operation", name });
+            }
+          }}
         >
           New node of this type
         </button>

@@ -1,13 +1,11 @@
 import type {
-  ApplyResult,
-  CheckResult,
+  DecimalString,
   DecodeError,
   EntryId,
   EvaluationParams,
   OperationEntry,
   PlanId,
   Proposal,
-  ProposalEntry,
   ProposalLocation,
   ProposalReference,
   ProposalReport,
@@ -16,22 +14,28 @@ import type {
 } from "../contract.ts";
 import type { PickRole } from "../editors/OperationEditor.tsx";
 
-// Operation names (FILES §2): a letter or underscore, then letters, digits,
-// underscores, and hyphens.
-export const NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
-
-export function validName(name: string): boolean {
-  return NAME.test(name);
-}
-
 // An endpoint the user has yet to pick. The contract has no "absent" edge
-// endpoint, so an empty identity stands in; it is never sent (`incomplete`
-// stops Check) and renders as "?" instead of a position.
-export const UNSET_ID: EntryId = { origin: "", position: "" };
+// endpoint or predecessor, so an empty identity stands in; it is never sent
+// (`incomplete` stops Check and Export) and renders as "?".
+const UNSET_ID: EntryId = { origin: "", position: "" };
 export const UNSET: ProposalReference = { existing: UNSET_ID };
 
 export function isUnset(reference: ProposalReference): boolean {
   return "existing" in reference && reference.existing.origin === "";
+}
+
+export function sameReference(
+  a: ProposalReference,
+  b: ProposalReference,
+): boolean {
+  if ("added" in a) {
+    return "added" in b && a.added === b.added;
+  }
+  return (
+    "existing" in b &&
+    a.existing.origin === b.existing.origin &&
+    a.existing.position === b.existing.position
+  );
 }
 
 // The evaluation-time choice of Check (INTERFACES §5): absent by default.
@@ -51,39 +55,104 @@ export function evaluationParams(evaluation: Evaluation): EvaluationParams {
   }
 }
 
+export function sameEvaluation(a: Evaluation, b: Evaluation): boolean {
+  if (a.kind === "at" || b.kind === "at") {
+    return a.kind === "at" && b.kind === "at" && a.time === b.time;
+  }
+  return a.kind === b.kind;
+}
+
 // The last complete report: a check's, or the one a rejected apply returned.
 // `request` is the JSON of the proposal it judged; Apply is gated on it
-// matching the current draft exactly.
+// matching the current draft exactly. `names` are that proposal's operation
+// names by index, following later renames, so findings stay on their
+// operation. `spent` marks a check an apply of uncertain fate used.
 export interface Outcome {
   source: "check" | "apply";
   request: string;
+  names: string[];
   evaluation: Evaluation;
   accepted: boolean;
   report: ProposalReport;
+  spent: boolean;
 }
 
 // What the last call reported besides a report: shown as a banner until the
-// next call or, for content problems, the next edit.
+// next call or, for content problems, the next edit. Each one is known to
+// have happened before publication; an apply that may have been published is
+// an `Uncertain` record instead.
 export type Problem =
   | {
       kind: "invalid_proposal";
       message: string;
       location: ProposalLocation | null;
     }
-  | { kind: "malformed_proposal"; message: string; decode: DecodeError }
+  | {
+      kind: "malformed_proposal";
+      message: string;
+      decode: DecodeError;
+      operation: string | null;
+    }
   | { kind: "incomplete"; message: string; operation: string }
-  | { kind: "foreign_database"; message: string }
+  | {
+      kind: "foreign_database";
+      message: string;
+      expected: Uuid;
+      actual: Uuid;
+    }
   | { kind: "busy"; message: string; action: "check" | "apply" }
-  // A write may have been published: `publication_uncertain` with its
-  // outcome, or a backend or transport failure during apply without one.
-  | { kind: "uncertain"; message: string; outcome: Published | null }
   // A check that got no answer; nothing was written, retry is the user's call.
   | { kind: "retryable"; message: string }
+  | { kind: "failed"; message: string; action: "check" | "apply" };
+
+// The apply being sent, persisted before the request leaves so a reload in
+// the middle restores the draft as uncertain. The base comes from the check
+// it used, to look for the entries afterwards.
+export interface InFlight {
+  plan_id: PlanId | null;
+  request: string;
+  base_revision: Uuid | null;
+  base_end: DecimalString;
+}
+
+// What a look at the graph after an uncertain apply found.
+export type Verdict =
+  | { kind: "unchanged" }
+  | { kind: "absent" }
+  | { kind: "other" }
+  | { kind: "present"; operations: OperationEntry[] }
   | { kind: "failed"; message: string };
 
+// An apply that may have been published: `error` is the error kind,
+// `transport` for a lost answer, or `interrupted` for a page that went away
+// mid-apply. Only the user's decision clears it.
+export interface Uncertain extends InFlight {
+  error: string;
+  message: string;
+  outcome: Published | null;
+  verdict: Verdict | null;
+}
+
+// Where a kept edge came from: the revision it keeps a relationship for, the
+// node that revision revised when it was kept, and the original edge.
+export interface KeptEdge {
+  revision: string;
+  predecessor: EntryId;
+  edge: EntryId;
+}
+
+// A note about an edit that stays until dismissed; an offer is a follow-up
+// the user may take, such as removing edges left without an end.
+export interface Notice {
+  id: number;
+  text: string;
+  offer: { label: string; remove: string[] } | null;
+}
+
 export interface Applied {
-  graph_revision: Uuid;
+  graph_revision: Uuid | null;
   operations: OperationEntry[];
+  report: ProposalReport | null;
 }
 
 export interface Picking {
@@ -95,6 +164,8 @@ export type Pending = "mint" | "check" | "apply" | "encode" | "decode" | null;
 
 export interface DraftState {
   proposal: Proposal;
+  // Provenance of the kept edges, by edge operation name.
+  kept: Record<string, KeptEdge>;
   selected: string | null;
   picking: Picking | null;
   evaluation: Evaluation;
@@ -102,24 +173,30 @@ export interface DraftState {
   // The plan ID names an earlier graph revision; only Replan clears it.
   stale: { expected: Uuid; actual: Uuid } | null;
   problem: Problem | null;
-  // The last successful Apply, kept until dismissed while the draft is empty.
+  inFlight: InFlight | null;
+  uncertain: Uncertain | null;
+  // The last successful Apply, kept until dismissed.
   applied: Applied | null;
   pending: Pending;
-  // A transient note about the last edit, such as cleared references.
-  notice: string | null;
+  notices: Notice[];
+  nextNotice: number;
 }
 
 export const initialDraft: DraftState = {
   proposal: { entries: [] },
+  kept: {},
   selected: null,
   picking: null,
   evaluation: { kind: "none" },
   outcome: null,
   stale: null,
   problem: null,
+  inFlight: null,
+  uncertain: null,
   applied: null,
   pending: null,
-  notice: null,
+  notices: [],
+  nextNotice: 1,
 };
 
 // The draft without client state, exactly as it is sent.
@@ -132,538 +209,32 @@ export function requestOf(state: DraftState): string {
   return JSON.stringify(proposalOf(state));
 }
 
-// Apply is enabled only for an accepted check of this very content.
+// While an apply is in flight the draft is what was sent: no edit lands.
+export function frozen(state: DraftState): boolean {
+  return state.pending === "apply";
+}
+
+// Apply is enabled only for an unspent accepted check of this very content
+// and evaluation choice, with no apply of uncertain fate outstanding.
 export function applicable(state: DraftState): boolean {
   const { outcome } = state;
   return (
-    outcome?.accepted === true &&
+    outcome !== null &&
+    outcome.source === "check" &&
+    outcome.accepted &&
+    !outcome.spent &&
     state.stale === null &&
+    state.uncertain === null &&
     state.pending === null &&
     state.proposal.entries.length > 0 &&
-    outcome.request === requestOf(state)
+    outcome.request === requestOf(state) &&
+    sameEvaluation(outcome.evaluation, state.evaluation)
   );
 }
 
-// ---- Names ----
-
-function nameBase(ty_name: string): string {
-  const base = ty_name.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
-  if (base === "") {
-    return "op";
-  }
-  return /^[a-z_]/.test(base) ? base : `_${base}`;
-}
-
-function taken(entries: readonly ProposalEntry[]): Set<string> {
-  return new Set(entries.map((entry) => entry.name));
-}
-
-// `<ty_name lowercased>_<n>` with the smallest n that is free.
-export function defaultName(
-  entries: readonly ProposalEntry[],
-  ty_name: string,
-): string {
-  const used = taken(entries);
-  const base = nameBase(ty_name);
-  for (let n = 1; ; n++) {
-    const candidate = `${base}_${n}`;
-    if (!used.has(candidate)) {
-      return candidate;
-    }
-  }
-}
-
-// `wanted` itself when free, else `wanted_2`, `wanted_3`, and so on.
-export function uniqueName(
-  entries: readonly ProposalEntry[],
-  wanted: string,
-): string {
-  const used = taken(entries);
-  if (!used.has(wanted)) {
-    return wanted;
-  }
-  for (let n = 2; ; n++) {
-    const candidate = `${wanted}_${n}`;
-    if (!used.has(candidate)) {
-      return candidate;
-    }
-  }
-}
-
-// ---- References ----
-
-function renamed(
-  reference: ProposalReference,
-  from: string,
-  to: string,
-): ProposalReference {
-  return "added" in reference && reference.added === from
-    ? { added: to }
-    : reference;
-}
-
-export function renameReferences(
-  entries: readonly ProposalEntry[],
-  from: string,
-  to: string,
-): ProposalEntry[] {
-  return entries.map((entry) => {
-    if (entry.kind === "edge") {
-      return {
-        ...entry,
-        from: renamed(entry.from, from, to),
-        to: renamed(entry.to, from, to),
-      };
-    }
-    if (entry.predecessor !== undefined) {
-      return { ...entry, predecessor: renamed(entry.predecessor, from, to) };
-    }
-    return entry;
-  });
-}
-
-function refersTo(reference: ProposalReference, name: string): boolean {
-  return "added" in reference && reference.added === name;
-}
-
-// Drops the named operation and clears every `added` reference to it: a
-// node loses its predecessor and intent, an edge endpoint becomes unset.
-export function removeOperation(
-  entries: readonly ProposalEntry[],
-  name: string,
-): { entries: ProposalEntry[]; cleared: number } {
-  let cleared = 0;
-  const rest: ProposalEntry[] = [];
-  for (const entry of entries) {
-    if (entry.name === name) {
-      continue;
-    }
-    if (entry.kind === "edge") {
-      const from = refersTo(entry.from, name);
-      const to = refersTo(entry.to, name);
-      cleared += Number(from) + Number(to);
-      rest.push({
-        ...entry,
-        from: from ? UNSET : entry.from,
-        to: to ? UNSET : entry.to,
-      });
-    } else if (
-      entry.predecessor !== undefined &&
-      refersTo(entry.predecessor, name)
-    ) {
-      cleared += 1;
-      const { predecessor: _p, intent: _i, ...root } = entry;
-      rest.push(root);
-    } else {
-      rest.push(entry);
-    }
-  }
-  return { entries: rest, cleared };
-}
-
-// Why an `added` reference would fail: it names no operation, or a later one.
-export function referenceIssue(
-  entries: readonly ProposalEntry[],
-  index: number,
-  reference: ProposalReference,
-): "missing" | "later" | null {
-  if (!("added" in reference)) {
-    return null;
-  }
-  const target = entries.findIndex((entry) => entry.name === reference.added);
-  if (target < 0) {
-    return "missing";
-  }
-  return target < index ? null : "later";
-}
-
-// The first reason the draft cannot be sent: an unset endpoint. Everything
-// else is the server's judgment.
-export function incomplete(
-  entries: readonly ProposalEntry[],
-): { operation: string; message: string } | null {
-  for (const entry of entries) {
-    if (entry.kind === "edge") {
-      for (const end of ["from", "to"] as const) {
-        if (isUnset(entry[end])) {
-          return {
-            operation: entry.name,
-            message: `edge ${entry.name} has no ${end} node yet`,
-          };
-        }
-      }
-    } else if (entry.predecessor !== undefined && isUnset(entry.predecessor)) {
-      return {
-        operation: entry.name,
-        message: `node ${entry.name} has no predecessor picked yet`,
-      };
-    }
-  }
-  return null;
-}
-
-// Appends imported operations after the draft's own, renaming names already
-// in use with a numeric suffix. An imported `added` reference resolves among
-// the imported operations before it, as it would in its own file, and
-// follows that operation's final name; the draft's operations never pointed
-// at an imported name, so they are untouched.
-export function appendOperations(
-  entries: readonly ProposalEntry[],
-  imported: readonly ProposalEntry[],
-): { entries: ProposalEntry[]; renamed: [string, string][] } {
-  const renames: [string, string][] = [];
-  const combined = [...entries];
-  // Original name to final name, for the imported operations seen so far.
-  const finals = new Map<string, string>();
-  const follow = (reference: ProposalReference): ProposalReference => {
-    if (!("added" in reference)) {
-      return reference;
-    }
-    const final = finals.get(reference.added);
-    return final === undefined ? reference : { added: final };
-  };
-  for (const entry of imported) {
-    const followed: ProposalEntry =
-      entry.kind === "edge"
-        ? { ...entry, from: follow(entry.from), to: follow(entry.to) }
-        : entry.predecessor === undefined
-          ? entry
-          : { ...entry, predecessor: follow(entry.predecessor) };
-    const name = uniqueName(combined, entry.name);
-    if (name !== entry.name) {
-      renames.push([entry.name, name]);
-    }
-    finals.set(entry.name, name);
-    combined.push({ ...followed, name });
-  }
-  return { entries: combined, renamed: renames };
-}
-
-// ---- Reducer ----
-
-export type DraftAction =
-  // Selects the new operation unless `select` is false, as for the kept
-  // edges a revision adds beside itself.
-  | { kind: "add"; entry: ProposalEntry; after?: string; select?: boolean }
-  | { kind: "replace"; name: string; entry: ProposalEntry }
-  | { kind: "rename"; name: string; to: string }
-  | { kind: "move"; name: string; by: -1 | 1 }
-  | { kind: "duplicate"; name: string }
-  | { kind: "remove"; name: string }
-  | { kind: "clear" }
-  | { kind: "import"; proposal: Proposal; mode: "replace" | "append" }
-  | { kind: "set_plan_id"; plan_id: PlanId }
-  | { kind: "replan"; plan_id: PlanId }
-  | { kind: "evaluation"; evaluation: Evaluation }
-  | { kind: "pending"; pending: Pending }
-  | {
-      kind: "checked";
-      result: CheckResult;
-      request: string;
-      evaluation: Evaluation;
-    }
-  | { kind: "applied"; result: ApplyResult }
-  | {
-      kind: "rejected";
-      report: ProposalReport;
-      request: string;
-      evaluation: Evaluation;
-    }
-  | { kind: "stale"; expected: Uuid; actual: Uuid }
-  | { kind: "problem"; problem: Problem | null }
-  | { kind: "dismiss_applied" }
-  | { kind: "notice"; notice: string | null }
-  | { kind: "select"; name: string | null }
-  | { kind: "pick"; picking: Picking | null }
-  | { kind: "resolve_pick"; id: EntryId };
-
-// Problems about the content go away with the next edit; the others stay
-// until the next call or an explicit dismissal.
-function survivesEdit(problem: Problem | null): Problem | null {
-  switch (problem?.kind) {
-    case "invalid_proposal":
-    case "malformed_proposal":
-    case "incomplete":
-      return null;
-    default:
-      return problem;
-  }
-}
-
-function edited(
-  state: DraftState,
-  entries: ProposalEntry[],
-  more: Partial<DraftState> = {},
-): DraftState {
-  return {
-    ...state,
-    proposal: { ...state.proposal, entries },
-    problem: survivesEdit(state.problem),
-    notice: null,
-    ...more,
-  };
-}
-
-function withEntry(
-  entries: readonly ProposalEntry[],
-  index: number,
-  entry: ProposalEntry,
-): ProposalEntry[] {
-  const copy = [...entries];
-  copy[index] = entry;
-  return copy;
-}
-
-function emptied(state: DraftState): DraftState {
-  return {
-    ...state,
-    proposal: { entries: [] },
-    selected: null,
-    picking: null,
-    outcome: null,
-    stale: null,
-    problem: null,
-    notice: null,
-  };
-}
-
-export function draftReducer(
-  state: DraftState,
-  action: DraftAction,
-): DraftState {
-  const { entries } = state.proposal;
-  switch (action.kind) {
-    case "add": {
-      const name = uniqueName(entries, action.entry.name);
-      const entry = { ...action.entry, name };
-      const at =
-        action.after === undefined
-          ? -1
-          : entries.findIndex((e) => e.name === action.after);
-      const next =
-        at < 0
-          ? [...entries, entry]
-          : [...entries.slice(0, at + 1), entry, ...entries.slice(at + 1)];
-      return edited(state, next, {
-        selected: action.select === false ? state.selected : name,
-      });
-    }
-    case "replace": {
-      const index = entries.findIndex((e) => e.name === action.name);
-      if (index < 0) {
-        return state;
-      }
-      let entry = action.entry;
-      let next = entries;
-      let notice: string | null = null;
-      // Names are the operations' identities in the client, so a name already
-      // in use is refused. A name outside the grammar is kept, as the user
-      // typed it mid-edit; the editor flags it and the server rejects it.
-      if (entry.name !== action.name) {
-        if (entries.some((e) => e.name === entry.name)) {
-          notice = `the name ${entry.name} is already used; kept ${action.name}`;
-          entry = { ...entry, name: action.name };
-        } else {
-          next = renameReferences(entries, action.name, entry.name);
-        }
-      }
-      const selected =
-        state.selected === action.name ? entry.name : state.selected;
-      const picking =
-        state.picking?.operation === action.name
-          ? { ...state.picking, operation: entry.name }
-          : state.picking;
-      return edited(state, withEntry(next, index, entry), {
-        selected,
-        picking,
-        notice,
-      });
-    }
-    case "rename": {
-      const index = entries.findIndex((e) => e.name === action.name);
-      const entry = entries[index];
-      if (entry === undefined) {
-        return state;
-      }
-      return draftReducer(state, {
-        kind: "replace",
-        name: action.name,
-        entry: { ...entry, name: action.to },
-      });
-    }
-    case "move": {
-      const index = entries.findIndex((e) => e.name === action.name);
-      const target = index + action.by;
-      if (index < 0 || target < 0 || target >= entries.length) {
-        return state;
-      }
-      const next = [...entries];
-      const [moved] = next.splice(index, 1);
-      if (moved === undefined) {
-        return state;
-      }
-      next.splice(target, 0, moved);
-      return edited(state, next);
-    }
-    case "duplicate": {
-      const entry = entries.find((e) => e.name === action.name);
-      if (entry === undefined) {
-        return state;
-      }
-      return draftReducer(state, {
-        kind: "add",
-        entry: { ...entry, name: uniqueName(entries, entry.name) },
-        after: action.name,
-      });
-    }
-    case "remove": {
-      if (!entries.some((e) => e.name === action.name)) {
-        return state;
-      }
-      const { entries: next, cleared } = removeOperation(entries, action.name);
-      return edited(state, next, {
-        selected: state.selected === action.name ? null : state.selected,
-        picking:
-          state.picking?.operation === action.name ? null : state.picking,
-        notice:
-          cleared === 0
-            ? null
-            : `removed ${action.name} and cleared ${cleared} reference${cleared === 1 ? "" : "s"} to it`,
-      });
-    }
-    case "clear":
-      return emptied(state);
-    case "import": {
-      if (action.mode === "replace") {
-        const plan_id = action.proposal.plan_id ?? state.proposal.plan_id;
-        return {
-          ...emptied(state),
-          proposal:
-            plan_id === undefined
-              ? { entries: action.proposal.entries }
-              : { plan_id, entries: action.proposal.entries },
-        };
-      }
-      const { entries: next, renamed } = appendOperations(
-        entries,
-        action.proposal.entries,
-      );
-      return edited(state, next, {
-        notice:
-          renamed.length === 0
-            ? null
-            : `renamed ${renamed.map(([from, to]) => `${from} → ${to}`).join(", ")}`,
-      });
-    }
-    case "set_plan_id":
-      // A plan ID minted for a draft that was cleared meanwhile is dropped.
-      if (entries.length === 0 || state.proposal.plan_id !== undefined) {
-        return state;
-      }
-      return {
-        ...state,
-        proposal: { ...state.proposal, plan_id: action.plan_id },
-      };
-    case "replan":
-      return {
-        ...state,
-        proposal: { ...state.proposal, plan_id: action.plan_id },
-        outcome: null,
-        stale: null,
-        problem: null,
-        pending: null,
-      };
-    case "evaluation":
-      return { ...state, evaluation: action.evaluation };
-    case "pending":
-      return { ...state, pending: action.pending };
-    case "checked":
-      return {
-        ...state,
-        outcome: {
-          source: "check",
-          request: action.request,
-          evaluation: action.evaluation,
-          accepted: action.result.accepted,
-          report: action.result.report,
-        },
-        stale: null,
-        problem: null,
-        pending: null,
-      };
-    case "applied":
-      return {
-        ...emptied(state),
-        applied: {
-          graph_revision: action.result.graph_revision,
-          operations: action.result.report.operations,
-        },
-        pending: null,
-      };
-    case "rejected":
-      return {
-        ...state,
-        outcome: {
-          source: "apply",
-          request: action.request,
-          evaluation: action.evaluation,
-          accepted: false,
-          report: action.report,
-        },
-        stale: null,
-        problem: null,
-        pending: null,
-      };
-    case "stale":
-      return {
-        ...state,
-        stale: { expected: action.expected, actual: action.actual },
-        problem: null,
-        pending: null,
-      };
-    case "problem":
-      return { ...state, problem: action.problem, pending: null };
-    case "dismiss_applied":
-      return { ...state, applied: null };
-    case "notice":
-      return { ...state, notice: action.notice };
-    case "select":
-      return { ...state, selected: action.name };
-    case "pick":
-      return { ...state, picking: action.picking };
-    case "resolve_pick": {
-      const { picking } = state;
-      if (picking === null) {
-        return state;
-      }
-      const index = entries.findIndex((e) => e.name === picking.operation);
-      const entry = entries[index];
-      if (entry === undefined) {
-        return { ...state, picking: null };
-      }
-      const reference: ProposalReference = { existing: action.id };
-      let next: ProposalEntry;
-      if (picking.role === "predecessor") {
-        if (entry.kind !== "node") {
-          return { ...state, picking: null };
-        }
-        // A predecessor needs an intent; revise is the common case and the
-        // editor offers branch.
-        next = {
-          ...entry,
-          predecessor: reference,
-          intent: entry.intent ?? "revise",
-        };
-      } else {
-        if (entry.kind !== "edge") {
-          return { ...state, picking: null };
-        }
-        next = { ...entry, [picking.role]: reference };
-      }
-      return edited(state, withEntry(entries, index, next), {
-        picking: null,
-        selected: entry.name,
-      });
-    }
-  }
+// Apply reuses the inputs the check reported, so a check with `now` applies
+// at the instant that check captured, not at a new one.
+export function applyParams(outcome: Outcome): EvaluationParams {
+  const time = outcome.report.analysis.inputs.evaluation_time;
+  return time === null ? {} : { evaluation_time: time };
 }

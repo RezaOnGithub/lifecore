@@ -11,6 +11,50 @@ import type {
   TimestampString,
 } from "../contract.ts";
 
+// ---- Own properties ----
+
+// Field names are data, so `__proto__`, `constructor`, and `toString` are
+// ordinary names: membership is an own-property test, and writes define a
+// data property, since assigning `__proto__` would replace the prototype.
+export function getOwn<T>(
+  object: { readonly [key: string]: T },
+  key: string,
+): T | undefined {
+  return Object.hasOwn(object, key) ? object[key] : undefined;
+}
+
+export function setOwn<T>(
+  object: { [key: string]: T },
+  key: string,
+  value: T,
+): void {
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+// ---- Ordering ----
+
+// Code point order, which is the byte order of the server's UTF-8 `String`s
+// in a `BTreeSet`. Plain `<` compares UTF-16 units, which puts an astral
+// character before U+E000..U+FFFF.
+export function compareCodePoints(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length) {
+    const x = a.codePointAt(i) ?? 0;
+    const y = b.codePointAt(i) ?? 0;
+    if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+    // Equal code points span the same number of units in both strings.
+    i += x > 0xffff ? 2 : 1;
+  }
+  return Math.sign(a.length - b.length);
+}
+
 // ---- Integers (FILES §2.1): one spelling per value, within i64 ----
 
 const DECIMAL = /^(?:0|-?[1-9][0-9]*)$/;
@@ -36,54 +80,31 @@ export function isDecimal(text: string): boolean {
   return decimalError(text) === null;
 }
 
-// ---- Timestamps: a sanity check on what Jiff prints and parses ----
+// ---- Timestamps: Jiff decides (FILES §2.1) ----
 
-// Date, `T` (or a space), time, up to nine fraction digits, then `Z` or an
-// offset. Jiff is the arbiter; this only catches obvious slips before a
-// round trip to the server.
-const TIMESTAMP =
-  /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})$/;
-
-function daysInMonth(year: number, month: number): number {
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return days[month - 1] ?? 0;
+// Any non-empty text is a timestamp value as far as the client goes: Jiff's
+// parser, range, and normalization are the server's, and Check reports what
+// it rejects. Empty text is refused only because nothing would accept it.
+export function timestampError(text: string): string | null {
+  return text === "" ? "a timestamp cannot be empty" : null;
 }
 
-export function timestampError(text: string): string | null {
+// A loose recognizer for RFC 3339 and RFC 9557 spellings: a date with a
+// four- or six-digit year, extended or basic; a time to the hour, minute,
+// or second with any fraction; `Z` or an offset to the second; bracketed
+// annotations. Values are not range-checked. It only spots text that is
+// plainly something else, so the hint can say so before a Check.
+const LOOSE_TIMESTAMP =
+  /^[+-]?\d{4,6}-?\d{2}-?\d{2}[Tt ]\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?(?:[Zz]|[+-]\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?)(?:\[[^\]]+\])*$/;
+
+export const TIMESTAMP_HINT =
+  "not in the usual RFC 3339 form; Check will report it if Jiff rejects it";
+
+export function timestampHint(text: string): string | null {
   if (text === "") {
-    return "timestamp required";
+    return "an instant such as 2026-10-15T08:30:00Z, or now (UTC)";
   }
-  const match = TIMESTAMP.exec(text);
-  if (match === null) {
-    return "expected an RFC 3339 instant such as 2026-10-15T08:30:00Z, with up to nine fraction digits and Z or a ±HH:MM offset";
-  }
-  const part = (index: number) => Number(match[index] ?? "");
-  const [year, month, day, hour, minute, second] = [1, 2, 3, 4, 5, 6].map(
-    part,
-  ) as [number, number, number, number, number, number];
-  if (month < 1 || month > 12) {
-    return `month ${month} is out of range`;
-  }
-  if (day < 1 || day > daysInMonth(year, month)) {
-    return `day ${day} is out of range for ${match[1]}-${match[2]}`;
-  }
-  if (hour > 23 || minute > 59) {
-    return "time of day is out of range";
-  }
-  // Jiff accepts a leap second and clamps it.
-  if (second > 60) {
-    return "second is out of range";
-  }
-  const offset = match[8] ?? "";
-  if (offset.length === 6) {
-    const hours = Number(offset.slice(1, 3));
-    const minutes = Number(offset.slice(4, 6));
-    if (hours > 23 || minutes > 59) {
-      return "offset is out of range";
-    }
-  }
-  return null;
+  return LOOSE_TIMESTAMP.test(text) ? null : TIMESTAMP_HINT;
 }
 
 // The instant `Date` knows, at the millisecond precision it has: no digits
@@ -94,7 +115,7 @@ export function nowTimestamp(date: Date = new Date()): TimestampString {
 
 // ---- Operation names (FILES §2.3) ----
 
-const NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+export const NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 export function nameError(name: string): string | null {
   if (name === "") {
@@ -138,37 +159,32 @@ export function matchesShape(value: Payload, shape: Shape): boolean {
   return kindOf(value) === shape.kind;
 }
 
-// The value a field gets when it becomes present. A timestamp has no neutral
-// spelling, so it starts at the clock; a record starts complete, with its
-// mandatory fields defaulted in turn.
-export function defaultValue(
-  shape: Shape,
-  now: () => TimestampString = nowTimestamp,
-): Payload {
+// The value a field gets when it becomes present, or null for an integer
+// or a timestamp: neither has a neutral value, so the editor waits for one
+// to be typed rather than inventing `0` or the current time. A record starts
+// with those of its mandatory fields that have a default.
+export function defaultValue(shape: Shape): Payload | null {
   switch (shape.kind) {
     case "text":
       return "";
     case "integer":
-      return integer("0");
+    case "timestamp":
+      return null;
     case "boolean":
       return boolean(false);
-    case "timestamp":
-      return timestamp(now());
     case "list":
       return [];
     case "record":
-      return record(defaultBody(shape.fields, now));
+      return record(defaultBody(shape.fields));
   }
 }
 
-export function defaultBody(
-  fields: FieldDecls,
-  now: () => TimestampString = nowTimestamp,
-): Body {
+export function defaultBody(fields: FieldDecls): Body {
   const body: Body = {};
   for (const [field, decl] of Object.entries(fields)) {
-    if (decl.status === "mandatory") {
-      body[field] = defaultValue(decl.shape, now);
+    const value = decl.status === "mandatory" ? defaultValue(decl.shape) : null;
+    if (value !== null) {
+      setOwn(body, field, value);
     }
   }
   return body;
@@ -187,6 +203,95 @@ const RECORD_FORM = '{"kind":"record","value":{…}}';
 
 function join(path: string, field: string): string {
   return path === "" ? field : `${path}.${field}`;
+}
+
+export interface RepeatedKey {
+  // The JSON path of the object that repeats `key`; "" for the outermost.
+  path: string;
+  key: string;
+}
+
+interface Frame {
+  // Null for an array.
+  keys: Set<string> | null;
+  path: string;
+  key: string;
+  index: number;
+  expectKey: boolean;
+}
+
+// `JSON.parse` keeps the last of repeated keys, but a repeated field name is
+// malformed wherever it appears (FILES §2.1), so the text is scanned first:
+// one key set per open object, strings skipped whole, so braces, commas,
+// and escaped quotes inside them are inert. Keys compare decoded, as
+// `"a"` and `"\u0061"` name the same field. Text that is not JSON yields
+// null and is left to `JSON.parse` to report.
+export function findRepeatedKey(text: string): RepeatedKey | null {
+  const stack: Frame[] = [];
+  const childPath = (): string => {
+    const top = stack.at(-1);
+    if (top === undefined) {
+      return "";
+    }
+    return top.keys === null
+      ? `${top.path}[${top.index}]`
+      : join(top.path, top.key);
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') {
+      let end = i + 1;
+      while (end < text.length && text[end] !== '"') {
+        end += text[end] === "\\" ? 2 : 1;
+      }
+      if (end >= text.length) {
+        return null;
+      }
+      const top = stack.at(-1);
+      if (top !== undefined && top.keys !== null && top.expectKey) {
+        let key: unknown;
+        try {
+          key = JSON.parse(text.slice(i, end + 1));
+        } catch {
+          return null;
+        }
+        if (typeof key !== "string") {
+          return null;
+        }
+        if (top.keys.has(key)) {
+          return { path: top.path, key };
+        }
+        top.keys.add(key);
+        top.key = key;
+        top.expectKey = false;
+      }
+      i = end + 1;
+      continue;
+    }
+    if (c === "{" || c === "[") {
+      stack.push({
+        keys: c === "{" ? new Set() : null,
+        path: childPath(),
+        key: "",
+        index: 0,
+        expectKey: c === "{",
+      });
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+    } else if (c === ",") {
+      const top = stack.at(-1);
+      if (top !== undefined) {
+        if (top.keys === null) {
+          top.index += 1;
+        } else {
+          top.expectKey = true;
+        }
+      }
+    }
+    i += 1;
+  }
+  return null;
 }
 
 function canonicalValue(json: unknown, path: string): Payload {
@@ -212,18 +317,17 @@ function canonicalValue(json: unknown, path: string): Payload {
   if (typeof json !== "object") {
     throw new Malformed(`${path}: not a JSON value`);
   }
-  const object = json as { [key: string]: unknown };
-  if (!("kind" in object)) {
+  if (!Object.hasOwn(json, "kind")) {
     throw new Malformed(
       `${path}: an object must be an envelope with "kind" and "value"; a record is ${RECORD_FORM}`,
     );
   }
-  if (!("value" in object) || Object.keys(object).length !== 2) {
+  if (!Object.hasOwn(json, "value") || Object.keys(json).length !== 2) {
     throw new Malformed(
       `${path}: an envelope has exactly "kind" and "value", as in ${INTEGER_FORM}`,
     );
   }
-  const { kind, value } = object;
+  const { kind, value } = json as { kind: unknown; value: unknown };
   switch (kind) {
     case "integer": {
       if (typeof value !== "string") {
@@ -271,12 +375,23 @@ function canonicalValue(json: unknown, path: string): Payload {
 function canonicalBody(json: object, path: string): Body {
   const body: Body = {};
   for (const [field, value] of Object.entries(json)) {
-    body[field] = canonicalValue(value, join(path, field));
+    setOwn(body, field, canonicalValue(value, join(path, field)));
   }
   return body;
 }
 
-function parseJson(text: string): { json: unknown } | { error: string } {
+// `where` names the text in messages: a field label, or "" for a payload.
+function parseJson(
+  text: string,
+  where: string,
+): { json: unknown } | { error: string } {
+  const repeated = findRepeatedKey(text);
+  if (repeated !== null) {
+    const path = join(where, repeated.path);
+    return {
+      error: `${path === "" ? "the payload" : path} repeats the key ${JSON.stringify(repeated.key)}; a name may appear once (FILES §2.1)`,
+    };
+  }
   try {
     return { json: JSON.parse(text) as unknown };
   } catch (failure) {
@@ -297,7 +412,7 @@ function malformed(failure: unknown): { error: string } {
 export function validateCanonicalPayload(
   text: string,
 ): { payload: Body } | { error: string } {
-  const parsed = parseJson(text);
+  const parsed = parseJson(text, "");
   if ("error" in parsed) {
     return parsed;
   }
@@ -317,7 +432,7 @@ export function validateCanonicalValue(
   text: string,
   path = "value",
 ): { value: Payload } | { error: string } {
-  const parsed = parseJson(text);
+  const parsed = parseJson(text, path);
   if ("error" in parsed) {
     return parsed;
   }

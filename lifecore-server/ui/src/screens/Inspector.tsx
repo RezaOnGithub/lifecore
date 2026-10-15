@@ -11,6 +11,7 @@ import type {
 } from "../contract.ts";
 import { latest, useAsOf, useCall, useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
+import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import {
   CurrentBadge,
@@ -119,6 +120,7 @@ function PickBanner({ id }: { id: EntryId | null }) {
           <OperationLink name={picking.operation} />?{" "}
           <button
             type="button"
+            disabled={frozen(state)}
             onClick={() => {
               const operation = actions.resolvePick(id);
               if (operation !== null) {
@@ -147,12 +149,19 @@ function NodeInspection({
   const { entry, type, lineage, edges, view } = inspection;
   const [raw, setRaw] = useState(false);
   const types = useTypes();
-  const { actions } = useDraft();
+  const { state, actions } = useDraft();
   const open = useOpen();
+  const locked = frozen(state);
+  // A revise needs its predecessor current (FILES §2.4); a superseded node
+  // can only be branched.
+  const revisable = entry.current;
   const declaration =
     entry.ty_name === "Type" ? ownDeclaration(types, entry) : null;
   const revise = (intent: "revise" | "branch") => {
-    open({ kind: "operation", name: actions.revise(entry, intent) });
+    const name = actions.revise(entry, intent);
+    if (name !== null) {
+      open({ kind: "operation", name });
+    }
   };
   return (
     <article data-testid="inspector">
@@ -177,13 +186,19 @@ function NodeInspection({
         </button>
         <button
           type="button"
-          title="a new revision with this payload; current edges are kept"
+          disabled={locked || !revisable}
+          title={
+            revisable
+              ? "a new revision with this payload; current edges are kept"
+              : "only a current node can be revised; Branch instead"
+          }
           onClick={() => revise("revise")}
         >
           Revise
         </button>
         <button
           type="button"
+          disabled={locked}
           title="a new branch with this payload; no edges are kept"
           onClick={() => revise("branch")}
         >
@@ -191,10 +206,14 @@ function NodeInspection({
         </button>
         <button
           type="button"
+          disabled={locked}
           title="a new edge from this node"
-          onClick={() =>
-            open({ kind: "operation", name: actions.connect(entry.id) })
-          }
+          onClick={() => {
+            const name = actions.connect(entry.id);
+            if (name !== null) {
+              open({ kind: "operation", name });
+            }
+          }}
         >
           Connect
         </button>

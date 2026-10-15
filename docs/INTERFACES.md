@@ -512,40 +512,83 @@ them; none is a server contract.
   for a current declaration, else a client-side reading) and then the full
   payload table, so `name` and fields outside the grammar stay visible.
 - Drafts: one per database, kept in `localStorage` under
-  `lifecore.draft.<database>`. Only the proposal is saved, on every change, and
-  restored on load; check results and editor state are not, and an unreadable
-  stored draft is dropped. A plan ID is minted when the draft gets its first
-  operation and again only on an explicit Replan, which clears the stale check.
+  `lifecore.draft.<database>` and held under the last database ID that loaded,
+  so a failed or reloading description neither empties nor remounts it. The
+  proposal, the provenance of its kept edges, an uncertain-apply record, and
+  an apply-in-flight marker are saved synchronously on every change of them;
+  check results and editor state are not, so a restored draft needs a new
+  check. An unreadable stored draft is dropped. A plan ID is minted when the
+  draft gets its first operation and again only on an explicit Replan, which
+  clears the stale check; a replacing import takes the file's plan ID or a
+  fresh one, never the old draft's.
 - Operation names default to `<ty_name lowercased>_<n>`, with the smallest
   free `n` and characters outside the name grammar replaced by `_`. Names
   identify operations in the client, so a rename to a name in use is refused;
-  a name outside the grammar is kept while typed and left to the server to
-  reject. Renames update `added` references. Removing an operation clears the
-  references to it: a node becomes a root, an edge end must be picked again.
-  Appended imports get a `_<n>` suffix on a name collision.
+  renames update `added` references, kept-edge provenance, and the last
+  check's findings. Removing an operation unsets every reference to it, a
+  predecessor included: the node keeps its intent and Check waits until it is
+  picked again. A notice, kept until dismissed, names the affected operations
+  and offers to remove the edges left without an end. Imported operations,
+  appended or replacing, get a `_<n>` suffix on a name collision; a proposal
+  that acknowledges a finding is not imported. Clear and Remove take a second
+  click; a move that puts a reference before its target posts a notice.
 - Check is manual. The evaluation time is absent by default, `now`, or an
-  explicit timestamp. Apply is enabled only after an accepted check of
-  identical proposal JSON, plan ID included, so any edit disables it, and it
-  reuses that check's evaluation choice. A successful Apply clears the draft,
-  lists the assigned IDs until dismissed, and reloads every screen. A lost
-  apply answer, `publication_uncertain`, or `backend_failure` keeps the draft,
-  says the change may have been applied, and reloads the screens. Nothing is
-  retried automatically. Drafts always apply to the current state; while an
-  as-of boundary is set, the tray says so.
+  explicit timestamp. Apply is enabled only after an accepted, unspent check
+  of identical proposal JSON, plan ID included, with the same evaluation
+  choice, and it sends the evaluation time that check reported, so `now`
+  applies at the instant the check captured; the tray shows which. While an
+  apply is in flight the draft is frozen: no edit, pick, import, or Clear
+  lands. A successful Apply removes the operations it carried, matched by name
+  and content, turns references to them into the assigned IDs, lists those
+  IDs and the report's finding counts until dismissed, and reloads every
+  screen. Failures known to precede publication (`invalid_params`,
+  `malformed_proposal`, `invalid_proposal`, `acknowledgment_unsupported`,
+  `foreign_database`, `stale_base`, `rejected`, `analyzer_failure`, `busy`,
+  `lock_failed`, `database_missing`, `database_unreadable`,
+  `publication_failed`, envelope errors, and structured HTTP rejections) keep
+  the draft and its check. Any other apply failure, such as
+  `publication_uncertain`, `backend_failure`, `internal`, an unknown kind, or a
+  lost or unreadable answer, spends the check and records the apply as
+  uncertain: plan ID, request JSON, error kind, and `data.outcome` when
+  present, stored with the draft. An apply still in flight when the page went
+  away restores as uncertain. Until the user decides that the entries are
+  present, offered when the outcome or a look at the positions the request
+  would have taken shows them, or that the draft was verified not applied, a
+  banner stays above the others and Apply and Replan are off. A stale base
+  does not show that an earlier apply was published: any writer moves the
+  revision. Nothing is retried automatically. Drafts always apply to the
+  current state; while an as-of boundary is set, the tray says so.
+- The tray is a column: a fixed header with the status, Check, Apply and the
+  evaluation it will use, the evaluation choice, the draft-wide buttons, and
+  every banner, above a scrolling list of one-line operations with their
+  provisional position `@<base + index>`. A revision's kept edges collapse
+  into one line under it.
 - A finding belongs to the operation whose entry is the newest in the first
-  prefix it was emitted at. Findings first emitted before the base are listed
-  as already in history, and initialization findings as suite-level.
-  Provisional subjects link to their operations.
-- Revise and Branch copy the node's payload. Reconnection lists the
-  predecessor's current edges, read without `as_of`. Revise keeps all of them
-  by default and Branch none. Each kept edge becomes an explicit edge
-  operation, `<operation>_keep_<edge position>`, placed after the revision
-  ([SPEC §5](SPEC.md#5-current-and-historical-data)).
+  prefix it was emitted at, matched by position against the report's
+  operations and kept by operation index, so renames keep it; findings from a
+  check of other content are dimmed. Each shows its prefix range, and
+  "resolved later in this draft" when its last prefix ends before the
+  candidate's head. "Already in history" lists base findings still emitted at
+  the base boundary; initialization findings are suite-level. Provisional
+  subjects link to their operations.
+- Revise and Branch copy the node's payload; only a current node can be
+  revised. Reconnection lists the predecessor's current edges, read without
+  `as_of`, by direction and type, collapsed beyond 10. Revise keeps all of
+  them by default, also when a predecessor is picked for a revise, and Branch
+  none. Each kept edge becomes an explicit edge operation,
+  `<operation>_keep_<edge position>`, placed after the revision
+  ([SPEC §5](SPEC.md#5-current-and-historical-data)). Its other end is the
+  revision itself for a self-loop, else the latest earlier revise successor
+  of the other node in the draft, else that node. An edge whose end the draft
+  supersedes, or whose revision no longer revises the node it was kept from,
+  carries a warning. Edges read for an operation that was meanwhile removed
+  or re-pointed are not added, and edges already kept are not added twice.
 - Picking: an editor's pick leaves a pending role (predecessor, from, or to).
   While it is pending, every node inspector offers "Use as <role>", which sets
   an `existing` reference and returns to the operation; edges cannot be
   picked. Connect starts an edge from the inspected node and picks its `to`.
-  The client does not send a draft with an endpoint still unpicked.
+  The client neither sends nor exports a draft with an endpoint or
+  predecessor still unpicked.
 
 ## 6. Analysis lifetime and dismissal persistence
 

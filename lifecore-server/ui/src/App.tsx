@@ -83,15 +83,25 @@ function Shell({
   };
   const screen = nav.current;
   // The draft is per database: the provider mounts once the id is known and
-  // remounts, restoring that database's draft, if it ever changes.
-  const database = latest(description)?.database ?? null;
+  // remounts, restoring that database's draft, only when another database
+  // answers. A failed or reloading description keeps the last id, so an
+  // outage never empties the draft or orphans an apply in flight.
+  const [database, setDatabase] = useState<string | null>(null);
+  const described = latest(description);
+  if (described !== null && described.database !== database) {
+    setDatabase(described.database);
+  }
+  const head = described?.view.end_exclusive ?? null;
+  const tray = <Tray screen={screen} head={head} />;
   // Explore stays mounted, hidden under other screens, so its results
-  // survive a detour through the inspector and Back.
+  // survive a detour through the inspector and Back. The operation screen
+  // is not keyed by name: a rename must not remount the editor under the
+  // user's cursor.
   return (
     <NavigationContext value={open}>
       <ReplaceContext value={replace}>
         <TypesContext value={latest(types)?.types ?? null}>
-          <DraftProvider key={database ?? ""} database={database}>
+          <DraftProvider key={database ?? "unknown"} database={database}>
             <div className="app">
               <TopBar
                 description={description}
@@ -102,9 +112,12 @@ function Shell({
                 onRefresh={onRefresh}
               />
               {description.status === "failed" ? (
-                <main className="full">
-                  <FailureView failure={description.failure} />
-                </main>
+                <>
+                  <main className="full">
+                    <FailureView failure={description.failure} />
+                  </main>
+                  {tray}
+                </>
               ) : (
                 <>
                   <Sidebar types={types} screen={screen} />
@@ -130,8 +143,6 @@ function Shell({
                         onExplore={exploreFrom}
                       />
                     )}
-                    {/* Not keyed by name: a rename must not remount the
-                      editor under the user's cursor. */}
                     {screen.kind === "operation" && (
                       <OperationScreen name={screen.name} />
                     )}
@@ -143,7 +154,7 @@ function Shell({
                       />
                     </div>
                   </main>
-                  <Tray screen={screen} />
+                  {tray}
                 </>
               )}
             </div>

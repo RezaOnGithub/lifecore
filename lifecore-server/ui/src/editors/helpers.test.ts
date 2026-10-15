@@ -1,20 +1,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ProposalEntry, TypeSchema, TypeSummary } from "../contract.ts";
+import type {
+  ProposalEntry,
+  Shape,
+  TypeSchema,
+  TypeSummary,
+} from "../contract.ts";
 import {
   addedNodeType,
   allEdgeLabels,
   earlierNodes,
   edgeTypeSuggestions,
   fieldRows,
-  freshFieldName,
+  fitKeys,
+  initialShape,
+  isUnpicked,
+  lineCount,
+  liveDraft,
   moveItem,
+  namedKeys,
+  nextKey,
   operationNameError,
   parseTags,
   renameField,
+  renameKey,
+  sameReference,
+  shapeOfKind,
   typeNames,
   withField,
-  withoutDecl,
   withoutField,
 } from "./helpers.ts";
 
@@ -96,28 +109,80 @@ test("only earlier node operations can be named by added", () => {
   assert.equal(addedNodeType({ existing: id }, earlier), null);
 });
 
-test("edge type suggestions follow the known endpoint types", () => {
+const blocked: TypeSchema = {
+  name: "Wall",
+  fields: {},
+  outgoing: [],
+  incoming: [],
+  successors: [],
+};
+
+test("edge type suggestions intersect what the known ends permit", () => {
   assert.deepEqual(allEdgeLabels(types), ["DependsOn", "Mentions"]);
   assert.deepEqual(allEdgeLabels(null), []);
-  assert.deepEqual(edgeTypeSuggestions(task, null, types), ["DependsOn"]);
-  assert.deepEqual(edgeTypeSuggestions(null, task, types), [
-    "DependsOn",
-    "Mentions",
-  ]);
-  assert.deepEqual(edgeTypeSuggestions(note, task, types), [
-    "DependsOn",
-    "Mentions",
-  ]);
+  // One end known: its own set.
+  assert.deepEqual(edgeTypeSuggestions(task, null, types), {
+    labels: ["DependsOn"],
+    note: null,
+  });
+  assert.deepEqual(edgeTypeSuggestions(null, task, types), {
+    labels: ["DependsOn", "Mentions"],
+    note: null,
+  });
+  // Both known: Note permits Mentions outgoing, Task both incoming.
+  assert.deepEqual(edgeTypeSuggestions(note, task, types), {
+    labels: ["Mentions"],
+    note: null,
+  });
+  assert.deepEqual(edgeTypeSuggestions(task, task, types), {
+    labels: ["DependsOn"],
+    note: null,
+  });
+  // Both known and nothing in common.
+  assert.deepEqual(
+    edgeTypeSuggestions(
+      { ...task, outgoing: ["Blocks"] },
+      { ...note, incoming: ["Mentions"] },
+      types,
+    ),
+    {
+      labels: [],
+      note: "no label is both outgoing from Task and incoming to Note",
+    },
+  );
   // Nothing known about either end: every declared label.
-  assert.deepEqual(edgeTypeSuggestions(null, null, types), [
-    "DependsOn",
-    "Mentions",
-  ]);
-  // Known ends that permit nothing fall back the same way.
-  assert.deepEqual(edgeTypeSuggestions(null, note, types), [
-    "DependsOn",
-    "Mentions",
-  ]);
+  assert.deepEqual(edgeTypeSuggestions(null, null, types), {
+    labels: ["DependsOn", "Mentions"],
+    note: null,
+  });
+  // A known end that permits nothing says so instead of offering everything.
+  assert.deepEqual(edgeTypeSuggestions(null, note, types), {
+    labels: [],
+    note: "Note permits no incoming edges",
+  });
+  assert.deepEqual(edgeTypeSuggestions(blocked, task, types), {
+    labels: [],
+    note: "Wall permits no outgoing edges",
+  });
+  assert.deepEqual(edgeTypeSuggestions(task, blocked, types), {
+    labels: [],
+    note: "Wall permits no incoming edges",
+  });
+});
+
+test("references: unpicked placeholders and equal ends", () => {
+  const unset = { existing: { origin: "", position: "" } };
+  assert.equal(isUnpicked(unset), true);
+  assert.equal(isUnpicked({ existing: id }), false);
+  assert.equal(isUnpicked({ added: "x" }), false);
+  assert.equal(sameReference({ added: "a" }, { added: "a" }), true);
+  assert.equal(sameReference({ added: "a" }, { added: "b" }), false);
+  assert.equal(sameReference({ existing: id }, { existing: { ...id } }), true);
+  assert.equal(
+    sameReference({ existing: id }, { existing: { ...id, position: "4" } }),
+    false,
+  );
+  assert.equal(sameReference({ existing: id }, { added: "3" }), false);
 });
 
 test("type names keep the server's order and always include Type", () => {
@@ -152,21 +217,84 @@ test("field rows: declared by status then name, then undeclared by name", () => 
   assert.deepEqual(fieldRows(null, {}), []);
 });
 
+test("field rows treat prototype names as ordinary fields", () => {
+  const text = {
+    status: "optional" as const,
+    shape: { kind: "text" as const },
+  };
+  const fields = JSON.parse(
+    `{"constructor":${JSON.stringify(text)},"__proto__":${JSON.stringify(text)}}`,
+  );
+  const body = JSON.parse(
+    '{"toString":"t","__proto__":"p","hasOwnProperty":"h"}',
+  );
+  assert.deepEqual(
+    fieldRows(fields, body).map((row) => [row.field, row.decl !== null]),
+    [
+      ["__proto__", true],
+      ["constructor", true],
+      ["hasOwnProperty", false],
+      ["toString", false],
+    ],
+  );
+  // No schema field is inherited: `toString` in the body is undeclared
+  // even against an empty declaration.
+  assert.deepEqual(
+    fieldRows({}, { toString: "t" }).map((row) => row.decl),
+    [null],
+  );
+});
+
 test("body and declaration edits keep order and drop keys cleanly", () => {
   const body = { a: "1", b: "2" };
   assert.deepEqual(Object.keys(withField(body, "c", "3")), ["a", "b", "c"]);
   assert.deepEqual(withField(body, "a", "x"), { a: "x", b: "2" });
+  assert.deepEqual(Object.keys(withField(body, "a", "x")), ["a", "b"]);
   assert.deepEqual(withoutField(body, "a"), { b: "2" });
   assert.equal("a" in withoutField(body, "a"), false);
   const text = {
     status: "optional" as const,
     shape: { kind: "text" as const },
   };
-  const decls = { a: text, b: text, c: text };
+  const integer = {
+    status: "mandatory" as const,
+    shape: { kind: "integer" as const },
+  };
+  const decls = { a: text, b: integer, c: text };
   assert.deepEqual(Object.keys(renameField(decls, "b", "x")), ["a", "x", "c"]);
-  assert.deepEqual(Object.keys(withoutDecl(decls, "b")), ["a", "c"]);
-  assert.equal(freshFieldName(decls), "field_1");
-  assert.equal(freshFieldName({ field_1: text, field_2: text }), "field_3");
+  assert.equal(renameField(decls, "b", "x").x, integer);
+  assert.deepEqual(Object.keys(withoutField(decls, "b")), ["a", "c"]);
+});
+
+test("renaming onto a declared name is refused, not an overwrite", () => {
+  const text = {
+    status: "optional" as const,
+    shape: { kind: "text" as const },
+  };
+  const integer = {
+    status: "mandatory" as const,
+    shape: { kind: "integer" as const },
+  };
+  const decls = { a: text, b: integer };
+  assert.equal(renameField(decls, "a", "b"), decls);
+  assert.deepEqual(decls, { a: text, b: integer });
+  // A name that is not declared, or no change, leaves them as they are.
+  assert.equal(renameField(decls, "z", "y"), decls);
+  assert.equal(renameField(decls, "a", "a"), decls);
+  // A number-like name is an ordinary name, although JavaScript lists
+  // such keys first; the row keys follow the name, not the place.
+  const renamed = renameField(decls, "b", "1");
+  assert.deepEqual(renamed, { 1: integer, a: text });
+  assert.equal(Object.hasOwn(renamed, "b"), false);
+  // Prototype names become own fields.
+  const odd = renameField(decls, "a", "__proto__");
+  assert.deepEqual(Object.keys(odd), ["__proto__", "b"]);
+  assert.equal(Object.getPrototypeOf(odd), Object.prototype);
+  assert.equal(Object.getOwnPropertyDescriptor(odd, "__proto__")?.value, text);
+  const withProto = withField({ a: "x" }, "__proto__", "y");
+  assert.deepEqual(Object.keys(withProto), ["a", "__proto__"]);
+  assert.equal(Object.getPrototypeOf(withProto), Object.prototype);
+  assert.deepEqual(Object.keys(withoutField(withProto, "a")), ["__proto__"]);
 });
 
 test("list items move within bounds", () => {
@@ -176,11 +304,92 @@ test("list items move within bounds", () => {
   assert.deepEqual(moveItem(["a", "b", "c"], 2, 3), ["a", "b", "c"]);
 });
 
-test("tags parse to a canonical name list", () => {
-  assert.deepEqual(parseTags("Mentions, DependsOn,,  Mentions ,"), [
-    "DependsOn",
-    "Mentions",
+test("tags parse to a canonical name list and report repeats", () => {
+  assert.deepEqual(parseTags("Mentions, DependsOn,,  Mentions ,"), {
+    tags: ["DependsOn", "Mentions"],
+    repeated: ["Mentions"],
+  });
+  assert.deepEqual(parseTags(""), { tags: [], repeated: [] });
+  assert.deepEqual(parseTags(" , "), { tags: [], repeated: [] });
+  assert.deepEqual(parseTags("\u{1f600}, \uff61, b").tags, [
+    "b",
+    "\uff61",
+    "\u{1f600}",
   ]);
-  assert.deepEqual(parseTags(""), []);
-  assert.deepEqual(parseTags(" , "), []);
+});
+
+test("draft text shows only over the value it was typed over", () => {
+  const draft = { text: "12a", base: "12" };
+  assert.equal(liveDraft(draft, "12"), draft);
+  assert.equal(liveDraft(draft, "13"), null);
+  assert.equal(liveDraft(null, "12"), null);
+  // A pending value: nothing committed yet.
+  const pending = { text: "-", base: null };
+  assert.equal(liveDraft(pending, null), pending);
+  assert.equal(liveDraft(pending, "5"), null);
+  assert.equal(lineCount(""), 1);
+  assert.equal(lineCount("a\nb\n"), 3);
+});
+
+test("row keys follow moves, removals, and renames", () => {
+  assert.deepEqual(fitKeys([], 3), [0, 1, 2]);
+  assert.deepEqual(fitKeys([4, 2], 4), [4, 2, 5, 6]);
+  assert.deepEqual(fitKeys([4, 2, 7], 2), [4, 2]);
+  assert.equal(nextKey([]), 0);
+  assert.equal(nextKey([3, 1]), 4);
+  // A move carries the key with the element.
+  assert.deepEqual(moveItem(fitKeys([], 3), 0, 2), [1, 2, 0]);
+  const named = namedKeys(["a", "b"], new Map());
+  assert.deepEqual(
+    [...named],
+    [
+      ["a", 0],
+      ["b", 1],
+    ],
+  );
+  // A rename keeps the key; a new name gets a fresh one.
+  const renamed = renameKey(named, "b", "1");
+  assert.deepEqual(
+    [...namedKeys(["1", "a", "c"], renamed)],
+    [
+      ["1", 1],
+      ["a", 0],
+      ["c", 2],
+    ],
+  );
+  // A removed name's key is not reused while others hold higher ones.
+  assert.deepEqual([...namedKeys(["b"], named)], [["b", 1]]);
+});
+
+test("shape changes keep nested declarations where they can", () => {
+  const record: Shape = {
+    kind: "record",
+    fields: { owner: { status: "mandatory", shape: { kind: "text" } } },
+  };
+  // record → list wraps it, so a list of records keeps the fields.
+  const list = shapeOfKind("list", record);
+  assert.deepEqual(list, { kind: "list", element: record });
+  // list of record → record unwraps it again.
+  assert.equal(shapeOfKind("record", list), record);
+  // list of integer → integer unwraps; → text replaces.
+  const integers: Shape = { kind: "list", element: { kind: "integer" } };
+  assert.deepEqual(shapeOfKind("integer", integers), { kind: "integer" });
+  assert.deepEqual(shapeOfKind("text", integers), { kind: "text" });
+  // A list of lists unwraps one level.
+  const matrix: Shape = { kind: "list", element: integers };
+  assert.equal(shapeOfKind("list", matrix), matrix);
+  assert.deepEqual(shapeOfKind("list", { kind: "text" }), {
+    kind: "list",
+    element: { kind: "text" },
+  });
+  assert.deepEqual(shapeOfKind("record", { kind: "text" }), {
+    kind: "record",
+    fields: {},
+  });
+  assert.deepEqual(initialShape("list"), {
+    kind: "list",
+    element: { kind: "text" },
+  });
+  assert.deepEqual(initialShape("record"), { kind: "record", fields: {} });
+  assert.deepEqual(initialShape("boolean"), { kind: "boolean" });
 });

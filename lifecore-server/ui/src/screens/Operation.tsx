@@ -1,112 +1,49 @@
-import { useEffect, useRef, useState } from "react";
-import type { EntryId, ProposalEntry } from "../contract.ts";
-import { latest, useCall, useTypes } from "../data.tsx";
+import { useEffect, useState } from "react";
+import type { ProposalEntry } from "../contract.ts";
+import { useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
-import { attachFindings } from "../draft/findings.ts";
-import { isUnset } from "../draft/model.ts";
-import { keptBy, reconnectable, reconnection } from "../draft/reconnect.ts";
+import { frozen, isUnset, type Problem } from "../draft/model.ts";
 import { OperationEditor, type PickRole } from "../editors/OperationEditor.tsx";
-import { FailureView } from "../failure.tsx";
-import { IdLink, NodeLink, useOpen, useReplace } from "../links.tsx";
-import { entryKey } from "../model/labels.ts";
-import { FindingList } from "../views/Findings.tsx";
+import { useOpen, useReplace } from "../links.tsx";
+import { ConfirmButton } from "../views/ConfirmButton.tsx";
+import { FindingList, judged, OperationStatus } from "../views/Findings.tsx";
+import { operationWarnings } from "../views/OperationRow.tsx";
+import { Reconnection } from "../views/Reconnection.tsx";
 
-// The current relationships of the predecessor, read without `as_of`: the
-// draft applies to the current state. Each checkbox is the presence of the
-// kept-edge operation in the draft, so it survives renames and reloads.
-type NodeOperation = Extract<ProposalEntry, { kind: "node" }>;
-
-function Reconnection({
-  operation,
-  predecessor,
-}: {
-  operation: NodeOperation;
-  predecessor: EntryId;
-}) {
-  const { state, dispatch } = useDraft();
-  const load = useCall("entries.inspect", { id: predecessor });
-  const result = latest(load);
-  if (load.status === "failed") {
-    return <FailureView failure={load.failure} compact />;
+// What a content problem from the server says about this operation.
+function problemFor(problem: Problem | null, name: string): string | null {
+  switch (problem?.kind) {
+    case "invalid_proposal":
+      return problem.location?.name === name ? problem.message : null;
+    case "malformed_proposal":
+      return problem.operation === name ? problem.decode.message : null;
+    case "incomplete":
+      return problem.operation === name ? problem.message : null;
+    default:
+      return null;
   }
-  if (result === null) {
-    return <p className="muted">reading the current edges…</p>;
-  }
-  if (result.kind !== "node") {
-    return null;
-  }
-  const { entries } = state.proposal;
-  const edges = reconnectable(result.edges);
-  return (
-    <section className="reconnect" data-testid="reconnect">
-      <h3>Reconnection</h3>
-      <p className="muted">
-        Revising <IdLink id={predecessor} /> makes its edges historical;
-        reconnection is explicit (SPEC §5). A checked edge becomes a new edge
-        operation of the same type with this operation at{" "}
-        {operation.intent === "branch" ? "the branch's" : "the revision's"} end.
-      </p>
-      {edges.length === 0 ? (
-        <p className="muted">no current edges</p>
-      ) : (
-        <ul className="reconnect-list">
-          {edges.map((incident) => {
-            const kept = keptBy(entries, operation.name, incident);
-            return (
-              <li key={entryKey(incident.edge.id)}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={kept !== null}
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        if (kept === null) {
-                          dispatch({
-                            kind: "add",
-                            entry: reconnection(operation.name, incident),
-                            after: operation.name,
-                            select: false,
-                          });
-                        }
-                      } else if (kept !== null) {
-                        dispatch({ kind: "remove", name: kept.name });
-                      }
-                    }}
-                  />{" "}
-                  {incident.direction === "outgoing" ? "→" : "←"}{" "}
-                  {incident.edge.ty_name} <NodeLink node={incident.other} />{" "}
-                  <IdLink id={incident.edge.id} />
-                  {kept !== null && (
-                    <span className="muted"> kept as {kept.name}</span>
-                  )}
-                </label>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
-  );
 }
 
+// The operation's header and findings, then its editor, then for a revision
+// of an existing node the reconnection assistant. Nothing here edits while
+// an apply is in flight.
 export function OperationScreen({ name }: { name: string }) {
   const { state, dispatch, actions } = useDraft();
   const types = useTypes();
   const open = useOpen();
   const replace = useReplace();
   // The editor keeps its local state, and the name input its focus, across
-  // a rename of its own operation, but starts afresh for another operation.
-  const renamedTo = useRef<string | null>(null);
+  // a rename of its own operation, which moves the session along in the
+  // same handler; any other change of name is another operation and
+  // remounts it.
   const [session, setSession] = useState({ name, key: 0 });
   if (session.name !== name) {
-    setSession({
-      name,
-      key: renamedTo.current === name ? session.key : session.key + 1,
-    });
+    setSession({ name, key: session.key + 1 });
   }
   const { entries } = state.proposal;
   const index = entries.findIndex((entry) => entry.name === name);
   const entry = entries[index];
+  const locked = frozen(state);
   // Opening the screen from a chip selects the operation in the tray too.
   useEffect(() => {
     if (entry !== undefined && state.selected !== name) {
@@ -124,26 +61,22 @@ export function OperationScreen({ name }: { name: string }) {
       </section>
     );
   }
-  const findings =
-    state.outcome === null
-      ? []
-      : (attachFindings(state.outcome.report).operations.get(name) ?? []);
-  const { problem } = state;
-  const invalid =
-    problem?.kind === "invalid_proposal" && problem.location?.name === name
-      ? problem.message
-      : problem?.kind === "incomplete" && problem.operation === name
-        ? problem.message
-        : null;
+  const judgment = judged(state);
+  const findings = judgment?.findings(name) ?? [];
+  const invalid = problemFor(state.problem, name);
+  const warnings = operationWarnings(entries, index, state.kept);
   const onChange = (changed: ProposalEntry) => {
+    if (locked) {
+      return;
+    }
     dispatch({ kind: "replace", name, entry: changed });
-    // The screen is keyed by name: follow a rename the reducer accepts, one
-    // per keystroke, without leaving a Back step for each.
+    // The screen is keyed by name: follow a rename the reducer accepts
+    // without leaving a Back step.
     if (
       changed.name !== name &&
       !entries.some((other) => other.name === changed.name)
     ) {
-      renamedTo.current = changed.name;
+      setSession({ name: changed.name, key: session.key });
       replace({ kind: "operation", name: changed.name });
     }
   };
@@ -171,61 +104,79 @@ export function OperationScreen({ name }: { name: string }) {
         {entry.name} <span className="badge kind">{entry.kind}</span>{" "}
         <span className="muted">
           operation {index + 1} of {entries.length}
-        </span>
+        </span>{" "}
+        <OperationStatus name={name} />
       </h2>
+      {locked && (
+        <p className="banner busy">
+          Applying: the draft is frozen until the answer.
+        </p>
+      )}
       {invalid !== null && (
         <p className="banner problem" role="alert">
           {invalid}
         </p>
       )}
-      {findings.length > 0 && (
+      {warnings.map((warning) => (
+        <p key={warning} className="op-warn" data-testid="op-warning">
+          {warning}
+        </p>
+      ))}
+      {judgment !== null && findings.length > 0 && (
         <section>
           <h3>Findings</h3>
-          <FindingList findings={findings} />
+          <FindingList
+            findings={findings}
+            names={judgment.names}
+            current={judgment.current}
+          />
         </section>
       )}
+      <fieldset className="frame" disabled={locked}>
+        <OperationEditor
+          key={session.key}
+          entry={entry}
+          operations={entries}
+          index={index}
+          types={types}
+          onChange={onChange}
+          onPick={onPick}
+        />
+        <div className="row">
+          <button type="button" disabled={index === 0} onClick={() => move(-1)}>
+            Move up
+          </button>
+          <button
+            type="button"
+            disabled={index === entries.length - 1}
+            onClick={() => move(1)}
+          >
+            Move down
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch({ kind: "duplicate", name })}
+          >
+            Duplicate
+          </button>
+          <ConfirmButton
+            confirm={`Remove ${name}?`}
+            onConfirm={() => {
+              dispatch({ kind: "remove", names: [name] });
+              open({ kind: "database" });
+            }}
+          >
+            Remove
+          </ConfirmButton>
+        </div>
+      </fieldset>
       {revision !== null && (
         <Reconnection
           operation={revision.operation}
           predecessor={revision.predecessor}
+          disabled={locked}
         />
       )}
-      <OperationEditor
-        key={session.key}
-        entry={entry}
-        operations={entries}
-        index={index}
-        types={types}
-        onChange={onChange}
-        onPick={onPick}
-      />
-      <div className="row">
-        <button type="button" disabled={index === 0} onClick={() => move(-1)}>
-          Move up
-        </button>
-        <button
-          type="button"
-          disabled={index === entries.length - 1}
-          onClick={() => move(1)}
-        >
-          Move down
-        </button>
-        <button
-          type="button"
-          onClick={() => dispatch({ kind: "duplicate", name })}
-        >
-          Duplicate
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            dispatch({ kind: "remove", name });
-            open({ kind: "database" });
-          }}
-        >
-          Remove
-        </button>
-      </div>
     </article>
   );
 }

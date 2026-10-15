@@ -1,19 +1,34 @@
 import type {
+  EntryId,
   IncidentEdge,
   ProposalEntry,
   ProposalReference,
-  RevisionIntent,
 } from "../contract.ts";
-import { sameId } from "../model/labels.ts";
+import { entryKey, sameId } from "../model/labels.ts";
+import { sameReference } from "./model.ts";
+import { reviseSuccessor } from "./operations.ts";
 
 // Revising a node makes its edges historical (SPEC §5); keeping one means an
 // explicit new edge of the same type whose end at the revised node is the
-// new operation and whose other end stays the existing node.
+// new operation and whose other end is the other node, or what the draft
+// already put in its place.
 
 // Only current edges can be kept: a historical one already has a superseded
-// endpoint.
+// endpoint. A self-loop listed once per direction is kept once.
 export function reconnectable(edges: readonly IncidentEdge[]): IncidentEdge[] {
-  return edges.filter(({ edge }) => edge.current);
+  const seen = new Set<string>();
+  return edges.filter(({ edge }) => {
+    const key = entryKey(edge.id);
+    if (!edge.current || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function selfLoop({ edge }: IncidentEdge): boolean {
+  return sameId(edge.from, edge.to);
 }
 
 export function keptEdgeName(
@@ -23,37 +38,47 @@ export function keptEdgeName(
   return `${operation}_keep_${incident.edge.id.position}`;
 }
 
+// The other end of a kept edge for the revision at `index`: the revision
+// itself for a self-loop, which it supersedes; else an earlier operation
+// that revises the other node, whose original the draft supersedes before
+// the edge lands; else the other node.
+export function otherEnd(
+  entries: readonly ProposalEntry[],
+  index: number,
+  operation: string,
+  incident: IncidentEdge,
+): ProposalReference {
+  if (selfLoop(incident)) {
+    return { added: operation };
+  }
+  const other: ProposalReference = { existing: incident.other.id };
+  const successor = reviseSuccessor(entries, index, other);
+  return successor === null ? other : { added: successor };
+}
+
 export function reconnection(
+  entries: readonly ProposalEntry[],
   operation: string,
   incident: IncidentEdge,
 ): ProposalEntry {
-  const { edge, direction, other } = incident;
+  const index = entries.findIndex((entry) => entry.name === operation);
   const self: ProposalReference = { added: operation };
-  const kept: ProposalReference = { existing: other.id };
+  const other = otherEnd(entries, index, operation, incident);
+  const outgoing = incident.direction === "outgoing";
   return {
     name: keptEdgeName(operation, incident),
     kind: "edge",
-    ty_name: edge.ty_name,
-    from: direction === "outgoing" ? self : kept,
-    to: direction === "outgoing" ? kept : self,
+    ty_name: incident.edge.ty_name,
+    from: outgoing ? self : other,
+    to: outgoing ? other : self,
   };
 }
 
-// The edge operations a fresh revision starts with: every current edge for
-// revise, none for branch.
-export function reconnections(
-  operation: string,
-  edges: readonly IncidentEdge[],
-  intent: RevisionIntent,
-): ProposalEntry[] {
-  return intent === "revise"
-    ? reconnectable(edges).map((incident) => reconnection(operation, incident))
-    : [];
-}
-
 // Whether `entry` keeps `incident` for `operation`: matched structurally, not
-// by name, so a renamed operation or edge keeps its checkbox.
+// by name, so a renamed operation or edge keeps its checkbox. The other end
+// may be the other node or the successor `otherEnd` would pick.
 export function keepsEdge(
+  entries: readonly ProposalEntry[],
   entry: ProposalEntry,
   operation: string,
   incident: IncidentEdge,
@@ -61,13 +86,17 @@ export function keepsEdge(
   if (entry.kind !== "edge" || entry.ty_name !== incident.edge.ty_name) {
     return false;
   }
-  const self = incident.direction === "outgoing" ? entry.from : entry.to;
-  const kept = incident.direction === "outgoing" ? entry.to : entry.from;
+  const outgoing = incident.direction === "outgoing";
+  const self = outgoing ? entry.from : entry.to;
+  const other = outgoing ? entry.to : entry.from;
+  if (!sameReference(self, { added: operation })) {
+    return false;
+  }
+  const index = entries.findIndex((e) => e.name === operation);
   return (
-    "added" in self &&
-    self.added === operation &&
-    "existing" in kept &&
-    sameId(kept.existing, incident.other.id)
+    sameReference(other, otherEnd(entries, index, operation, incident)) ||
+    (!selfLoop(incident) &&
+      sameReference(other, { existing: incident.other.id }))
   );
 }
 
@@ -76,5 +105,20 @@ export function keptBy(
   operation: string,
   incident: IncidentEdge,
 ): ProposalEntry | null {
-  return entries.find((entry) => keepsEdge(entry, operation, incident)) ?? null;
+  return (
+    entries.find((entry) => keepsEdge(entries, entry, operation, incident)) ??
+    null
+  );
+}
+
+// The operation still revises or branches `predecessor`.
+export function stillRevises(
+  entry: ProposalEntry | undefined,
+  predecessor: EntryId,
+): boolean {
+  return (
+    entry?.kind === "node" &&
+    entry.predecessor !== undefined &&
+    sameReference(entry.predecessor, { existing: predecessor })
+  );
 }

@@ -1,10 +1,17 @@
-import { useState } from "react";
-import type { Payload, Shape } from "../contract.ts";
+import { Fragment, useId, useState } from "react";
+import type {
+  Body,
+  FieldDecl,
+  FieldDecls,
+  Payload,
+  Shape,
+} from "../contract.ts";
 import { shapeWords } from "../model/payload.ts";
 import {
   boolean,
   decimalError,
   defaultValue,
+  getOwn,
   integer,
   kindOf,
   narrow,
@@ -12,54 +19,23 @@ import {
   record,
   timestamp,
   timestampError,
+  timestampHint,
 } from "../model/values.ts";
-import { moveItem } from "./helpers.ts";
-import { FieldsEditor } from "./PayloadEditor.tsx";
+import { StatusBadge } from "../views/Payload.tsx";
+import {
+  fieldRows,
+  fitKeys,
+  moveItem,
+  nextKey,
+  sameList,
+  withField,
+  withoutField,
+} from "./helpers.ts";
+import { keepFocus, TextValueInput, ValidatedInput } from "./inputs.tsx";
 import { RawValueEditor } from "./RawJsonEditor.tsx";
 
-// A text input committed only while valid. Invalid text stays on screen
-// with its error until it is fixed or the committed value changes under it.
-export function ValidatedInput({
-  label,
-  value,
-  validate,
-  onCommit,
-  inputMode,
-  size,
-}: {
-  label: string;
-  value: string;
-  validate: (text: string) => string | null;
-  onCommit: (text: string) => void;
-  inputMode?: "numeric" | "text";
-  size?: number;
-}) {
-  const [draft, setDraft] = useState<{ text: string; base: string } | null>(
-    null,
-  );
-  const text = draft !== null && draft.base === value ? draft.text : value;
-  const error = validate(text);
-  return (
-    <>
-      <input
-        type="text"
-        aria-label={label}
-        value={text}
-        aria-invalid={error !== null}
-        {...(inputMode === undefined ? {} : { inputMode })}
-        {...(size === undefined ? {} : { size })}
-        onChange={(event) => {
-          const next = event.target.value;
-          setDraft({ text: next, base: value });
-          if (validate(next) === null) {
-            onCommit(next);
-          }
-        }}
-      />
-      {error !== null && <span className="field-error">{error}</span>}
-    </>
-  );
-}
+// ShapeValueEditor, ListEditor, and FieldsEditor recurse into each other
+// (a record holds fields, a list holds values), so they share this module.
 
 function ListEditor({
   label,
@@ -72,75 +48,150 @@ function ListEditor({
   items: Payload[];
   onChange: (items: Payload[]) => void;
 }) {
+  const [keys, setKeys] = useState<readonly number[]>(() =>
+    fitKeys([], items.length),
+  );
+  // An element being added that has no value yet (an integer or a
+  // timestamp): it is appended once valid text is typed. Its key is the one
+  // the appended element takes, so the input keeps focus across that.
+  const [pendingKey, setPendingKey] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const rowKeys = fitKeys(keys, items.length);
+  if (!sameList(rowKeys, keys)) {
+    setKeys(rowKeys);
+  }
+  const commit = (next: Payload[], nextKeys: number[]) => {
+    setKeys(nextKeys);
+    setNote(null);
+    onChange(next);
+  };
+  const add = () => {
+    const key = nextKey(rowKeys);
+    const initial = defaultValue(element);
+    if (initial === null) {
+      setPendingKey(key);
+      setNote(null);
+    } else {
+      commit([...items, initial], [...rowKeys, key]);
+    }
+  };
+  const rows = items.map((item, index) => ({
+    key: rowKeys[index] ?? index,
+    index,
+    value: item as Payload | null,
+  }));
+  if (pendingKey !== null) {
+    rows.push({ key: pendingKey, index: items.length, value: null });
+  }
   return (
     <div className="list-editor">
-      {items.length === 0 && <span className="muted">empty list</span>}
-      {items.map((item, index) => (
-        <div
-          className="row"
-          // Elements are positional; a removed one shifts the rest.
-          // biome-ignore lint/suspicious/noArrayIndexKey: position is the identity
-          key={index}
-        >
-          <span className="muted">[{index}]</span>
-          <ShapeValueEditor
-            label={`${label}[${index}]`}
-            shape={element}
-            value={item}
-            onChange={(changed) =>
-              onChange(items.map((old, i) => (i === index ? changed : old)))
-            }
-          />
-          <button
-            type="button"
-            aria-label={`move ${label}[${index}] up`}
-            disabled={index === 0}
-            onClick={() => onChange(moveItem(items, index, index - 1))}
-          >
-            up
-          </button>
-          <button
-            type="button"
-            aria-label={`move ${label}[${index}] down`}
-            disabled={index === items.length - 1}
-            onClick={() => onChange(moveItem(items, index, index + 1))}
-          >
-            down
-          </button>
-          <button
-            type="button"
-            aria-label={`remove ${label}[${index}]`}
-            onClick={() => onChange(items.filter((_, i) => i !== index))}
-          >
-            remove
-          </button>
-        </div>
-      ))}
+      {rows.length === 0 && <span className="muted">empty list</span>}
+      {rows.map(({ key, index, value }) => {
+        const itemLabel = `${label}[${index}]`;
+        const pending = value === null;
+        return (
+          <div className="row" key={key}>
+            <span className="muted">[{index}]</span>
+            <ShapeValueEditor
+              label={itemLabel}
+              shape={element}
+              value={value}
+              onChange={(changed) => {
+                if (pending) {
+                  setPendingKey(null);
+                  commit([...items, changed], [...rowKeys, key]);
+                } else {
+                  onChange(
+                    items.map((old, i) => (i === index ? changed : old)),
+                  );
+                }
+              }}
+              onAbandon={() => {
+                setPendingKey(null);
+                setNote(`reverted: ${itemLabel} was not added`);
+              }}
+            />
+            <button
+              type="button"
+              aria-label={`move ${itemLabel} up`}
+              disabled={pending || index === 0}
+              onClick={() =>
+                commit(
+                  moveItem(items, index, index - 1),
+                  moveItem(rowKeys, index, index - 1),
+                )
+              }
+            >
+              up
+            </button>
+            <button
+              type="button"
+              aria-label={`move ${itemLabel} down`}
+              disabled={pending || index === items.length - 1}
+              onClick={() =>
+                commit(
+                  moveItem(items, index, index + 1),
+                  moveItem(rowKeys, index, index + 1),
+                )
+              }
+            >
+              down
+            </button>
+            <button
+              type="button"
+              aria-label={`remove ${itemLabel}`}
+              onMouseDown={pending ? keepFocus : undefined}
+              onClick={() => {
+                if (pending) {
+                  setPendingKey(null);
+                } else {
+                  commit(
+                    items.filter((_, i) => i !== index),
+                    rowKeys.filter((_, i) => i !== index),
+                  );
+                }
+              }}
+            >
+              remove
+            </button>
+          </div>
+        );
+      })}
       <button
         type="button"
         aria-label={`add to ${label}`}
-        onClick={() => onChange([...items, defaultValue(element)])}
+        disabled={pendingKey !== null}
+        onClick={add}
       >
         add
       </button>
+      {note !== null && <span className="edit-note">{note}</span>}
     </div>
   );
 }
 
-// The input for a declared shape. A value of another kind than declared
-// cannot be edited by that input, so it falls back to JSON with a note.
+const INTEGER_PATTERN = "0|-?[1-9][0-9]*";
+
+// The input for a declared shape. `value` is null for an integer or a
+// timestamp made present without a value yet; nothing is committed until
+// one is typed, and `onAbandon` runs if focus leaves first. A value of
+// another kind than declared cannot be edited by that input, so it falls
+// back to JSON with a note.
 export function ShapeValueEditor({
   label,
   shape,
   value,
   onChange,
+  onAbandon,
 }: {
   label: string;
   shape: Shape;
-  value: Payload;
+  value: Payload | null;
   onChange: (value: Payload) => void;
+  onAbandon?: () => void;
 }) {
-  if (kindOf(value) !== shape.kind) {
+  const abandon = onAbandon === undefined ? {} : { onAbandon };
+  if (value !== null && kindOf(value) !== shape.kind) {
     return (
       <RawValueEditor
         label={label}
@@ -153,30 +204,34 @@ export function ShapeValueEditor({
   switch (shape.kind) {
     case "text":
       return (
-        <input
-          type="text"
-          aria-label={label}
-          size={40}
-          value={narrow(value, "text") ?? ""}
-          onChange={(event) => onChange(event.target.value)}
+        <TextValueInput
+          label={label}
+          value={value === null ? "" : (narrow(value, "text") ?? "")}
+          onChange={onChange}
         />
       );
     case "integer":
       return (
         <ValidatedInput
           label={label}
-          value={narrow(value, "integer")?.value ?? ""}
+          value={
+            value === null ? null : (narrow(value, "integer")?.value ?? "")
+          }
           validate={decimalError}
-          inputMode="numeric"
+          pattern={INTEGER_PATTERN}
+          title="a decimal integer such as -42, within the signed 64-bit range"
           size={22}
           onCommit={(text) => onChange(integer(text))}
+          {...abandon}
         />
       );
     case "boolean":
       return (
         <select
           aria-label={label}
-          value={narrow(value, "boolean")?.value ? "true" : "false"}
+          value={
+            value !== null && narrow(value, "boolean")?.value ? "true" : "false"
+          }
           onChange={(event) => onChange(boolean(event.target.value === "true"))}
         >
           <option value="true">true</option>
@@ -188,13 +243,19 @@ export function ShapeValueEditor({
         <>
           <ValidatedInput
             label={label}
-            value={narrow(value, "timestamp")?.value ?? ""}
+            value={
+              value === null ? null : (narrow(value, "timestamp")?.value ?? "")
+            }
             validate={timestampError}
+            advise={timestampHint}
             size={32}
             onCommit={(text) => onChange(timestamp(text))}
+            {...abandon}
           />{" "}
           <button
             type="button"
+            aria-label={`now (UTC) for ${label}`}
+            onMouseDown={keepFocus}
             onClick={() => onChange(timestamp(nowTimestamp()))}
           >
             now (UTC)
@@ -206,18 +267,263 @@ export function ShapeValueEditor({
         <ListEditor
           label={label}
           element={shape.element}
-          items={narrow(value, "list") ?? []}
+          items={value === null ? [] : (narrow(value, "list") ?? [])}
           onChange={onChange}
         />
       );
     case "record":
       return (
         <FieldsEditor
-          body={narrow(value, "record")?.value ?? {}}
+          body={value === null ? {} : (narrow(value, "record")?.value ?? {})}
           fields={shape.fields}
           prefix={label}
           onChange={(body) => onChange(record(body))}
         />
       );
   }
+}
+
+function withMember<K, V>(
+  map: ReadonlyMap<K, V>,
+  key: K,
+  value: V | null,
+): ReadonlyMap<K, V> {
+  const copy = new Map(map);
+  if (value === null) {
+    copy.delete(key);
+  } else {
+    copy.set(key, value);
+  }
+  return copy;
+}
+
+function withItem<T>(
+  set: ReadonlySet<T>,
+  item: T,
+  member: boolean,
+): ReadonlySet<T> {
+  const copy = new Set(set);
+  if (member) {
+    copy.add(item);
+  } else {
+    copy.delete(item);
+  }
+  return copy;
+}
+
+// The rows of one body: every declared field, present or absent, then the
+// undeclared ones as JSON. A record's body nests the same editor with the
+// field path as `prefix`, so labels read `details.owner`.
+export function FieldsEditor({
+  body,
+  fields,
+  prefix,
+  onChange,
+}: {
+  body: Body;
+  fields: FieldDecls | null;
+  prefix: string | null;
+  onChange: (body: Body) => void;
+}) {
+  const id = useId();
+  const [newField, setNewField] = useState("");
+  // Declared fields made present that wait for a first valid value; the
+  // body does not have them until then.
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  // The value a field had when it was made absent, restored when it is
+  // made present again.
+  const [remembered, setRemembered] = useState<ReadonlyMap<string, Payload>>(
+    () => new Map(),
+  );
+  const [notes, setNotes] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+  const rows = fieldRows(fields, body);
+  const labelOf = (field: string) =>
+    prefix === null ? field : `${prefix}.${field}`;
+  const makePresent = (field: string, decl: FieldDecl) => {
+    const initial = remembered.get(field) ?? defaultValue(decl.shape);
+    setNotes(withMember(notes, field, null));
+    if (initial === null) {
+      setPending(withItem(pending, field, true));
+    } else {
+      onChange(withField(body, field, initial));
+    }
+  };
+  const makeAbsent = (field: string) => {
+    const value = getOwn(body, field);
+    setPending(withItem(pending, field, false));
+    setNotes(withMember(notes, field, null));
+    if (value !== undefined) {
+      setRemembered(withMember(remembered, field, value));
+      onChange(withoutField(body, field));
+    }
+  };
+  const commit = (field: string, value: Payload) => {
+    setPending(withItem(pending, field, false));
+    setNotes(withMember(notes, field, null));
+    onChange(withField(body, field, value));
+  };
+  const abandon = (field: string) => {
+    setPending(withItem(pending, field, false));
+    setNotes(withMember(notes, field, "reverted to absent"));
+  };
+  const addError =
+    newField !== "" && (Object.hasOwn(body, newField) || pending.has(newField))
+      ? `${newField} is already present`
+      : null;
+  const add = () => {
+    if (newField === "" || addError !== null) {
+      return;
+    }
+    // A declared name becomes present as its checkbox would make it; any
+    // other name starts as empty text to be edited as JSON.
+    const decl = fields === null ? undefined : getOwn(fields, newField);
+    if (decl === undefined) {
+      onChange(withField(body, newField, ""));
+    } else {
+      makePresent(newField, decl);
+    }
+    setNewField("");
+  };
+  const firstUndeclared = rows.findIndex((row) => row.decl === null);
+  return (
+    <div className={prefix === null ? "fields-editor" : "fields-editor nested"}>
+      {rows.length === 0 ? (
+        <p className="muted">no fields</p>
+      ) : (
+        <table className="fields">
+          <thead>
+            <tr>
+              <th scope="col">field</th>
+              {fields !== null && <th scope="col">status</th>}
+              <th scope="col">shape</th>
+              <th scope="col">present</th>
+              <th scope="col">value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ field, decl }, index) => {
+              const label = labelOf(field);
+              const value = getOwn(body, field);
+              const shown =
+                value !== undefined || (decl !== null && pending.has(field));
+              const note = notes.get(field);
+              const row = (
+                <tr key={field} className={decl ? undefined : "undeclared"}>
+                  <th scope="row">{field}</th>
+                  {fields !== null && (
+                    <td>
+                      {decl ? (
+                        <StatusBadge status={decl.status} />
+                      ) : (
+                        <span className="badge warn">undeclared</span>
+                      )}
+                    </td>
+                  )}
+                  <td className="muted">
+                    {decl
+                      ? shapeWords(decl.shape)
+                      : value === undefined
+                        ? ""
+                        : kindOf(value)}
+                  </td>
+                  <td>
+                    {decl ? (
+                      <input
+                        type="checkbox"
+                        aria-label={`${label} present`}
+                        checked={shown}
+                        onMouseDown={keepFocus}
+                        onChange={(event) =>
+                          event.target.checked
+                            ? makePresent(field, decl)
+                            : makeAbsent(field)
+                        }
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`remove ${label}`}
+                        onClick={() => onChange(withoutField(body, field))}
+                      >
+                        remove
+                      </button>
+                    )}
+                  </td>
+                  <td className="value">
+                    {decl !== null && shown ? (
+                      <ShapeValueEditor
+                        label={label}
+                        shape={decl.shape}
+                        value={value ?? null}
+                        onChange={(changed) => commit(field, changed)}
+                        onAbandon={() => abandon(field)}
+                      />
+                    ) : decl === null && value !== undefined ? (
+                      <RawValueEditor
+                        label={label}
+                        value={value}
+                        onChange={(changed) =>
+                          onChange(withField(body, field, changed))
+                        }
+                      />
+                    ) : (
+                      <span className="muted">absent</span>
+                    )}
+                    {note !== undefined && (
+                      <span className="edit-note"> {note}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+              // With a schema, the undeclared rows sit under their own
+              // heading; without one every row is undeclared and the
+              // heading would say nothing.
+              if (fields !== null && index === firstUndeclared) {
+                return (
+                  <Fragment key={field}>
+                    <tr className="group">
+                      <th scope="rowgroup" colSpan={5}>
+                        undeclared
+                      </th>
+                    </tr>
+                    {row}
+                  </Fragment>
+                );
+              }
+              return row;
+            })}
+          </tbody>
+        </table>
+      )}
+      <div className="row">
+        <label htmlFor={`${id}-new`}>
+          {prefix === null ? "new field" : `new field in ${prefix}`}
+        </label>
+        <input
+          id={`${id}-new`}
+          type="text"
+          size={16}
+          value={newField}
+          aria-invalid={addError !== null}
+          onChange={(event) => setNewField(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          type="button"
+          disabled={newField === "" || addError !== null}
+          onClick={add}
+        >
+          {prefix === null ? "Add field" : `Add field to ${prefix}`}
+        </button>
+        {addError !== null && <span className="field-error">{addError}</span>}
+      </div>
+    </div>
+  );
 }

@@ -7,13 +7,9 @@ import type {
   TypeSchema,
 } from "../contract.ts";
 import { formatPayload } from "./payload.ts";
+import { PRESENCE_WORDS } from "./schema.ts";
 
-export const STATUS_ORDER: readonly FieldStatus[] = [
-  "mandatory",
-  "encouraged",
-  "optional",
-  "deprecated",
-];
+export const STATUS_ORDER: readonly FieldStatus[] = PRESENCE_WORDS;
 
 export interface FieldColumn {
   field: string;

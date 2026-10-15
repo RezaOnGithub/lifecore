@@ -2,144 +2,59 @@ import type {
   DecodeError,
   EntryId,
   Format,
-  IncidentEdge,
   Method,
   NodeRecord,
   Params,
   Proposal,
   ProposalEntry,
-  ProposalReport,
   Result,
   RevisionIntent,
-  Uuid,
 } from "../contract.ts";
 import type { PickRole } from "../editors/OperationEditor.tsx";
-import { HttpRejectionError, RpcError, TransportError } from "../rpc.ts";
+import { RpcError } from "../rpc.ts";
+import { type Classified, classify, message } from "./classify.ts";
 import {
-  type DraftAction,
+  applicable,
+  applyParams,
   type DraftState,
-  defaultName,
+  type Evaluation,
   evaluationParams,
-  incomplete,
-  type Problem,
+  frozen,
+  type InFlight,
   proposalOf,
   requestOf,
   UNSET,
+  type Verdict,
 } from "./model.ts";
-import { reconnections } from "./reconnect.ts";
+import { defaultName, findApplied, incomplete } from "./operations.ts";
+import { reconnectable } from "./reconnect.ts";
+import type { DraftAction } from "./reducer.ts";
 
 export type Call = <M extends Method>(
   method: M,
   params: Params<M>,
 ) => Promise<Result<M>>;
 
-export type Classified =
-  | { kind: "stale"; expected: Uuid; actual: Uuid }
-  | { kind: "rejected"; report: ProposalReport }
-  | { kind: "problem"; problem: Problem };
-
-function message(failure: unknown): string {
-  return failure instanceof Error ? failure.message : String(failure);
-}
-
-// Sorts a failed check or apply by what the user can do about it. A lost
-// answer means nothing was written for a check, but may have been for an
-// apply, which is never retried on its own.
-export function classify(
-  failure: unknown,
-  action: "check" | "apply",
-): Classified {
-  if (failure instanceof RpcError) {
-    const { error } = failure;
-    const data = "data" in error ? error.data : undefined;
-    switch (data?.kind) {
-      case "stale_base":
-        return { kind: "stale", expected: data.expected, actual: data.actual };
-      case "rejected":
-        return { kind: "rejected", report: data.report };
-      case "invalid_proposal":
-        return {
-          kind: "problem",
-          problem: {
-            kind: "invalid_proposal",
-            message: error.message,
-            location: data.location ?? null,
-          },
-        };
-      case "malformed_proposal":
-        return {
-          kind: "problem",
-          problem: {
-            kind: "malformed_proposal",
-            message: error.message,
-            decode: data.decode,
-          },
-        };
-      case "foreign_database":
-        return {
-          kind: "problem",
-          problem: { kind: "foreign_database", message: error.message },
-        };
-      case "busy":
-        return {
-          kind: "problem",
-          problem: { kind: "busy", message: error.message, action },
-        };
-      case "publication_uncertain":
-        return {
-          kind: "problem",
-          problem: {
-            kind: "uncertain",
-            message: error.message,
-            outcome: data.outcome,
-          },
-        };
-      case "backend_failure":
-        return {
-          kind: "problem",
-          problem:
-            action === "apply"
-              ? { kind: "uncertain", message: error.message, outcome: null }
-              : { kind: "retryable", message: error.message },
-        };
-      default:
-        return {
-          kind: "problem",
-          problem: { kind: "failed", message: error.message },
-        };
-    }
-  }
-  if (failure instanceof TransportError) {
-    return {
-      kind: "problem",
-      problem:
-        action === "apply"
-          ? { kind: "uncertain", message: failure.message, outcome: null }
-          : { kind: "retryable", message: failure.message },
-    };
-  }
-  if (failure instanceof HttpRejectionError) {
-    return {
-      kind: "problem",
-      problem: { kind: "failed", message: failure.message },
-    };
-  }
-  return {
-    kind: "problem",
-    problem: { kind: "failed", message: message(failure) },
-  };
-}
-
 export type Decoded =
   | { kind: "ok"; proposal: Proposal }
   | { kind: "malformed"; message: string; decode: DecodeError }
   | { kind: "failed"; message: string };
 
+export type Encoded =
+  | { kind: "ok"; text: string }
+  | { kind: "failed"; message: string };
+
+function names(request: string): string[] {
+  return (JSON.parse(request) as Proposal).entries.map((entry) => entry.name);
+}
+
 // The event-driven side of the draft: every method is called from a handler,
 // reads the state of that moment through `state()`, which must already
 // reflect its own dispatches, and records what the server answered through
 // `dispatch`; nothing here is keyed or retried. `refresh` reloads every
-// screen after a write that was, or may have been, published.
+// screen after a write that was, or may have been, published. The dispatch
+// persists the stored parts of the draft synchronously, so the in-flight
+// marker is saved before an apply request leaves.
 export class DraftActions {
   readonly #call: Call;
   readonly #dispatch: (action: DraftAction) => void;
@@ -159,22 +74,28 @@ export class DraftActions {
     this.#refresh = refresh;
   }
 
+  #notice(text: string) {
+    this.#dispatch({ kind: "notice", text });
+  }
+
   // ---- Local edits that may need a plan ID ----
 
   // The name the reducer settles on is `entry.name` unless taken; callers
-  // pass a free one, so the returned name is the entry's.
-  add(entry: ProposalEntry, after?: string): string {
-    const name = entry.name;
+  // pass a free one. Null while an apply is in flight: nothing is added.
+  add(entry: ProposalEntry, after?: string): string | null {
+    if (frozen(this.#state())) {
+      return null;
+    }
     this.#dispatch(
       after === undefined
         ? { kind: "add", entry }
         : { kind: "add", entry, after },
     );
     void this.ensurePlanId();
-    return name;
+    return entry.name;
   }
 
-  addNode(ty_name: string): string {
+  addNode(ty_name: string): string | null {
     const { entries } = this.#state().proposal;
     return this.add({
       name: defaultName(entries, ty_name),
@@ -184,7 +105,7 @@ export class DraftActions {
     });
   }
 
-  addEdge(ty_name = ""): string {
+  addEdge(ty_name = ""): string | null {
     const { entries } = this.#state().proposal;
     return this.add({
       name: defaultName(entries, ty_name === "" ? "edge" : ty_name),
@@ -196,7 +117,7 @@ export class DraftActions {
   }
 
   // "Connect": an edge from this node whose other end is picked next.
-  connect(from: EntryId): string {
+  connect(from: EntryId): string | null {
     const { entries } = this.#state().proposal;
     const name = this.add({
       name: defaultName(entries, "edge"),
@@ -205,14 +126,18 @@ export class DraftActions {
       from: { existing: from },
       to: UNSET,
     });
-    this.#dispatch({ kind: "pick", picking: { operation: name, role: "to" } });
+    if (name !== null) {
+      this.#dispatch({
+        kind: "pick",
+        picking: { operation: name, role: "to" },
+      });
+    }
     return name;
   }
 
-  // A revision with the payload copied. The kept edges come from the node's
-  // current relationships, read without `as_of` because the draft applies to
-  // the current state; they follow once that read answers.
-  revise(node: NodeRecord, intent: RevisionIntent): string {
+  // A revision with the payload copied. For revise, the kept edges follow
+  // once the node's current relationships are read.
+  revise(node: NodeRecord, intent: RevisionIntent): string | null {
     const { entries } = this.#state().proposal;
     const name = this.add({
       name: defaultName(entries, node.ty_name),
@@ -222,44 +147,34 @@ export class DraftActions {
       intent,
       payload: node.payload,
     });
-    if (intent === "revise") {
-      this.#call("entries.inspect", { id: node.id }).then(
-        (inspection) => {
-          if (inspection.kind !== "node") {
-            return;
-          }
-          this.reconnect(name, inspection.edges, intent);
-        },
-        (failure: unknown) => {
-          this.#dispatch({
-            kind: "notice",
-            notice: `could not read the current edges of @${node.id.position}: ${message(failure)}`,
-          });
-        },
-      );
+    if (name !== null && intent === "revise") {
+      this.#keepCurrentEdges(name, node.id);
     }
     return name;
   }
 
-  // Adds the default edge operations right after `operation`, each after the
-  // previous one, so they keep the relationships' order.
-  reconnect(
-    operation: string,
-    edges: readonly IncidentEdge[],
-    intent: RevisionIntent,
-  ) {
-    if (!this.#state().proposal.entries.some((e) => e.name === operation)) {
-      return;
-    }
-    let after = operation;
-    for (const entry of reconnections(operation, edges, intent)) {
-      this.#dispatch({ kind: "add", entry, after, select: false });
-      // The reducer may have suffixed a taken name; the newest selection is
-      // not it, so find the entry by position instead.
-      const { entries } = this.#state().proposal;
-      const at = entries.findIndex((e) => e.name === after);
-      after = entries[at + 1]?.name ?? after;
-    }
+  // Reads without `as_of`, because the draft applies to the current state.
+  // The answer lands only if the operation still revises the node; the
+  // reducer checks that when it arrives.
+  #keepCurrentEdges(operation: string, predecessor: EntryId) {
+    this.#call("entries.inspect", { id: predecessor }).then(
+      (inspection) => {
+        if (inspection.kind === "node") {
+          this.#dispatch({
+            kind: "keep",
+            operation,
+            predecessor,
+            intent: "revise",
+            edges: reconnectable(inspection.edges),
+          });
+        }
+      },
+      (failure: unknown) => {
+        this.#notice(
+          `could not read the current edges of @${predecessor.position}: ${message(failure)}`,
+        );
+      },
+    );
   }
 
   startPick(operation: string, role: PickRole) {
@@ -270,24 +185,47 @@ export class DraftActions {
     this.#dispatch({ kind: "pick", picking: null });
   }
 
+  // A predecessor picked for a revise gets the same kept edges as Revise in
+  // the inspector; a branch gets none.
   resolvePick(id: EntryId): string | null {
     const { picking } = this.#state();
-    if (picking === null) {
+    if (picking === null || frozen(this.#state())) {
       return null;
     }
     this.#dispatch({ kind: "resolve_pick", id });
+    const entry = this.#state().proposal.entries.find(
+      (e) => e.name === picking.operation,
+    );
+    if (
+      picking.role === "predecessor" &&
+      entry?.kind === "node" &&
+      entry.intent === "revise"
+    ) {
+      this.#keepCurrentEdges(picking.operation, id);
+    }
     return picking.operation;
   }
 
-  importProposal(proposal: Proposal, mode: "replace" | "append") {
+  // The name of the first operation as it landed, or null when nothing did.
+  importProposal(
+    proposal: Proposal,
+    mode: "replace" | "append",
+  ): string | null {
+    if (frozen(this.#state()) || proposal.acknowledges !== undefined) {
+      return null;
+    }
+    const before = this.#state().proposal.entries.length;
     this.#dispatch({ kind: "import", proposal, mode });
     void this.ensurePlanId();
+    const { entries } = this.#state().proposal;
+    return entries[mode === "replace" ? 0 : before]?.name ?? null;
   }
 
   // ---- Calls ----
 
   // Mints once per missing plan ID; the reducer drops the answer if the
-  // draft was cleared meanwhile.
+  // draft was cleared meanwhile. A failure is a notice, so it never hides a
+  // banner about the last check or apply.
   async ensurePlanId(): Promise<boolean> {
     const { proposal, pending } = this.#state();
     if (proposal.plan_id !== undefined || proposal.entries.length === 0) {
@@ -303,24 +241,23 @@ export class DraftActions {
     try {
       const { plan_id } = await this.#call("plan_id.mint", {});
       this.#dispatch({ kind: "set_plan_id", plan_id });
-      this.#dispatch({ kind: "pending", pending: null });
       return true;
     } catch (failure) {
-      this.#dispatch({
-        kind: "problem",
-        problem: {
-          kind: "failed",
-          message: `could not mint a plan ID: ${message(failure)}`,
-        },
-      });
+      this.#notice(`could not mint a plan ID: ${message(failure)}`);
       return false;
     } finally {
       this.#minting = false;
+      if (this.#state().pending === "mint") {
+        this.#dispatch({ kind: "pending", pending: null });
+      }
     }
   }
 
+  // Not while an apply may have been published: that needs the user's
+  // decision first.
   async replan(): Promise<void> {
-    if (this.#state().pending !== null) {
+    const state = this.#state();
+    if (state.pending !== null || state.uncertain !== null) {
       return;
     }
     this.#dispatch({ kind: "pending", pending: "mint" });
@@ -328,13 +265,8 @@ export class DraftActions {
       const { plan_id } = await this.#call("plan_id.mint", {});
       this.#dispatch({ kind: "replan", plan_id });
     } catch (failure) {
-      this.#dispatch({
-        kind: "problem",
-        problem: {
-          kind: "failed",
-          message: `could not mint a plan ID: ${message(failure)}`,
-        },
-      });
+      this.#dispatch({ kind: "pending", pending: null });
+      this.#notice(`could not mint a plan ID: ${message(failure)}`);
     }
   }
 
@@ -355,6 +287,9 @@ export class DraftActions {
       return;
     }
     const current = this.#state();
+    if (current.pending !== null) {
+      return;
+    }
     const { evaluation } = current;
     const proposal = proposalOf(current);
     const request = requestOf(current);
@@ -366,50 +301,54 @@ export class DraftActions {
       });
       this.#dispatch({ kind: "checked", result, request, evaluation });
     } catch (failure) {
-      this.#settle(classify(failure, "check"), request, evaluation);
+      this.#settle(classify(failure, "check", names(request)), request, {
+        evaluation,
+        flight: null,
+      });
     }
   }
 
-  // Applies with the inputs the accepted check used; the tray only enables
-  // it for the same content.
+  // Applies exactly what the accepted check judged, with the inputs it
+  // reported. The draft is frozen until the answer, and the marker saved
+  // first turns a reload in the middle into an uncertain draft.
   async apply(): Promise<void> {
     const state = this.#state();
     const { outcome } = state;
-    if (
-      state.pending !== null ||
-      outcome === null ||
-      !outcome.accepted ||
-      outcome.request !== requestOf(state)
-    ) {
+    if (outcome === null || !applicable(state)) {
       return;
     }
-    const { evaluation } = outcome;
-    this.#dispatch({ kind: "pending", pending: "apply" });
+    const proposal = proposalOf(state);
+    const { request, evaluation } = outcome;
+    const flight: InFlight = {
+      plan_id: proposal.plan_id ?? null,
+      request,
+      base_revision: outcome.report.base_revision ?? null,
+      base_end: outcome.report.base.end_exclusive,
+    };
+    this.#dispatch({ kind: "apply_started", flight });
+    let result: Result<"proposal.apply">;
     try {
-      const result = await this.#call("proposal.apply", {
-        proposal: proposalOf(state),
-        ...evaluationParams(evaluation),
+      result = await this.#call("proposal.apply", {
+        proposal,
+        ...applyParams(outcome),
       });
-      this.#dispatch({ kind: "applied", result });
-      this.#refresh();
     } catch (failure) {
-      const classified = classify(failure, "apply");
-      this.#settle(classified, outcome.request, evaluation);
-      // A possibly published write: reload what the screens show, which is
-      // a read and never a retry of the apply.
-      if (
-        classified.kind === "problem" &&
-        classified.problem.kind === "uncertain"
-      ) {
-        this.#refresh();
-      }
+      this.#settle(classify(failure, "apply", names(request)), request, {
+        evaluation,
+        flight,
+      });
+      return;
     }
+    this.#dispatch({ kind: "applied", result, request });
+    this.#refresh();
+    // Operations the request did not carry stay and need a new plan ID.
+    void this.ensurePlanId();
   }
 
   #settle(
     classified: Classified,
     request: string,
-    evaluation: DraftState["evaluation"],
+    { evaluation, flight }: { evaluation: Evaluation; flight: InFlight | null },
   ) {
     switch (classified.kind) {
       case "stale":
@@ -430,13 +369,72 @@ export class DraftActions {
       case "problem":
         this.#dispatch({ kind: "problem", problem: classified.problem });
         return;
+      case "uncertain":
+        if (flight === null) {
+          return;
+        }
+        this.#dispatch({
+          kind: "uncertain",
+          uncertain: {
+            ...flight,
+            error: classified.error,
+            message: classified.message,
+            outcome: classified.outcome,
+            verdict: null,
+          },
+        });
+        // A possibly published write: reload what the screens show, which
+        // is a read and never a retry of the apply.
+        this.#refresh();
+        return;
     }
   }
 
-  async encode(format: Format): Promise<string | null> {
+  // Looks for the entries an uncertain apply would have added, at the
+  // positions it would have taken after the check's base. Only reads.
+  async lookForEntries(): Promise<void> {
+    const { uncertain } = this.#state();
+    if (uncertain === null) {
+      return;
+    }
+    let verdict: Verdict;
+    try {
+      const description = await this.#call("database.describe", {});
+      if (description.graph_revision === uncertain.base_revision) {
+        verdict = { kind: "unchanged" };
+      } else if (
+        BigInt(description.view.end_exclusive) <= BigInt(uncertain.base_end)
+      ) {
+        verdict = { kind: "absent" };
+      } else {
+        const sent = (JSON.parse(uncertain.request) as Proposal).entries;
+        const { entries } = await this.#call("entries.list", {
+          currentness: "all",
+        });
+        const operations = findApplied(sent, uncertain.base_end, entries);
+        verdict =
+          operations === null
+            ? { kind: "other" }
+            : { kind: "present", operations };
+      }
+    } catch (failure) {
+      verdict = { kind: "failed", message: message(failure) };
+    }
+    if (this.#state().uncertain?.request === uncertain.request) {
+      this.#dispatch({ kind: "verdict", verdict });
+    }
+  }
+
+  // Refused locally while an endpoint is unset: the codec would write the
+  // placeholder as if it were an entry.
+  async encode(format: Format): Promise<Encoded> {
     const state = this.#state();
     if (state.pending !== null) {
-      return null;
+      return { kind: "failed", message: "another call is in flight" };
+    }
+    const missing = incomplete(state.proposal.entries);
+    if (missing !== null) {
+      return { kind: "failed", message: `cannot export: ${missing.message}` };
     }
     this.#dispatch({ kind: "pending", pending: "encode" });
     try {
@@ -444,17 +442,14 @@ export class DraftActions {
         proposal: proposalOf(state),
         format,
       });
-      this.#dispatch({ kind: "pending", pending: null });
-      return text;
+      return { kind: "ok", text };
     } catch (failure) {
-      this.#dispatch({
-        kind: "problem",
-        problem: {
-          kind: "failed",
-          message: `could not encode the draft: ${message(failure)}`,
-        },
-      });
-      return null;
+      return {
+        kind: "failed",
+        message: `could not encode the draft: ${message(failure)}`,
+      };
+    } finally {
+      this.#dispatch({ kind: "pending", pending: null });
     }
   }
 
@@ -467,10 +462,8 @@ export class DraftActions {
     this.#dispatch({ kind: "pending", pending: "decode" });
     try {
       const proposal = await this.#call("proposal.decode", { text, format });
-      this.#dispatch({ kind: "pending", pending: null });
       return { kind: "ok", proposal };
     } catch (failure) {
-      this.#dispatch({ kind: "pending", pending: null });
       if (failure instanceof RpcError) {
         const { error } = failure;
         const data = "data" in error ? error.data : undefined;
@@ -483,6 +476,8 @@ export class DraftActions {
         }
       }
       return { kind: "failed", message: message(failure) };
+    } finally {
+      this.#dispatch({ kind: "pending", pending: null });
     }
   }
 }

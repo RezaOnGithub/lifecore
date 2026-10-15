@@ -1,8 +1,17 @@
 import type {
+  EntryId,
   Proposal,
   ProposalEntry,
   ProposalReference,
+  Published,
 } from "../contract.ts";
+import {
+  type DraftState,
+  type InFlight,
+  initialDraft,
+  type KeptEdge,
+  type Uncertain,
+} from "./model.ts";
 
 // One draft per database: the key carries the database id, so another
 // database's draft is never restored into this one.
@@ -10,10 +19,27 @@ export function storageKey(database: string): string {
   return `lifecore.draft.${database}`;
 }
 
+// What survives a reload: the proposal, the provenance of its kept edges,
+// an apply of uncertain fate, and the marker of an apply in flight.
+export interface Stored {
+  proposal: Proposal;
+  kept: Record<string, KeptEdge>;
+  uncertain: Omit<Uncertain, "verdict"> | null;
+  in_flight: InFlight | null;
+}
+
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isId(value: unknown): value is EntryId {
+  return (
+    isRecord(value) &&
+    typeof value.origin === "string" &&
+    typeof value.position === "string"
+  );
 }
 
 function isReference(value: unknown): value is ProposalReference {
@@ -23,17 +49,12 @@ function isReference(value: unknown): value is ProposalReference {
   if ("added" in value) {
     return typeof value.added === "string";
   }
-  return (
-    isRecord(value.existing) &&
-    typeof value.existing.origin === "string" &&
-    typeof value.existing.position === "string"
-  );
+  return isId(value.existing);
 }
 
 // The stored shape is this client's own, so the check is structural only:
-// names, types, and payload contents are the server's to judge (a draft may
-// be saved mid-rename), and a rejected entry drops the whole draft rather
-// than restoring half of it.
+// names, types, and payload contents are the server's to judge, and a
+// rejected part drops the whole draft rather than restoring half of it.
 function readEntry(value: unknown): ProposalEntry | null {
   if (
     !isRecord(value) ||
@@ -88,8 +109,152 @@ export function readProposal(value: unknown): Proposal | null {
     : null;
 }
 
+function readKept(value: unknown): Record<string, KeptEdge> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const kept: Record<string, KeptEdge> = {};
+  for (const [name, edge] of Object.entries(value)) {
+    if (
+      !isRecord(edge) ||
+      typeof edge.revision !== "string" ||
+      !isId(edge.predecessor) ||
+      !isId(edge.edge)
+    ) {
+      return null;
+    }
+    kept[name] = {
+      revision: edge.revision,
+      predecessor: edge.predecessor,
+      edge: edge.edge,
+    };
+  }
+  return kept;
+}
+
+function readFlight(value: unknown): InFlight | null {
+  if (
+    !isRecord(value) ||
+    (value.plan_id !== null && typeof value.plan_id !== "string") ||
+    typeof value.request !== "string" ||
+    (value.base_revision !== null && typeof value.base_revision !== "string") ||
+    typeof value.base_end !== "string"
+  ) {
+    return null;
+  }
+  return {
+    plan_id: value.plan_id,
+    request: value.request,
+    base_revision: value.base_revision,
+    base_end: value.base_end,
+  };
+}
+
+function readUncertain(value: unknown): Stored["uncertain"] {
+  const flight = readFlight(value);
+  if (
+    flight === null ||
+    !isRecord(value) ||
+    typeof value.error !== "string" ||
+    typeof value.message !== "string" ||
+    (value.outcome !== null && !isRecord(value.outcome))
+  ) {
+    return null;
+  }
+  return {
+    ...flight,
+    error: value.error,
+    message: value.message,
+    outcome: value.outcome as Published | null,
+  };
+}
+
+export function readStored(value: unknown): Stored | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const proposal = readProposal(value.proposal);
+  const kept = readKept(value.kept);
+  const uncertain =
+    value.uncertain === null ? null : readUncertain(value.uncertain);
+  const in_flight =
+    value.in_flight === null ? null : readFlight(value.in_flight);
+  if (
+    proposal === null ||
+    kept === null ||
+    (value.uncertain !== null && uncertain === null) ||
+    (value.in_flight !== null && in_flight === null)
+  ) {
+    return null;
+  }
+  return { proposal, kept, uncertain, in_flight };
+}
+
+export function storedOf(state: DraftState): Stored {
+  const { uncertain } = state;
+  return {
+    proposal: state.proposal,
+    kept: state.kept,
+    uncertain:
+      uncertain === null
+        ? null
+        : {
+            plan_id: uncertain.plan_id,
+            request: uncertain.request,
+            base_revision: uncertain.base_revision,
+            base_end: uncertain.base_end,
+            error: uncertain.error,
+            message: uncertain.message,
+            outcome: uncertain.outcome,
+          },
+    in_flight: state.inFlight,
+  };
+}
+
+// The stored parts change only through these fields, so comparing them by
+// identity tells whether a dispatch needs a save.
+export function storedChanged(before: DraftState, after: DraftState): boolean {
+  return (
+    before.proposal !== after.proposal ||
+    before.kept !== after.kept ||
+    before.uncertain !== after.uncertain ||
+    before.inFlight !== after.inFlight
+  );
+}
+
+// An apply that was in flight when the page went away may have been
+// published: the draft comes back uncertain, never ready to apply again.
+// Check results are not stored, so Apply needs a new check either way.
+export function restoredState(stored: Stored | null): DraftState {
+  if (stored === null) {
+    return initialDraft;
+  }
+  const { proposal, kept, uncertain, in_flight } = stored;
+  return {
+    ...initialDraft,
+    proposal,
+    kept,
+    uncertain:
+      uncertain !== null
+        ? { ...uncertain, verdict: null }
+        : in_flight === null
+          ? null
+          : {
+              ...in_flight,
+              error: "interrupted",
+              message:
+                "the page was closed or reloaded while this draft was being applied",
+              outcome: null,
+              verdict: null,
+            },
+  };
+}
+
 // Null for a missing, unreadable, or malformed draft.
-export function loadDraft(store: Pick<Store, "getItem">, database: string) {
+export function loadDraft(
+  store: Pick<Store, "getItem">,
+  database: string,
+): Stored | null {
   let text: string | null;
   try {
     text = store.getItem(storageKey(database));
@@ -100,20 +265,25 @@ export function loadDraft(store: Pick<Store, "getItem">, database: string) {
     return null;
   }
   try {
-    return readProposal(JSON.parse(text));
+    return readStored(JSON.parse(text));
   } catch {
     return null;
   }
 }
 
-// An empty draft leaves nothing behind. Storage failures (quota, private
-// mode) are swallowed: the draft lives on in memory either way.
-export function saveDraft(store: Store, database: string, proposal: Proposal) {
+// A draft with nothing to keep leaves nothing behind. Storage failures
+// (quota, private mode) are swallowed: the draft lives on in memory either
+// way.
+export function saveDraft(store: Store, database: string, stored: Stored) {
   try {
-    if (proposal.entries.length === 0) {
+    if (
+      stored.proposal.entries.length === 0 &&
+      stored.uncertain === null &&
+      stored.in_flight === null
+    ) {
       store.removeItem(storageKey(database));
     } else {
-      store.setItem(storageKey(database), JSON.stringify(proposal));
+      store.setItem(storageKey(database), JSON.stringify(stored));
     }
   } catch {
     // Nothing to do: the next save will try again.

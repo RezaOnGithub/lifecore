@@ -431,26 +431,55 @@
       .raw-editor {
         max-width: 60rem;
       }
+      /* Text values grow a row per line; long lines wrap. */
+      textarea.text-value {
+        font: inherit;
+        width: 100%;
+        max-width: 40rem;
+        box-sizing: border-box;
+        resize: vertical;
+        vertical-align: top;
+      }
+      .edit-note {
+        color: #666;
+        font-size: 0.85rem;
+        font-style: italic;
+        margin-left: 0.3rem;
+      }
+      .edit-hint {
+        color: #8a5a00;
+        font-size: 0.85rem;
+        margin-left: 0.3rem;
+      }
+      .add-decl {
+        margin-top: 0.3rem;
+      }
       /* draft */
       /* A third column for the draft tray; main keeps minmax(0, 1fr) so it
-         can shrink and scroll. */
+         can shrink and scroll. A failed description spans the first two
+         columns, so the tray stays. */
       .app {
         grid-template-columns: 15rem minmax(0, 1fr) auto;
       }
+      .app > main.full {
+        grid-column: 1 / span 2;
+      }
+      /* The tray is a column: a header that never scrolls away and the
+         operations below it, which scroll on their own. */
       aside.tray {
         border-left: 1px solid #c8c8c8;
         background: #fbfbfb;
-        width: 24rem;
+        width: 26rem;
         min-width: 0;
-        overflow: auto;
-        padding: 0.5rem 0.75rem;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
         box-sizing: border-box;
       }
       aside.tray.collapsed {
         width: auto;
         padding: 0.5rem 0.3rem;
-        display: flex;
-        flex-direction: column;
         align-items: center;
         gap: 0.5rem;
       }
@@ -460,11 +489,27 @@
         font-size: 0.85rem;
         white-space: nowrap;
       }
+      .tray-head {
+        flex: none;
+        max-height: 60%;
+        overflow: auto;
+        padding: 0.4rem 0.75rem;
+        border-bottom: 1px solid #ddd;
+      }
+      .tray-head .row {
+        margin: 0.25rem 0;
+      }
+      .tray-body {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 0.3rem 0.75rem 0.75rem;
+      }
       .tray-title {
         font-size: 0.8rem;
         text-transform: uppercase;
         color: #666;
-        margin: 0.25rem 0;
+        margin: 0.1rem 0;
         display: flex;
         gap: 0.5rem;
         align-items: center;
@@ -476,11 +521,24 @@
         font-size: 0.9rem;
         margin: 0.75rem 0 0.25rem;
       }
+      .apply-note {
+        font-size: 0.8rem;
+      }
       .plan {
         font-size: 0.75rem;
         color: #666;
         overflow-wrap: anywhere;
         margin: 0.2rem 0;
+      }
+      button.confirm {
+        border-color: #b00020;
+        color: #b00020;
+      }
+      fieldset.frame {
+        border: none;
+        margin: 0;
+        padding: 0;
+        min-width: 0;
       }
       .operations {
         list-style: none;
@@ -488,22 +546,63 @@
         padding: 0;
       }
       .operations li.op {
-        border: 1px solid #ddd;
-        border-radius: 3px;
-        padding: 0.3rem 0.5rem;
-        margin: 0.3rem 0;
-        background: #fff;
+        padding: 0.1rem 0.3rem;
+        border-bottom: 1px solid #eee;
+        font-size: 0.85rem;
       }
       .operations li.op.selected {
-        border-color: #06c;
         background: #eef4ff;
+        box-shadow: inset 2px 0 0 #06c;
       }
       .operations li.op.invalid {
-        border-color: #b00020;
         background: #fff4f4;
+        box-shadow: inset 2px 0 0 #b00020;
       }
-      .operations .row {
-        margin: 0;
+      .op-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.2rem 0.4rem;
+      }
+      .op-line .op-name {
+        font-weight: 600;
+      }
+      .op-line .op-type {
+        color: #333;
+      }
+      .op-line .chip {
+        font-size: 0.8rem;
+        color: #555;
+      }
+      .pos.dim,
+      .dim {
+        opacity: 0.55;
+      }
+      .dim-note {
+        font-size: 0.8rem;
+        font-style: italic;
+        margin: 0.1rem 0;
+      }
+      .op-warn {
+        margin: 0.1rem 0 0.1rem 0.5rem;
+        font-size: 0.8rem;
+        color: #8a5a00;
+      }
+      .op-warn::before {
+        content: "⚠ ";
+      }
+      .ref-unset {
+        color: #b00020;
+        font-weight: 600;
+      }
+      .kept-group {
+        padding: 0.05rem 0.3rem 0.1rem 1.2rem;
+        border-bottom: 1px solid #eee;
+        font-size: 0.8rem;
+      }
+      .operations.nested li.op {
+        border-bottom: none;
+        padding-left: 0;
       }
       .badge.kind {
         text-transform: uppercase;
@@ -526,6 +625,10 @@
       .badge.check-ok {
         border-color: #2a7;
         background: #e6f7ee;
+      }
+      .badge.resolved {
+        border-color: #2a7;
+        font-style: italic;
       }
       .ref-issue button.link {
         color: #a60;
@@ -575,6 +678,9 @@
         border-color: #b00020;
         background: #fff4f4;
       }
+      .banner.uncertain {
+        border-width: 2px;
+      }
       .banner.applied {
         border-color: #2a7;
         background: #e6f7ee;
@@ -582,6 +688,23 @@
       .banner.picking {
         border-color: #27a;
         background: #e8f2fb;
+      }
+      .notices {
+        list-style: none;
+        margin: 0.3rem 0;
+        padding: 0;
+        font-size: 0.85rem;
+      }
+      .notices li {
+        padding: 0.2rem 0.4rem;
+        margin: 0.2rem 0;
+        border-left: 3px solid #c80;
+        background: #fffaf0;
+      }
+      .export-error {
+        color: #b00020;
+        font-size: 0.85rem;
+        margin: 0.2rem 0;
       }
       aside.tray textarea.export {
         width: 100%;
@@ -595,9 +718,12 @@
         box-sizing: border-box;
         font-family: ui-monospace, monospace;
       }
+      .reconnect-head {
+        margin: 0.4rem 0 0.1rem;
+      }
       .reconnect-list {
         list-style: none;
-        margin: 0.3rem 0;
+        margin: 0.1rem 0;
         padding: 0;
       }
       .reconnect-list li {

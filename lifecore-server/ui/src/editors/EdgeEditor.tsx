@@ -6,7 +6,9 @@ import {
   type EdgeOperation,
   earlierNodes,
   edgeTypeSuggestions,
+  isUnpicked,
   type NodeOperation,
+  sameReference,
 } from "./helpers.ts";
 import type { OperationEditorProps, PickRole } from "./OperationEditor.tsx";
 import { ReferenceChip } from "./ReferenceChip.tsx";
@@ -18,7 +20,8 @@ const ADDED = "added:";
 // One endpoint: an earlier node operation by name, or an existing entry
 // picked from the inspector. Choosing "existing…" over an `added` reference
 // keeps that reference until an entry is picked: there is no blank
-// identity to put in its place.
+// identity to put in its place. An existing entry is only picked, never
+// typed: its identity includes the database origin, which no one types.
 function EndpointPicker({
   end,
   reference,
@@ -71,7 +74,7 @@ function EndpointPicker({
           </option>
         )}
       </select>
-      {existingMode ? (
+      {existingMode && (
         <>
           {"existing" in reference ? (
             <ReferenceChip reference={reference} />
@@ -84,12 +87,11 @@ function EndpointPicker({
             pick {end}
           </button>
         </>
-      ) : (
-        !known && (
-          <span className="field-error">
-            {end} must name an earlier node operation
-          </span>
-        )
+      )}
+      {added !== null && !known && (
+        <span className="field-error">
+          {end} +{added} is not an earlier node operation
+        </span>
       )}
     </div>
   );
@@ -105,6 +107,8 @@ export function EdgeEditor({
 }: Omit<OperationEditorProps, "entry"> & { entry: EdgeOperation }) {
   const id = useId();
   const earlier = earlierNodes(operations, index);
+  // Only an `added` end's type is known here: an existing entry's type
+  // would take a read, so it counts as unknown.
   const fromType = addedNodeType(entry.from, earlier);
   const toType = addedNodeType(entry.to, earlier);
   const suggestions = edgeTypeSuggestions(
@@ -112,6 +116,7 @@ export function EdgeEditor({
     toType === null ? null : schemaOf(types, toType),
     types,
   );
+  const loop = !isUnpicked(entry.from) && sameReference(entry.from, entry.to);
   return (
     <>
       <div className="row">
@@ -127,10 +132,13 @@ export function EdgeEditor({
           }
         />
         <datalist id={`${id}-labels`}>
-          {suggestions.map((label) => (
+          {suggestions.labels.map((label) => (
             <option key={label} value={label} />
           ))}
         </datalist>
+        {suggestions.note !== null && (
+          <span className="edit-hint">{suggestions.note}</span>
+        )}
       </div>
       <EndpointPicker
         end="from"
@@ -146,6 +154,9 @@ export function EdgeEditor({
         onChange={(to) => onChange({ ...entry, to })}
         onPick={() => onPick("to")}
       />
+      {loop && (
+        <p className="edit-hint">from and to are the same node: a self-loop</p>
+      )}
     </>
   );
 }

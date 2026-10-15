@@ -1,4 +1,5 @@
 import type {
+  DecimalString,
   EntryId,
   MessageType,
   Observation,
@@ -7,72 +8,120 @@ import type {
 import { sameId } from "../model/labels.ts";
 
 // A subject or focus of a finding, with provisional ids mapped back to the
-// operation that would create them.
+// index of the operation that would create them.
 export type Target =
-  | { kind: "operation"; name: string }
+  | { kind: "operation"; index: number }
   | { kind: "existing"; id: EntryId };
 
 export interface Attached {
   observation: Observation;
   subjects: Target[];
   focus: Target | null;
+  // The boundaries of the first and last prefix it was emitted at; null for
+  // a suite-level initialization finding.
+  range: { first: DecimalString; last: DecimalString } | null;
+  // Last emitted before the candidate's head, so a later operation of the
+  // draft resolved it.
+  resolvedLater: boolean;
 }
 
 export interface Attachment {
-  // Keyed by the operation name as of the report, so a reordered draft keeps
-  // its findings and a renamed or removed operation's end up in `unplaced`.
-  operations: Map<string, Attached[]>;
+  // Keyed by the index of the operation in the checked proposal, whose
+  // entry sits at `base + index`; `Outcome.names` names it in the draft.
+  operations: Map<number, Attached[]>;
+  // Held in the committed base and still at its boundary.
   history: Attached[];
+  // Held in the committed history but resolved before the base; not listed.
+  settled: number;
   initialization: Attached[];
   unplaced: Attached[];
 }
 
+const attachments = new WeakMap<ProposalReport, Attachment>();
+
 // Attaches each observation to the operation that introduced it: the newest
 // entry of the first prefix it was emitted at is at position
-// `first.end_exclusive - 1`; at or past the base boundary that is the plan's
-// operation `position - base.end_exclusive`, before it the finding already
-// held in the committed history.
+// `first.end_exclusive - 1`; at or past the base boundary that is the entry
+// of the report operation at that position, before it the finding already
+// held in the committed history. Reports are immutable, so the attachment
+// is computed once per report.
 export function attachFindings(report: ProposalReport): Attachment {
+  const known = attachments.get(report);
+  if (known !== undefined) {
+    return known;
+  }
   const base = BigInt(report.base.end_exclusive);
+  const head = BigInt(report.analysis.view.end_exclusive);
+  const indexAt = (position: bigint): number | null => {
+    const found = report.operations.some(
+      (op) => BigInt(op.entry.position) === position,
+    );
+    return found && position >= base ? Number(position - base) : null;
+  };
   const target = (id: EntryId): Target => {
     const operation = report.operations.find((op) => sameId(op.entry, id));
-    return operation === undefined
+    const index =
+      operation === undefined
+        ? null
+        : indexAt(BigInt(operation.entry.position));
+    return index === null
       ? { kind: "existing", id }
-      : { kind: "operation", name: operation.name };
+      : { kind: "operation", index };
   };
   const attachment: Attachment = {
-    operations: new Map(report.operations.map((op) => [op.name, []])),
+    operations: new Map(),
     history: [],
+    settled: 0,
     initialization: [],
     unplaced: [],
   };
   for (const observation of report.analysis.observations) {
     const { diagnostic, evaluated_view } = observation;
-    const attached: Attached = {
+    const common = {
       observation,
       subjects: diagnostic.subjects.map(target),
       focus: diagnostic.focus === null ? null : target(diagnostic.focus),
     };
     if (evaluated_view.kind === "initialization") {
-      attachment.initialization.push(attached);
+      attachment.initialization.push({
+        ...common,
+        range: null,
+        resolvedLater: false,
+      });
       continue;
     }
-    const newest = BigInt(evaluated_view.first.end_exclusive) - 1n;
+    const first = BigInt(evaluated_view.first.end_exclusive);
+    const last = BigInt(evaluated_view.last.end_exclusive);
+    const attached: Attached = {
+      ...common,
+      range: {
+        first: evaluated_view.first.end_exclusive,
+        last: evaluated_view.last.end_exclusive,
+      },
+      resolvedLater: last >= base && last < head,
+    };
+    const newest = first - 1n;
     if (newest < base) {
-      attachment.history.push(attached);
+      if (last >= base) {
+        attachment.history.push(attached);
+      } else {
+        attachment.settled += 1;
+      }
       continue;
     }
-    const operation = report.operations[Number(newest - base)];
-    const list =
-      operation === undefined
-        ? undefined
-        : attachment.operations.get(operation.name);
-    if (list === undefined) {
+    const index = indexAt(newest);
+    if (index === null) {
       attachment.unplaced.push(attached);
+      continue;
+    }
+    const list = attachment.operations.get(index);
+    if (list === undefined) {
+      attachment.operations.set(index, [attached]);
     } else {
       list.push(attached);
     }
   }
+  attachments.set(report, attachment);
   return attachment;
 }
 
@@ -84,6 +133,22 @@ export function countFindings(findings: readonly Attached[]): Counts {
     counts[observation.diagnostic.kind] += 1;
   }
   return counts;
+}
+
+// The findings of a whole report, and those the plan's operations introduced.
+export function reportCounts(report: ProposalReport): {
+  total: Counts;
+  introduced: Counts;
+} {
+  const attachment = attachFindings(report);
+  const total: Counts = { inconsistency: 0, warning: 0, suggestion: 0 };
+  for (const observation of report.analysis.observations) {
+    total[observation.diagnostic.kind] += 1;
+  }
+  return {
+    total,
+    introduced: countFindings([...attachment.operations.values()].flat()),
+  };
 }
 
 // The per-operation status after a check: inconsistencies block, warnings
@@ -99,4 +164,14 @@ export function statusWords(counts: Counts): string {
     words.push(`${counts.warning} warning${counts.warning === 1 ? "" : "s"}`);
   }
   return words.length === 0 ? "ok" : words.join(", ");
+}
+
+export function countWords(counts: Counts): string {
+  const plural = (n: number, one: string, many: string) =>
+    `${n} ${n === 1 ? one : many}`;
+  return [
+    plural(counts.inconsistency, "inconsistency", "inconsistencies"),
+    plural(counts.warning, "warning", "warnings"),
+    plural(counts.suggestion, "suggestion", "suggestions"),
+  ].join(", ");
 }

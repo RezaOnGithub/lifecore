@@ -3,20 +3,21 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { useData } from "../data.tsx";
 import { DraftActions } from "./actions.ts";
+import { type DraftState, initialDraft } from "./model.ts";
 import {
-  type DraftAction,
-  type DraftState,
-  draftReducer,
-  initialDraft,
-} from "./model.ts";
-import { loadDraft, saveDraft } from "./persist.ts";
+  loadDraft,
+  restoredState,
+  saveDraft,
+  storedChanged,
+  storedOf,
+} from "./persist.ts";
+import { type DraftAction, draftReducer } from "./reducer.ts";
 
 export interface Draft {
   state: DraftState;
@@ -34,17 +35,11 @@ export function useDraft(): Draft {
   return draft;
 }
 
-function restored(database: string | null): DraftState {
-  if (database === null) {
-    return initialDraft;
-  }
-  const proposal = loadDraft(window.localStorage, database);
-  return proposal === null ? initialDraft : { ...initialDraft, proposal };
-}
-
 // Holds the draft of one database. Mount it keyed by the database id: the
-// stored draft is read once, on mount, and written on every change of the
-// proposal; nothing is stored before the database is known.
+// stored draft is read once, on mount, and the stored parts are written on
+// every dispatch that changes them, synchronously, so the marker of an apply
+// is on disk before its request leaves; nothing is stored before the
+// database is known.
 export function DraftProvider({
   database,
   children,
@@ -60,15 +55,25 @@ export function DraftProvider({
   // lag one render behind the handlers.
   const current = useRef<DraftState | null>(null);
   const [state, setState] = useState(() => {
-    const initial = restored(database);
+    const initial =
+      database === null
+        ? initialDraft
+        : restoredState(loadDraft(window.localStorage, database));
     current.current = initial;
     return initial;
   });
-  const dispatch = useCallback((action: DraftAction) => {
-    const next = draftReducer(current.current ?? initialDraft, action);
-    current.current = next;
-    setState(next);
-  }, []);
+  const dispatch = useCallback(
+    (action: DraftAction) => {
+      const previous = current.current ?? initialDraft;
+      const next = draftReducer(previous, action);
+      current.current = next;
+      if (database !== null && storedChanged(previous, next)) {
+        saveDraft(window.localStorage, database, storedOf(next));
+      }
+      setState(next);
+    },
+    [database],
+  );
   const actions = useMemo(
     () =>
       new DraftActions(
@@ -79,11 +84,6 @@ export function DraftProvider({
       ),
     [client, dispatch, bumpRefresh],
   );
-  useEffect(() => {
-    if (database !== null) {
-      saveDraft(window.localStorage, database, state.proposal);
-    }
-  }, [database, state.proposal]);
   const value = useMemo(
     () => ({ state, dispatch, actions }),
     [state, dispatch, actions],

@@ -3,7 +3,7 @@ import type { RevisionIntent } from "../contract.ts";
 import { schemaOf } from "../data.tsx";
 import { typeName } from "../model/labels.ts";
 import { ResolutionBadge } from "../views/widgets.tsx";
-import { type NodeOperation, typeNames } from "./helpers.ts";
+import { earlierNodes, type NodeOperation, typeNames } from "./helpers.ts";
 import type { OperationEditorProps } from "./OperationEditor.tsx";
 import { PayloadEditor } from "./PayloadEditor.tsx";
 import { ReferenceChip } from "./ReferenceChip.tsx";
@@ -24,6 +24,8 @@ function asRoot(entry: NodeOperation): NodeOperation {
 
 export function NodeEditor({
   entry,
+  operations,
+  index,
   types,
   onChange,
   onPick,
@@ -37,6 +39,14 @@ export function NodeEditor({
   const summary = types?.find((type) => type.name === entry.ty_name);
   const schema = schemaOf(types, entry.ty_name);
   const setIntent = (intent: RevisionIntent) => onChange({ ...entry, intent });
+  const { predecessor, intent } = entry;
+  const earlier = earlierNodes(operations, index);
+  const predecessorProblem =
+    predecessor !== undefined &&
+    "added" in predecessor &&
+    !earlier.some((operation) => operation.name === predecessor.added)
+      ? `+${predecessor.added} is not an earlier node operation`
+      : null;
   return (
     <>
       <div className="row">
@@ -68,9 +78,10 @@ export function NodeEditor({
               type="text"
               size={20}
               value={entry.ty_name}
-              onChange={(event) =>
-                onChange({ ...entry, ty_name: event.target.value })
-              }
+              onChange={(event) => {
+                setForcedOther(true);
+                onChange({ ...entry, ty_name: event.target.value });
+              }}
             />
           </>
         )}
@@ -85,8 +96,8 @@ export function NodeEditor({
       </div>
       <div className="row">
         <span>predecessor</span>
-        {entry.predecessor ? (
-          <ReferenceChip reference={entry.predecessor} />
+        {predecessor ? (
+          <ReferenceChip reference={predecessor} />
         ) : (
           <span className="muted">none (root)</span>
         )}
@@ -95,19 +106,32 @@ export function NodeEditor({
         </button>
         <button
           type="button"
-          disabled={entry.predecessor === undefined}
+          disabled={predecessor === undefined}
           onClick={() => onChange(asRoot(entry))}
         >
           clear
         </button>
-        {entry.predecessor && (
+        {predecessorProblem !== null && (
+          <span className="field-error">{predecessorProblem}</span>
+        )}
+        {predecessor === undefined && intent !== undefined && (
+          <>
+            <span className="field-error">
+              a root has no intent, but this one says {intent}
+            </span>
+            <button type="button" onClick={() => onChange(asRoot(entry))}>
+              remove intent
+            </button>
+          </>
+        )}
+        {predecessor && (
           <span className="intent">
             <label>
               <input
                 type="radio"
                 name={`${id}-intent`}
                 value="revise"
-                checked={entry.intent === "revise"}
+                checked={intent === "revise"}
                 onChange={() => setIntent("revise")}
               />{" "}
               revise
@@ -117,12 +141,12 @@ export function NodeEditor({
                 type="radio"
                 name={`${id}-intent`}
                 value="branch"
-                checked={entry.intent === "branch"}
+                checked={intent === "branch"}
                 onChange={() => setIntent("branch")}
               />{" "}
               branch
             </label>
-            {entry.intent === undefined && (
+            {intent === undefined && (
               <span className="field-error">intent required</span>
             )}
           </span>

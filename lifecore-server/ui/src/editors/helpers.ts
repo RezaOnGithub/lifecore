@@ -2,14 +2,19 @@ import type {
   Body,
   FieldDecl,
   FieldDecls,
-  Payload,
   ProposalEntry,
   ProposalReference,
+  Shape,
   TypeSchema,
   TypeSummary,
 } from "../contract.ts";
 import { compareStrings, STATUS_ORDER } from "../model/columns.ts";
-import { nameError } from "../model/values.ts";
+import {
+  compareCodePoints,
+  nameError,
+  type PayloadKind,
+  setOwn,
+} from "../model/values.ts";
 
 export type NodeOperation = Extract<ProposalEntry, { kind: "node" }>;
 export type EdgeOperation = Extract<ProposalEntry, { kind: "edge" }>;
@@ -57,6 +62,25 @@ export function addedNodeType(
   return target === undefined ? null : target.ty_name;
 }
 
+// The draft's placeholder for an endpoint or predecessor still to be picked.
+export function isUnpicked(reference: ProposalReference): boolean {
+  return "existing" in reference && reference.existing.origin === "";
+}
+
+export function sameReference(
+  a: ProposalReference,
+  b: ProposalReference,
+): boolean {
+  if ("added" in a) {
+    return "added" in b && a.added === b.added;
+  }
+  return (
+    "existing" in b &&
+    a.existing.origin === b.existing.origin &&
+    a.existing.position === b.existing.position
+  );
+}
+
 export function allEdgeLabels(types: TypeSummary[] | null): string[] {
   const labels = new Set<string>();
   for (const type of types ?? []) {
@@ -69,24 +93,50 @@ export function allEdgeLabels(types: TypeSummary[] | null): string[] {
       }
     }
   }
-  return [...labels].sort(compareStrings);
+  return [...labels].sort(compareCodePoints);
 }
 
-// What the from type permits outgoing and the to type permits incoming, when
-// either is known; otherwise every declared label.
+export interface EdgeSuggestions {
+  labels: string[];
+  // Why there is nothing to suggest although an end's type is known.
+  note: string | null;
+}
+
+// The labels both known ends permit: the from type's `outgoing` and the to
+// type's `incoming`, intersected when both are known. A known end that
+// permits nothing is said so rather than hidden behind every label; only
+// when neither end is known are all declared labels offered.
 export function edgeTypeSuggestions(
   from: TypeSchema | null,
   to: TypeSchema | null,
   types: TypeSummary[] | null,
-): string[] {
-  const labels = new Set<string>([
-    ...(from?.outgoing ?? []),
-    ...(to?.incoming ?? []),
-  ]);
-  if (labels.size === 0) {
-    return allEdgeLabels(types);
+): EdgeSuggestions {
+  if (from === null && to === null) {
+    return { labels: allEdgeLabels(types), note: null };
   }
-  return [...labels].sort(compareStrings);
+  if (from !== null && from.outgoing.length === 0) {
+    return { labels: [], note: `${from.name} permits no outgoing edges` };
+  }
+  if (to !== null && to.incoming.length === 0) {
+    return { labels: [], note: `${to.name} permits no incoming edges` };
+  }
+  const outgoing = from === null ? null : new Set(from.outgoing);
+  const incoming = to === null ? null : new Set(to.incoming);
+  const candidates = [...(outgoing ?? incoming ?? [])];
+  const labels = candidates
+    .filter(
+      (label) =>
+        (outgoing === null || outgoing.has(label)) &&
+        (incoming === null || incoming.has(label)),
+    )
+    .sort(compareCodePoints);
+  return {
+    labels,
+    note:
+      labels.length === 0 && from !== null && to !== null
+        ? `no label is both outgoing from ${from.name} and incoming to ${to.name}`
+        : null,
+  };
 }
 
 // Type names in the order the server lists them; the built-in `Type` is
@@ -115,24 +165,61 @@ export function fieldRows(fields: FieldDecls | null, body: Body): FieldRow[] {
         STATUS_ORDER.indexOf(b.decl.status) || compareStrings(a.field, b.field),
   );
   const undeclared = Object.keys(body)
-    .filter((field) => fields === null || !(field in fields))
+    .filter((field) => fields === null || !Object.hasOwn(fields, field))
     .sort(compareStrings)
     .map((field) => ({ field, decl: null }));
   return [...declared, ...undeclared];
 }
 
-export function withField(body: Body, field: string, value: Payload): Body {
-  return { ...body, [field]: value };
+// A copy with `field` set, in place when it exists and last otherwise.
+export function withField<T>(
+  object: { readonly [field: string]: T },
+  field: string,
+  value: T,
+): { [field: string]: T } {
+  const copy: { [field: string]: T } = {};
+  for (const [name, old] of Object.entries(object)) {
+    setOwn(copy, name, name === field ? value : old);
+  }
+  if (!Object.hasOwn(object, field)) {
+    setOwn(copy, field, value);
+  }
+  return copy;
 }
 
-export function withoutField(body: Body, field: string): Body {
-  const rest: Body = {};
-  for (const [name, value] of Object.entries(body)) {
+export function withoutField<T>(
+  object: { readonly [field: string]: T },
+  field: string,
+): { [field: string]: T } {
+  const rest: { [field: string]: T } = {};
+  for (const [name, value] of Object.entries(object)) {
     if (name !== field) {
-      rest[name] = value;
+      setOwn(rest, name, value);
     }
   }
   return rest;
+}
+
+// Renames a declared field in place, keeping the table order. A name that
+// is already declared is refused: the fields come back unchanged rather
+// than one declaration overwriting another.
+export function renameField(
+  fields: FieldDecls,
+  from: string,
+  to: string,
+): FieldDecls {
+  if (
+    from === to ||
+    !Object.hasOwn(fields, from) ||
+    Object.hasOwn(fields, to)
+  ) {
+    return fields;
+  }
+  const renamed: FieldDecls = {};
+  for (const [field, decl] of Object.entries(fields)) {
+    setOwn(renamed, field === from ? to : field, decl);
+  }
+  return renamed;
 }
 
 export function moveItem<T>(
@@ -149,45 +236,161 @@ export function moveItem<T>(
   return moved;
 }
 
-// Comma-separated tags as the canonical name list: trimmed, without empties
-// or repeats, sorted as the server's sets come back.
-export function parseTags(text: string): string[] {
-  const tags = text
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter((tag) => tag !== "");
-  return [...new Set(tags)].sort();
+export interface Tags {
+  // Trimmed, without empties or repeats, in code point order as the
+  // server's sets come back.
+  tags: string[];
+  // Names typed more than once, each listed once.
+  repeated: string[];
 }
 
-// Renames a declared field in place, keeping the table order.
-export function renameField(
-  fields: FieldDecls,
+export function parseTags(text: string): Tags {
+  const seen = new Set<string>();
+  const repeated = new Set<string>();
+  for (const tag of text.split(",").map((part) => part.trim())) {
+    if (tag === "") {
+      continue;
+    }
+    if (seen.has(tag)) {
+      repeated.add(tag);
+    }
+    seen.add(tag);
+  }
+  return {
+    tags: [...seen].sort(compareCodePoints),
+    repeated: [...repeated].sort(compareCodePoints),
+  };
+}
+
+// ---- Declaration shapes ----
+
+// The shape for a kind chosen in the shape builder, keeping what nests:
+// `list` wraps the current shape; a kind matching a list's element unwraps
+// it; a record chosen over a record keeps its fields; a scalar replaces.
+export function shapeOfKind(kind: PayloadKind, previous: Shape): Shape {
+  if (previous.kind === kind) {
+    return previous;
+  }
+  if (previous.kind === "list" && previous.element.kind === kind) {
+    return previous.element;
+  }
+  switch (kind) {
+    case "list":
+      return { kind, element: previous };
+    case "record":
+      return { kind, fields: {} };
+    default:
+      return { kind };
+  }
+}
+
+// A fresh field declaration's shape: a list starts as a list of text.
+export function initialShape(kind: PayloadKind): Shape {
+  switch (kind) {
+    case "list":
+      return { kind, element: { kind: "text" } };
+    case "record":
+      return { kind, fields: {} };
+    default:
+      return { kind };
+  }
+}
+
+// ---- Text typed over a committed value ----
+
+// Text being typed is kept with the committed value it was typed over.
+// While that value is still the committed one, the text is what the input
+// shows; once the value changes under it (another edit, an undo, a reload),
+// the text is stale and the committed value shows instead.
+export interface TextDraft<B = string> {
+  text: string;
+  base: B;
+}
+
+export function liveDraft<B>(
+  draft: TextDraft<B> | null,
+  committed: B,
+): TextDraft<B> | null {
+  return draft !== null && draft.base === committed ? draft : null;
+}
+
+export function lineCount(text: string): number {
+  return text.split("\n").length;
+}
+
+// ---- Stable row keys ----
+
+// Keys for rows that have no identity of their own, such as list elements:
+// `keys` follows the editor's own moves and removals; when the list changes
+// elsewhere, it is cut or extended to fit, with fresh keys at the end.
+export function fitKeys(keys: readonly number[], count: number): number[] {
+  if (keys.length >= count) {
+    return keys.slice(0, count);
+  }
+  const fitted = [...keys];
+  let next = nextKey(keys);
+  while (fitted.length < count) {
+    fitted.push(next);
+    next += 1;
+  }
+  return fitted;
+}
+
+export function nextKey(keys: Iterable<number>): number {
+  let next = 0;
+  for (const key of keys) {
+    next = Math.max(next, key + 1);
+  }
+  return next;
+}
+
+// Keys for named rows, such as declared fields, so a row keeps its key
+// across a rename: the names present keep theirs, new names get fresh ones.
+export function namedKeys(
+  names: readonly string[],
+  keys: ReadonlyMap<string, number>,
+): Map<string, number> {
+  const fitted = new Map<string, number>();
+  let next = nextKey(keys.values());
+  for (const name of names) {
+    const key = keys.get(name);
+    if (key === undefined) {
+      fitted.set(name, next);
+      next += 1;
+    } else {
+      fitted.set(name, key);
+    }
+  }
+  return fitted;
+}
+
+export function renameKey(
+  keys: ReadonlyMap<string, number>,
   from: string,
   to: string,
-): FieldDecls {
-  const renamed: FieldDecls = {};
-  for (const [field, decl] of Object.entries(fields)) {
-    renamed[field === from ? to : field] = decl;
+): Map<string, number> {
+  const renamed = new Map<string, number>();
+  for (const [name, key] of keys) {
+    renamed.set(name === from ? to : name, key);
   }
   return renamed;
 }
 
-export function withoutDecl(fields: FieldDecls, field: string): FieldDecls {
-  const rest: FieldDecls = {};
-  for (const [name, decl] of Object.entries(fields)) {
-    if (name !== field) {
-      rest[name] = decl;
-    }
-  }
-  return rest;
+export function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
-// `field_1`, `field_2`, …: the first name not yet declared.
-export function freshFieldName(fields: FieldDecls): string {
-  for (let n = 1; ; n += 1) {
-    const name = `field_${n}`;
-    if (!(name in fields)) {
-      return name;
+export function sameMap<K, V>(
+  a: ReadonlyMap<K, V>,
+  b: ReadonlyMap<K, V>,
+): boolean {
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const [key, value] of a) {
+    if (!b.has(key) || b.get(key) !== value) {
+      return false;
     }
   }
+  return true;
 }
