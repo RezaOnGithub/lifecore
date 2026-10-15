@@ -8,7 +8,7 @@ use axum::{
 use std::path::PathBuf;
 
 // Where the client comes from: the copy `build.rs` embedded, or a directory
-// read on every request, so a refresh picks up an `esbuild --watch` rebuild.
+// read on every request, so a refresh picks up an `npm run watch` rebuild.
 #[derive(Clone, Debug)]
 pub enum Ui {
     Embedded,

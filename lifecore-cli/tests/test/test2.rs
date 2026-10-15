@@ -192,3 +192,26 @@ fn serve_refuses_to_start_without_a_database() {
     assert_eq!(error["code"], 1002);
     assert_eq!(error["data"]["kind"], "database_missing");
 }
+
+// Browsers omit port 80 from Host and Origin, so the server refuses it at
+// startup instead of rejecting every request later.
+#[test]
+fn serve_refuses_port_80() {
+    let scratch = Scratch::new();
+    let state = scratch.0.join("LifeCoreState.json");
+    let init = Command::new(BINARY)
+        .arg("init")
+        .env("LIFECORE_STATE_FILE_PATH", &state)
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+    let output = Command::new(BINARY)
+        .args(["serve", "--port", "80"])
+        .env("LIFECORE_STATE_FILE_PATH", &state)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("port 80 cannot be served"), "{stderr}");
+}

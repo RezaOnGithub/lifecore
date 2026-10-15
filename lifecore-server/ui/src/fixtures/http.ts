@@ -3,39 +3,56 @@
 import type { HttpRejectionFixtures } from "../contract.ts";
 
 export const rejections = {
-  "body": {
-    "body": {
-      "kind": "body",
-      "message": "Failed to buffer the request body: length limit exceeded"
+  "body": [
+    {
+      "body": {
+        "kind": "body",
+        "message": "Failed to buffer the request body: length limit exceeded"
+      },
+      "status": 413
     },
-    "status": 413
-  },
-  "content_type": {
-    "body": {
-      "kind": "content_type",
-      "message": "the request body must be declared as application/json"
-    },
-    "status": 415
-  },
-  "host": {
-    "body": {
-      "kind": "host",
-      "message": "the Host must be 127.0.0.1:4242 or localhost:4242"
-    },
-    "status": 421
-  },
-  "origin": {
-    "body": {
-      "kind": "origin",
-      "message": "requests must come from http://127.0.0.1:4242"
-    },
-    "status": 403
-  },
-  "token": {
-    "body": {
-      "kind": "token",
-      "message": "missing or wrong launch token; open the URL that `lifecore serve` printed at its latest start"
-    },
-    "status": 401
-  }
+    {
+      "body": {
+        "kind": "body",
+        "message": "Failed to buffer the request body: connection reset by peer"
+      },
+      "status": 400
+    }
+  ],
+  "content_type": [
+    {
+      "body": {
+        "kind": "content_type",
+        "message": "the request body must be declared as application/json"
+      },
+      "status": 415
+    }
+  ],
+  "host": [
+    {
+      "body": {
+        "kind": "host",
+        "message": "the Host must be 127.0.0.1:4242 or localhost:4242"
+      },
+      "status": 421
+    }
+  ],
+  "origin": [
+    {
+      "body": {
+        "kind": "origin",
+        "message": "requests must come from http://127.0.0.1:4242"
+      },
+      "status": 403
+    }
+  ],
+  "token": [
+    {
+      "body": {
+        "kind": "token",
+        "message": "missing or wrong launch token; open the URL that `lifecore serve` printed at its latest start"
+      },
+      "status": 401
+    }
+  ]
 } satisfies HttpRejectionFixtures;

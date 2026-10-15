@@ -133,39 +133,68 @@ fn call<P: DeserializeOwned, R: Serialize>(
     })
 }
 
-// Every method `dispatch` answers, in its order, so hosts and the client
-// fixtures can prove they cover each one.
-pub const METHODS: [&str; 9] = [
-    "database.describe",
-    "entries.list",
-    "entries.get",
-    "plan_id.mint",
-    "proposal.check",
-    "proposal.apply",
-    "proposal.decode",
-    "proposal.encode",
-    "analyzers.add",
-];
+// Declares each method once: its variant, its wire name, and its place in
+// `Method::ALL`. `dispatch` matches the variants exhaustively, so the list,
+// the names, and the dispatcher cannot drift apart.
+macro_rules! methods {
+    ($($variant:ident => $name:literal,)*) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Method {
+            $($variant,)*
+        }
+
+        impl Method {
+            pub const ALL: &[Method] = &[$(Method::$variant,)*];
+
+            pub fn name(self) -> &'static str {
+                match self {
+                $(Method::$variant => $name,)*
+                }
+            }
+        }
+    };
+}
 
 // Method names are provisional; the UI stages reshape them (PLAN 4.3).
 // `init` and filesystem path selection are deliberately absent.
+methods! {
+    DatabaseDescribe => "database.describe",
+    EntriesList => "entries.list",
+    EntriesGet => "entries.get",
+    PlanIdMint => "plan_id.mint",
+    ProposalCheck => "proposal.check",
+    ProposalApply => "proposal.apply",
+    ProposalDecode => "proposal.decode",
+    ProposalEncode => "proposal.encode",
+    AnalyzersAdd => "analyzers.add",
+}
+
+impl Method {
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|method| method.name() == name)
+    }
+}
+
 fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, DispatchError> {
+    let method = Method::parse(method).ok_or(DispatchError::MethodNotFound)?;
     match method {
-    "database.describe" => call(params, |p| service.describe(p)),
-    "entries.list" => call(params, |p| service.list_entries(p)),
-    "entries.get" => call(params, |p| service.get_entry(p)),
-    "plan_id.mint" => call(params, |p| service.mint_plan_id(p)),
-    "proposal.check" => call(params, |p| service.check(proposal_request(p)?)),
-    "proposal.apply" => call(params, |p| service.apply(proposal_request(p)?)),
-    "proposal.decode" => call(params, decode_proposal),
-    "proposal.encode" => call(params, |p: EncodeRequest<Box<RawValue>>| {
+    Method::DatabaseDescribe => call(params, |p| service.describe(p)),
+    Method::EntriesList => call(params, |p| service.list_entries(p)),
+    Method::EntriesGet => call(params, |p| service.get_entry(p)),
+    Method::PlanIdMint => call(params, |p| service.mint_plan_id(p)),
+    Method::ProposalCheck => call(params, |p| service.check(proposal_request(p)?)),
+    Method::ProposalApply => call(params, |p| service.apply(proposal_request(p)?)),
+    Method::ProposalDecode => call(params, decode_proposal),
+    Method::ProposalEncode => call(params, |p: EncodeRequest<Box<RawValue>>| {
         encode_proposal(EncodeRequest {
             proposal: embedded(&p.proposal)?,
             format: p.format,
         })
     }),
-    "analyzers.add" => call(params, |p| service.add_analyzer(p)),
-    _ => Err(DispatchError::MethodNotFound),
+    Method::AnalyzersAdd => call(params, |p| service.add_analyzer(p)),
     }
 }
 

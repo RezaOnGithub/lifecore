@@ -260,6 +260,24 @@ export const application = {
         "code": 2001,
         "data": {
           "decode": {
+            "column": 17,
+            "format": "toml",
+            "line": 5,
+            "message": "\"01\" is not a canonical decimal integer string",
+            "path": "entries[0].payload.n"
+          },
+          "kind": "malformed_proposal"
+        },
+        "message": "malformed TOML proposal: \"01\" is not a canonical decimal integer string at entries[0].payload.n (line 5, column 17)"
+      },
+      "id": "call",
+      "jsonrpc": "2.0"
+    },
+    {
+      "error": {
+        "code": 2001,
+        "data": {
+          "decode": {
             "format": "json",
             "message": "\"01\" is not a canonical decimal integer string at line 1 column 84",
             "path": "entries[0].payload.n"

@@ -514,6 +514,7 @@ name = "lifecore-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
  "getrandom",
  "lifecore",
  "lifecore-app",

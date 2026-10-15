@@ -15,6 +15,7 @@ tokio-util = { version = "0.7.20", features = ["rt"] }
 
 [dev-dependencies]
 lifecore = { path = "../" }
+futures-util = "0.3"
 lifecore-dag-check = { path = "../lifecore-dag-check" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 semver = "1.0"

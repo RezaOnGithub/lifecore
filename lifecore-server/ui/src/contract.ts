@@ -397,6 +397,15 @@ export interface HttpRejection {
   kind: HttpRejectionKind;
   message: string;
 }
+// The HTTP status that accompanies each rejection kind: the body check answers
+// 413 for the size limit and 400 for a body that cannot be read.
+export interface HttpRejectionStatuses {
+  host: 421;
+  origin: 403;
+  token: 401;
+  content_type: 415;
+  body: 413 | 400;
+}
 
 // ---- Fixture shapes ----
 
@@ -409,7 +418,7 @@ export type ApplicationErrorFixtures = {
 };
 export type HttpRejectionFixtures = {
   [K in HttpRejectionKind]: {
-    status: number;
+    status: HttpRejectionStatuses[K];
     body: HttpRejection & { kind: K };
-  };
+  }[];
 };

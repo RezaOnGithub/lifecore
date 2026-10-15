@@ -1646,8 +1646,9 @@ fn every_listed_method_dispatches_and_no_other_does() {
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}).to_string();
         serde_json::to_value(rpc::handle(&service, &line)).unwrap()["error"]["code"].clone()
     };
-    for method in rpc::METHODS {
-        assert_ne!(code(method), json!(-32601), "{method}");
+    for method in rpc::Method::ALL {
+        assert_eq!(rpc::Method::parse(method.name()), Some(*method));
+        assert_ne!(code(method.name()), json!(-32601), "{method:?}");
     }
     for method in ["init", "entries", "database.describe.", "Database.describe"] {
         assert_eq!(code(method), json!(-32601), "{method}");

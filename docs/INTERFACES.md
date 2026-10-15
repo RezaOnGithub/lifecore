@@ -42,9 +42,14 @@ Async execution and HTTP dependencies belong to the server adapter. It runs
 each request on a blocking task that calls the synchronous service the way a CLI
 invocation does: it reads the current snapshot, performs the operation, and
 keeps no graph or analysis state between requests. Requests run concurrently;
-the file lock serializes writers exactly as it does between CLI processes, and a
-disconnected client does not cancel a running task. There is no worker thread,
-queue, or server-side cache. The core and application operations remain ordinary
+the file lock serializes writers exactly as it does between CLI processes.
+There is no worker thread, queue, or server-side cache.
+
+A client that disconnects does not cancel its call: the task runs to
+completion and its outcome stands, so a disconnect is never a rollback, and the
+adapter only notes it on stderr. A caller that lost its answer preserves its
+drafts, reports the outcome as unknown, and inspects the stored state; nothing
+retries the call automatically, and durable retry recognition is backlogged. The core and application operations remain ordinary
 synchronous calls; a CLI invocation calls them directly. Package boundaries must
 preserve this dependency direction.
 
@@ -53,7 +58,7 @@ preserve this dependency direction.
 | Command | Responsibility |
 | --- | --- |
 | `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out. This operation is outside RPC. |
-| `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database, which must already be readable; otherwise print the error object and exit nonzero. Print the client URL as the only line on stdout ([section 3.2](#32-server-access)). `--port <port>` selects the loopback port, default 0 for one the system chooses. `--ui-dir <dir>` serves the client from disk instead ([section 5.1](#51-frontend-build-and-tests)). |
+| `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database, which must already be readable; otherwise print the error object and exit nonzero. Print the client URL as the only line on stdout ([section 3.2](#32-server-access)). `--port <port>` selects the loopback port, default 0 for one the system chooses; port 80 is refused at startup, because browsers omit it from `Host` and `Origin`, which the access checks require. `--ui-dir <dir>` serves the client from disk instead ([section 5.1](#51-frontend-build-and-tests)). |
 | `lifecore rpc` | Read one request line from stdin, execute it locally, print one response line, exit. |
 | `lifecore check FILE` | Decode a JSON/TOML proposal and call shared proposal checking. |
 | `lifecore apply FILE` | Decode a JSON/TOML proposal and call shared checked application. |
@@ -191,10 +196,8 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | `proposal.encode` | `proposal`, `format` | `text` |
 | `analyzers.add` | `name`, `configuration` (default `{}`), evaluation inputs | new `graph_revision`, `suite`, and the report |
 
-Each entry record is the stored entry, in the vocabulary of
-[FILES §2.5](FILES.md#25-entry-shaped-types), with `current` beside its members:
-`kind`, exact `id`, `type`, `current`, and either `predecessor` (when present)
-and `payload`, or `from` and `to`.
+Each entry record is the stored entry of
+[FILES §2.5](FILES.md#25-entry-shaped-types) with `current` beside its members.
 
 List and query results are complete. The prototype applies no result limits or
 paging; they are [backlogged](PLAN.md#other-deferred-work).
@@ -267,19 +270,19 @@ before they pass:
 | 403 | `origin` | `Origin` is present but not the served origin, including `null`. |
 | 401 | `token` | `/rpc` without exactly one `Authorization: Bearer <token>` (scheme case-insensitive) naming the launch token. Also sends `WWW-Authenticate: Bearer`. |
 | 415 | `content_type` | `/rpc` whose `Content-Type` essence is not `application/json`; parameters such as `charset` are ignored. |
-| 413 | `body` | `/rpc` whose body exceeds 64 MiB or cannot be read. |
+| 413 | `body` | `/rpc` whose body exceeds 64 MiB. |
+| 400 | `body` | `/rpc` whose body cannot be read, for example malformed chunking or a connection closed before the declared length. |
 
 Assets and RPC answers are sent with `Cache-Control: no-store`; assets also
 carry a content security policy that loads scripts only from the served origin.
 
 The adapter runs each call on a blocking task as described in
-[section 1](#1-shared-synchronous-application). A client that disconnects does
-not cancel its task: the call runs to completion, its outcome stands, and the
-adapter only notes the disconnection on stderr. The first SIGINT or SIGTERM
-starts an orderly shutdown: the server stops accepting connections, lets every
-running call finish and answer its client if still connected, and then exits;
-a second signal exits at once, which atomic publication makes safe for the
-stored snapshot. A call whose task panics answers `backend_failure` with its
+[section 1](#1-shared-synchronous-application), which also owns what a client
+disconnect means. The first SIGINT or SIGTERM starts an orderly shutdown: the
+server stops accepting connections, lets every running call finish and answer
+its client if still connected, and then exits; a second signal exits at once,
+with status 128 plus that signal's number (130 for SIGINT, 143 for SIGTERM),
+which atomic publication makes safe for the stored snapshot. A call whose task panics answers `backend_failure` with its
 request ID in builds that unwind; this workspace's dev profile aborts on panic
 instead.
 
@@ -344,9 +347,8 @@ A verified `acknowledges` stages an `Acknowledged` dismissal, retaining any
 existing reason/note, and publishes it in the same snapshot as the checked graph
 changes. All current dismissal records come from the reload under writer exclusion.
 
-Disconnecting a browser does not establish cancellation or rollback of an
-executing mutation. Preserve drafts, report uncertainty when acknowledgment is
-lost, and support state inspection. Durable retry recognition is backlogged.
+A disconnected browser leaves an executing mutation to complete as
+[section 1](#1-shared-synchronous-application) describes.
 
 ## 5. React client
 
@@ -368,9 +370,10 @@ exports the Rust-serialized JSON value followed by `satisfies` its declared
 type, so the frontend type-check rejects a changed Rust shape: a missing or
 renamed member, a member the contract does not declare, or a wrong tag.
 Imported `.json` files would not do, because `tsc` widens their string literals
-and skips excess-member checks. A generated `index.ts` maps every method to its
-fixture, so a method the contract declares without a fixture, or the reverse,
-also fails `tsc`. Random UUIDs and scratch paths are replaced by stable
+and skips excess-member checks. A generated `index.ts` maps every method of the
+dispatcher's single method list (`rpc::Method::ALL`) to its fixture, so a method
+the contract declares without a fixture, or the reverse, also fails `tsc`.
+HTTP rejection statuses are pinned per kind as literal types. Random UUIDs and scratch paths are replaced by stable
 stand-ins, so an unchanged shape rewrites nothing. Canonical integer payloads are
 `{"kind":"integer","value":"9223372036854775807"}`-shaped objects. Keep the decimal
 strings in model state, including inside lists/records, and use `bigint` only

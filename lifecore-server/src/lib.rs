@@ -5,8 +5,11 @@ use access::{Access, Reason, Token};
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, State, rejection::BytesRejection},
-    http::header,
+    extract::{
+        DefaultBodyLimit, State,
+        rejection::{BytesRejection, FailedToBufferBody},
+    },
+    http::{StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -53,6 +56,14 @@ struct Shared {
 // token to `ready`, and serves until SIGINT or SIGTERM. Shutdown stops
 // accepting connections and returns once every running call has finished.
 pub fn serve(service: Service, options: Options, ready: impl FnOnce(&str)) -> io::Result<()> {
+    // Browsers omit the default port from `Host` and `Origin`, but the access
+    // checks require both to name the bound port.
+    if options.port == 80 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "port 80 cannot be served, because browsers omit it from Host and Origin, which the access checks require; choose another port, or 0",
+        ));
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -119,7 +130,8 @@ async fn run(
 }
 
 // The first SIGINT or SIGTERM starts an orderly shutdown; a second one exits
-// at once, which atomic publication makes safe for the stored snapshot.
+// at once with status 128 plus its number, which atomic publication makes safe
+// for the stored snapshot.
 fn shutdown_signal() -> io::Result<impl Future<Output = ()> + Send + 'static> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
@@ -130,11 +142,11 @@ fn shutdown_signal() -> io::Result<impl Future<Output = ()> + Send + 'static> {
         }
         eprintln!("lifecore: stopping after running requests finish; interrupt again to stop now");
         tokio::spawn(async move {
-            tokio::select! {
-                _ = interrupt.recv() => {}
-                _ = terminate.recv() => {}
-            }
-            std::process::exit(130);
+            let second = tokio::select! {
+                _ = interrupt.recv() => SignalKind::interrupt(),
+                _ = terminate.recv() => SignalKind::terminate(),
+            };
+            std::process::exit(128 + second.as_raw_value());
         });
     })
 }
@@ -162,7 +174,15 @@ async fn call(State(shared): State<Shared>, body: Result<Bytes, BytesRejection>)
     let body = match body {
     Ok(body) => body,
     Err(rejection) => {
-        return access::reject(rejection.status(), Reason::Body, &rejection.body_text());
+        // The size limit is 413; any other failure to read the body, such as
+        // malformed chunking or a connection closed early, is 400.
+        let status = match &rejection {
+        BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_)) => {
+            StatusCode::PAYLOAD_TOO_LARGE
+        }
+        _ => StatusCode::BAD_REQUEST,
+        };
+        return access::reject(status, Reason::Body, &rejection.body_text());
     }
     };
     let service = shared.service.clone();

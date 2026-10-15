@@ -1,12 +1,12 @@
 use crate::{
-    BODY_LIMIT, Shared, Ui,
+    BODY_LIMIT, Options, Shared, Ui,
     access::{Access, Token},
     respond, router, run,
 };
 use axum::{
     Router,
-    body::Body,
-    http::{HeaderMap, Request, StatusCode, header},
+    body::{Body, Bytes},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
 };
 use lifecore::{
     LifeCoreError, View,
@@ -18,7 +18,7 @@ use lifecore::{
 };
 use lifecore_app::{
     AppError, Service,
-    rpc::{self, METHODS},
+    rpc::{self, Method},
     service::{ApplyResult, Published},
     storage::{DEFAULT_STATE_FILE, StatePath},
 };
@@ -29,9 +29,13 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs::{self, File},
+    io,
     net::Ipv4Addr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -783,6 +787,282 @@ async fn shutdown_waits_for_running_calls_to_finish_and_answer() {
     );
 }
 
+// A body that fails when read, as malformed chunking or an early close does.
+fn failing_body() -> Body {
+    Body::from_stream(futures_util::stream::once(async {
+        Err::<Bytes, io::Error>(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ))
+    }))
+}
+
+// A body of `length` bytes, produced only when something reads it.
+fn watched_body(length: usize) -> (Body, Arc<AtomicBool>) {
+    let read = Arc::new(AtomicBool::new(false));
+    let flag = read.clone();
+    let body = Body::from_stream(futures_util::stream::once(async move {
+        flag.store(true, Ordering::SeqCst);
+        Ok::<_, io::Error>(Bytes::from(vec![b' '; length]))
+    }));
+    (body, read)
+}
+
+// Each step repairs the earliest failing check, so the next one in the
+// documented order answers: Host, Origin, token, content type, then the body,
+// which none of the earlier checks reads.
+#[tokio::test]
+async fn access_checks_run_in_order_before_the_body_is_read() {
+    let scratch = Scratch::new();
+    let state = scratch.initialized();
+    let router = router(shared(service(state), PORT, Ui::Embedded));
+    let stored = scratch.bytes();
+    let mut headers: Headers = vec![
+        ("host", "rebound.example:4242".into()),
+        ("origin", "http://evil.example".into()),
+        ("content-type", "text/plain".into()),
+    ];
+    let steps = [
+        (StatusCode::MISDIRECTED_REQUEST, "host"),
+        (StatusCode::FORBIDDEN, "origin"),
+        (StatusCode::UNAUTHORIZED, "token"),
+        (StatusCode::UNSUPPORTED_MEDIA_TYPE, "content_type"),
+        (StatusCode::PAYLOAD_TOO_LARGE, "body"),
+    ];
+    for (step, (status, kind)) in steps.into_iter().enumerate() {
+        let (body, read) = watched_body(BODY_LIMIT + 1);
+        let (actual, _, response) = send(&router, request("POST", "/rpc", &headers, body)).await;
+        assert_eq!(
+            (actual, json_body(&response)["kind"].clone()),
+            (status, json!(kind))
+        );
+        assert_eq!(read.load(Ordering::SeqCst), kind == "body", "{kind}");
+        headers = match step {
+        0 => with(headers, "host", Some(&format!("127.0.0.1:{PORT}"))),
+        1 => with(headers, "origin", None),
+        2 => with(headers, "authorization", Some(&format!("Bearer {TOKEN}"))),
+        _ => with(headers, "content-type", Some("application/json")),
+        };
+    }
+    let no_token = with(valid_headers(PORT), "authorization", None);
+    for (headers, status, kind) in [
+        (
+            with(no_token.clone(), "content-type", Some("text/plain")),
+            StatusCode::UNAUTHORIZED,
+            "token",
+        ),
+        (
+            with(no_token.clone(), "origin", Some("http://evil.example")),
+            StatusCode::FORBIDDEN,
+            "origin",
+        ),
+        (no_token, StatusCode::UNAUTHORIZED, "token"),
+    ] {
+        let (body, read) = watched_body(BODY_LIMIT + 1);
+        let (actual, _, response) = send(&router, request("POST", "/rpc", &headers, body)).await;
+        assert_eq!(
+            (actual, json_body(&response)["kind"].clone()),
+            (status, json!(kind))
+        );
+        assert!(!read.load(Ordering::SeqCst), "{headers:?}");
+    }
+    assert_eq!(scratch.bytes(), stored);
+}
+
+// A repeated header is refused even when every copy would be accepted alone.
+#[tokio::test]
+async fn repeated_host_origin_and_content_type_headers_are_rejected() {
+    let scratch = Scratch::new();
+    let state = scratch.initialized();
+    let router = router(shared(service(state), PORT, Ui::Embedded));
+    let stored = scratch.bytes();
+    let origin = format!("http://127.0.0.1:{PORT}");
+    let headers = with(valid_headers(PORT), "origin", Some(&origin));
+    let (status, _, _) = send(&router, request("POST", "/rpc", &headers, declare("Note"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let stored_after_valid = scratch.bytes();
+    assert_ne!(stored_after_valid, stored);
+    for (name, value, status, kind) in [
+        (
+            header::HOST,
+            format!("127.0.0.1:{PORT}"),
+            StatusCode::MISDIRECTED_REQUEST,
+            "host",
+        ),
+        (
+            header::ORIGIN,
+            origin.clone(),
+            StatusCode::FORBIDDEN,
+            "origin",
+        ),
+        (
+            header::CONTENT_TYPE,
+            "application/json".into(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "content_type",
+        ),
+    ] {
+        let mut repeated = request("POST", "/rpc", &headers, declare("Other"));
+        repeated
+            .headers_mut()
+            .append(name.clone(), HeaderValue::from_str(&value).unwrap());
+        assert_eq!(repeated.headers().get_all(&name).iter().count(), 2);
+        let (actual, _, body) = send(&router, repeated).await;
+        assert_eq!(
+            (actual, json_body(&body)["kind"].clone()),
+            (status, json!(kind))
+        );
+        assert_eq!(scratch.bytes(), stored_after_valid, "{name}");
+    }
+}
+
+// The adapter never approves a CORS preflight, whatever it carries.
+#[tokio::test]
+async fn preflight_requests_are_never_approved() {
+    let scratch = Scratch::new();
+    let state = scratch.initialized();
+    let router = router(shared(service(state), PORT, Ui::Embedded));
+    let preflight = vec![
+        ("host", format!("127.0.0.1:{PORT}")),
+        ("access-control-request-method", "POST".into()),
+        (
+            "access-control-request-headers",
+            "authorization, content-type".into(),
+        ),
+    ];
+    for headers in [
+        with(preflight.clone(), "origin", Some("http://evil.example")),
+        with(
+            preflight.clone(),
+            "origin",
+            Some(&format!("http://127.0.0.1:{PORT}")),
+        ),
+        preflight.clone(),
+        with(
+            with(preflight, "authorization", Some(&format!("Bearer {TOKEN}"))),
+            "content-type",
+            Some("application/json"),
+        ),
+    ] {
+        let (status, response_headers, _) =
+            send(&router, request("OPTIONS", "/rpc", &headers, Body::empty())).await;
+        assert!(status.is_client_error(), "{status} {headers:?}");
+        assert!(
+            response_headers
+                .keys()
+                .all(|name| !name.as_str().starts_with("access-control-")),
+            "{response_headers:?}"
+        );
+    }
+}
+
+// Starts a real server on a loopback port; dropping the sender stops it.
+async fn serving(
+    state: &StatePath,
+) -> (
+    u16,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<io::Result<()>>,
+) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let shared = shared(service(state.clone()), port, Ui::Embedded);
+    let tasks = shared.tasks.clone();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(run(listener, router(shared), tasks, async {
+        stopped.await.ok();
+    }));
+    (port, stop, server)
+}
+
+// Sends raw bytes, optionally closing the write half, and returns the answer.
+async fn exchange(port: u16, bytes: &[u8], half_close: bool) -> String {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+        .await
+        .unwrap();
+    stream.write_all(bytes).await.unwrap();
+    if half_close {
+        stream.shutdown().await.unwrap();
+    }
+    let mut response = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        stream.read_to_string(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    response
+}
+
+// The size limit answers 413 and any other unreadable body 400, both with
+// the `body` kind and without dispatch, in process and over a real
+// connection with malformed chunking or a body cut short.
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_bodies_answer_400_and_oversized_ones_413() {
+    let scratch = Scratch::new();
+    let state = scratch.initialized();
+    let router = router(shared(service(state.clone()), PORT, Ui::Embedded));
+    let stored = scratch.bytes();
+    for (body, status) in [
+        (failing_body(), StatusCode::BAD_REQUEST),
+        (
+            Body::from(vec![b' '; BODY_LIMIT + 1]),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+    ] {
+        let (actual, headers, response) =
+            send(&router, request("POST", "/rpc", &valid_headers(PORT), body)).await;
+        assert_eq!(actual, status);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+        assert_eq!(json_body(&response)["kind"], "body");
+    }
+    let (port, stop, server) = serving(&state).await;
+    let head = format!(
+        "POST /rpc HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nConnection: close\r\n"
+    );
+    let body = declare("Note");
+    let cut_short = format!(
+        "{head}Content-Length: {}\r\n\r\n{}",
+        body.len(),
+        &body[..10]
+    );
+    for (bytes, half_close) in [
+        (
+            format!("{head}Transfer-Encoding: chunked\r\n\r\nzz\r\n"),
+            false,
+        ),
+        (cut_short, true),
+    ] {
+        let response = exchange(port, bytes.as_bytes(), half_close).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{response}"
+        );
+        let json: Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(json["kind"], "body", "{response}");
+    }
+    drop(stop);
+    server.await.unwrap().unwrap();
+    assert_eq!(scratch.bytes(), stored);
+}
+
+#[test]
+fn port_80_is_refused_before_anything_is_bound() {
+    let scratch = Scratch::new();
+    let state = scratch.initialized();
+    let options = Options {
+        port: 80,
+        ui: Ui::Embedded,
+    };
+    let error = crate::serve(service(state), options, |url| {
+        panic!("port 80 printed {url}")
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("port 80"), "{error}");
+}
+
 // Fixtures replace random UUIDs, in order of first appearance, and the
 // scratch directory with stable stand-ins, so an unchanged Rust shape writes
 // byte-identical files.
@@ -867,15 +1147,20 @@ fn module(file: String, imports: &[&str], exports: Vec<(&str, String, Value)>) -
 fn index_module() -> Module {
     let mut text =
         format!("{GENERATED}import type {{ Method, MethodFixture }} from \"../contract.ts\";\n");
-    for method in METHODS {
+    for method in Method::ALL {
         text.push_str(&format!(
-            "import * as {} from \"./{method}.ts\";\n",
-            method.replace('.', "_")
+            "import * as {} from \"./{}.ts\";\n",
+            method.name().replace('.', "_"),
+            method.name()
         ));
     }
     text.push_str("\nexport const methods = {\n");
-    for method in METHODS {
-        text.push_str(&format!("  {method:?}: {},\n", method.replace('.', "_")));
+    for method in Method::ALL {
+        text.push_str(&format!(
+            "  {:?}: {},\n",
+            method.name(),
+            method.name().replace('.', "_")
+        ));
     }
     text.push_str("} satisfies { [M in Method]: MethodFixture<M> };\n");
     Module {
@@ -1165,7 +1450,10 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         .iter()
         .map(|module| module.file.trim_end_matches(".ts").to_string())
         .collect::<BTreeSet<_>>();
-    assert_eq!(covered, METHODS.iter().map(|m| m.to_string()).collect());
+    assert_eq!(
+        covered,
+        Method::ALL.iter().map(|m| m.name().to_string()).collect()
+    );
     modules.push(index_module());
     modules.push(application_errors(&mut recorder, scratch, applied));
     modules.push(protocol_errors(&mut recorder));
@@ -1181,6 +1469,13 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         response
     };
     let task = |name: &str| json!({"name": name, "kind": "node", "type": "Task", "payload": {"title": name}});
+    // Decoding raw text keeps the line and column; an embedded `proposal`
+    // parameter drops them.
+    samples.push(call(
+        recorder,
+        "proposal.decode",
+        json!({"text": "[[entries]]\nname = \"n\"\nkind = \"node\"\ntype = \"Task\"\npayload = { n = { kind = \"integer\", value = \"01\" } }\n", "format": "toml"}),
+    ));
     samples.push(call(recorder, "proposal.check", json!({"proposal": {"entries": [
         {"name": "n", "kind": "node", "type": "Task", "payload": {"n": {"kind": "integer", "value": "01"}}},
     ]}})));
@@ -1374,34 +1669,37 @@ async fn http_rejections(scratch: &Scratch, normalizer: &mut Normalizer) -> Modu
         with(valid.clone(), "authorization", None),
         with(valid.clone(), "content-type", Some("text/plain")),
     ];
-    let mut rejections = serde_json::Map::new();
+    let mut rejections = BTreeMap::<String, Vec<Value>>::new();
+    let mut record = |status: StatusCode, body: &[u8]| {
+        let body = json_body(body);
+        rejections
+            .entry(body["kind"].as_str().unwrap().into())
+            .or_default()
+            .push(json!({"status": status.as_u16(), "body": body}));
+    };
     for headers in cases {
         let (status, _, body) =
             send(&router, request("POST", "/rpc", &headers, describe.clone())).await;
-        let body = json_body(&body);
-        rejections.insert(
-            body["kind"].as_str().unwrap().into(),
-            json!({"status": status.as_u16(), "body": body}),
-        );
+        record(status, &body);
     }
     let (status, _, body) = send(
         &router,
         request("POST", "/rpc", &valid, vec![b' '; BODY_LIMIT + 1]),
     )
     .await;
-    let body = json_body(&body);
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    rejections.insert(
-        "body".into(),
-        json!({"status": status.as_u16(), "body": body}),
-    );
+    record(status, &body);
+    let (status, _, body) = send(&router, request("POST", "/rpc", &valid, failing_body())).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    record(status, &body);
+    let rejections = serde_json::to_value(rejections).unwrap();
     module(
         "http.ts".into(),
         &["HttpRejectionFixtures"],
         vec![(
             "rejections",
             "HttpRejectionFixtures".into(),
-            normalizer.value(Value::Object(rejections)),
+            normalizer.value(rejections),
         )],
     )
 }

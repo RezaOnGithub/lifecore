@@ -40,7 +40,7 @@ enum Command {
         #[arg(
             long,
             default_value_t = 0,
-            help = "Loopback port to listen on; 0 lets the system choose a free one"
+            help = "Loopback port to listen on; 0 lets the system choose a free one, and 80 is refused"
         )]
         port: u16,
         #[arg(

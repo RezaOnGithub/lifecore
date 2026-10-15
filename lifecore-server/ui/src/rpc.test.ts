@@ -77,7 +77,9 @@ test("a JSON-RPC error keeps its code, kind, and data", async () => {
 });
 
 test("an HTTP rejection keeps its status and structured body", async () => {
-  const { status, body } = rejections.token;
+  const [rejection] = rejections.token;
+  assert.ok(rejection);
+  const { status, body } = rejection;
   const { fetchImpl } = server(status, body);
   const failure = await new RpcClient("stale", fetchImpl)
     .call("database.describe", {})
