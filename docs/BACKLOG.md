@@ -61,18 +61,18 @@ tags: [design]
 lifecore: |
   document_id = "design-note"
   revision = { origin = "11111111-1111-4111-8111-111111111111", position = "42" }
-  type = "Document"
+  ty_name = "Document"
   body_field = "body"
 
   [payload]
   title = "Design rationale"
 
   [edges.implementation-task]
-  type = "Supports"
+  ty_name = "Supports"
   direction = "incoming"
 
   [edges.underlying-concept]
-  type = "Explains"
+  ty_name = "Explains"
   direction = "outgoing"
 ---
 [This task][implementation-task] supports the work described here.
@@ -84,7 +84,7 @@ Compare [the experiment](./experiment.md).
 [underlying-concept]: lifecore:entry/96
 ```
 
-Inside the decoded TOML, `document_id`, `type`, and `body_field` are required. `payload` is a table, empty if omitted. For an existing document,
+Inside the decoded TOML, `document_id`, `ty_name`, and `body_field` are required. `payload` is a table, empty if omitted. For an existing document,
 `revision` must agree with checkout metadata. For a new root it is absent.
 Split metadata is described in section 4.3.
 
@@ -133,12 +133,12 @@ It accepts:
 | Field | Meaning |
 | --- | --- |
 | `mode` | `declare` (default), `observe`, or `navigate`. |
-| `type` | Relationship label; defaults to `References` for graph modes. |
+| `ty_name` | Relationship label; defaults to `References` for graph modes. |
 | `direction` | `outgoing` (default) or `incoming`, relative to this document. |
 
 `declare` expresses a relationship managed at this authoring location. `observe`
 asserts that the relationship will exist in the planned final view but does not
-manage its creation or removal. `navigate` is only a hyperlink; `type` and
+manage its creation or removal. `navigate` is only a hyperlink; `ty_name` and
 `direction` must be absent for this mode. Observation assertions are authoring
 checks at the final boundary, not blocking core analyzers at every prefix.
 
@@ -319,7 +319,7 @@ plan_id = "lc1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbb
 [[entries]]
 name = "b"
 kind = "node"
-type = "Document"
+ty_name = "Document"
 predecessor = { existing = { origin = "11111111-1111-4111-8111-111111111111", position = "73" } }
 intent = "revise"
 payload = { title = "B", body = "Updated B.\n" }
@@ -327,7 +327,7 @@ payload = { title = "B", body = "Updated B.\n" }
 [[entries]]
 name = "a"
 kind = "node"
-type = "Document"
+ty_name = "Document"
 predecessor = { existing = { origin = "11111111-1111-4111-8111-111111111111", position = "42" } }
 intent = "revise"
 payload = { title = "A", body = "A no longer links to B.\n" }
