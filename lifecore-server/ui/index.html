@@ -356,6 +356,224 @@
       .error.compact p {
         margin: 0;
       }
+      /* navigation */
+      /* Relationship cells wrap, unlike payload cells, so that a few
+         neighbour labels fit side by side. */
+      /* Rows stay one line, so a long table scans; it scrolls sideways
+         instead. An expanded neighbour list wraps. */
+      td.label-cell,
+      td.rel-cell,
+      td.via-cell {
+        white-space: nowrap;
+      }
+      .neighbour-item {
+        white-space: nowrap;
+      }
+      .neighbours.all {
+        display: inline-block;
+        max-width: 30rem;
+        white-space: normal;
+      }
+      .hop {
+        display: inline-block;
+        min-width: 0.9rem;
+        font-size: 0.7rem;
+        text-align: center;
+        color: #555;
+        background: #eee;
+        border-radius: 0.5rem;
+      }
+      button.link.neighbour.superseded {
+        color: #666;
+      }
+      button.link.neighbour.historical {
+        color: #777;
+        font-style: italic;
+        text-decoration-style: dotted;
+      }
+      button.link.more,
+      button.link.small {
+        font-size: 0.8rem;
+        color: #555;
+      }
+      .outline,
+      .rel-items {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .rel-items {
+        margin-left: 1.25rem;
+      }
+      .outline-empty {
+        font-size: 0.85rem;
+        margin: 0;
+      }
+      /* A neighbour's own relationships hang under it, one step in. */
+      .rel-item > .outline,
+      .rel-item > .outline-empty,
+      .rel-item > .error {
+        margin: 0 0 0.2rem 0.6rem;
+        padding-left: 0.6rem;
+        border-left: 1px dotted #aaa;
+      }
+      .rel-head,
+      .rel-row {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 0 0.4rem;
+        padding: 0.05rem 0.2rem;
+      }
+      .rel-row:hover,
+      .rel-head:hover {
+        background: #f1f5fb;
+      }
+      button.rel-toggle {
+        background: none;
+        border: none;
+        padding: 0;
+        font: inherit;
+        cursor: pointer;
+        display: inline-flex;
+        gap: 0.35rem;
+        align-items: baseline;
+      }
+      .rel-name {
+        font-weight: 600;
+      }
+      .twisty {
+        display: inline-block;
+        width: 1rem;
+        text-align: center;
+        color: #555;
+      }
+      button.twisty {
+        background: none;
+        border: none;
+        padding: 0;
+        font: inherit;
+        cursor: pointer;
+      }
+      button.twisty:hover {
+        color: #06c;
+      }
+      .rel-row .ty,
+      .rel-row .edge-ref {
+        font-size: 0.8rem;
+        color: #777;
+      }
+      .rel-item.historical > .rel-row {
+        color: #666;
+      }
+      .on-path {
+        font-style: italic;
+        font-size: 0.8rem;
+      }
+      .via-type {
+        font-size: 0.75rem;
+        color: #666;
+        margin-right: 0.35rem;
+      }
+      button.link.via-edge {
+        white-space: nowrap;
+        color: #333;
+        text-decoration-style: dotted;
+      }
+      .row-actions {
+        display: inline-flex;
+        gap: 0.2rem;
+        margin-left: 0.5rem;
+        opacity: 0.55;
+      }
+      td.actions .row-actions {
+        margin-left: 0;
+      }
+      tr:hover .row-actions {
+        opacity: 1;
+      }
+      /* In a thread every row is a node, so its actions wait for the
+         pointer. */
+      .thread li .row-actions {
+        visibility: hidden;
+        opacity: 1;
+      }
+      .thread li:hover .row-actions,
+      .thread li:focus-within .row-actions {
+        visibility: visible;
+      }
+      td.actions {
+        white-space: nowrap;
+        width: 1%;
+      }
+      button.mini {
+        font-size: 0.75rem;
+        line-height: 1.2;
+        padding: 0 0.3rem;
+      }
+      .graph-frame {
+        border: 1px solid #c8c8c8;
+        max-height: 70vh;
+        overflow: auto;
+        background: #fff;
+      }
+      .graph-sizer {
+        overflow: hidden;
+      }
+      .graph-svg {
+        width: max-content;
+        transform-origin: 0 0;
+      }
+      .graph-svg svg {
+        display: block;
+      }
+      pre.dot {
+        max-height: 30vh;
+        font-size: 0.8rem;
+      }
+      button.pin {
+        background: none;
+        border: none;
+        padding: 0;
+        font-size: 1.1rem;
+        line-height: 1;
+        color: #c80;
+        cursor: pointer;
+      }
+      .places li {
+        display: flex;
+        align-items: baseline;
+        gap: 0.3rem;
+      }
+      .places .place-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: left;
+      }
+      .places .place-type {
+        font-size: 0.75rem;
+        color: #888;
+        white-space: nowrap;
+      }
+      .places button.remove {
+        margin-left: auto;
+        color: #888;
+        text-decoration: none;
+      }
+      .places li.beyond .place-label {
+        color: #999;
+      }
+      .side-hint {
+        font-size: 0.8rem;
+        margin: 0.1rem 0.25rem;
+      }
+      .save-view {
+        display: inline-flex;
+        gap: 0.3rem;
+        align-items: center;
+      }
       /* editors */
       .editor .row > label {
         color: #666;
@@ -728,6 +946,109 @@
       }
       .reconnect-list li {
         padding: 0.1rem 0;
+      }
+      /* findings */
+      button.link.disclosure {
+        color: inherit;
+        text-decoration: none;
+        font-weight: inherit;
+      }
+      button.link.disclosure:hover {
+        text-decoration: underline;
+      }
+      table.context {
+        margin: 0.4rem 0;
+      }
+      .implementations {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .findings-filters {
+        padding: 0.3rem 0;
+        border-bottom: 1px solid #ddd;
+      }
+      .findings-filters .filter-gap {
+        width: 0.8rem;
+      }
+      .finding-groups {
+        list-style: none;
+        margin: 0.3rem 0;
+        padding: 0;
+      }
+      /* One line per finding where it fits: the observations take the
+         room, the dismissal controls sit at the right end, and anything
+         else (other ranges, the dismiss form, a failure) takes a line. */
+      .finding-group {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0 0.6rem;
+        padding: 0.15rem 0.5rem;
+        border-bottom: 1px solid #e4e4e4;
+        border-left: 3px solid #ccc;
+      }
+      .finding-group > * {
+        flex: 1 1 100%;
+      }
+      .finding-group > .findings {
+        flex: 1 1 30rem;
+      }
+      .finding-group > .dismissal {
+        flex: none;
+        margin-left: auto;
+      }
+      .finding-group li.finding > .chips {
+        display: inline-flex;
+        margin: 0 0 0 0.3rem;
+      }
+      .finding-group.inconsistency {
+        border-left-color: #b00020;
+      }
+      .finding-group.warning {
+        border-left-color: #c80;
+      }
+      .finding-group.suggestion {
+        border-left-color: #27a;
+      }
+      .finding-group.dismissed {
+        background: #f8f8f8;
+        color: #555;
+      }
+      .finding-group .findings {
+        margin: 0;
+        font-size: 0.9rem;
+      }
+      .finding-group .findings li.finding {
+        border-top: none;
+      }
+      .finding-group .also {
+        font-size: 0.8rem;
+        margin: 0.1rem 0;
+      }
+      .finding-group .dismissal {
+        margin: 0.1rem 0;
+        font-size: 0.85rem;
+      }
+      .badge.dismissed {
+        border-color: #777;
+        background: #f0f0f0;
+      }
+      .badge.unconfirmed {
+        border-color: #a60;
+        font-style: italic;
+      }
+      .dismissal-note {
+        font-style: italic;
+        color: #444;
+      }
+      .dismiss-form {
+        font-size: 0.85rem;
+      }
+      .suggested-actions {
+        margin: 0.2rem 0 0.1rem 1.2rem;
+        padding: 0;
+        font-size: 0.85rem;
       }
     </style>
   </head>

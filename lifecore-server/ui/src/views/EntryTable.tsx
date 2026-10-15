@@ -17,19 +17,23 @@ export interface ExtraColumn<R extends NodeRecord> {
   cell: (row: R) => ReactNode;
   // Omitted for a column that does not sort.
   sortValue?: (row: R) => Payload | undefined;
+  className?: string;
 }
 
 // Rows of one type. The built-in `Type` lists declarations with a summary
-// instead of a column per declared field.
+// instead of a column per declared field. `lead` columns come before the
+// label, `extra` ones after the payload.
 export function EntryTable<R extends NodeRecord>({
   rows,
   schema,
   ty_name,
+  lead = [],
   extra = [],
 }: {
   rows: readonly R[];
   schema: TypeSchema | null;
   ty_name: string;
+  lead?: ExtraColumn<R>[];
   extra?: ExtraColumn<R>[];
 }) {
   const [sort, setSort] = useState<Sort | null>(null);
@@ -53,7 +57,9 @@ export function EntryTable<R extends NodeRecord>({
     if (column.startsWith("field:")) {
       return row.payload[column.slice("field:".length)];
     }
-    const column_ = extra.find((c) => `extra:${c.key}` === column);
+    const column_ = [...lead, ...extra].find(
+      (c) => `extra:${c.key}` === column,
+    );
     return column_?.sortValue?.(row);
   };
   const sorted =
@@ -83,6 +89,13 @@ export function EntryTable<R extends NodeRecord>({
     <table className="entries">
       <thead>
         <tr>
+          {lead.map((column) =>
+            header(
+              `extra:${column.key}`,
+              column.header,
+              column.sortValue !== undefined,
+            ),
+          )}
           {header("label", "label")}
           {header("position", "@position")}
           {header("current", "current")}
@@ -115,7 +128,12 @@ export function EntryTable<R extends NodeRecord>({
             key={entryKey(row.id)}
             className={row.current ? undefined : "historical"}
           >
-            <td>
+            {lead.map((column) => (
+              <td key={column.key} className={column.className}>
+                {column.cell(row)}
+              </td>
+            ))}
+            <td className="label-cell">
               <NodeLink node={row} position={false} />
             </td>
             <td>
@@ -131,7 +149,9 @@ export function EntryTable<R extends NodeRecord>({
               <ValueCell key={column.field} value={row.payload[column.field]} />
             ))}
             {extra.map((column) => (
-              <td key={column.key}>{column.cell(row)}</td>
+              <td key={column.key} className={column.className}>
+                {column.cell(row)}
+              </td>
             ))}
           </tr>
         ))}

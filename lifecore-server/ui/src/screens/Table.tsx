@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
 import type {
   Currentness,
-  EntryListParams,
   NodeRecord,
+  Seed,
   TypeSummary,
+  ViewQueryParams,
 } from "../contract.ts";
 import { latest, schemaOf, useAsOf, useCall, useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, useOpen } from "../links.tsx";
-import { typeName } from "../model/labels.ts";
+import { entryKey, typeName } from "../model/labels.ts";
 import { EntryTable } from "../views/EntryTable.tsx";
+import { relationColumns } from "../views/Relationships.tsx";
 import { CurrentnessSelect, ResolutionBadge } from "../views/widgets.tsx";
 
 // Nothing until the type list has loaded: an unknown name is only known to
@@ -87,25 +89,38 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
     const timer = setTimeout(() => setApplied(text.trim()), 300);
     return () => clearTimeout(timer);
   }, [text]);
-  const params: EntryListParams = {
-    ...asOf,
-    kind: "node",
-    ty_name,
-    currentness,
-  };
+  const [relationships, setRelationships] = useState(true);
+  const seed: Seed = { kind: "nodes", ty_name, currentness };
   if (applied !== "") {
-    params.text = applied;
+    seed.text = applied;
   }
-  const load = useCall("entries.list", params);
+  // The rows are the seeds; one hop both ways brings their neighbours, and
+  // the edges among the result include every edge incident to a row. The
+  // edges followed match the rows: current rows meet current edges, while a
+  // superseded row's edges are all historical.
+  const followed: Currentness = currentness === "current" ? "current" : "all";
+  const params: ViewQueryParams = {
+    ...asOf,
+    seeds: [seed],
+    expand: [{ hops: 1, direction: "both", currentness: followed }],
+    edges: { currentness: followed },
+  };
+  const load = useCall("views.query", params);
   // A reload keeps the last rows, and the sort, on screen until the new ones
   // arrive.
   const result = latest(load);
-  const rows =
-    result === null
-      ? []
-      : result.entries.filter(
-          (entry): entry is NodeRecord => entry.kind === "node",
-        );
+  const rows: NodeRecord[] = [];
+  const nodes = new Map<string, NodeRecord>();
+  for (const { node, provenance } of result?.nodes ?? []) {
+    nodes.set(entryKey(node.id), node);
+    if (provenance.kind === "seed") {
+      rows.push(node);
+    }
+  }
+  const columns =
+    result !== null && relationships
+      ? relationColumns(rows, result.edges, nodes)
+      : [];
   return (
     <section data-testid="table">
       <h2>
@@ -140,6 +155,14 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
             placeholder="any text"
           />
         </label>
+        <label title="a column per edge type and direction, listing each row's neighbours">
+          <input
+            type="checkbox"
+            checked={relationships}
+            onChange={(event) => setRelationships(event.target.checked)}
+          />{" "}
+          relationships
+        </label>
         {result !== null && (
           <>
             <span className="muted">
@@ -160,6 +183,7 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
           rows={rows}
           schema={schemaOf(types, ty_name)}
           ty_name={ty_name}
+          extra={columns}
         />
       )}
     </section>

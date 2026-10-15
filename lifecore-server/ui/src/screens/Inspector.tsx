@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   EdgeRecord,
   EntryId,
   EntryInspection,
+  EntryRecord,
   NodeRecord,
   TypeResolution,
   TypeSchema,
   TypeSummary,
   ViewId,
 } from "../contract.ts";
-import { latest, useAsOf, useCall, useTypes } from "../data.tsx";
+import { latest, useAsOf, useCall, usePlaces, useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
@@ -22,11 +23,43 @@ import {
   TypeLink,
   useOpen,
 } from "../links.tsx";
-import { entryKey, rowLabel, sameId } from "../model/labels.ts";
+import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
 import { lineageRows } from "../model/lineage.ts";
+import { isPinned, type Place } from "../model/places.ts";
 import { parseDeclaration } from "../model/schema.ts";
+import { EntryFindings } from "../views/EntryFindings.tsx";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
+import { RelationshipOutline } from "../views/Relationships.tsx";
 import { ResolutionBadge } from "../views/widgets.tsx";
+
+// What the sidebar keeps of an inspected entry: a node by its row label, an
+// edge by its type name.
+function placeOf(entry: EntryRecord): Place {
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    label: entry.kind === "node" ? rowLabel(entry) : typeName(entry.ty_name),
+    ty_name: entry.ty_name,
+  };
+}
+
+// ☆ pins the entry to the sidebar, ★ unpins it.
+function PinButton({ entry }: { entry: EntryRecord }) {
+  const { places, togglePin } = usePlaces();
+  const pinned = isPinned(places, entry.id);
+  return (
+    <button
+      type="button"
+      className="pin"
+      aria-pressed={pinned}
+      aria-label={pinned ? "unpin" : "pin"}
+      title={pinned ? "unpin from the sidebar" : "pin to the sidebar"}
+      onClick={() => togglePin(placeOf(entry))}
+    >
+      {pinned ? "★" : "☆"}
+    </button>
+  );
+}
 
 export function InspectorScreen({
   id,
@@ -36,10 +69,19 @@ export function InspectorScreen({
   onExplore: (id: EntryId) => void;
 }) {
   const asOf = useAsOf();
+  const { visit } = usePlaces();
   const load = useCall("entries.inspect", { ...asOf, id });
   // The screen is keyed by the entry, so a previous result is this entry
   // under another boundary; it stays until the reload answers.
   const result = latest(load);
+  // Each answer records the visit, refreshing the label kept for it.
+  const place = load.status === "ready" ? placeOf(load.result.entry) : null;
+  const placeKey = place === null ? null : JSON.stringify(place);
+  useEffect(() => {
+    if (placeKey !== null) {
+      visit(JSON.parse(placeKey) as Place);
+    }
+  }, [placeKey, visit]);
   if (load.status === "failed") {
     return <FailureView failure={load.failure} />;
   }
@@ -147,6 +189,7 @@ function NodeInspection({
   onExplore: (id: EntryId) => void;
 }) {
   const { entry, type, lineage, edges, view } = inspection;
+  const historical = edges.filter(({ edge }) => !edge.current).length;
   const [raw, setRaw] = useState(false);
   const types = useTypes();
   const { state, actions } = useDraft();
@@ -167,7 +210,7 @@ function NodeInspection({
     <article data-testid="inspector">
       <PickBanner id={entry.id} />
       <h2>
-        {rowLabel(entry)} <Position id={entry.id} />
+        <PinButton entry={entry} /> {rowLabel(entry)} <Position id={entry.id} />
       </h2>
       <div className="row">
         <TypeLink name={entry.ty_name} />
@@ -286,52 +329,17 @@ function NodeInspection({
           Relationships{" "}
           <span className="muted">
             {edges.length} edge{edges.length === 1 ? "" : "s"}
+            {historical > 0 && `, ${historical} historical`}
           </span>
         </h3>
-        {edges.length === 0 ? (
-          <p className="muted">no edges</p>
-        ) : (
-          <table className="entries" data-testid="relationships">
-            <thead>
-              <tr>
-                <th scope="col">dir</th>
-                <th scope="col">edge type</th>
-                <th scope="col">other node</th>
-                <th scope="col">current</th>
-                <th scope="col">edge</th>
-              </tr>
-            </thead>
-            <tbody>
-              {edges.map(({ edge, direction, other }) => (
-                <tr
-                  key={entryKey(edge.id)}
-                  className={edge.current ? undefined : "historical"}
-                >
-                  <td title={direction}>
-                    {direction === "outgoing" ? "→" : "←"}
-                  </td>
-                  <td>{edge.ty_name}</td>
-                  <td>
-                    <NodeLink node={other} />
-                    {!other.current && (
-                      <>
-                        {" "}
-                        <CurrentBadge current={false} kind="node" />
-                      </>
-                    )}
-                  </td>
-                  <td>
-                    <CurrentBadge current={edge.current} kind="edge" />
-                  </td>
-                  <td>
-                    <IdLink id={edge.id} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <RelationshipOutline
+          owner={entry}
+          edges={edges}
+          path={[entryKey(entry.id)]}
+          testId="relationships"
+        />
       </section>
+      <EntryFindings id={entry.id} />
     </article>
   );
 }
@@ -365,7 +373,8 @@ function EdgeInspection({
     <article data-testid="inspector">
       <PickBanner id={null} />
       <h2>
-        {entry.ty_name} <Position id={entry.id} />
+        <PinButton entry={entry} /> {typeName(entry.ty_name)}{" "}
+        <Position id={entry.id} />
       </h2>
       <div className="row">
         <span className="muted">edge</span>

@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   addSeed,
+  defaultExpansion,
   emptyForm,
   exploreReducer,
   formChanged,
   initialExplore,
   parseNames,
+  querySummary,
+  readForm,
   removeSeed,
   toParams,
 } from "./query.ts";
@@ -97,4 +100,63 @@ test("seeding runs the query and the form is compared with the one run", () => {
 test("names split on commas and whitespace", () => {
   assert.deepEqual(parseNames(" a, b  c,,"), ["a", "b", "c"]);
   assert.deepEqual(parseNames(""), []);
+});
+
+test("focus replaces every seed and keeps the expansion; load runs a form", () => {
+  const form = {
+    ...addSeed(addSeed(emptyForm, id("1")), id("2")),
+    nodes: { ...emptyForm.nodes, enabled: true, ty_name: "Task" },
+    expand: [{ ...defaultExpansion(), hops: 2 }],
+  };
+  const changed = exploreReducer(initialExplore, { kind: "change", form });
+  const focused = exploreReducer(changed, { kind: "focus", id: id("3") });
+  assert.deepEqual(focused.form.ids, [id("3")]);
+  assert.equal(focused.form.nodes.enabled, false);
+  assert.equal(focused.form.nodes.ty_name, "Task");
+  assert.deepEqual(focused.submitted?.params.seeds, [
+    { kind: "ids", ids: [id("3")] },
+  ]);
+  assert.equal(focused.submitted?.params.expand?.[0]?.hops, 2);
+  const loaded = exploreReducer(focused, { kind: "load", form });
+  assert.equal(loaded.form, form);
+  assert.equal(formChanged(loaded), false);
+  assert.equal(loaded.submitted?.run, 2);
+});
+
+test("a stored form reads back only when every member is well formed", () => {
+  const form = {
+    ...addSeed(emptyForm, id("7")),
+    nodes: { ...emptyForm.nodes, enabled: true, text: "hinge" },
+  };
+  assert.deepEqual(readForm(JSON.parse(JSON.stringify(form))), form);
+  assert.equal(readForm(null), null);
+  assert.equal(
+    readForm({ ...form, ids: [{ origin: "o", position: 7 }] }),
+    null,
+  );
+  assert.equal(readForm({ ...form, expand: [] }), null);
+  assert.equal(
+    readForm({ ...form, expand: [{ ...form.expand[0], hops: 9 }] }),
+    null,
+  );
+  assert.equal(
+    readForm({ ...form, edges: { ty_names: "", currentness: "some" } }),
+    null,
+  );
+});
+
+test("a folded form reads as one line", () => {
+  const form = {
+    ...addSeed(emptyForm, id("4")),
+    nodes: { ...emptyForm.nodes, enabled: true, ty_name: "Task", text: "x" },
+    expand: [
+      { ...defaultExpansion(), hops: 2, ty_names: "PartOf DependsOn" },
+      { ...defaultExpansion(), direction: "incoming" as const },
+    ],
+  };
+  assert.equal(
+    querySummary(form),
+    '@4 + current Task containing "x", then 2 hops both over PartOf, DependsOn, then 1 hop incoming',
+  );
+  assert.equal(querySummary(emptyForm), "no seeds, then 1 hop both");
 });

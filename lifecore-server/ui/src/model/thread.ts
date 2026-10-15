@@ -1,21 +1,30 @@
 import type { EdgeEntry, NodeEntry } from "../contract.ts";
 import { entryKey } from "./labels.ts";
 
-// Which edges define parent → child: `outgoing` reads an edge from its `from`
-// (parent) to its `to` (child); `incoming` the reverse.
+// Which edges define parent → child: edges of `ty_name`, or of every type
+// when it is null; `outgoing` reads an edge from its `from` (parent) to its
+// `to` (child), `incoming` the reverse.
 export interface ParentRelation {
-  ty_name: string;
+  ty_name: string | null;
   direction: "outgoing" | "incoming";
 }
 
+// `via` names the types of the edges joining a row to the parent it is shown
+// under, in edge order; empty for a root.
 export type ThreadRow =
   // First occurrence, expanded.
-  | { kind: "node"; key: string; depth: number }
+  | { kind: "node"; key: string; depth: number; via: string[] }
   // A later occurrence, collapsed; `under` is the parent of the first
   // occurrence, null when that was a root.
-  | { kind: "repeat"; key: string; depth: number; under: string | null }
+  | {
+      kind: "repeat";
+      key: string;
+      depth: number;
+      via: string[];
+      under: string | null;
+    }
   // A revisit on the current path.
-  | { kind: "cycle"; key: string; depth: number };
+  | { kind: "cycle"; key: string; depth: number; via: string[] };
 
 export interface Thread {
   rows: ThreadRow[];
@@ -45,10 +54,11 @@ export function buildThread(
   nodes.forEach((node, index) => {
     order.set(entryKey(node.id), index);
   });
-  const children = new Map<string, Set<string>>();
+  // Parent, then child, to the types of the edges joining them.
+  const children = new Map<string, Map<string, Set<string>>>();
   const hasParent = new Set<string>();
   for (const edge of edges) {
-    if (edge.ty_name !== relation.ty_name) {
+    if (relation.ty_name !== null && edge.ty_name !== relation.ty_name) {
       continue;
     }
     const [parent, child] =
@@ -61,12 +71,17 @@ export function buildThread(
       continue;
     }
     hasParent.add(childKey);
-    let set = children.get(parentKey);
-    if (set === undefined) {
-      set = new Set();
-      children.set(parentKey, set);
+    let byChild = children.get(parentKey);
+    if (byChild === undefined) {
+      byChild = new Map();
+      children.set(parentKey, byChild);
     }
-    set.add(childKey);
+    const types = byChild.get(childKey);
+    if (types === undefined) {
+      byChild.set(childKey, new Set([edge.ty_name]));
+    } else {
+      types.add(edge.ty_name);
+    }
   }
   const byAppend = (a: string, b: string) =>
     (order.get(a) ?? 0) - (order.get(b) ?? 0);
@@ -76,36 +91,38 @@ export function buildThread(
     key: string,
     depth: number,
     parent: string | null,
+    via: string[],
     path: ReadonlySet<string>,
   ) => {
     if (path.has(key)) {
-      rows.push({ kind: "cycle", key, depth });
+      rows.push({ kind: "cycle", key, depth, via });
       return;
     }
     const under = firstParent.get(key);
     if (under !== undefined) {
-      rows.push({ kind: "repeat", key, depth, under });
+      rows.push({ kind: "repeat", key, depth, via, under });
       return;
     }
     firstParent.set(key, parent);
-    rows.push({ kind: "node", key, depth });
+    rows.push({ kind: "node", key, depth, via });
     const next = new Set(path);
     next.add(key);
-    for (const child of [...(children.get(key) ?? [])].sort(byAppend)) {
-      visit(child, depth + 1, key, next);
+    const byChild = children.get(key) ?? new Map<string, Set<string>>();
+    for (const child of [...byChild.keys()].sort(byAppend)) {
+      visit(child, depth + 1, key, [...(byChild.get(child) ?? [])], next);
     }
   };
   const keys = nodes.map((node) => entryKey(node.id));
   for (const key of keys) {
     if (!hasParent.has(key)) {
-      visit(key, 0, null, new Set());
+      visit(key, 0, null, [], new Set());
     }
   }
   // A component where every node has a parent is a cycle without a root; it
   // starts at its first node in append order so it is still shown.
   for (const key of keys) {
     if (!firstParent.has(key)) {
-      visit(key, 0, null, new Set());
+      visit(key, 0, null, [], new Set());
     }
   }
   const counts = new Map<string, number>();
@@ -119,4 +136,19 @@ export function buildThread(
     }
   }
   return { rows, stripes };
+}
+
+// The direction that nests the most: the one leaving fewer roots, outgoing
+// on a tie. Edge types are often named from the part to the whole
+// (`PartOf`, `About`), so neither direction suits every result.
+export function preferredDirection(
+  nodes: readonly NodeEntry[],
+  edges: readonly EdgeEntry[],
+  ty_name: string | null,
+): ParentRelation["direction"] {
+  const roots = (direction: ParentRelation["direction"]) =>
+    buildThread(nodes, edges, { ty_name, direction }).rows.filter(
+      (row) => row.depth === 0,
+    ).length;
+  return roots("incoming") < roots("outgoing") ? "incoming" : "outgoing";
 }

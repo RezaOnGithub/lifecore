@@ -179,7 +179,10 @@ test("the sidebar lists Task with its node counts and opens its table", async ()
     "status",
     "tags",
   ]);
-  const done = rows.filter({ hasText: "Write the report" });
+  // By the label cell: a neighbour's relationship cell names the row too.
+  const done = rows.filter({
+    has: page.locator("td.label-cell", { hasText: "Write the report" }),
+  });
   await expect(done).toContainText(`@${ids.report_done?.position}`);
   const columns = await headers.allTextContents();
   await expect(done.locator("td").nth(columns.indexOf("status"))).toHaveText(
@@ -204,7 +207,11 @@ test("historical rows appear on request and the text filter reaches the backend"
 });
 
 test("a row opens the inspector with payload, lineage, and relationships", async () => {
-  await table().getByRole("button", { name: "Review the report" }).click();
+  // The label cell: the neighbours' relationship cells name it too.
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Review the report" })
+    .click();
   await expect(
     main().getByRole("heading", { name: "Review the report" }),
   ).toBeVisible();
@@ -213,19 +220,26 @@ test("a row opens the inspector with payload, lineage, and relationships", async
   await expect(page.getByTestId("lineage").getByRole("listitem")).toHaveCount(
     1,
   );
-  const relationships = page.getByTestId("relationships").locator("tbody tr");
-  await expect(relationships).toHaveCount(2);
-  await expect(relationships.nth(0)).toContainText("→");
-  await expect(relationships.nth(0)).toContainText("Write the report");
-  await expect(relationships.nth(1)).toContainText("←");
-  await expect(relationships.nth(1)).toContainText("Publish the report");
+  // One group per edge type and direction, outgoing first.
+  const groups = page
+    .getByTestId("relationships")
+    .getByTestId("relation-group");
+  await expect(groups).toHaveCount(2);
+  await expect(groups.nth(0)).toHaveAttribute("data-relation", "→ DependsOn");
+  await expect(groups.nth(0).getByTestId("neighbour")).toHaveText([
+    /Write the report/,
+  ]);
+  await expect(groups.nth(1)).toHaveAttribute("data-relation", "← DependsOn");
+  await expect(groups.nth(1).getByTestId("neighbour")).toHaveText([
+    /Publish the report/,
+  ]);
   await expect(main().getByRole("button", { name: "Revise" })).toBeEnabled();
 });
 
 test("following a relationship shows the revised node's lineage", async () => {
   await page
     .getByTestId("relationships")
-    .getByRole("button", { name: "Write the report" })
+    .getByRole("button", { name: "Write the report", exact: true })
     .click();
   await expect(
     main().getByRole("heading", { name: "Write the report" }),
@@ -266,15 +280,20 @@ test("Explore from here seeds and runs a one-hop query grouped by type", async (
   await expect(page.getByTestId("form-changed")).toHaveCount(0);
   await expect(results.getByRole("heading", { name: "Task" })).toBeVisible();
   // Result rows keep append order: the reached node was appended before
-  // the revision that seeded the query.
+  // the revision that seeded the query. The edge it was reached over is
+  // drawn in its own direction, here into the seed.
   const rows = results.locator("table.entries tbody tr");
   await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0)).toContainText("Review the report");
-  await expect(rows.nth(0)).toContainText(
-    `hop 1 ← DependsOn @${ids.review_after_report?.position} from Write the report`,
+  await expect(rows.nth(0).locator("td.label-cell")).toHaveText(
+    "Review the report",
   );
-  await expect(rows.nth(1)).toContainText("Write the report");
-  await expect(rows.nth(1)).toContainText("seed");
+  await expect(rows.nth(0).locator("td.via-cell")).toHaveText(
+    "1 from Write the report ←DependsOn—",
+  );
+  await expect(rows.nth(1).locator("td.label-cell")).toHaveText(
+    "Write the report",
+  );
+  await expect(rows.nth(1).locator("td.via-cell")).toHaveText("seed");
 });
 
 test("the Thread display nests the dependency under its parent", async () => {

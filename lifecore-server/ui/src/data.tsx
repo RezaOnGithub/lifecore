@@ -1,13 +1,34 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import type {
   AsOfParams,
   DecimalString,
+  EntryId,
   Method,
   Params,
   Result,
   TypeSchema,
   TypeSummary,
 } from "./contract.ts";
+import {
+  emptyPlaces,
+  loadPlaces,
+  type Place,
+  type Places,
+  removeView,
+  saveView,
+  storePlaces,
+  togglePin,
+  unpin,
+  visit,
+} from "./model/places.ts";
+import type { ExploreForm } from "./model/query.ts";
 import type { RpcClient } from "./rpc.ts";
 
 // What every read shares: the client, the selected boundary (null for the
@@ -127,4 +148,61 @@ export function schemaOf(
   return summary?.resolution.kind === "declared"
     ? summary.resolution.schema
     : null;
+}
+
+export interface PlacesApi {
+  places: Places;
+  visit: (place: Place) => void;
+  togglePin: (place: Place) => void;
+  unpin: (id: EntryId) => void;
+  saveView: (name: string, form: ExploreForm) => void;
+  removeView: (name: string) => void;
+}
+
+const PlacesContext = createContext<PlacesApi | null>(null);
+
+export function usePlaces(): PlacesApi {
+  const places = useContext(PlacesContext);
+  if (places === null) {
+    throw new Error("usePlaces needs a PlacesProvider");
+  }
+  return places;
+}
+
+// Recent, pinned, and saved places of one database, kept in localStorage.
+// Mount it keyed by the database id, like the draft: the stored places are
+// read once, on mount, and written after every change; nothing is stored
+// before the database is known.
+export function PlacesProvider({
+  database,
+  children,
+}: {
+  database: string | null;
+  children: ReactNode;
+}) {
+  const [places, setPlaces] = useState(() =>
+    database === null ? emptyPlaces : loadPlaces(window.localStorage, database),
+  );
+  useEffect(() => {
+    if (database !== null) {
+      storePlaces(window.localStorage, database, places);
+    }
+  }, [database, places]);
+  // The actions keep their identity across changes, so an effect that
+  // records a visit does not run again because the places changed.
+  const actions = useMemo(
+    () => ({
+      visit: (place: Place) => setPlaces((current) => visit(current, place)),
+      togglePin: (place: Place) =>
+        setPlaces((current) => togglePin(current, place)),
+      unpin: (id: EntryId) => setPlaces((current) => unpin(current, id)),
+      saveView: (name: string, form: ExploreForm) =>
+        setPlaces((current) => saveView(current, name, form)),
+      removeView: (name: string) =>
+        setPlaces((current) => removeView(current, name)),
+    }),
+    [],
+  );
+  const value = useMemo(() => ({ places, ...actions }), [places, actions]);
+  return <PlacesContext value={value}>{children}</PlacesContext>;
 }

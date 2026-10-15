@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { EdgeEntry, NodeEntry } from "../contract.ts";
-import { buildThread, stripeMark } from "./thread.ts";
+import { buildThread, preferredDirection, stripeMark } from "./thread.ts";
 
 function node(position: string): NodeEntry {
   return {
@@ -140,6 +140,63 @@ test("without edges every node is a root in append order", () => {
     ["node", "o:1", 0],
   ]);
   assert.equal(thread.stripes.size, 0);
+});
+
+test("every edge type nests children and names the types joining them", () => {
+  // Tasks 2 and 3 are part of project 1; task 3 depends on task 2 and is
+  // also about it.
+  const nodes = ["1", "2", "3"].map(node);
+  const edges = [
+    edge("10", "2", "1", "PartOf"),
+    edge("11", "3", "1", "PartOf"),
+    edge("12", "3", "2", "DependsOn"),
+    edge("13", "3", "2", "About"),
+  ];
+  const incoming = buildThread(nodes, edges, {
+    ty_name: null,
+    direction: "incoming",
+  });
+  assert.deepEqual(
+    incoming.rows.map((row) => [row.kind, row.key, row.depth, row.via]),
+    [
+      ["node", "o:1", 0, []],
+      ["node", "o:2", 1, ["PartOf"]],
+      ["node", "o:3", 2, ["DependsOn", "About"]],
+      ["repeat", "o:3", 1, ["PartOf"]],
+    ],
+  );
+  // One type at a time ignores the others, as before.
+  const partOf = buildThread(nodes, edges, {
+    ty_name: "PartOf",
+    direction: "incoming",
+  });
+  assert.deepEqual(
+    partOf.rows.map((row) => [row.key, row.depth, row.via]),
+    [
+      ["o:1", 0, []],
+      ["o:2", 1, ["PartOf"]],
+      ["o:3", 1, ["PartOf"]],
+    ],
+  );
+});
+
+test("the preferred direction leaves fewer roots, outgoing on a tie", () => {
+  // Three tasks part of one project: read to → from, the project is the
+  // only root.
+  const nodes = ["1", "2", "3", "4"].map(node);
+  const partOf = [
+    edge("10", "2", "1", "PartOf"),
+    edge("11", "3", "1", "PartOf"),
+    edge("12", "4", "1", "PartOf"),
+  ];
+  assert.equal(preferredDirection(nodes, partOf, null), "incoming");
+  assert.equal(preferredDirection(nodes, partOf, "Other"), "outgoing");
+  // A chain has one root either way.
+  const chain = [edge("10", "1", "2"), edge("11", "2", "3")];
+  assert.equal(
+    preferredDirection(nodes.slice(0, 3), chain, "DependsOn"),
+    "outgoing",
+  );
 });
 
 test("stripes cycle through the palette with a suffix afterwards", () => {

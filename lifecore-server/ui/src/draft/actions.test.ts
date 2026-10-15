@@ -627,3 +627,33 @@ test("import refuses an acknowledgment and replace lands on the first operation"
     "a_3",
   );
 });
+
+test("a suggestion's actions append as operations without an acknowledgment", async () => {
+  const h = harness(answers({ ...minted }));
+  assert.deepEqual(h.actions.addSuggested([]), []);
+  h.actions.addNode("Task");
+  assert.deepEqual(
+    h.actions.addSuggested([
+      { kind: "node", ty_name: "Task", payload: { title: "t" } },
+      {
+        kind: "edge",
+        ty_name: "Of",
+        from: { added: 0 },
+        to: { existing: id("1") },
+      },
+    ]),
+    ["task_2", "of_1"],
+  );
+  await settle();
+  const { proposal } = h.state();
+  assert.equal(proposal.acknowledges, undefined);
+  assert.equal(proposal.plan_id, "lc1:p");
+  assert.deepEqual(
+    proposal.entries.map((e) => [e.name, e.kind === "edge" ? e.from : null]),
+    [
+      ["task_1", null],
+      ["task_2", null],
+      ["of_1", { added: "task_2" }],
+    ],
+  );
+});

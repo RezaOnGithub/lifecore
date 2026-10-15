@@ -15,15 +15,24 @@ import {
   DataContext,
   type Load,
   latest,
+  PlacesProvider,
   TypesContext,
   useAsOf,
   useCall,
+  useData,
+  usePlaces,
 } from "./data.tsx";
 import { DraftProvider } from "./draft/context.tsx";
 import { FailureView } from "./failure.tsx";
 import { NavigationContext, ReplaceContext, useOpen } from "./links.tsx";
-import { entryKey, typeName } from "./model/labels.ts";
-import { exploreReducer, initialExplore } from "./model/query.ts";
+import { entryKey, LABEL_LIMIT, sameId, typeName } from "./model/labels.ts";
+import { truncate } from "./model/payload.ts";
+import type { Place } from "./model/places.ts";
+import {
+  type ExploreAction,
+  exploreReducer,
+  initialExplore,
+} from "./model/query.ts";
 import {
   initialNavigation,
   type Navigation,
@@ -34,6 +43,7 @@ import {
 import type { RpcClient } from "./rpc.ts";
 import { DatabaseScreen } from "./screens/Database.tsx";
 import { ExploreScreen } from "./screens/Explore.tsx";
+import { FindingsScreen } from "./screens/Findings.tsx";
 import { InspectorScreen } from "./screens/Inspector.tsx";
 import { OperationScreen } from "./screens/Operation.tsx";
 import { TableScreen } from "./screens/Table.tsx";
@@ -102,62 +112,69 @@ function Shell({
       <ReplaceContext value={replace}>
         <TypesContext value={latest(types)?.types ?? null}>
           <DraftProvider key={database ?? "unknown"} database={database}>
-            <div className="app">
-              <TopBar
-                description={description}
-                nav={nav}
-                dispatch={dispatch}
-                asOf={asOf}
-                onAsOf={onAsOf}
-                onRefresh={onRefresh}
-              />
-              {description.status === "failed" ? (
-                <>
-                  <main className="full">
-                    <FailureView failure={description.failure} />
-                  </main>
-                  {tray}
-                </>
-              ) : (
-                <>
-                  <Sidebar types={types} screen={screen} />
-                  <main>
-                    {screen.kind === "database" &&
-                      (description.status === "ready" ? (
-                        <DatabaseScreen description={description.result} />
-                      ) : (
-                        <p className="muted">
-                          Loading the database description…
-                        </p>
-                      ))}
-                    {screen.kind === "table" && (
-                      <TableScreen
-                        key={screen.ty_name}
-                        ty_name={screen.ty_name}
-                      />
-                    )}
-                    {screen.kind === "inspector" && (
-                      <InspectorScreen
-                        key={entryKey(screen.id)}
-                        id={screen.id}
-                        onExplore={exploreFrom}
-                      />
-                    )}
-                    {screen.kind === "operation" && (
-                      <OperationScreen name={screen.name} />
-                    )}
-                    {screen.kind === "import" && <ImportView />}
-                    <div hidden={screen.kind !== "explore"}>
-                      <ExploreScreen
-                        state={explore}
-                        dispatch={dispatchExplore}
-                      />
-                    </div>
-                  </main>
-                  {tray}
-                </>
-              )}
-            </div>
+            <PlacesProvider key={database ?? "unknown"} database={database}>
+              <div className="app">
+                <TopBar
+                  description={description}
+                  nav={nav}
+                  dispatch={dispatch}
+                  asOf={asOf}
+                  onAsOf={onAsOf}
+                  onRefresh={onRefresh}
+                />
+                {description.status === "failed" ? (
+                  <>
+                    <main className="full">
+                      <FailureView failure={description.failure} />
+                    </main>
+                    {tray}
+                  </>
+                ) : (
+                  <>
+                    <Sidebar
+                      types={types}
+                      screen={screen}
+                      dispatchExplore={dispatchExplore}
+                    />
+                    <main>
+                      {screen.kind === "database" &&
+                        (description.status === "ready" ? (
+                          <DatabaseScreen description={description.result} />
+                        ) : (
+                          <p className="muted">
+                            Loading the database description…
+                          </p>
+                        ))}
+                      {screen.kind === "table" && (
+                        <TableScreen
+                          key={screen.ty_name}
+                          ty_name={screen.ty_name}
+                        />
+                      )}
+                      {screen.kind === "inspector" && (
+                        <InspectorScreen
+                          key={entryKey(screen.id)}
+                          id={screen.id}
+                          onExplore={exploreFrom}
+                        />
+                      )}
+                      {screen.kind === "operation" && (
+                        <OperationScreen name={screen.name} />
+                      )}
+                      {screen.kind === "import" && <ImportView />}
+                      {screen.kind === "findings" && <FindingsScreen />}
+                      <div hidden={screen.kind !== "explore"}>
+                        <ExploreScreen
+                          state={explore}
+                          dispatch={dispatchExplore}
+                        />
+                      </div>
+                    </main>
+                    {tray}
+                  </>
+                )}
+              </div>
+            </PlacesProvider>
           </DraftProvider>
         </TypesContext>
       </ReplaceContext>
@@ -277,9 +294,25 @@ function TopBar({
 
 // The list on show is the last one loaded: a reload only adds a hint, so the
 // entries, and the active one, stay where they are.
-function Sidebar({ types, screen }: { types: Load<TypeList>; screen: Screen }) {
+function Sidebar({
+  types,
+  screen,
+  dispatchExplore,
+}: {
+  types: Load<TypeList>;
+  screen: Screen;
+  dispatchExplore: (action: ExploreAction) => void;
+}) {
   const open = useOpen();
   const list = latest(types);
+  const { places, unpin, removeView } = usePlaces();
+  const view = (kind: "explore" | "findings", label: string) => (
+    <li className={screen.kind === kind ? "active" : undefined}>
+      <button type="button" className="link" onClick={() => open({ kind })}>
+        {label}
+      </button>
+    </li>
+  );
   return (
     <nav className="side" aria-label="Types">
       <h2>
@@ -322,16 +355,125 @@ function Sidebar({ types, screen }: { types: Load<TypeList>; screen: Screen }) {
       )}
       <h2>Views</h2>
       <ul className="types">
-        <li className={screen.kind === "explore" ? "active" : undefined}>
-          <button
-            type="button"
-            className="link"
-            onClick={() => open({ kind: "explore" })}
-          >
-            Explore
-          </button>
-        </li>
+        {view("explore", "Explore")}
+        {view("findings", "Findings")}
       </ul>
+      <h2>Pinned</h2>
+      <PlaceList
+        places={places.pinned}
+        screen={screen}
+        testId="pinned"
+        empty="☆ in the inspector pins an entry here"
+        onRemove={(place) => unpin(place.id)}
+      />
+      <h2>Saved views</h2>
+      {places.views.length === 0 ? (
+        <p className="muted side-hint">Save view in Explore keeps a query</p>
+      ) : (
+        <ul className="types places" data-testid="saved-views">
+          {places.views.map((saved) => (
+            <li key={saved.name}>
+              <button
+                type="button"
+                className="link place-label"
+                title={`open and run "${saved.name}"`}
+                onClick={() => {
+                  dispatchExplore({ kind: "load", form: saved.form });
+                  open({ kind: "explore" });
+                }}
+              >
+                {saved.name}
+              </button>
+              <button
+                type="button"
+                className="link remove"
+                aria-label={`remove view ${saved.name}`}
+                onClick={() => removeView(saved.name)}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <h2>Recent</h2>
+      <PlaceList
+        places={places.recent}
+        screen={screen}
+        testId="recent"
+        empty="inspected entries appear here"
+      />
     </nav>
+  );
+}
+
+// Entries kept by the sidebar, under the label and type they had when last
+// inspected. Under an as-of boundary, those past it are dimmed: they would
+// not be found.
+function PlaceList({
+  places,
+  screen,
+  testId,
+  empty,
+  onRemove,
+}: {
+  places: readonly Place[];
+  screen: Screen;
+  testId: string;
+  empty: string;
+  onRemove?: (place: Place) => void;
+}) {
+  const open = useOpen();
+  const { asOf } = useData();
+  if (places.length === 0) {
+    return <p className="muted side-hint">{empty}</p>;
+  }
+  return (
+    <ul className="types places" data-testid={testId}>
+      {places.map((place) => {
+        const beyond =
+          asOf !== null && BigInt(place.id.position) >= BigInt(asOf);
+        const active =
+          screen.kind === "inspector" && sameId(screen.id, place.id);
+        return (
+          <li
+            key={entryKey(place.id)}
+            className={
+              [active && "active", beyond && "beyond"]
+                .filter(Boolean)
+                .join(" ") || undefined
+            }
+          >
+            <button
+              type="button"
+              className="link place-label"
+              title={`${place.label}\n@${place.id.position} ${
+                place.kind === "edge" ? "edge " : ""
+              }${typeName(place.ty_name)}${
+                beyond ? "\npast the as-of boundary" : ""
+              }`}
+              onClick={() => open({ kind: "inspector", id: place.id })}
+            >
+              {truncate(place.label, LABEL_LIMIT)}
+            </button>
+            <span className="place-type">
+              {place.kind === "edge"
+                ? `@${place.id.position}`
+                : typeName(place.ty_name)}
+            </span>
+            {onRemove && (
+              <button
+                type="button"
+                className="link remove"
+                aria-label={`unpin ${place.label}`}
+                onClick={() => onRemove(place)}
+              >
+                ×
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }

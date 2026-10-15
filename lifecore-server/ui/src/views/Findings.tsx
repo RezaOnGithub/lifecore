@@ -8,6 +8,8 @@ import {
 import type { DraftState } from "../draft/model.ts";
 import { requestOf } from "../draft/model.ts";
 import { IdLink, OperationLink } from "../links.tsx";
+import { sameId } from "../model/labels.ts";
+import { FindingRow } from "./FindingRow.tsx";
 
 // The findings of the last check, as the views need them: per operation by
 // its current name, whether they judged the draft as it is now, and the
@@ -120,9 +122,15 @@ function Range({ attached }: { attached: Attached }) {
   );
 }
 
-// Findings as the backend worded them: kind, message, analyzer, prefix
-// range, then the focus and subjects as chips linking to the operation or
-// the entry.
+function sameTarget(a: Target, b: Target): boolean {
+  if (a.kind === "operation") {
+    return b.kind === "operation" && a.index === b.index;
+  }
+  return b.kind === "existing" && sameId(a.id, b.id);
+}
+
+// Findings as the backend worded them, in the shared row, with provisional
+// targets linking to their operations.
 // `note` says why a list is dimmed; the tray says it once above its rows.
 export function FindingList({
   findings,
@@ -139,41 +147,20 @@ export function FindingList({
     <>
       {!current && note && <p className="muted dim-note">{EARLIER}</p>}
       <ul className={`findings${current ? "" : " dim"}`} data-testid="findings">
-        {findings.map((attached, index) => {
-          const { observation, subjects, focus } = attached;
-          const { diagnostic, key } = observation;
-          return (
+        {findings.map((attached, index) => (
+          <FindingRow
             // Observations are distinct by key, but the key is long; the
             // index is stable for one report.
             // biome-ignore lint/suspicious/noArrayIndexKey: list is rebuilt per report
-            <li key={index} className={`finding ${diagnostic.kind}`}>
-              <span className={`badge kind-${diagnostic.kind}`}>
-                {diagnostic.kind}
-              </span>{" "}
-              {diagnostic.message}{" "}
-              <span className="muted">
-                {key.analyzer.name} {key.analyzer.version}
-                {diagnostic.sticky && ", sticky"}
-              </span>{" "}
-              <Range attached={attached} />
-              {(focus !== null || subjects.length > 0) && (
-                <ul className="chips">
-                  {focus !== null && (
-                    <li>
-                      focus <TargetChip target={focus} names={names} />
-                    </li>
-                  )}
-                  {subjects.map((subject, i) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: subjects may repeat
-                    <li key={i}>
-                      <TargetChip target={subject} names={names} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          );
-        })}
+            key={index}
+            observation={attached.observation}
+            range={<Range attached={attached} />}
+            focus={attached.focus}
+            subjects={attached.subjects}
+            same={sameTarget}
+            chip={(target) => <TargetChip target={target} names={names} />}
+          />
+        ))}
       </ul>
     </>
   );

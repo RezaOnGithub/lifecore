@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { EntryRecord, ProposalEntry } from "../contract.ts";
+import type { EntryChange, EntryRecord, ProposalEntry } from "../contract.ts";
 import { isUnset } from "./model.ts";
 import {
   appendOperations,
@@ -15,6 +15,7 @@ import {
   referenceIssue,
   removeOperations,
   reviseSuccessor,
+  suggestedOperations,
   uniqueName,
   withoutApplied,
 } from "./operations.ts";
@@ -267,4 +268,52 @@ test("a decode path names the operation it points into", () => {
   assert.equal(pathOperation("entries[5]", ["a"]), null);
   assert.equal(pathOperation("plan_id", ["a"]), null);
   assert.equal(pathOperation(undefined, ["a"]), null);
+});
+
+test("suggested actions get free default names and named references", () => {
+  const actions: EntryChange[] = [
+    {
+      kind: "node",
+      ty_name: "Task",
+      predecessor: { existing: id("3") },
+      intent: "revise",
+      payload: { title: "b" },
+    },
+    { kind: "node", ty_name: "Task", payload: {} },
+    { kind: "edge", ty_name: "", from: { added: 0 }, to: { added: 1 } },
+    {
+      kind: "edge",
+      ty_name: "DependsOn",
+      from: { added: 7 },
+      to: { existing: id("2") },
+    },
+  ];
+  // `task_1` is taken by the draft.
+  const operations = suggestedOperations([task], actions);
+  assert.deepEqual(operations.slice(0, 3), [
+    {
+      name: "task_2",
+      kind: "node",
+      ty_name: "Task",
+      predecessor: { existing: id("3") },
+      intent: "revise",
+      payload: { title: "b" },
+    },
+    { name: "task_3", kind: "node", ty_name: "Task", payload: {} },
+    {
+      name: "edge_1",
+      kind: "edge",
+      ty_name: "",
+      from: { added: "task_2" },
+      to: { added: "task_3" },
+    },
+  ]);
+  // An index outside the actions is left to be picked.
+  const last = operations[3];
+  assert.equal(last?.name, "dependson_1");
+  assert.ok(last?.kind === "edge" && isUnset(last.from));
+  assert.deepEqual(last.to, { existing: id("2") });
+  // Appended as an import, nothing is renamed.
+  assert.deepEqual(appendOperations([task], operations).renamed, []);
+  assert.deepEqual(suggestedOperations([task], []), []);
 });

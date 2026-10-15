@@ -1,10 +1,12 @@
 import type {
   DecimalString,
+  EntryChange,
   EntryId,
   EntryRecord,
   OperationEntry,
   ProposalEntry,
   ProposalReference,
+  Reference,
 } from "../contract.ts";
 import { sameId } from "../model/labels.ts";
 import { isUnset, type KeptEdge, sameReference, UNSET } from "./model.ts";
@@ -223,6 +225,56 @@ export function appendOperations(
     combined.push({ ...followed, name });
   }
   return { entries: combined, renamed: renames };
+}
+
+// A suggestion's actions as operations to append, each with a default name
+// free in `entries` and among the earlier actions. `{added: n}` addresses
+// the n-th action and becomes that operation's name; an index outside the
+// actions, which a valid suggestion never has, is left unset to be picked.
+export function suggestedOperations(
+  entries: readonly ProposalEntry[],
+  actions: readonly EntryChange[],
+): ProposalEntry[] {
+  const combined = [...entries];
+  const names: string[] = [];
+  for (const action of actions) {
+    const base =
+      action.kind === "edge" && action.ty_name === "" ? "edge" : action.ty_name;
+    const name = defaultName(combined, base);
+    names.push(name);
+    // A placeholder that only reserves the name.
+    combined.push({ name, kind: "node", ty_name: "", payload: {} });
+  }
+  const reference = (r: Reference): ProposalReference => {
+    if ("existing" in r) {
+      return { existing: r.existing };
+    }
+    const name = Number.isInteger(r.added) ? names[r.added] : undefined;
+    return name === undefined ? UNSET : { added: name };
+  };
+  return actions.map((action, index): ProposalEntry => {
+    const name = names[index] as string;
+    if (action.kind === "edge") {
+      return {
+        name,
+        kind: "edge",
+        ty_name: action.ty_name,
+        from: reference(action.from),
+        to: reference(action.to),
+      };
+    }
+    const { ty_name, predecessor, intent, payload } = action;
+    return {
+      name,
+      kind: "node",
+      ty_name,
+      ...(predecessor === undefined
+        ? {}
+        : { predecessor: reference(predecessor) }),
+      ...(intent === undefined ? {} : { intent }),
+      payload,
+    };
+  });
 }
 
 // ---- Supersession inside the draft ----

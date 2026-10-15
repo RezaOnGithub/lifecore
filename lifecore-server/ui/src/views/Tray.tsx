@@ -2,11 +2,57 @@ import { useState } from "react";
 import type { DecimalString } from "../contract.ts";
 import { useData } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
-import { attachFindings } from "../draft/findings.ts";
+import {
+  type Attached,
+  attachFindings,
+  countFindings,
+} from "../draft/findings.ts";
+import { kindWords } from "../model/findings.ts";
 import type { Screen } from "../navigation.ts";
 import { EARLIER, FindingList, judged } from "./Findings.tsx";
 import { OperationRows, rowsOf } from "./OperationRow.tsx";
 import { statusWord, TrayHeader } from "./TrayHeader.tsx";
+
+// Findings the committed base already had: often many, and not this
+// draft's doing, so one line with their counts until expanded.
+function HistoryFindings({
+  findings,
+  names,
+  current,
+}: {
+  findings: readonly Attached[];
+  names: readonly string[];
+  current: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (findings.length === 0) {
+    return (
+      <>
+        <h4>already in history</h4>
+        <p className="muted">none</p>
+      </>
+    );
+  }
+  return (
+    <>
+      <h4>
+        <button
+          type="button"
+          className="link disclosure"
+          aria-expanded={open}
+          data-testid="history-findings"
+          onClick={() => setOpen(!open)}
+        >
+          already in history: {kindWords(countFindings(findings))}{" "}
+          {open ? "▾" : "▸"}
+        </button>
+      </h4>
+      {open && (
+        <FindingList findings={findings} names={names} current={current} />
+      )}
+    </>
+  );
+}
 
 // What the last report says beyond single operations: findings of
 // operations no longer in the draft, of the committed base, and of the
@@ -47,8 +93,11 @@ function ReportSummary() {
           {list(judgment.unplaced)}
         </>
       )}
-      <h4>already in history</h4>
-      {list(attachment.history)}
+      <HistoryFindings
+        findings={attachment.history}
+        names={judgment.names}
+        current={judgment.current}
+      />
       {attachment.settled > 0 && (
         <p className="muted">
           {attachment.settled} more resolved before the base, not listed

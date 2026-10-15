@@ -1,20 +1,34 @@
-import { type FormEvent, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useState,
+} from "react";
 import type {
   EdgeRecord,
   NodeRecord,
   Provenance,
   ViewQuery,
 } from "../contract.ts";
-import { latest, schemaOf, useAsOf, useCall, useTypes } from "../data.tsx";
+import {
+  latest,
+  schemaOf,
+  useAsOf,
+  useCall,
+  usePlaces,
+  useTypes,
+} from "../data.tsx";
 import { FailureView } from "../failure.tsx";
-import { IdLink, NodeLink, TypeLink } from "../links.tsx";
+import { IdLink, NodeLink, TypeLink, useOpen } from "../links.tsx";
 import { compareStrings } from "../model/columns.ts";
-import { entryKey } from "../model/labels.ts";
+import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
+import { truncate } from "../model/payload.ts";
 import {
   type ExploreAction,
   type ExploreForm,
   type ExploreState,
   formChanged,
+  querySummary,
   toParams,
 } from "../model/query.ts";
 import { EntryTable, type ExtraColumn } from "../views/EntryTable.tsx";
@@ -24,13 +38,17 @@ import {
   ExpandFieldset,
   SeedsFieldset,
 } from "../views/ExploreForm.tsx";
+import { GraphView } from "../views/Graph.tsx";
+import { relationColumns } from "../views/Relationships.tsx";
 import { ThreadView } from "../views/Thread.tsx";
 
 type QueriedRow = NodeRecord & { provenance: Provenance };
 
-// The edge a node was reached over may be absent from the result's edges
-// (the edge filter is separate), so the identity is always a link and the
-// type name is shown when known.
+// How a node was reached: from the provenance node over the edge, drawn in
+// the edge's own direction, `—PartOf→` when the edge goes from the
+// provenance node to this one and `←PartOf—` when it comes from this one.
+// The edge may be absent from the result's edges (the edge filter is
+// separate); then only its identity is known.
 function Via({
   provenance,
   edges,
@@ -45,16 +63,91 @@ function Via({
   }
   const edge = edges.get(entryKey(provenance.via));
   const from = nodes.get(entryKey(provenance.from));
+  const forward = edge !== undefined && sameId(edge.from, provenance.from);
   return (
-    <span>
-      hop {provenance.hop} ← {edge ? edge.ty_name : "edge"}{" "}
-      <IdLink id={provenance.via} /> from{" "}
-      {from ? <NodeLink node={from} /> : <IdLink id={provenance.from} />}
+    <span className="via">
+      <span className="hop" title={`reached at hop ${provenance.hop}`}>
+        {provenance.hop}
+      </span>{" "}
+      from{" "}
+      {from ? (
+        <NodeLink node={from} position={false} />
+      ) : (
+        <IdLink id={provenance.from} />
+      )}{" "}
+      {edge === undefined ? (
+        <>
+          via <IdLink id={provenance.via} />
+        </>
+      ) : (
+        <EdgeArrow edge={edge} forward={forward} />
+      )}
     </span>
   );
 }
 
-function GroupedTables({ result }: { result: ViewQuery }) {
+// The traversed edge, drawn in its own direction and linking to its
+// inspector.
+function EdgeArrow({ edge, forward }: { edge: EdgeRecord; forward: boolean }) {
+  const open = useOpen();
+  const name = typeName(edge.ty_name);
+  return (
+    <button
+      type="button"
+      className="link via-edge"
+      title={`edge @${edge.id.position} ${name}, ${
+        forward ? "from that node to this one" : "from this node to that one"
+      }`}
+      onClick={() => open({ kind: "inspector", id: edge.id })}
+    >
+      {forward ? `—${name}→` : `←${name}—`}
+    </button>
+  );
+}
+
+// "focus" makes the node the only seed; "+ seed" adds it. Both run.
+function RowActions({
+  node,
+  form,
+  dispatch,
+}: {
+  node: NodeRecord;
+  form: ExploreForm;
+  dispatch: (action: ExploreAction) => void;
+}) {
+  const seeded = form.ids.some((id) => sameId(id, node.id));
+  return (
+    <span className="row-actions">
+      <button
+        type="button"
+        className="mini"
+        title="explore from this node alone, with the same expansion"
+        onClick={() => dispatch({ kind: "focus", id: node.id })}
+      >
+        focus
+      </button>
+      <button
+        type="button"
+        className="mini"
+        disabled={seeded}
+        title={seeded ? "already a seed" : "add this node to the seeds"}
+        onClick={() => dispatch({ kind: "seed", id: node.id })}
+      >
+        + seed
+      </button>
+    </span>
+  );
+}
+
+function GroupedTables({
+  result,
+  relationships,
+  actions,
+}: {
+  result: ViewQuery;
+  relationships: boolean;
+  actions: (node: NodeRecord) => ReactNode;
+}) {
   const types = useTypes();
   const groups = new Map<string, QueriedRow[]>();
   const nodes = new Map<string, NodeRecord>();
@@ -65,13 +158,9 @@ function GroupedTables({ result }: { result: ViewQuery }) {
     groups.set(node.ty_name, rows);
   }
   const edges = new Map(result.edges.map((edge) => [entryKey(edge.id), edge]));
-  const incident = new Map<string, number>();
-  for (const edge of result.edges) {
-    for (const end of [edge.from, edge.to]) {
-      const key = entryKey(end);
-      incident.set(key, (incident.get(key) ?? 0) + 1);
-    }
-  }
+  const lead: ExtraColumn<QueriedRow>[] = [
+    { key: "actions", header: "", cell: actions, className: "actions" },
+  ];
   const extra: ExtraColumn<QueriedRow>[] = [
     {
       key: "via",
@@ -79,22 +168,10 @@ function GroupedTables({ result }: { result: ViewQuery }) {
       cell: (row) => (
         <Via provenance={row.provenance} edges={edges} nodes={nodes} />
       ),
+      className: "via-cell",
       sortValue: (row) => ({
         kind: "integer",
         value: String(row.provenance.kind === "seed" ? 0 : row.provenance.hop),
-      }),
-    },
-    {
-      key: "edges",
-      header: (
-        <span title="incident edges among the result's edges, which the edge filter selects">
-          edges
-        </span>
-      ),
-      cell: (row) => incident.get(entryKey(row.id)) ?? 0,
-      sortValue: (row) => ({
-        kind: "integer",
-        value: String(incident.get(entryKey(row.id)) ?? 0),
       }),
     },
   ];
@@ -114,7 +191,14 @@ function GroupedTables({ result }: { result: ViewQuery }) {
               rows={rows}
               schema={schemaOf(types, ty_name)}
               ty_name={ty_name}
-              extra={extra}
+              lead={lead}
+              // The relationships are those among the result's edges, which
+              // the edge filter selects.
+              extra={
+                relationships
+                  ? [...extra, ...relationColumns(rows, result.edges, nodes)]
+                  : extra
+              }
             />
           </section>
         );
@@ -122,6 +206,88 @@ function GroupedTables({ result }: { result: ViewQuery }) {
     </>
   );
 }
+
+// A name for the form about to be saved: its seeds as the result labels
+// them when the form is the one on show, else as positions and selections.
+function suggestedName(form: ExploreForm, result: ViewQuery | null): string {
+  const labels = new Map(
+    (result?.nodes ?? []).map(({ node }) => [entryKey(node.id), node]),
+  );
+  const parts = form.ids.map((id) => {
+    const node = labels.get(entryKey(id));
+    return node === undefined ? `@${id.position}` : rowLabel(node);
+  });
+  if (form.nodes.enabled) {
+    const text = form.nodes.text.trim();
+    parts.push(
+      `${form.nodes.ty_name === "" ? "any type" : typeName(form.nodes.ty_name)}${
+        text === "" ? "" : ` "${text}"`
+      }`,
+    );
+  }
+  return truncate(parts.join(" + "), 40);
+}
+
+function SaveView({
+  form,
+  result,
+}: {
+  form: ExploreForm;
+  result: ViewQuery | null;
+}) {
+  const { places, saveView } = usePlaces();
+  const [name, setName] = useState<string | null>(null);
+  if (name === null) {
+    return (
+      <button
+        type="button"
+        disabled={toParams(form) === null}
+        title="keep this form in the sidebar under a name"
+        onClick={() => setName(suggestedName(form, result))}
+      >
+        Save view
+      </button>
+    );
+  }
+  const trimmed = name.trim();
+  const exists = places.views.some((view) => view.name === trimmed);
+  const save = () => {
+    if (trimmed !== "") {
+      saveView(trimmed, form);
+      setName(null);
+    }
+  };
+  // Enter saves rather than submitting the Explore form around it.
+  const onKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      save();
+    } else if (event.key === "Escape") {
+      setName(null);
+    }
+  };
+  return (
+    <span className="save-view">
+      <input
+        aria-label="view name"
+        value={name}
+        size={24}
+        // biome-ignore lint/a11y/noAutofocus: the field opens on request
+        autoFocus
+        onChange={(event) => setName(event.target.value)}
+        onKeyDown={onKey}
+      />
+      <button type="button" disabled={trimmed === ""} onClick={save}>
+        {exists ? "Replace" : "Save"}
+      </button>
+      <button type="button" onClick={() => setName(null)}>
+        Cancel
+      </button>
+    </span>
+  );
+}
+
+type Display = "table" | "thread" | "graph";
 
 export function ExploreScreen({
   state,
@@ -131,13 +297,12 @@ export function ExploreScreen({
   dispatch: (action: ExploreAction) => void;
 }) {
   const asOf = useAsOf();
-  const [display, setDisplay] = useState<"table" | "thread">("table");
+  const [display, setDisplay] = useState<Display>("table");
+  const [relationships, setRelationships] = useState(true);
+  const [unfolded, setUnfolded] = useState(true);
   const { form, submitted } = state;
-  const load = useCall(
-    "views.query",
-    submitted === null ? null : { ...asOf, ...submitted.params },
-    submitted?.run ?? 0,
-  );
+  const params = submitted === null ? null : { ...asOf, ...submitted.params };
+  const load = useCall("views.query", params, submitted?.run ?? 0);
   // A rerun keeps the last result, and with it the display and thread
   // choices, on screen until the new one arrives.
   const result = latest(load);
@@ -148,18 +313,46 @@ export function ExploreScreen({
     event.preventDefault();
     dispatch({ kind: "run" });
   };
+  const actions = (node: NodeRecord) => (
+    <RowActions node={node} form={form} dispatch={dispatch} />
+  );
+  const displays: [Display, string][] = [
+    ["table", "Table"],
+    ["thread", "Thread"],
+    ["graph", "Graph"],
+  ];
   return (
     <section>
-      <h2>Explore</h2>
+      <h2>
+        Explore{" "}
+        <button
+          type="button"
+          className="link small"
+          aria-expanded={unfolded}
+          onClick={() => setUnfolded(!unfolded)}
+        >
+          {unfolded ? "fold the form" : "unfold the form"}
+        </button>
+      </h2>
       <form className="explore" onSubmit={run}>
-        <SeedsFieldset form={form} onChange={onChange} />
-        <ExpandFieldset form={form} onChange={onChange} />
-        <EdgesFieldset form={form} onChange={onChange} />
+        {/* Folded, the form leaves the results the room; it stays mounted
+            so nothing typed is lost. */}
+        <div hidden={!unfolded}>
+          <SeedsFieldset form={form} onChange={onChange} />
+          <ExpandFieldset form={form} onChange={onChange} />
+          <EdgesFieldset form={form} onChange={onChange} />
+        </div>
         <EdgeTypeList />
+        {!unfolded && (
+          <p className="muted query-summary" data-testid="query-summary">
+            {querySummary(form)}
+          </p>
+        )}
         <div className="row">
           <button type="submit" disabled={query === null}>
             Run
           </button>
+          <SaveView form={form} result={result} />
           {query === null && <span className="muted">add a seed to run</span>}
           {query !== null && formChanged(state) && (
             <span className="muted" data-testid="form-changed">
@@ -181,31 +374,53 @@ export function ExploreScreen({
               {result.edges.length === 1 ? "" : "s"}
             </strong>
             <span className="toggle">
-              <button
-                type="button"
-                className={display === "table" ? "on" : undefined}
-                onClick={() => setDisplay("table")}
-              >
-                Table
-              </button>
-              <button
-                type="button"
-                className={display === "thread" ? "on" : undefined}
-                onClick={() => setDisplay("thread")}
-              >
-                Thread
-              </button>
+              {displays.map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={display === value ? "on" : undefined}
+                  onClick={() => setDisplay(value)}
+                >
+                  {label}
+                </button>
+              ))}
             </span>
+            {display === "table" && (
+              <label title="a column per edge type and direction among the result's edges">
+                <input
+                  type="checkbox"
+                  checked={relationships}
+                  onChange={(event) => setRelationships(event.target.checked)}
+                />{" "}
+                relationships
+              </label>
+            )}
             <span className="muted">view [0, {result.view.end_exclusive})</span>
           </div>
-          {display === "table" ? (
-            <GroupedTables result={result} />
-          ) : (
+          {display === "table" && (
+            <GroupedTables
+              result={result}
+              relationships={relationships}
+              actions={actions}
+            />
+          )}
+          {display === "thread" && (
             <ThreadView
               nodes={result.nodes.map((queried) => queried.node)}
               edges={result.edges}
+              actions={actions}
             />
           )}
+          {/* Mounted throughout, so a drawing survives a look at the other
+              displays; it is requested only by its Render button. */}
+          <div hidden={display !== "graph"}>
+            <GraphView
+              params={params}
+              focus={result.nodes
+                .filter(({ provenance }) => provenance.kind === "seed")
+                .map(({ node }) => node.id.position)}
+            />
+          </div>
         </section>
       )}
     </section>

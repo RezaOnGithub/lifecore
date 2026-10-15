@@ -59,8 +59,14 @@ export interface ExploreState {
 export type ExploreAction =
   | { kind: "change"; form: ExploreForm }
   | { kind: "run" }
-  // "Explore from here": the node joins the seeds and the query runs.
-  | { kind: "seed"; id: EntryId };
+  // "Explore from here" and "+ seed": the node joins the seeds and the
+  // query runs.
+  | { kind: "seed"; id: EntryId }
+  // "focus": the node becomes the only seed, the node selection included,
+  // and the query runs with the same expansion.
+  | { kind: "focus"; id: EntryId }
+  // A saved view: its form replaces this one and runs.
+  | { kind: "load"; form: ExploreForm };
 
 export const initialExplore: ExploreState = {
   form: emptyForm,
@@ -78,6 +84,17 @@ export function exploreReducer(
       return run(state);
     case "seed":
       return run({ ...state, form: addSeed(state.form, action.id) });
+    case "focus":
+      return run({
+        ...state,
+        form: {
+          ...state.form,
+          ids: [action.id],
+          nodes: { ...state.form.nodes, enabled: false },
+        },
+      });
+    case "load":
+      return run({ ...state, form: action.form });
   }
 }
 
@@ -162,4 +179,110 @@ export function toParams(form: ExploreForm): ViewQueryParams | null {
     edges.ty_names = edgeNames;
   }
   return { seeds, expand, edges };
+}
+
+const CURRENTNESS: readonly Currentness[] = ["current", "historical", "all"];
+const DIRECTIONS: readonly Direction[] = ["both", "outgoing", "incoming"];
+const POSITION = /^(0|[1-9][0-9]*)$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCurrentness(value: unknown): value is Currentness {
+  return CURRENTNESS.includes(value as Currentness);
+}
+
+export function readEntryId(value: unknown): EntryId | null {
+  if (
+    isRecord(value) &&
+    typeof value.origin === "string" &&
+    typeof value.position === "string" &&
+    POSITION.test(value.position)
+  ) {
+    return { origin: value.origin, position: value.position };
+  }
+  return null;
+}
+
+function readExpansion(value: unknown): ExpansionForm | null {
+  if (
+    isRecord(value) &&
+    Number.isInteger(value.hops) &&
+    (value.hops as number) >= 1 &&
+    (value.hops as number) <= MAX_HOPS &&
+    DIRECTIONS.includes(value.direction as Direction) &&
+    typeof value.ty_names === "string" &&
+    isCurrentness(value.currentness)
+  ) {
+    return {
+      hops: value.hops as number,
+      direction: value.direction as Direction,
+      ty_names: value.ty_names,
+      currentness: value.currentness,
+    };
+  }
+  return null;
+}
+
+// A stored form, as saved views keep it, or null when anything in it is not
+// a form this client would build.
+export function readForm(value: unknown): ExploreForm | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.ids) ||
+    !isRecord(value.nodes) ||
+    !Array.isArray(value.expand) ||
+    !isRecord(value.edges)
+  ) {
+    return null;
+  }
+  const ids = value.ids.map(readEntryId);
+  const expand = value.expand.map(readExpansion);
+  const { nodes, edges } = value;
+  if (
+    ids.some((id) => id === null) ||
+    expand.some((step) => step === null) ||
+    expand.length === 0 ||
+    expand.length > MAX_STEPS ||
+    typeof nodes.enabled !== "boolean" ||
+    typeof nodes.ty_name !== "string" ||
+    typeof nodes.text !== "string" ||
+    !isCurrentness(nodes.currentness) ||
+    typeof edges.ty_names !== "string" ||
+    !isCurrentness(edges.currentness)
+  ) {
+    return null;
+  }
+  return {
+    ids: ids.filter((id) => id !== null),
+    nodes: {
+      enabled: nodes.enabled,
+      ty_name: nodes.ty_name,
+      text: nodes.text,
+      currentness: nodes.currentness,
+    },
+    expand: expand.filter((step) => step !== null),
+    edges: { ty_names: edges.ty_names, currentness: edges.currentness },
+  };
+}
+
+// One line for a folded form: its seeds, then its steps.
+export function querySummary(form: ExploreForm): string {
+  const seeds = form.ids.map((id) => `@${id.position}`);
+  if (form.nodes.enabled) {
+    const text = form.nodes.text.trim();
+    seeds.push(
+      `${form.nodes.currentness} ${form.nodes.ty_name.trim() || "any type"}${
+        text === "" ? "" : ` containing "${text}"`
+      }`,
+    );
+  }
+  const steps = form.expand.map((step) => {
+    const names = parseNames(step.ty_names);
+    return `${step.hops} hop${step.hops === 1 ? "" : "s"} ${step.direction}${
+      names.length === 0 ? "" : ` over ${names.join(", ")}`
+    }`;
+  });
+  return `${seeds.length === 0 ? "no seeds" : seeds.join(" + ")}, then ${steps.join(", then ")}`;
 }

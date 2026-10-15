@@ -1,5 +1,6 @@
 import type {
   DecodeError,
+  EntryChange,
   EntryId,
   Format,
   Method,
@@ -26,7 +27,12 @@ import {
   UNSET,
   type Verdict,
 } from "./model.ts";
-import { defaultName, findApplied, incomplete } from "./operations.ts";
+import {
+  defaultName,
+  findApplied,
+  incomplete,
+  suggestedOperations,
+} from "./operations.ts";
 import { reconnectable } from "./reconnect.ts";
 import type { DraftAction } from "./reducer.ts";
 
@@ -219,6 +225,23 @@ export class DraftActions {
     void this.ensurePlanId();
     const { entries } = this.#state().proposal;
     return entries[mode === "replace" ? 0 : before]?.name ?? null;
+  }
+
+  // A suggestion's actions appended as ordinary operations, never with
+  // `acknowledges` (PLAN §4.4). The names they landed under; none while an
+  // apply is in flight.
+  addSuggested(actions: readonly EntryChange[]): string[] {
+    const { entries } = this.#state().proposal;
+    if (actions.length === 0 || frozen(this.#state())) {
+      return [];
+    }
+    this.importProposal(
+      { entries: suggestedOperations(entries, actions) },
+      "append",
+    );
+    return this.#state()
+      .proposal.entries.slice(entries.length)
+      .map((entry) => entry.name);
   }
 
   // ---- Calls ----

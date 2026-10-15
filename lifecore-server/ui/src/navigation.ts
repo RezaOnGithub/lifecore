@@ -6,6 +6,7 @@ export type Screen =
   | { kind: "table"; ty_name: string }
   | { kind: "inspector"; id: EntryId }
   | { kind: "explore" }
+  | { kind: "findings" }
   // A draft operation, by its name; a renamed one is a different screen.
   | { kind: "operation"; name: string }
   | { kind: "import" };
@@ -67,4 +68,20 @@ export function navigate(
       return { current: previous, history: state.history.slice(0, -1) };
     }
   }
+}
+
+const INSPECT_HREF = /^#inspect\/([^/]+)\/(0|[1-9][0-9]*)$/;
+
+// The entry a rendered graph's link names: `views.render` gives every node
+// and edge an `href` of `#inspect/<origin>/<position>`. Null for any other
+// link.
+export function inspectHref(href: string | null): EntryId | null {
+  const match = href === null ? null : INSPECT_HREF.exec(href);
+  if (match === null) {
+    return null;
+  }
+  const [, origin, position] = match;
+  return origin === undefined || position === undefined
+    ? null
+    : { origin, position };
 }

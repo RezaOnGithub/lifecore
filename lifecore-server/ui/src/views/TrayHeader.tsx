@@ -83,7 +83,7 @@ function applyNote(state: DraftState): string {
     : `applies at ${time}, as checked`;
 }
 
-function EvaluationChoice({
+export function EvaluationChoice({
   evaluation,
   disabled,
   onChange,

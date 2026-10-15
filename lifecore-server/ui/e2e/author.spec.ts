@@ -229,7 +229,9 @@ test("a new Job entered through the form is checked, applied, and listed", async
   await openJobs();
   await expect(table().locator("table.entries tbody tr")).toHaveCount(4);
   await expect(
-    table().getByRole("button", { name: "Water the plants" }),
+    table()
+      .locator("td.label-cell")
+      .getByRole("button", { name: "Water the plants" }),
   ).toBeVisible();
   await applied.getByRole("button", { name: "Dismiss" }).click();
   await expect(applied).toHaveCount(0);
@@ -238,7 +240,11 @@ test("a new Job entered through the form is checked, applied, and listed", async
 test("revising a Job keeps the chosen edge and leaves the old ones historical", async () => {
   await fresh();
   await openJobs();
-  await table().getByRole("button", { name: "Draft agenda" }).click();
+  // The label cell: the neighbours' relationship cells name it too.
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Draft agenda" })
+    .click();
   await expect(
     main().getByRole("heading", { name: "Draft agenda" }),
   ).toBeVisible();
@@ -277,10 +283,12 @@ test("revising a Job keeps the chosen edge and leaves the old ones historical", 
   await expect(lineage).toHaveCount(2);
   await expect(lineage.nth(0)).toContainText("superseded");
   await expect(lineage.nth(1)).toContainText("(this)");
-  const relationships = page.getByTestId("relationships").locator("tbody tr");
+  const relationships = page
+    .getByTestId("relationships")
+    .getByTestId("neighbour");
   await expect(relationships).toHaveCount(1);
   await expect(relationships.nth(0)).toContainText("Send invites");
-  await expect(relationships.nth(0)).toContainText("current");
+  await expect(relationships.nth(0)).not.toContainText("historical");
   // The superseded revision keeps both of its edges, now historical, and
   // can only be branched.
   await lineage.nth(0).getByRole("button", { name: "Draft agenda" }).click();
