@@ -16,8 +16,10 @@ use std::time::Duration;
 use uuid::Uuid;
 
 //A Called once per operation, so each request gets fresh analyzer instances
-//A and its own frozen evaluation inputs.
-pub type Factories = Box<dyn Fn() -> Vec<Box<dyn AnalyzerFactory>>>;
+//A and its own frozen evaluation inputs. Only this constructor must be
+//A `Send + Sync`, so one service can answer requests on several threads;
+//A the factories and analyzers it builds stay on the calling thread.
+pub type Factories = Box<dyn Fn() -> Vec<Box<dyn AnalyzerFactory>> + Send + Sync>;
 
 //A The synchronous application service shared by the CLI and RPC. It keeps no
 //A graph or analysis state between calls; every call reopens the snapshot.

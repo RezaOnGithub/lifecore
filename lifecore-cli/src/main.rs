@@ -11,6 +11,7 @@ use lifecore_app::{
     storage::StatePath,
 };
 use lifecore_dag_check::DagCheckFactory;
+use lifecore_server::{Options, Ui};
 use lifecore_typecheck::TypeCheckFactory;
 use serde::Serialize;
 use std::{
@@ -33,6 +34,21 @@ enum Command {
     Init {
         #[arg(long, help = "Do not configure the Type_Check analyzer")]
         no_typecheck: bool,
+    },
+    #[command(about = "Serve the browser client and HTTP RPC for the selected database")]
+    Serve {
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Loopback port to listen on; 0 lets the system choose a free one"
+        )]
+        port: u16,
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Serve index.html and app.js from DIR instead of the embedded client"
+        )]
+        ui_dir: Option<PathBuf>,
     },
     #[command(about = "Execute one JSON-RPC request line from stdin and print one response line")]
     Rpc,
@@ -100,6 +116,47 @@ fn factories() -> Vec<Box<dyn AnalyzerFactory>> {
 
 fn service() -> Result<Service, AppError> {
     Ok(Service::new(StatePath::resolve()?, Box::new(factories)))
+}
+
+//A The database is selected once, at startup, and must already be readable;
+//A no remote method selects a path or initializes one. The URL with its token
+//A is the only line on stdout, so a launcher can read it.
+fn serve(port: u16, ui_dir: Option<PathBuf>) -> ExitCode {
+    let state = match StatePath::resolve() {
+    Ok(state) => state,
+    Err(error) => return emit::<()>(Err(error)),
+    };
+    let service = Service::new(state.clone(), Box::new(factories));
+    if let Err(error) = service.describe(NoParams {}) {
+        return emit::<()>(Err(error));
+    }
+    let ui = match ui_dir {
+    Some(directory) if !directory.is_dir() => {
+        eprintln!(
+            "lifecore: --ui-dir {} is not a directory",
+            directory.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    Some(directory) => Ui::Directory(directory),
+    None => Ui::Embedded,
+    };
+    let served = lifecore_server::serve(service, Options { port, ui }, |url| {
+        println!("{url}");
+        io::stdout().flush().ok();
+        let origin = url.split('#').next().unwrap_or(url);
+        eprintln!(
+            "lifecore: serving {} at {origin}; open the URL above, and press Ctrl-C to stop",
+            state.path().display()
+        );
+    });
+    match served {
+    Ok(()) => ExitCode::SUCCESS,
+    Err(error) => {
+        eprintln!("lifecore: cannot serve: {error}");
+        ExitCode::FAILURE
+    }
+    }
 }
 
 fn read_proposal(file: &Path) -> Result<Proposal, AppError> {
@@ -184,7 +241,7 @@ fn run_rpc(
         String::from_utf8(line).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     });
     let response = match line {
-    Ok(line) => match rpc::parse_line(line.strip_suffix('\r').unwrap_or(&line)) {
+    Ok(line) => match rpc::parse_request(line.strip_suffix('\r').unwrap_or(&line)) {
     Ok(request) => match service() {
     Ok(service) => request.respond(&service),
     Err(error) => request.fail(&error),
@@ -217,6 +274,7 @@ fn main() -> ExitCode {
         };
         emit(service().and_then(|service| service.init(&suite)))
     }
+    Command::Serve { port, ui_dir } => serve(port, ui_dir),
     Command::Rpc => {
         let mut output = io::stdout().lock();
         let responded = match raw_stdin() {

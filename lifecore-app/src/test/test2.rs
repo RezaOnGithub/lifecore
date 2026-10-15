@@ -628,7 +628,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     let ids = populated(&scratch);
     let service = scratch.service();
     let line = r#"{"jsonrpc":"2.0","id":"list","method":"entries.list","params":{"type":"Task"}}"#;
-    let response = serde_json::to_value(rpc::handle_line(&service, line)).unwrap();
+    let response = serde_json::to_value(rpc::handle(&service, line)).unwrap();
     assert_eq!(response["id"], "list");
     let entries = response["result"]["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2);
@@ -1008,7 +1008,7 @@ fn rejected_proposals_report_full_context_and_store_nothing() {
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": "proposal.check",
         "params": {"proposal": serde_json::to_value(&rejected().proposal).unwrap()}})
     .to_string();
-    let response = serde_json::to_value(rpc::handle_line(&service, &line)).unwrap();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
     assert_eq!(response["result"]["accepted"], false, "{response}");
     assert_eq!(response["result"]["report"]["operations"][1]["name"], "bad");
     assert_eq!(
@@ -1301,7 +1301,7 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": "proposal.apply",
         "params": {"proposal": {"entries": [task("c", "C")]}}})
     .to_string();
-    let response = serde_json::to_value(rpc::handle_line(&failing, &line)).unwrap();
+    let response = serde_json::to_value(rpc::handle(&failing, &line)).unwrap();
     let error = &response["error"];
     assert_eq!(error["code"], 1008, "{response}");
     assert_eq!(error["data"]["kind"], "publication_uncertain");
@@ -1433,7 +1433,7 @@ fn rpc_envelope_rejects_invalid_calls_without_mutation() {
     populated(&scratch);
     let service = scratch.service();
     let stored = scratch.bytes();
-    let call = |line: &str| serde_json::to_value(rpc::handle_line(&service, line)).unwrap();
+    let call = |line: &str| serde_json::to_value(rpc::handle(&service, line)).unwrap();
     let apply = json!({"proposal": {"entries": [task("c", "C")]}});
     for (line, code, id) in [
         ("".to_string(), -32700, Value::Null),
@@ -1498,7 +1498,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
     let stored = scratch.bytes();
     let call = |method: &str, params: String| {
         let line = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#);
-        serde_json::to_value(rpc::handle_line(&service, &line)).unwrap()
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
     };
     let bad = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"n":1.5}}]}"#;
     //A Raw text keeps a repeated payload field visible to the decoder.
@@ -1579,7 +1579,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
     }
     assert_eq!(scratch.bytes(), stored);
     //A Surrounding whitespace is not part of the request.
-    let response = serde_json::to_value(rpc::handle_line(
+    let response = serde_json::to_value(rpc::handle(
         &service,
         r#"  {"jsonrpc":"2.0","id":9,"method":"plan_id.mint"}  "#,
     ))
@@ -1599,7 +1599,7 @@ fn entry_records_are_core_entries_with_currentness_beside_them() {
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": "entries.list",
             "params": {"currentness": "all"}})
         .to_string();
-        serde_json::to_value(rpc::handle_line(service, &line)).unwrap()["result"]["entries"].clone()
+        serde_json::to_value(rpc::handle(service, &line)).unwrap()["result"]["entries"].clone()
     };
     let id = |id: EntryId| serde_json::to_value(id).unwrap();
     let before = list(&service);
@@ -1634,4 +1634,40 @@ fn entry_records_are_core_entries_with_currentness_beside_them() {
     let record: EntryRecord = serde_json::from_value(after[4].clone()).unwrap();
     assert_eq!(record.entry.id(), revised);
     assert!(record.current);
+}
+
+#[test]
+fn every_listed_method_dispatches_and_no_other_does() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let code = |method: &str| {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}).to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()["error"]["code"].clone()
+    };
+    for method in rpc::METHODS {
+        assert_ne!(code(method), json!(-32601), "{method}");
+    }
+    for method in ["init", "entries", "database.describe.", "Database.describe"] {
+        assert_eq!(code(method), json!(-32601), "{method}");
+    }
+}
+
+//A HTTP bodies may be formatted across lines; the envelope rules are the same.
+#[test]
+fn a_request_may_span_lines_when_its_framing_allows() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    let service = scratch.service();
+    let text = serde_json::to_string_pretty(
+        &json!({"jsonrpc": "2.0", "id": "pretty", "method": "database.describe", "params": {}}),
+    )
+    .unwrap();
+    assert!(text.contains('\n'));
+    let response = serde_json::to_value(rpc::handle(&service, &format!("\n{text}\n"))).unwrap();
+    assert_eq!(response["id"], "pretty");
+    assert!(response["result"]["database"].is_string(), "{response}");
+    let repeated = text.replace("\"method\"", "\"id\": 2,\n  \"method\"");
+    let response = serde_json::to_value(rpc::handle(&service, &repeated)).unwrap();
+    assert_eq!(response["error"]["code"], -32600);
 }

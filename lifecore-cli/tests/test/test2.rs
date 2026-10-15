@@ -1,7 +1,8 @@
 use serde_json::Value;
 use std::{
     fs::{self, File},
-    io::Read,
+    io::{BufRead, BufReader, Read, Write},
+    net::{Ipv4Addr, TcpStream},
     path::PathBuf,
     process::{Command, Stdio},
 };
@@ -98,4 +99,96 @@ fn check_exits_nonzero_for_a_proposal_that_is_not_accepted() {
         assert_eq!(result["accepted"], accepted, "{result}");
         assert!(result["report"]["analysis"].is_object());
     }
+}
+
+//A Sends one HTTP/1.1 request and returns the status line and body.
+fn post(port: u16, headers: &[String], body: &str) -> (String, Value) {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    let mut request = format!("POST /rpc HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+    for header in headers {
+        request.push_str(&format!("{header}\r\n"));
+    }
+    request.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    ));
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    (
+        head.lines().next().unwrap().to_string(),
+        serde_json::from_str(body).unwrap(),
+    )
+}
+
+//A The URL with its launch token is the only stdout line; the server listens
+//A on loopback, answers a valid call, refuses one without the token before
+//A dispatch, and exits cleanly on SIGTERM.
+#[test]
+fn serve_prints_a_loopback_url_and_stops_on_sigterm() {
+    let scratch = Scratch::new();
+    let state = scratch.0.join("LifeCoreState.json");
+    let init = Command::new(BINARY)
+        .arg("init")
+        .env("LIFECORE_STATE_FILE_PATH", &state)
+        .output()
+        .unwrap();
+    let database = serde_json::from_slice::<Value>(&init.stdout).unwrap()["database"].clone();
+    let mut server = Command::new(BINARY)
+        .args(["serve", "--ui-dir"])
+        .arg(&scratch.0)
+        .env("LIFECORE_STATE_FILE_PATH", &state)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(server.stdout.take().unwrap());
+    let mut url = String::new();
+    stdout.read_line(&mut url).unwrap();
+    let (origin, token) = url.trim().split_once("/#token=").unwrap();
+    let port: u16 = origin
+        .strip_prefix("http://127.0.0.1:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_ne!(port, 0);
+    assert_eq!(token.len(), 64, "{url}");
+    let describe = r#"{"jsonrpc":"2.0","id":1,"method":"database.describe"}"#;
+    let json = "Content-Type: application/json".to_string();
+    let (status, body) = post(
+        port,
+        &[format!("Authorization: Bearer {token}"), json.clone()],
+        describe,
+    );
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert_eq!(body["result"]["database"], database);
+    let (status, body) = post(port, &[json], describe);
+    assert_eq!(status, "HTTP/1.1 401 Unauthorized");
+    assert_eq!(body["kind"], "token");
+    let killed = Command::new("kill")
+        .args(["-TERM", &server.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    assert!(server.wait().unwrap().success());
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).unwrap();
+    assert_eq!(rest, "");
+}
+
+//A The database is resolved and read at startup; without one, `serve` prints
+//A the error object and no URL.
+#[test]
+fn serve_refuses_to_start_without_a_database() {
+    let scratch = Scratch::new();
+    let output = Command::new(BINARY)
+        .arg("serve")
+        .env("LIFECORE_STATE_FILE_PATH", scratch.0.join("missing.json"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["code"], 1002);
+    assert_eq!(error["data"]["kind"], "database_missing");
 }

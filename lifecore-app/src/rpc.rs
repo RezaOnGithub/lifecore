@@ -36,6 +36,11 @@ impl Response {
             outcome,
         }
     }
+    //A Answers a call with an application error raised outside dispatch, such
+    //A as an unusable state path or a host task that ended without a response.
+    pub fn error(id: Value, error: &AppError) -> Self {
+        Self::new(id, Outcome::Error(error.to_object()))
+    }
     pub fn is_success(&self) -> bool {
         matches!(self.outcome, Outcome::Result(_))
     }
@@ -128,6 +133,20 @@ fn call<P: DeserializeOwned, R: Serialize>(
     })
 }
 
+//A Every method `dispatch` answers, in its order, so hosts and the client
+//A fixtures can prove they cover each one.
+pub const METHODS: [&str; 9] = [
+    "database.describe",
+    "entries.list",
+    "entries.get",
+    "plan_id.mint",
+    "proposal.check",
+    "proposal.apply",
+    "proposal.decode",
+    "proposal.encode",
+    "analyzers.add",
+];
+
 //A Method names are provisional; the UI stages reshape them (PLAN 4.3).
 //A `init` and filesystem path selection are deliberately absent.
 fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, DispatchError> {
@@ -176,7 +195,7 @@ impl Request {
     //A Answers the call with an error raised before a service was available,
     //A such as an unusable state path.
     pub fn fail(self, error: &AppError) -> Response {
-        Response::new(self.id, Outcome::Error(error.to_object()))
+        Response::error(self.id, error)
     }
 }
 
@@ -209,9 +228,10 @@ pub fn parse_error(message: impl Into<String>) -> Response {
 }
 
 //A Validate the envelope before dispatch, echoing a usable ID in protocol
-//A errors where the request supplied one. HTTP bodies may span lines; the CLI
-//A passes exactly one line.
-pub fn parse_line(text: &str) -> Result<Request, Response> {
+//A errors where the request supplied one. The text is one complete request in
+//A either framing: an HTTP body may span lines, and the CLI passes exactly one
+//A line.
+pub fn parse_request(text: &str) -> Result<Request, Response> {
     let invalid = |id: Value, message: String| {
         Response::new(id, Outcome::Error(protocol_error(-32600, message)))
     };
@@ -278,8 +298,8 @@ pub fn parse_line(text: &str) -> Result<Request, Response> {
     Ok(Request { id, method, params })
 }
 
-pub fn handle_line(service: &Service, line: &str) -> Response {
-    match parse_line(line) {
+pub fn handle(service: &Service, text: &str) -> Response {
+    match parse_request(text) {
     Ok(request) => request.respond(service),
     Err(response) => response,
     }

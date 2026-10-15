@@ -62,6 +62,13 @@ pub enum AppError {
     EntryNotFound { id: EntryId },
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
+    //A Raised by a host, not the service: the task running a call ended
+    //A without a response, for example by panicking. A write it was making may
+    //A or may not have been published, so this is never a rollback.
+    #[error(
+        "the request's task failed before it responded, so any write it was making may or may not have been published: {message}"
+    )]
+    Backend { message: String },
     #[error("internal error: {message}")]
     Internal { message: String },
 }
@@ -99,6 +106,7 @@ impl AppError {
         Self::Analyzer(_) => "analyzer_failure",
         Self::EntryNotFound { .. } => "entry_not_found",
         Self::InvalidParams { .. } => "invalid_params",
+        Self::Backend { .. } => "backend_failure",
         Self::Internal { .. } => "internal",
         }
     }
@@ -125,6 +133,7 @@ impl AppError {
         Self::Rejected(_) => 2006,
         Self::Analyzer(_) => 3001,
         Self::EntryNotFound { .. } => 4001,
+        Self::Backend { .. } => 5001,
         }
     }
 
