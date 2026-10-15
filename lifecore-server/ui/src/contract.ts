@@ -72,7 +72,9 @@ export interface EdgeEntry {
 }
 export type Entry = NodeEntry | EdgeEntry;
 // A stored entry and whether it is current in the selected view.
-export type EntryRecord = (NodeEntry | EdgeEntry) & { current: boolean };
+export type NodeRecord = NodeEntry & { current: boolean };
+export type EdgeRecord = EdgeEntry & { current: boolean };
+export type EntryRecord = NodeRecord | EdgeRecord;
 
 export type RevisionIntent = "revise" | "branch";
 export type EntryKind = Entry["kind"];
@@ -90,6 +92,117 @@ export type EntryChange =
       payload: Body;
     }
   | { kind: "edge"; ty_name: string; from: Reference; to: Reference };
+
+// ---- Type declarations (FILES §2.6), in structured form ----
+
+export type FieldStatus =
+  | "mandatory"
+  | "encouraged"
+  | "deprecated"
+  | "optional";
+export type Shape =
+  | { kind: "text" }
+  | { kind: "integer" }
+  | { kind: "boolean" }
+  | { kind: "timestamp" }
+  | { kind: "list"; element: Shape }
+  | { kind: "record"; fields: FieldDecls };
+export interface FieldDecl {
+  status: FieldStatus;
+  shape: Shape;
+}
+export type FieldDecls = { [field: string]: FieldDecl };
+// A parsed declaration: the same information as its word-list payload.
+export interface TypeSchema {
+  name: string;
+  fields: FieldDecls;
+  outgoing: string[];
+  incoming: string[];
+  successors: string[];
+}
+// How a type name resolves in the selected view (SPEC §6.2).
+export type TypeResolution =
+  | { kind: "builtin" }
+  | { kind: "declared"; declaration: EntryId; schema: TypeSchema }
+  | { kind: "missing" }
+  | { kind: "ambiguous"; declarations: EntryId[] }
+  | { kind: "malformed"; declaration: EntryId; message: string };
+// One type name known to the view: declared, built in, or merely used by a
+// node. Counts are of nodes whose `ty_name` is this name.
+export interface TypeSummary {
+  name: string;
+  resolution: TypeResolution;
+  nodes: { current: DecimalString; historical: DecimalString };
+}
+export interface TypeList {
+  view: ViewId;
+  types: TypeSummary[];
+}
+
+// ---- Inspection and queries (SPEC §9) ----
+
+export type Direction = "outgoing" | "incoming" | "both";
+// An edge incident to the inspected node, with its other endpoint.
+export interface IncidentEdge {
+  edge: EdgeRecord;
+  direction: "outgoing" | "incoming";
+  other: NodeRecord;
+}
+// A node with its type, its whole revision tree in append order (root first,
+// itself included), and every incident edge in append order; or an edge with
+// its endpoints.
+export type EntryInspection =
+  | {
+      kind: "node";
+      view: ViewId;
+      entry: NodeRecord;
+      type: TypeResolution;
+      lineage: NodeRecord[];
+      edges: IncidentEdge[];
+    }
+  | {
+      kind: "edge";
+      view: ViewId;
+      entry: EdgeRecord;
+      from: NodeRecord;
+      to: NodeRecord;
+    };
+
+// A view query: seeds, then expansion steps in order, each following matching
+// edges `hops` times (default 1) from the nodes the previous step added, then
+// the edges among the result nodes that match `edges` (default: current).
+export type Seed =
+  | { kind: "ids"; ids: EntryId[] }
+  | {
+      kind: "nodes";
+      ty_name?: string;
+      currentness?: Currentness;
+      text?: string;
+    };
+export interface Expansion {
+  hops?: number;
+  direction?: Direction;
+  ty_names?: string[];
+  currentness?: Currentness;
+}
+export interface EdgeFilter {
+  ty_names?: string[];
+  currentness?: Currentness;
+}
+// Why a node is in the result: a seed, or first reached at `hop` over edge
+// `via` from node `from`.
+export type Provenance =
+  | { kind: "seed" }
+  | { kind: "reached"; hop: number; via: EntryId; from: EntryId };
+export interface QueriedNode {
+  node: NodeRecord;
+  provenance: Provenance;
+}
+export interface ViewQuery {
+  view: ViewId;
+  nodes: QueriedNode[];
+  edges: EdgeRecord[];
+}
 
 // ---- Analysis ----
 
@@ -243,14 +356,27 @@ export interface EvaluationParams {
   evaluation_time?: TimestampString;
   now?: boolean;
 }
-export interface EntryListParams {
+// Read methods answer as of the prefix `[0, as_of)`; default: the whole
+// history. A boundary past the end fails with `beyond_boundary`.
+export interface AsOfParams {
+  as_of?: DecimalString;
+}
+export interface EntryListParams extends AsOfParams {
   kind?: EntryKind;
   ty_name?: string;
   currentness?: Currentness;
   text?: string;
 }
-export interface EntryGetParams {
+export interface EntryGetParams extends AsOfParams {
   id: EntryId;
+}
+export interface EntryInspectParams extends AsOfParams {
+  id: EntryId;
+}
+export interface ViewQueryParams extends AsOfParams {
+  seeds: Seed[];
+  expand?: Expansion[];
+  edges?: EdgeFilter;
 }
 export interface ProposalParams extends EvaluationParams {
   proposal: Proposal;
@@ -272,6 +398,9 @@ export interface Methods {
   "database.describe": { params: NoParams; result: Description };
   "entries.list": { params: EntryListParams; result: EntryList };
   "entries.get": { params: EntryGetParams; result: EntryLookup };
+  "entries.inspect": { params: EntryInspectParams; result: EntryInspection };
+  "types.list": { params: AsOfParams; result: TypeList };
+  "views.query": { params: ViewQueryParams; result: ViewQuery };
   "plan_id.mint": { params: NoParams; result: MintedPlanId };
   "proposal.check": { params: ProposalParams; result: CheckResult };
   "proposal.apply": { params: ProposalParams; result: ApplyResult };
@@ -318,6 +447,11 @@ export type ApplicationErrorData =
   | { kind: "rejected"; report: ProposalReport }
   | { kind: "analyzer_failure"; failure?: ExecutionFailure }
   | { kind: "entry_not_found"; id: EntryId }
+  | {
+      kind: "beyond_boundary";
+      requested: DecimalString;
+      visible: DecimalString;
+    }
   | { kind: "invalid_params" }
   | { kind: "backend_failure" }
   | { kind: "internal" };
@@ -342,6 +476,7 @@ export interface ErrorCodes {
   rejected: 2006;
   analyzer_failure: 3001;
   entry_not_found: 4001;
+  beyond_boundary: 4002;
   invalid_params: -32602;
   backend_failure: 5001;
   internal: -32603;

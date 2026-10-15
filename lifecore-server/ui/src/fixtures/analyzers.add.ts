@@ -17,7 +17,7 @@ export const response = {
   "id": "add",
   "jsonrpc": "2.0",
   "result": {
-    "graph_revision": "00000000-0000-4000-8000-000000000012",
+    "graph_revision": "00000000-0000-4000-8000-000000000016",
     "report": {
       "analysis": {
         "implementations": [
@@ -91,10 +91,10 @@ export const response = {
               "kind": "prefixes",
               "last": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "4",
+                "end_exclusive": "6",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000005",
-                  "position": "3"
+                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "position": "5"
                 }
               }
             },
@@ -255,26 +255,106 @@ export const response = {
               "database": "00000000-0000-4000-8000-000000000001",
               "kind": "suggestion"
             }
+          },
+          {
+            "diagnostic": {
+              "actions": [
+                {
+                  "intent": "revise",
+                  "kind": "node",
+                  "payload": {
+                    "priority": {
+                      "kind": "integer",
+                      "value": "2"
+                    },
+                    "status": "done",
+                    "title": "Write the report"
+                  },
+                  "predecessor": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000005",
+                      "position": "1"
+                    }
+                  },
+                  "ty_name": "Task"
+                },
+                {
+                  "from": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000007",
+                      "position": "4"
+                    }
+                  },
+                  "kind": "edge",
+                  "to": {
+                    "added": 0
+                  },
+                  "ty_name": "DependsOn"
+                }
+              ],
+              "focus": {
+                "origin": "00000000-0000-4000-8000-000000000005",
+                "position": "1"
+              },
+              "kind": "suggestion",
+              "message": "this task may be done",
+              "sticky": false,
+              "subjects": [
+                {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "1"
+                }
+              ]
+            },
+            "evaluated_view": {
+              "first": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "5",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "position": "4"
+                }
+              },
+              "kind": "prefixes",
+              "last": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "6",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "position": "5"
+                }
+              }
+            },
+            "key": {
+              "analyzer": {
+                "configuration": "{}",
+                "name": "Fixture_Suggestions",
+                "version": "1.0.0"
+              },
+              "analyzer_certificate": "done:1",
+              "database": "00000000-0000-4000-8000-000000000001",
+              "kind": "suggestion"
+            }
           }
         ],
         "view": {
           "database": "00000000-0000-4000-8000-000000000001",
-          "end_exclusive": "4",
+          "end_exclusive": "6",
           "head": {
-            "origin": "00000000-0000-4000-8000-000000000005",
-            "position": "3"
+            "origin": "00000000-0000-4000-8000-000000000007",
+            "position": "5"
           }
         }
       },
       "base": {
         "database": "00000000-0000-4000-8000-000000000001",
-        "end_exclusive": "4",
+        "end_exclusive": "6",
         "head": {
-          "origin": "00000000-0000-4000-8000-000000000005",
-          "position": "3"
+          "origin": "00000000-0000-4000-8000-000000000007",
+          "position": "5"
         }
       },
-      "base_revision": "00000000-0000-4000-8000-000000000004",
+      "base_revision": "00000000-0000-4000-8000-00000000000b",
       "database": "00000000-0000-4000-8000-000000000001",
       "operations": []
     },

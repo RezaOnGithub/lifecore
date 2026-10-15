@@ -8,7 +8,7 @@ export const request = {
   "method": "proposal.decode",
   "params": {
     "format": "toml",
-    "text": "plan_id = \"lc1:00000000-0000-4000-8000-00000000000b:00000000-0000-4000-8000-00000000000c:00000000-0000-4000-8000-00000000000d\"\n\n[[entries]]\nname = \"extremes\"\nkind = \"node\"\nty_name = \"Task\"\n\n[entries.payload]\ntitle = \"Bare integers decode in Rust\"\nmaximum = 9223372036854775807\nminimum = -9223372036854775808\nnested = [1, { kind = \"record\", value = { at = { kind = \"timestamp\", value = \"2026-10-15T08:30:00.000000001Z\" } } }]\n\n[[entries]]\nname = \"extremes_link\"\nkind = \"edge\"\nty_name = \"DependsOn\"\nfrom = { added = \"extremes\" }\nto = { existing = { origin = \"00000000-0000-4000-8000-00000000000a\", position = \"18446744073709551615\" } }\n"
+    "text": "plan_id = \"lc1:00000000-0000-4000-8000-00000000000f:00000000-0000-4000-8000-000000000010:00000000-0000-4000-8000-000000000011\"\n\n[[entries]]\nname = \"extremes\"\nkind = \"node\"\nty_name = \"Task\"\n\n[entries.payload]\ntitle = \"Bare integers decode in Rust\"\nmaximum = 9223372036854775807\nminimum = -9223372036854775808\nnested = [1, { kind = \"record\", value = { at = { kind = \"timestamp\", value = \"2026-10-15T08:30:00.000000001Z\" } } }]\n\n[[entries]]\nname = \"extremes_link\"\nkind = \"edge\"\nty_name = \"DependsOn\"\nfrom = { added = \"extremes\" }\nto = { existing = { origin = \"00000000-0000-4000-8000-00000000000e\", position = \"18446744073709551615\" } }\n"
   }
 } satisfies RpcRequest<"proposal.decode">;
 
@@ -56,13 +56,13 @@ export const response = {
         "name": "extremes_link",
         "to": {
           "existing": {
-            "origin": "00000000-0000-4000-8000-00000000000a",
+            "origin": "00000000-0000-4000-8000-00000000000e",
             "position": "18446744073709551615"
           }
         },
         "ty_name": "DependsOn"
       }
     ],
-    "plan_id": "lc1:00000000-0000-4000-8000-00000000000b:00000000-0000-4000-8000-00000000000c:00000000-0000-4000-8000-00000000000d"
+    "plan_id": "lc1:00000000-0000-4000-8000-00000000000f:00000000-0000-4000-8000-000000000010:00000000-0000-4000-8000-000000000011"
   }
 } satisfies RpcSuccess<"proposal.decode">;

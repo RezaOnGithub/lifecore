@@ -1,17 +1,19 @@
 use crate::{
     AppError, Service,
     proposal::{self, Format, PlanId, Proposal},
+    query::{EdgeFilter, EntryInspection, Expansion, Incidence, Provenance, Seed, ViewQuery},
     rpc,
+    schema::{self, NodeCounts, TypeResolution},
     service::{
-        AddAnalyzerRequest, EntryGetRequest, EntryListRequest, EntryRecord, NoParams,
-        ProposalRequest, Published,
+        AddAnalyzerRequest, EntryGetRequest, EntryInspectRequest, EntryListRequest, EntryRecord,
+        NoParams, ProposalRequest, Published, TypeListRequest, ViewQueryRequest,
     },
     storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
 use lifecore::{
     Body, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp,
     analysis::{AnalysisRunner, AnalyzerFactory, Config, EvaluatedView, MessageType},
-    inspection::Currentness,
+    inspection::{Currentness, Direction},
     transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
     typing::{FieldDecl, FieldStatus, Type, ValueType},
 };
@@ -19,6 +21,7 @@ use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
 use serde_json::{Value, json};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Path, PathBuf},
     time::Duration,
@@ -666,6 +669,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     let reloaded = service
         .get_entry(EntryGetRequest {
             id: applied.report.operations[0].entry,
+            as_of: None,
         })
         .unwrap();
     let EntryRecord {
@@ -683,7 +687,9 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     assert_eq!(predecessor, Some(a));
     assert_eq!(payload["status"], Payload::Text("done".into()));
     assert!(current);
-    let old = service.get_entry(EntryGetRequest { id: a }).unwrap();
+    let old = service
+        .get_entry(EntryGetRequest { id: a, as_of: None })
+        .unwrap();
     assert!(matches!(
         old.entry,
         EntryRecord {
@@ -720,7 +726,8 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     assert_eq!(scratch.bytes(), stored);
     assert!(matches!(
         service.get_entry(EntryGetRequest {
-            id: preview.report.operations[0].entry
+            id: preview.report.operations[0].entry,
+            as_of: None,
         }),
         Err(AppError::EntryNotFound { .. })
     ));
@@ -1329,7 +1336,7 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
         serde_json::from_value(outcome["report"]["operations"][0]["entry"].clone()).unwrap();
     let Entry::Node(node) = scratch
         .service()
-        .get_entry(EntryGetRequest { id })
+        .get_entry(EntryGetRequest { id, as_of: None })
         .unwrap()
         .entry
         .entry
@@ -1682,4 +1689,1047 @@ fn a_request_may_span_lines_when_its_framing_allows() {
     let repeated = text.replace("\"method\"", "\"id\": 2,\n  \"method\"");
     let response = serde_json::to_value(rpc::handle(&service, &repeated)).unwrap();
     assert_eq!(response["error"]["code"], -32600);
+}
+
+// A split revision tree over `populated`: A is revised to A2 and branched to
+// A3, A2 depends on B, and B depends on A3. Positions 0 to 7: the
+// declaration, A, B, A->B, A2, A3, A2->B, B->A3.
+fn split(scratch: &Scratch) -> Vec<EntryId> {
+    let mut ids = populated(scratch);
+    let applied = scratch
+        .service()
+        .apply(request(proposal(json!([
+            {"name": "a2", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]),
+                "intent": "revise", "payload": {"title": "A2", "notes": "n"}},
+            {"name": "a3", "kind": "node", "ty_name": "Task", "predecessor": existing(ids[1]),
+                "intent": "branch", "payload": {"title": "A3", "notes": "n"}},
+            {"name": "a2_b", "kind": "edge", "ty_name": "DependsOn",
+                "from": {"added": "a2"}, "to": existing(ids[2])},
+            {"name": "b_a3", "kind": "edge", "ty_name": "DependsOn",
+                "from": existing(ids[2]), "to": {"added": "a3"}},
+        ]))))
+        .unwrap();
+    ids.extend(applied.report.operations.iter().map(|o| o.entry));
+    ids
+}
+
+// A database without analyzers, so declarations TypeCheck would refuse are
+// stored. Positions 0 to 7: two current `Note` declarations, a `Ghost` node
+// with no declaration, a `Note` node, a malformed `Tag` declaration, a
+// nameless malformed one, and two differently typed edges between the nodes.
+fn unchecked(scratch: &Scratch) -> Vec<EntryId> {
+    let service = scratch.service();
+    service.init(&[]).unwrap();
+    let note =
+        |fields: Value| json!({"name": "Note", "fields": {"kind": "record", "value": fields}});
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "note", "kind": "node", "ty_name": "Type",
+                "payload": note(json!({"text": ["mandatory", "text"]}))},
+            {"name": "note_again", "kind": "node", "ty_name": "Type",
+                "payload": note(json!({"text": ["optional", "list", "text"]}))},
+            {"name": "ghost", "kind": "node", "ty_name": "Ghost", "payload": {"title": "G"}},
+            {"name": "a_note", "kind": "node", "ty_name": "Note", "payload": {"text": "t"}},
+            {"name": "tag", "kind": "node", "ty_name": "Type", "payload": tag_declaration()},
+            {"name": "nameless", "kind": "node", "ty_name": "Type", "payload": nameless_declaration()},
+            {"name": "likes", "kind": "edge", "ty_name": "Likes",
+                "from": {"added": "ghost"}, "to": {"added": "a_note"}},
+            {"name": "hates", "kind": "edge", "ty_name": "Hates",
+                "from": {"added": "a_note"}, "to": {"added": "ghost"}},
+        ]))))
+        .unwrap();
+    applied.report.operations.iter().map(|o| o.entry).collect()
+}
+
+fn tag_declaration() -> Value {
+    json!({"name": "Tag", "fields": "text"})
+}
+
+fn nameless_declaration() -> Value {
+    json!({"fields": {"kind": "record", "value": {}}})
+}
+
+// The display text a malformed declaration payload fails with.
+fn schema_error(payload: Value) -> String {
+    let body: Body = serde_json::from_value(payload).unwrap();
+    Type::from_body(&body).unwrap_err().to_string()
+}
+
+#[test]
+fn type_schemas_are_the_structured_form_of_declarations() {
+    let list = |element| ValueType::List(Box::new(element));
+    let owner = ValueType::Record(
+        [(
+            "owner".into(),
+            FieldDecl {
+                ty: ValueType::Text,
+                status: FieldStatus::Mandatory,
+            },
+        )]
+        .into(),
+    );
+    let nested = Type::new(
+        "Nested",
+        &[
+            (
+                "grid",
+                (list(list(ValueType::Integer)), FieldStatus::Optional),
+            ),
+            ("details", (owner, FieldStatus::Deprecated)),
+            ("when", (ValueType::Timestamp, FieldStatus::Encouraged)),
+            ("done", (ValueType::Boolean, FieldStatus::Mandatory)),
+        ],
+        &["Explains", "DependsOn"],
+        &[],
+        &["Nested"],
+    );
+    let schema = schema::TypeSchema::from(&nested);
+    assert_eq!(schema.name, "Nested");
+    assert_eq!(
+        schema.fields["grid"],
+        schema::FieldDecl {
+            status: schema::FieldStatus::Optional,
+            shape: schema::Shape::List {
+                element: Box::new(schema::Shape::List {
+                    element: Box::new(schema::Shape::Integer)
+                })
+            },
+        }
+    );
+    assert_eq!(
+        schema.fields["details"],
+        schema::FieldDecl {
+            status: schema::FieldStatus::Deprecated,
+            shape: schema::Shape::Record {
+                fields: BTreeMap::from([(
+                    "owner".to_string(),
+                    schema::FieldDecl {
+                        status: schema::FieldStatus::Mandatory,
+                        shape: schema::Shape::Text,
+                    }
+                )])
+            },
+        }
+    );
+    assert_eq!(schema.fields["when"].shape, schema::Shape::Timestamp);
+    assert_eq!(schema.fields["done"].shape, schema::Shape::Boolean);
+    // Permissions keep their set order; shapes and statuses are tagged words.
+    assert_eq!(
+        serde_json::to_value(&schema).unwrap(),
+        json!({
+            "name": "Nested",
+            "fields": {
+                "details": {"status": "deprecated", "shape": {"kind": "record", "fields": {
+                    "owner": {"status": "mandatory", "shape": {"kind": "text"}}}}},
+                "done": {"status": "mandatory", "shape": {"kind": "boolean"}},
+                "grid": {"status": "optional", "shape": {"kind": "list", "element": {
+                    "kind": "list", "element": {"kind": "integer"}}}},
+                "when": {"status": "encouraged", "shape": {"kind": "timestamp"}},
+            },
+            "outgoing": ["DependsOn", "Explains"],
+            "incoming": [],
+            "successors": ["Nested"],
+        })
+    );
+    let round_trip: schema::TypeSchema =
+        serde_json::from_value(serde_json::to_value(&schema).unwrap()).unwrap();
+    assert_eq!(round_trip, schema);
+}
+
+#[test]
+fn types_list_summarizes_every_name_the_view_knows_at_each_boundary() {
+    let scratch = Scratch::new();
+    let ids = split(&scratch);
+    let service = scratch.service();
+    let list = |as_of: Option<usize>| service.list_types(TypeListRequest { as_of }).unwrap();
+    let names = |listed: &schema::TypeList| {
+        listed
+            .types
+            .iter()
+            .map(|summary| summary.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let full = list(None);
+    assert_eq!(full.view.end_exclusive, 8);
+    assert_eq!(names(&full), ["Task", "Type"]);
+    let task = &full.types[0];
+    let TypeResolution::Declared {
+        declaration,
+        schema,
+    } = &task.resolution
+    else {
+        panic!("Task is declared: {:?}", task.resolution)
+    };
+    assert_eq!(*declaration, ids[0]);
+    assert_eq!(
+        *schema,
+        schema::TypeSchema::from(&Type::from_body(&task_type()).unwrap())
+    );
+    assert_eq!(
+        schema.fields["title"],
+        schema::FieldDecl {
+            status: schema::FieldStatus::Mandatory,
+            shape: schema::Shape::Text,
+        }
+    );
+    assert_eq!(schema.outgoing, BTreeSet::from(["DependsOn".to_string()]));
+    // A, A2, A3, and B are tasks; A is superseded.
+    assert_eq!(
+        task.nodes,
+        NodeCounts {
+            current: 3,
+            historical: 1,
+        }
+    );
+    assert_eq!(full.types[1].resolution, TypeResolution::Builtin);
+    assert_eq!(
+        full.types[1].nodes,
+        NodeCounts {
+            current: 1,
+            historical: 0,
+        }
+    );
+    // Before the revisions both tasks are current; before any task only the
+    // declaration is there; before everything only the metatype is known.
+    let before = list(Some(4));
+    assert_eq!(before.view.end_exclusive, 4);
+    assert_eq!(
+        before.types[0].nodes,
+        NodeCounts {
+            current: 2,
+            historical: 0,
+        }
+    );
+    let after_revision = list(Some(5));
+    assert_eq!(
+        after_revision.types[0].nodes,
+        NodeCounts {
+            current: 2,
+            historical: 1,
+        }
+    );
+    let declared = list(Some(1));
+    assert_eq!(names(&declared), ["Task", "Type"]);
+    assert_eq!(declared.types[0].nodes, NodeCounts::default());
+    assert!(matches!(
+        declared.types[0].resolution,
+        TypeResolution::Declared { declaration, .. } if declaration == ids[0]
+    ));
+    let empty = list(Some(0));
+    assert_eq!(empty.view.end_exclusive, 0);
+    assert_eq!(names(&empty), ["Type"]);
+    assert_eq!(empty.types[0].resolution, TypeResolution::Builtin);
+    assert_eq!(empty.types[0].nodes, NodeCounts::default());
+    assert!(matches!(
+        service.list_types(TypeListRequest { as_of: Some(9) }),
+        Err(AppError::BeyondBoundary {
+            requested: 9,
+            visible: 8
+        })
+    ));
+    // Counts travel as decimal strings; resolutions are tagged by kind.
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "types.list", "params": {"as_of": "4"}})
+        .to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    let types = &response["result"]["types"];
+    assert_eq!(response["result"]["view"]["end_exclusive"], "4");
+    assert_eq!(
+        types[0]["nodes"],
+        json!({"current": "2", "historical": "0"})
+    );
+    assert_eq!(types[0]["resolution"]["kind"], "declared");
+    assert_eq!(types[0]["resolution"]["declaration"], json!(ids[0]));
+    assert_eq!(
+        types[0]["resolution"]["schema"]["fields"]["notes"],
+        json!({"status": "encouraged", "shape": {"kind": "text"}})
+    );
+    assert_eq!(types[1]["resolution"], json!({"kind": "builtin"}));
+}
+
+#[test]
+fn types_list_judges_each_name_by_its_own_declarations() {
+    let scratch = Scratch::new();
+    let ids = unchecked(&scratch);
+    let service = scratch.service();
+    let listed = service.list_types(TypeListRequest::default()).unwrap();
+    let names = listed
+        .types
+        .iter()
+        .map(|summary| summary.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["", "Ghost", "Note", "Tag", "Type"]);
+    let summary = |name: &str| listed.types.iter().find(|t| t.name == name).unwrap();
+    let one = NodeCounts {
+        current: 1,
+        historical: 0,
+    };
+    assert_eq!(
+        summary("").resolution,
+        TypeResolution::Malformed {
+            declaration: ids[5],
+            message: schema_error(nameless_declaration()),
+        }
+    );
+    assert_eq!(summary("").nodes, NodeCounts::default());
+    assert_eq!(
+        summary("Tag").resolution,
+        TypeResolution::Malformed {
+            declaration: ids[4],
+            message: schema_error(tag_declaration()),
+        }
+    );
+    assert_eq!(
+        summary("Note").resolution,
+        TypeResolution::Ambiguous {
+            declarations: vec![ids[0], ids[1]],
+        }
+    );
+    assert_eq!(summary("Note").nodes, one);
+    assert_eq!(summary("Ghost").resolution, TypeResolution::Missing);
+    assert_eq!(summary("Ghost").nodes, one);
+    assert_eq!(summary("Type").resolution, TypeResolution::Builtin);
+    assert_eq!(
+        summary("Type").nodes,
+        NodeCounts {
+            current: 4,
+            historical: 0,
+        }
+    );
+    // Before the malformed declarations were appended.
+    let earlier = service
+        .list_types(TypeListRequest { as_of: Some(4) })
+        .unwrap();
+    assert_eq!(
+        earlier
+            .types
+            .iter()
+            .map(|summary| summary.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Ghost", "Note", "Type"]
+    );
+    // Before any node used `Ghost`, the ambiguous name is still listed.
+    let earliest = service
+        .list_types(TypeListRequest { as_of: Some(2) })
+        .unwrap();
+    assert_eq!(
+        earliest
+            .types
+            .iter()
+            .map(|summary| (summary.name.as_str(), summary.nodes))
+            .collect::<Vec<_>>(),
+        [
+            ("Note", NodeCounts::default()),
+            (
+                "Type",
+                NodeCounts {
+                    current: 2,
+                    historical: 0
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
+    let scratch = Scratch::new();
+    let ids = split(&scratch);
+    let service = scratch.service();
+    let inspect = |id: EntryId, as_of: Option<usize>| {
+        service.inspect_entry(EntryInspectRequest { id, as_of })
+    };
+    let node = |id: EntryId, as_of: Option<usize>| match inspect(id, as_of) {
+    Ok(EntryInspection::Node {
+        view,
+        entry,
+        ty,
+        lineage,
+        edges,
+    }) => (view, entry, ty, lineage, edges),
+    other => panic!("expected a node inspection, got {other:?}"),
+    };
+    let positions = |records: &[EntryRecord]| {
+        records
+            .iter()
+            .map(|record| record.entry.id())
+            .collect::<Vec<_>>()
+    };
+    // B: a historical incoming edge from the superseded A, a current incoming
+    // one from A2, and a current outgoing one to A3, in append order.
+    let (view, entry, ty, lineage, edges) = node(ids[2], None);
+    assert_eq!(view.end_exclusive, 8);
+    assert_eq!((entry.entry.id(), entry.current), (ids[2], true));
+    assert!(matches!(ty, TypeResolution::Declared { declaration, .. } if declaration == ids[0]));
+    assert_eq!(positions(&lineage), [ids[2]]);
+    let incident = edges
+        .iter()
+        .map(|incident| {
+            (
+                incident.edge.entry.id(),
+                incident.edge.current,
+                incident.direction,
+                incident.other.entry.id(),
+                incident.other.current,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        incident,
+        [
+            (ids[3], false, Incidence::Incoming, ids[1], false),
+            (ids[6], true, Incidence::Incoming, ids[4], true),
+            (ids[7], true, Incidence::Outgoing, ids[5], true),
+        ]
+    );
+    // The whole revision tree, root first, from any of its nodes, as far as
+    // the inspected view sees it.
+    for (id, as_of, expected) in [
+        (ids[5], None, vec![ids[1], ids[4], ids[5]]),
+        (ids[1], None, vec![ids[1], ids[4], ids[5]]),
+        (ids[4], Some(6), vec![ids[1], ids[4], ids[5]]),
+        (ids[4], Some(5), vec![ids[1], ids[4]]),
+        (ids[1], Some(4), vec![ids[1]]),
+    ] {
+        let (view, _, _, lineage, _) = node(id, as_of);
+        assert_eq!(view.end_exclusive, as_of.unwrap_or(8));
+        assert_eq!(positions(&lineage), expected, "{as_of:?}");
+    }
+    // The superseded root and its edge are historical now, current before.
+    let (_, entry, _, _, edges) = node(ids[1], None);
+    assert!(!entry.current);
+    assert_eq!(
+        edges
+            .iter()
+            .map(|e| (e.edge.entry.id(), e.edge.current, e.direction))
+            .collect::<Vec<_>>(),
+        [(ids[3], false, Incidence::Outgoing)]
+    );
+    let (view, entry, _, _, edges) = node(ids[1], Some(4));
+    assert_eq!(view.end_exclusive, 4);
+    assert!(entry.current);
+    assert_eq!(
+        (
+            edges[0].edge.current,
+            edges[0].other.entry.id(),
+            edges[0].other.current
+        ),
+        (true, ids[2], true)
+    );
+    // Just after the revision, A is stale but the later edges are not visible.
+    let (_, entry, _, _, edges) = node(ids[2], Some(5));
+    assert!(entry.current);
+    assert_eq!(
+        edges
+            .iter()
+            .map(|e| (e.edge.entry.id(), e.edge.current))
+            .collect::<Vec<_>>(),
+        [(ids[3], false)]
+    );
+    // An edge carries both endpoints as records of the same view.
+    let Ok(EntryInspection::Edge {
+        view,
+        entry,
+        from,
+        to,
+    }) = inspect(ids[3], None)
+    else {
+        panic!("expected an edge inspection")
+    };
+    assert_eq!(view.end_exclusive, 8);
+    assert_eq!((entry.entry.id(), entry.current), (ids[3], false));
+    assert_eq!((from.entry.id(), from.current), (ids[1], false));
+    assert_eq!((to.entry.id(), to.current), (ids[2], true));
+    let Ok(EntryInspection::Edge { entry, from, .. }) = inspect(ids[3], Some(4)) else {
+        panic!("expected an edge inspection")
+    };
+    assert!(entry.current && from.current);
+    // Absent from the view, unknown, or past the end.
+    assert!(matches!(
+        inspect(ids[5], Some(5)),
+        Err(AppError::EntryNotFound { id }) if id == ids[5]
+    ));
+    let unknown: EntryId =
+        serde_json::from_value(json!({"origin": Uuid::new_v4(), "position": "2"})).unwrap();
+    assert!(matches!(
+        inspect(unknown, None),
+        Err(AppError::EntryNotFound { id }) if id == unknown
+    ));
+    assert!(matches!(
+        inspect(ids[2], Some(9)),
+        Err(AppError::BeyondBoundary {
+            requested: 9,
+            visible: 8
+        })
+    ));
+    // On the wire the inspection, its records, and its type are tagged.
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "entries.inspect",
+        "params": {"id": ids[5], "as_of": "8"}})
+    .to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    let result = &response["result"];
+    assert_eq!(result["kind"], "node", "{response}");
+    assert_eq!(result["view"]["end_exclusive"], "8");
+    assert_eq!(result["entry"]["kind"], "node");
+    assert_eq!(result["type"]["kind"], "declared");
+    assert_eq!(result["lineage"].as_array().unwrap().len(), 3);
+    assert_eq!(result["lineage"][0]["current"], false);
+    assert_eq!(result["edges"][0]["direction"], "incoming");
+    assert_eq!(result["edges"][0]["edge"]["kind"], "edge");
+    assert_eq!(result["edges"][0]["other"]["kind"], "node");
+    let line =
+        json!({"jsonrpc": "2.0", "id": 2, "method": "entries.inspect", "params": {"id": ids[3]}})
+            .to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    assert_eq!(response["result"]["kind"], "edge");
+    assert_eq!(response["result"]["from"]["kind"], "node");
+}
+
+#[test]
+fn inspection_resolves_the_node_type_in_the_inspected_view() {
+    let scratch = Scratch::new();
+    let ids = unchecked(&scratch);
+    let service = scratch.service();
+    let ty = |id: EntryId, as_of: Option<usize>| match service
+        .inspect_entry(EntryInspectRequest { id, as_of })
+    {
+    Ok(EntryInspection::Node { ty, .. }) => ty,
+    other => panic!("expected a node inspection, got {other:?}"),
+    };
+    assert_eq!(ty(ids[0], None), TypeResolution::Builtin);
+    // Before the malformed declarations, names resolve by their own ones.
+    assert_eq!(ty(ids[2], Some(4)), TypeResolution::Missing);
+    assert_eq!(
+        ty(ids[3], Some(4)),
+        TypeResolution::Ambiguous {
+            declarations: vec![ids[0], ids[1]],
+        }
+    );
+    // A malformed current declaration fails every other name's resolution,
+    // naming the first one in append order, as `resolve_type` does.
+    let malformed = TypeResolution::Malformed {
+        declaration: ids[4],
+        message: schema_error(tag_declaration()),
+    };
+    assert_eq!(ty(ids[2], Some(5)), malformed);
+    assert_eq!(ty(ids[2], None), malformed);
+    assert_eq!(ty(ids[3], None), malformed);
+    assert_eq!(ty(ids[4], None), TypeResolution::Builtin);
+}
+
+#[test]
+fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
+    let scratch = Scratch::new();
+    let ids = split(&scratch);
+    let service = scratch.service();
+    let query = |seeds: Vec<Seed>, expand: Vec<Expansion>, edges: EdgeFilter, as_of| {
+        service.query_view(ViewQueryRequest {
+            seeds,
+            expand,
+            edges,
+            as_of,
+        })
+    };
+    let seeds = |ids: &[EntryId]| vec![Seed::Ids { ids: ids.to_vec() }];
+    let step = Expansion {
+        hops: 1,
+        direction: Direction::Both,
+        ty_names: None,
+        currentness: Currentness::Current,
+    };
+    let all_edges = EdgeFilter {
+        ty_names: None,
+        currentness: Currentness::All,
+    };
+    let nodes = |result: &ViewQuery| {
+        result
+            .nodes
+            .iter()
+            .map(|queried| (queried.node.entry.id(), queried.provenance.clone()))
+            .collect::<Vec<_>>()
+    };
+    let edges = |result: &ViewQuery| {
+        result
+            .edges
+            .iter()
+            .map(|record| record.entry.id())
+            .collect::<Vec<_>>()
+    };
+    let reached = |hop, via, from| Provenance::Reached { hop, via, from };
+    // One hop over current edges from B, in both directions.
+    let result = query(
+        seeds(&[ids[2]]),
+        vec![step.clone()],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.view.end_exclusive, 8);
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[2], Provenance::Seed),
+            (ids[4], reached(1, ids[6], ids[2])),
+            (ids[5], reached(1, ids[7], ids[2])),
+        ]
+    );
+    assert_eq!(edges(&result), [ids[6], ids[7]]);
+    // Historical edges reach the superseded root; the edge filter decides
+    // which edges among the result come back.
+    let all = Expansion {
+        currentness: Currentness::All,
+        ..step.clone()
+    };
+    let result = query(
+        seeds(&[ids[2]]),
+        vec![all.clone()],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result)[..2],
+        [
+            (ids[1], reached(1, ids[3], ids[2])),
+            (ids[2], Provenance::Seed)
+        ]
+    );
+    assert_eq!(edges(&result), [ids[6], ids[7]]);
+    let result = query(seeds(&[ids[2]]), vec![all.clone()], all_edges.clone(), None).unwrap();
+    assert_eq!(edges(&result), [ids[3], ids[6], ids[7]]);
+    assert_eq!(
+        result.edges.iter().map(|e| e.current).collect::<Vec<_>>(),
+        [false, true, true]
+    );
+    let historical = EdgeFilter {
+        ty_names: None,
+        currentness: Currentness::Historical,
+    };
+    let result = query(seeds(&[ids[2]]), vec![all], historical, None).unwrap();
+    assert_eq!(edges(&result), [ids[3]]);
+    // Direction is relative to the frontier node.
+    let outgoing = Expansion {
+        direction: Direction::Outgoing,
+        ..step.clone()
+    };
+    let result = query(
+        seeds(&[ids[2]]),
+        vec![outgoing],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[2], Provenance::Seed),
+            (ids[5], reached(1, ids[7], ids[2]))
+        ]
+    );
+    assert_eq!(edges(&result), [ids[7]]);
+    // A selection seeds the current tasks whose text contains "A".
+    let selection = Seed::Nodes {
+        ty_name: Some("Task".into()),
+        currentness: Currentness::Current,
+        text: Some("A".into()),
+    };
+    let result = query(vec![selection.clone()], vec![], EdgeFilter::default(), None).unwrap();
+    assert_eq!(
+        nodes(&result),
+        [(ids[4], Provenance::Seed), (ids[5], Provenance::Seed)]
+    );
+    assert!(result.edges.is_empty());
+    let result = query(
+        vec![selection],
+        vec![step.clone()],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[2], reached(1, ids[6], ids[4])),
+            (ids[4], Provenance::Seed),
+            (ids[5], Provenance::Seed),
+        ]
+    );
+    assert_eq!(edges(&result), [ids[6], ids[7]]);
+    // Seeds stay seeds however they were listed; a historical seed's
+    // historical edge is not followed over current edges.
+    let result = query(
+        vec![
+            Seed::Ids {
+                ids: vec![ids[5], ids[2], ids[5]],
+            },
+            Seed::Nodes {
+                ty_name: Some("Task".into()),
+                currentness: Currentness::Historical,
+                text: None,
+            },
+        ],
+        vec![step.clone()],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[1], Provenance::Seed),
+            (ids[2], Provenance::Seed),
+            (ids[4], reached(1, ids[6], ids[2])),
+            (ids[5], Provenance::Seed),
+        ]
+    );
+    // Steps continue from the last hop's additions and hops count from the
+    // seed across steps.
+    let incoming = Expansion {
+        direction: Direction::Incoming,
+        ..step.clone()
+    };
+    let result = query(
+        seeds(&[ids[5]]),
+        vec![
+            incoming.clone(),
+            Expansion {
+                currentness: Currentness::All,
+                ..incoming.clone()
+            },
+        ],
+        all_edges,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[1], reached(2, ids[3], ids[2])),
+            (ids[2], reached(1, ids[7], ids[5])),
+            (ids[4], reached(2, ids[6], ids[2])),
+            (ids[5], Provenance::Seed),
+        ]
+    );
+    assert_eq!(edges(&result), [ids[3], ids[6], ids[7]]);
+    // Several hops in one step stop when the frontier empties.
+    let result = query(
+        seeds(&[ids[5]]),
+        vec![Expansion {
+            hops: 5,
+            ..incoming
+        }],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[2], reached(1, ids[7], ids[5])),
+            (ids[4], reached(2, ids[6], ids[2])),
+            (ids[5], Provenance::Seed),
+        ]
+    );
+    // Relationship types restrict what is followed and what is returned.
+    let other = Some(vec!["Other".to_string()]);
+    let result = query(
+        seeds(&[ids[2]]),
+        vec![Expansion {
+            ty_names: other.clone(),
+            ..step.clone()
+        }],
+        EdgeFilter::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(nodes(&result), [(ids[2], Provenance::Seed)]);
+    assert!(result.edges.is_empty());
+    let result = query(
+        seeds(&[ids[2], ids[5]]),
+        vec![],
+        EdgeFilter {
+            ty_names: other,
+            currentness: Currentness::Current,
+        },
+        None,
+    )
+    .unwrap();
+    assert!(result.edges.is_empty());
+    let result = query(
+        seeds(&[ids[2], ids[5]]),
+        vec![],
+        EdgeFilter {
+            ty_names: Some(vec!["DependsOn".into(), "Other".into()]),
+            currentness: Currentness::Current,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(edges(&result), [ids[7]]);
+    // Before the revisions the old edge is current and the new nodes absent;
+    // just before the last edge only A2 is reached.
+    let result = query(
+        seeds(&[ids[2]]),
+        vec![step.clone()],
+        EdgeFilter::default(),
+        Some(4),
+    )
+    .unwrap();
+    assert_eq!(result.view.end_exclusive, 4);
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[1], reached(1, ids[3], ids[2])),
+            (ids[2], Provenance::Seed)
+        ]
+    );
+    assert_eq!(edges(&result), [ids[3]]);
+    assert!(result.edges[0].current && result.nodes[0].node.current);
+    let result = query(
+        seeds(&[ids[2]]),
+        vec![step.clone()],
+        EdgeFilter::default(),
+        Some(7),
+    )
+    .unwrap();
+    assert_eq!(
+        nodes(&result),
+        [
+            (ids[2], Provenance::Seed),
+            (ids[4], reached(1, ids[6], ids[2]))
+        ]
+    );
+    assert_eq!(edges(&result), [ids[6]]);
+    // Boundaries past the end, seeds the view lacks or that are edges, and
+    // a step without hops are errors.
+    assert!(matches!(
+        query(seeds(&[ids[2]]), vec![], EdgeFilter::default(), Some(9)),
+        Err(AppError::BeyondBoundary {
+            requested: 9,
+            visible: 8
+        })
+    ));
+    assert!(matches!(
+        query(seeds(&[ids[5]]), vec![], EdgeFilter::default(), Some(5)),
+        Err(AppError::EntryNotFound { id }) if id == ids[5]
+    ));
+    assert!(matches!(
+        query(seeds(&[ids[3]]), vec![], EdgeFilter::default(), None),
+        Err(AppError::EntryNotFound { id }) if id == ids[3]
+    ));
+    assert!(matches!(
+        query(
+            seeds(&[ids[2]]),
+            vec![Expansion {
+                hops: 0,
+                ..step.clone()
+            }],
+            EdgeFilter::default(),
+            None
+        ),
+        Err(AppError::InvalidParams { .. })
+    ));
+    // No seeds is an empty result.
+    let result = query(vec![], vec![step], EdgeFilter::default(), None).unwrap();
+    assert!(result.nodes.is_empty() && result.edges.is_empty());
+}
+
+#[test]
+fn edge_type_filters_apply_to_expansion_and_to_the_returned_edges() {
+    let scratch = Scratch::new();
+    let ids = unchecked(&scratch);
+    let service = scratch.service();
+    let query = |expand: Vec<Expansion>, edges: EdgeFilter| {
+        service
+            .query_view(ViewQueryRequest {
+                seeds: vec![Seed::Ids { ids: vec![ids[2]] }],
+                expand,
+                edges,
+                as_of: None,
+            })
+            .unwrap()
+    };
+    let step = |ty_names: Option<Vec<String>>| Expansion {
+        hops: 1,
+        direction: Direction::Both,
+        ty_names,
+        currentness: Currentness::Current,
+    };
+    let likes = Some(vec!["Likes".to_string()]);
+    let hates = Some(vec!["Hates".to_string()]);
+    let via_likes = Provenance::Reached {
+        hop: 1,
+        via: ids[6],
+        from: ids[2],
+    };
+    // Followed over Likes, returned edges restricted to Hates.
+    let result = query(
+        vec![step(likes)],
+        EdgeFilter {
+            ty_names: hates.clone(),
+            currentness: Currentness::Current,
+        },
+    );
+    assert_eq!(
+        result
+            .nodes
+            .iter()
+            .map(|n| (n.node.entry.id(), n.provenance.clone()))
+            .collect::<Vec<_>>(),
+        [(ids[2], Provenance::Seed), (ids[3], via_likes.clone())]
+    );
+    assert_eq!(
+        result
+            .edges
+            .iter()
+            .map(|e| e.entry.id())
+            .collect::<Vec<_>>(),
+        [ids[7]]
+    );
+    // Hates runs into the seed, so outgoing Hates reaches nothing; with any
+    // type, the earlier edge decides the provenance.
+    let result = query(
+        vec![Expansion {
+            direction: Direction::Outgoing,
+            ..step(hates)
+        }],
+        EdgeFilter::default(),
+    );
+    assert_eq!(result.nodes.len(), 1);
+    assert!(result.edges.is_empty());
+    let result = query(vec![step(None)], EdgeFilter::default());
+    assert_eq!(result.nodes[1].provenance, via_likes);
+    assert_eq!(
+        result
+            .edges
+            .iter()
+            .map(|e| e.entry.id())
+            .collect::<Vec<_>>(),
+        [ids[6], ids[7]]
+    );
+}
+
+#[test]
+fn as_of_and_query_parameters_are_decoded_strictly_through_rpc() {
+    let scratch = Scratch::new();
+    let ids = split(&scratch);
+    let service = scratch.service();
+    let call = |method: &str, params: Value| {
+        let line =
+            json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    // `as_of` narrows every read and the result's view names the boundary.
+    let listed = call("entries.list", json!({"currentness": "all", "as_of": "4"}));
+    assert_eq!(listed["result"]["view"]["end_exclusive"], "4");
+    assert_eq!(listed["result"]["entries"].as_array().unwrap().len(), 4);
+    assert_eq!(listed["result"]["entries"][1]["current"], true);
+    let got = call("entries.get", json!({"id": ids[1], "as_of": "5"}));
+    assert_eq!(got["result"]["view"]["end_exclusive"], "5");
+    assert_eq!(got["result"]["entry"]["current"], false);
+    let got = call("entries.get", json!({"id": ids[1], "as_of": "4"}));
+    assert_eq!(got["result"]["entry"]["current"], true);
+    assert_eq!(
+        call("entries.get", json!({"id": ids[4], "as_of": "4"}))["error"]["code"],
+        4001
+    );
+    // A boundary past the end is its own error, with decimal positions.
+    let beyond = call("entries.list", json!({"as_of": "9"}));
+    assert_eq!(beyond["error"]["code"], 4002);
+    assert_eq!(
+        beyond["error"]["data"],
+        json!({"kind": "beyond_boundary", "requested": "9", "visible": "8"})
+    );
+    for (method, params) in [
+        ("entries.get", json!({"id": ids[1], "as_of": "9"})),
+        ("entries.inspect", json!({"id": ids[1], "as_of": "9"})),
+        ("types.list", json!({"as_of": "9"})),
+        ("views.query", json!({"seeds": [], "as_of": "9"})),
+    ] {
+        let response = call(method, params);
+        assert_eq!(response["error"]["code"], 4002, "{method} {response}");
+        assert_eq!(response["error"]["data"]["kind"], "beyond_boundary");
+    }
+    // Null, numbers, non-canonical strings, and unknown members are invalid
+    // parameters, as are missing hops and foreign seed kinds.
+    for (method, params) in [
+        ("entries.list", json!({"as_of": null})),
+        ("entries.list", json!({"as_of": 4})),
+        ("entries.list", json!({"as_of": "04"})),
+        ("entries.list", json!({"as_of": "-1"})),
+        ("entries.get", json!({"id": ids[1], "as_of": null})),
+        ("entries.inspect", json!({"id": ids[1], "as_of": null})),
+        ("entries.inspect", json!({})),
+        ("types.list", json!({"as_of": null})),
+        ("types.list", json!({"kind": "node"})),
+        ("views.query", json!({})),
+        ("views.query", json!({"seeds": null})),
+        ("views.query", json!({"seeds": [{"kind": "ids"}]})),
+        (
+            "views.query",
+            json!({"seeds": [{"kind": "edges", "ids": []}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [{"kind": "nodes", "text": null}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [{"kind": "nodes", "fields": []}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [{"kind": "ids", "ids": [], "text": "x"}]}),
+        ),
+        ("views.query", json!({"seeds": [], "expand": null})),
+        ("views.query", json!({"seeds": [], "expand": [{"hops": 0}]})),
+        (
+            "views.query",
+            json!({"seeds": [], "expand": [{"hops": "1"}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [], "expand": [{"direction": "sideways"}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [], "expand": [{"ty_names": null}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [], "expand": [{"ty_name": "DependsOn"}]}),
+        ),
+        ("views.query", json!({"seeds": [], "edges": null})),
+        (
+            "views.query",
+            json!({"seeds": [], "edges": {"currentness": "stale"}}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [], "edges": {"kind": "edge"}}),
+        ),
+    ] {
+        let response = call(method, params.clone());
+        assert_eq!(
+            response["error"]["code"], -32602,
+            "{method} {params} {response}"
+        );
+        assert_eq!(response["error"]["data"]["kind"], "invalid_params");
+    }
+    // Defaults: one hop, both directions, any type, current edges.
+    let result = call(
+        "views.query",
+        json!({"seeds": [{"kind": "ids", "ids": [ids[2]]}], "expand": [{}], "edges": {}}),
+    );
+    let nodes = result["result"]["nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 3, "{result}");
+    assert_eq!(nodes[0]["provenance"], json!({"kind": "seed"}));
+    assert_eq!(
+        nodes[1]["provenance"],
+        json!({"kind": "reached", "hop": 1, "via": ids[6], "from": ids[2]})
+    );
+    assert_eq!(nodes[1]["node"]["kind"], "node");
+    assert_eq!(nodes[1]["node"]["current"], true);
+    assert_eq!(result["result"]["edges"].as_array().unwrap().len(), 2);
+    assert_eq!(result["result"]["edges"][0]["kind"], "edge");
+    assert_eq!(result["result"]["view"]["end_exclusive"], "8");
 }

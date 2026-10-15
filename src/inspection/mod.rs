@@ -46,10 +46,12 @@ pub struct EdgeSelection<'a> {
     pub currentness: Currentness,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Direction {
     Incoming,
     Outgoing,
+    #[default]
     Both,
 }
 

@@ -4,6 +4,9 @@ import type { Method, MethodFixture } from "../contract.ts";
 import * as database_describe from "./database.describe.ts";
 import * as entries_list from "./entries.list.ts";
 import * as entries_get from "./entries.get.ts";
+import * as entries_inspect from "./entries.inspect.ts";
+import * as types_list from "./types.list.ts";
+import * as views_query from "./views.query.ts";
 import * as plan_id_mint from "./plan_id.mint.ts";
 import * as proposal_check from "./proposal.check.ts";
 import * as proposal_apply from "./proposal.apply.ts";
@@ -15,6 +18,9 @@ export const methods = {
   "database.describe": database_describe,
   "entries.list": entries_list,
   "entries.get": entries_get,
+  "entries.inspect": entries_inspect,
+  "types.list": types_list,
+  "views.query": views_query,
   "plan_id.mint": plan_id_mint,
   "proposal.check": proposal_check,
   "proposal.apply": proposal_apply,

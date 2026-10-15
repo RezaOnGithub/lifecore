@@ -1239,7 +1239,7 @@ fn task_declaration() -> Value {
 }
 
 // Every application error kind; the recorded fixtures must match it exactly.
-const ERROR_KINDS: [&str; 21] = [
+const ERROR_KINDS: [&str; 22] = [
     "state_path_empty",
     "working_directory",
     "directory_missing",
@@ -1258,6 +1258,7 @@ const ERROR_KINDS: [&str; 21] = [
     "rejected",
     "analyzer_failure",
     "entry_not_found",
+    "beyond_boundary",
     "invalid_params",
     "backend_failure",
     "internal",
@@ -1285,6 +1286,7 @@ fn listed(error: &AppError) {
     | AppError::Rejected(_)
     | AppError::Analyzer(_)
     | AppError::EntryNotFound { .. }
+    | AppError::BeyondBoundary { .. }
     | AppError::InvalidParams { .. }
     | AppError::Backend { .. }
     | AppError::Internal { .. } => {}
@@ -1366,6 +1368,92 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
     modules.push(method_module(
         "entries.get",
         vec![("request", "response", got)],
+    ));
+
+    // Revise the review and restore its dependency, so inspection shows a
+    // revision tree and a historical incident edge beside a current one.
+    let review_id = raw_entries[2]["id"].clone();
+    let revised = recorder.raw_result(
+        "proposal.apply",
+        json!({"proposal": {"entries": [
+            {"name": "review_again", "kind": "node", "ty_name": "Task",
+                "predecessor": {"existing": review_id}, "intent": "revise",
+                "payload": {"title": "Review the report", "notes": "Ask Teto", "status": "in progress"}},
+            {"name": "review_again_after_report", "kind": "edge", "ty_name": "DependsOn",
+                "from": {"added": "review_again"}, "to": {"existing": report_id}},
+        ]}}),
+    );
+    let review_again_id = revised["report"]["operations"][0]["entry"].clone();
+    let inspected = recorder.call("inspect", "entries.inspect", json!({"id": report_id}));
+    let revision = recorder.call(
+        "revision",
+        "entries.inspect",
+        json!({"id": review_again_id}),
+    );
+    let inspected_edge = recorder.call("edge", "entries.inspect", json!({"id": edge_id}));
+    modules.push(method_module(
+        "entries.inspect",
+        vec![
+            ("request", "response", inspected),
+            ("revisionRequest", "revisionResponse", revision),
+            ("edgeRequest", "edgeResponse", inspected_edge),
+        ],
+    ));
+
+    let types = recorder.call("types", "types.list", json!({}));
+    let types_as_of = recorder.call("types_as_of", "types.list", json!({"as_of": "1"}));
+    // Resolutions TypeCheck refuses, from an unchecked database in the same
+    // directory: two current `Note` declarations, a malformed `Tag`, and a
+    // `Ghost` node with no declaration.
+    let unchecked = service(StatePath::new(scratch.0.join("unchecked.json")));
+    unchecked.init(&[]).unwrap();
+    let checked = std::mem::replace(&mut recorder.service, unchecked);
+    recorder.raw_result(
+        "proposal.apply",
+        json!({"proposal": {"entries": [
+            {"name": "note", "kind": "node", "ty_name": "Type", "payload": {"name": "Note",
+                "fields": {"kind": "record", "value": {"text": ["mandatory", "text"]}}}},
+            {"name": "note_again", "kind": "node", "ty_name": "Type", "payload": {"name": "Note"}},
+            {"name": "tag", "kind": "node", "ty_name": "Type", "payload": {"name": "Tag", "fields": "text"}},
+            {"name": "ghost", "kind": "node", "ty_name": "Ghost", "payload": {"title": "Undeclared"}},
+        ]}}),
+    );
+    let unresolved = recorder.call("unresolved", "types.list", json!({}));
+    recorder.service = checked;
+    modules.push(method_module(
+        "types.list",
+        vec![
+            ("request", "response", types),
+            ("asOfRequest", "asOfResponse", types_as_of),
+            ("unresolvedRequest", "unresolvedResponse", unresolved),
+        ],
+    ));
+
+    let dependents = recorder.call(
+        "dependents",
+        "views.query",
+        json!({
+            "seeds": [{"kind": "ids", "ids": [report_id]}],
+            "expand": [{"direction": "incoming", "currentness": "all"}],
+        }),
+    );
+    // Before the revision, two hops from the review over all edges.
+    let around_review = recorder.call(
+        "around_review",
+        "views.query",
+        json!({
+            "seeds": [{"kind": "nodes", "ty_name": "Task", "text": "Review"}],
+            "expand": [{"hops": 2}],
+            "edges": {"ty_names": ["DependsOn"], "currentness": "all"},
+            "as_of": "4",
+        }),
+    );
+    modules.push(method_module(
+        "views.query",
+        vec![
+            ("request", "response", dependents),
+            ("asOfRequest", "asOfResponse", around_review),
+        ],
     ));
 
     let plan = recorder.raw_result("plan_id.mint", json!({}))["plan_id"].clone();
@@ -1537,7 +1625,13 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         "entries.get",
         json!({"id": {"origin": Uuid::new_v4(), "position": usize::MAX.to_string()}}),
     ));
+    samples.push(call(recorder, "entries.list", json!({"as_of": "99"})));
     samples.push(call(recorder, "entries.list", json!({"currentness": null})));
+    samples.push(call(
+        recorder,
+        "views.query",
+        json!({"seeds": [], "expand": [{"hops": 0}]}),
+    ));
     samples.push(call(
         recorder,
         "analyzers.add",

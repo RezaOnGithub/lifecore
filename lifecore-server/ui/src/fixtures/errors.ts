@@ -83,6 +83,21 @@ export const application = {
       "jsonrpc": "2.0"
     }
   ],
+  "beyond_boundary": [
+    {
+      "error": {
+        "code": 4002,
+        "data": {
+          "kind": "beyond_boundary",
+          "requested": "99",
+          "visible": "6"
+        },
+        "message": "the boundary 99 is past the visible end 6"
+      },
+      "id": "call",
+      "jsonrpc": "2.0"
+    }
+  ],
   "busy": [
     {
       "error": {
@@ -159,12 +174,12 @@ export const application = {
         "code": 4001,
         "data": {
           "id": {
-            "origin": "00000000-0000-4000-8000-000000000016",
+            "origin": "00000000-0000-4000-8000-00000000001a",
             "position": "18446744073709551615"
           },
           "kind": "entry_not_found"
         },
-        "message": "entry EntryId { position: 18446744073709551615, origin: 00000000-0000-4000-8000-000000000016 } is not present in the selected view"
+        "message": "entry EntryId { position: 18446744073709551615, origin: 00000000-0000-4000-8000-00000000001a } is not present in the selected view"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -176,10 +191,10 @@ export const application = {
         "code": 2004,
         "data": {
           "actual": "00000000-0000-4000-8000-000000000001",
-          "expected": "00000000-0000-4000-8000-000000000013",
+          "expected": "00000000-0000-4000-8000-000000000017",
           "kind": "foreign_database"
         },
-        "message": "the plan ID names database 00000000-0000-4000-8000-000000000013, but the selected database is 00000000-0000-4000-8000-000000000001"
+        "message": "the plan ID names database 00000000-0000-4000-8000-000000000017, but the selected database is 00000000-0000-4000-8000-000000000001"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -206,6 +221,17 @@ export const application = {
           "kind": "invalid_params"
         },
         "message": "invalid parameters: expected value at line 1 column 16"
+      },
+      "id": "call",
+      "jsonrpc": "2.0"
+    },
+    {
+      "error": {
+        "code": -32602,
+        "data": {
+          "kind": "invalid_params"
+        },
+        "message": "invalid parameters: an expansion step needs at least one hop"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -310,7 +336,7 @@ export const application = {
         "data": {
           "kind": "publication_uncertain",
           "outcome": {
-            "graph_revision": "00000000-0000-4000-8000-000000000017",
+            "graph_revision": "00000000-0000-4000-8000-00000000001b",
             "kind": "applied",
             "report": {
               "analysis": {
@@ -348,14 +374,14 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "scope",
-                      "database": "00000000-0000-4000-8000-000000000018",
+                      "database": "00000000-0000-4000-8000-00000000001c",
                       "kind": "warning"
                     }
                   },
                   {
                     "diagnostic": {
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001d",
                         "position": "1"
                       },
                       "kind": "warning",
@@ -363,26 +389,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-000000000018",
+                        "database": "00000000-0000-4000-8000-00000000001c",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "1"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-000000000018",
+                        "database": "00000000-0000-4000-8000-00000000001c",
                         "end_exclusive": "4",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "3"
                         }
                       }
@@ -393,8 +419,8 @@ export const application = {
                         "name": "Type_Check",
                         "version": "0.1.0"
                       },
-                      "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000019\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
-                      "database": "00000000-0000-4000-8000-000000000018",
+                      "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-00000000001d\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
+                      "database": "00000000-0000-4000-8000-00000000001c",
                       "kind": "warning"
                     }
                   },
@@ -414,7 +440,7 @@ export const application = {
                           },
                           "predecessor": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-000000000019",
+                              "origin": "00000000-0000-4000-8000-00000000001d",
                               "position": "1"
                             }
                           },
@@ -422,7 +448,7 @@ export const application = {
                         }
                       ],
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001d",
                         "position": "1"
                       },
                       "kind": "suggestion",
@@ -430,26 +456,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-000000000018",
+                        "database": "00000000-0000-4000-8000-00000000001c",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "1"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-000000000018",
+                        "database": "00000000-0000-4000-8000-00000000001c",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "1"
                         }
                       }
@@ -461,7 +487,7 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "done:1",
-                      "database": "00000000-0000-4000-8000-000000000018",
+                      "database": "00000000-0000-4000-8000-00000000001c",
                       "kind": "suggestion"
                     }
                   },
@@ -481,7 +507,7 @@ export const application = {
                           },
                           "predecessor": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-000000000019",
+                              "origin": "00000000-0000-4000-8000-00000000001d",
                               "position": "1"
                             }
                           },
@@ -490,7 +516,7 @@ export const application = {
                         {
                           "from": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-000000000019",
+                              "origin": "00000000-0000-4000-8000-00000000001d",
                               "position": "2"
                             }
                           },
@@ -502,7 +528,7 @@ export const application = {
                         }
                       ],
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001d",
                         "position": "1"
                       },
                       "kind": "suggestion",
@@ -510,26 +536,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-000000000018",
+                        "database": "00000000-0000-4000-8000-00000000001c",
                         "end_exclusive": "3",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "2"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-000000000018",
+                        "database": "00000000-0000-4000-8000-00000000001c",
                         "end_exclusive": "4",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-000000000019",
+                          "origin": "00000000-0000-4000-8000-00000000001d",
                           "position": "3"
                         }
                       }
@@ -541,52 +567,52 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "done:1",
-                      "database": "00000000-0000-4000-8000-000000000018",
+                      "database": "00000000-0000-4000-8000-00000000001c",
                       "kind": "suggestion"
                     }
                   }
                 ],
                 "view": {
-                  "database": "00000000-0000-4000-8000-000000000018",
+                  "database": "00000000-0000-4000-8000-00000000001c",
                   "end_exclusive": "4",
                   "head": {
-                    "origin": "00000000-0000-4000-8000-000000000019",
+                    "origin": "00000000-0000-4000-8000-00000000001d",
                     "position": "3"
                   }
                 }
               },
               "base": {
-                "database": "00000000-0000-4000-8000-000000000018",
+                "database": "00000000-0000-4000-8000-00000000001c",
                 "end_exclusive": "0",
                 "head": null
               },
-              "base_revision": "00000000-0000-4000-8000-00000000001a",
-              "database": "00000000-0000-4000-8000-000000000018",
+              "base_revision": "00000000-0000-4000-8000-00000000001e",
+              "database": "00000000-0000-4000-8000-00000000001c",
               "operations": [
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-000000000019",
+                    "origin": "00000000-0000-4000-8000-00000000001d",
                     "position": "0"
                   },
                   "name": "task_type"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-000000000019",
+                    "origin": "00000000-0000-4000-8000-00000000001d",
                     "position": "1"
                   },
                   "name": "report"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-000000000019",
+                    "origin": "00000000-0000-4000-8000-00000000001d",
                     "position": "2"
                   },
                   "name": "review"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-000000000019",
+                    "origin": "00000000-0000-4000-8000-00000000001d",
                     "position": "3"
                   },
                   "name": "review_after_report"
@@ -680,10 +706,10 @@ export const application = {
                     "kind": "prefixes",
                     "last": {
                       "database": "00000000-0000-4000-8000-000000000001",
-                      "end_exclusive": "5",
+                      "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000015",
-                        "position": "4"
+                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "position": "6"
                       }
                     }
                   },
@@ -701,35 +727,35 @@ export const application = {
                 {
                   "diagnostic": {
                     "focus": {
-                      "origin": "00000000-0000-4000-8000-000000000015",
-                      "position": "4"
+                      "origin": "00000000-0000-4000-8000-000000000019",
+                      "position": "6"
                     },
                     "kind": "inconsistency",
                     "message": "Type \"Undeclared\" is not declared in this view",
                     "sticky": false,
                     "subjects": [
                       {
-                        "origin": "00000000-0000-4000-8000-000000000015",
-                        "position": "4"
+                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "position": "6"
                       }
                     ]
                   },
                   "evaluated_view": {
                     "first": {
                       "database": "00000000-0000-4000-8000-000000000001",
-                      "end_exclusive": "5",
+                      "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000015",
-                        "position": "4"
+                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "position": "6"
                       }
                     },
                     "kind": "prefixes",
                     "last": {
                       "database": "00000000-0000-4000-8000-000000000001",
-                      "end_exclusive": "5",
+                      "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000015",
-                        "position": "4"
+                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "position": "6"
                       }
                     }
                   },
@@ -739,7 +765,7 @@ export const application = {
                       "name": "Type_Check",
                       "version": "0.1.0"
                     },
-                    "analyzer_certificate": "{\"MissingType\":{\"subject\":{\"position\":\"4\",\"origin\":\"00000000-0000-4000-8000-000000000015\"},\"name\":\"Undeclared\"}}",
+                    "analyzer_certificate": "{\"MissingType\":{\"subject\":{\"position\":\"6\",\"origin\":\"00000000-0000-4000-8000-000000000019\"},\"name\":\"Undeclared\"}}",
                     "database": "00000000-0000-4000-8000-000000000001",
                     "kind": "inconsistency"
                   }
@@ -873,10 +899,90 @@ export const application = {
                     "kind": "prefixes",
                     "last": {
                       "database": "00000000-0000-4000-8000-000000000001",
+                      "end_exclusive": "4",
+                      "head": {
+                        "origin": "00000000-0000-4000-8000-000000000005",
+                        "position": "3"
+                      }
+                    }
+                  },
+                  "key": {
+                    "analyzer": {
+                      "configuration": "{}",
+                      "name": "Fixture_Suggestions",
+                      "version": "1.0.0"
+                    },
+                    "analyzer_certificate": "done:1",
+                    "database": "00000000-0000-4000-8000-000000000001",
+                    "kind": "suggestion"
+                  }
+                },
+                {
+                  "diagnostic": {
+                    "actions": [
+                      {
+                        "intent": "revise",
+                        "kind": "node",
+                        "payload": {
+                          "priority": {
+                            "kind": "integer",
+                            "value": "2"
+                          },
+                          "status": "done",
+                          "title": "Write the report"
+                        },
+                        "predecessor": {
+                          "existing": {
+                            "origin": "00000000-0000-4000-8000-000000000005",
+                            "position": "1"
+                          }
+                        },
+                        "ty_name": "Task"
+                      },
+                      {
+                        "from": {
+                          "existing": {
+                            "origin": "00000000-0000-4000-8000-000000000007",
+                            "position": "4"
+                          }
+                        },
+                        "kind": "edge",
+                        "to": {
+                          "added": 0
+                        },
+                        "ty_name": "DependsOn"
+                      }
+                    ],
+                    "focus": {
+                      "origin": "00000000-0000-4000-8000-000000000005",
+                      "position": "1"
+                    },
+                    "kind": "suggestion",
+                    "message": "this task may be done",
+                    "sticky": false,
+                    "subjects": [
+                      {
+                        "origin": "00000000-0000-4000-8000-000000000005",
+                        "position": "1"
+                      }
+                    ]
+                  },
+                  "evaluated_view": {
+                    "first": {
+                      "database": "00000000-0000-4000-8000-000000000001",
                       "end_exclusive": "5",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000015",
+                        "origin": "00000000-0000-4000-8000-000000000007",
                         "position": "4"
+                      }
+                    },
+                    "kind": "prefixes",
+                    "last": {
+                      "database": "00000000-0000-4000-8000-000000000001",
+                      "end_exclusive": "7",
+                      "head": {
+                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "position": "6"
                       }
                     }
                   },
@@ -894,28 +1000,28 @@ export const application = {
               ],
               "view": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "5",
+                "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000015",
-                  "position": "4"
+                  "origin": "00000000-0000-4000-8000-000000000019",
+                  "position": "6"
                 }
               }
             },
             "base": {
               "database": "00000000-0000-4000-8000-000000000001",
-              "end_exclusive": "4",
+              "end_exclusive": "6",
               "head": {
-                "origin": "00000000-0000-4000-8000-000000000005",
-                "position": "3"
+                "origin": "00000000-0000-4000-8000-000000000007",
+                "position": "5"
               }
             },
-            "base_revision": "00000000-0000-4000-8000-000000000012",
+            "base_revision": "00000000-0000-4000-8000-000000000016",
             "database": "00000000-0000-4000-8000-000000000001",
             "operations": [
               {
                 "entry": {
-                  "origin": "00000000-0000-4000-8000-000000000015",
-                  "position": "4"
+                  "origin": "00000000-0000-4000-8000-000000000019",
+                  "position": "6"
                 },
                 "name": "stray"
               }
@@ -933,11 +1039,11 @@ export const application = {
       "error": {
         "code": 2005,
         "data": {
-          "actual": "00000000-0000-4000-8000-000000000012",
-          "expected": "00000000-0000-4000-8000-000000000014",
+          "actual": "00000000-0000-4000-8000-000000000016",
+          "expected": "00000000-0000-4000-8000-000000000018",
           "kind": "stale_base"
         },
-        "message": "the plan ID base 00000000-0000-4000-8000-000000000014 is stale; the current graph revision is 00000000-0000-4000-8000-000000000012"
+        "message": "the plan ID base 00000000-0000-4000-8000-000000000018 is stale; the current graph revision is 00000000-0000-4000-8000-000000000016"
       },
       "id": "call",
       "jsonrpc": "2.0"

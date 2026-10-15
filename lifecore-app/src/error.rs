@@ -60,6 +60,8 @@ pub enum AppError {
     Analyzer(LifeCoreError),
     #[error("entry {id:?} is not present in the selected view")]
     EntryNotFound { id: EntryId },
+    #[error("the boundary {requested} is past the visible end {visible}")]
+    BeyondBoundary { requested: usize, visible: usize },
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
     // Raised by a host, not the service: the task running a call ended
@@ -105,6 +107,7 @@ impl AppError {
         Self::Rejected(_) => "rejected",
         Self::Analyzer(_) => "analyzer_failure",
         Self::EntryNotFound { .. } => "entry_not_found",
+        Self::BeyondBoundary { .. } => "beyond_boundary",
         Self::InvalidParams { .. } => "invalid_params",
         Self::Backend { .. } => "backend_failure",
         Self::Internal { .. } => "internal",
@@ -133,6 +136,7 @@ impl AppError {
         Self::Rejected(_) => 2006,
         Self::Analyzer(_) => 3001,
         Self::EntryNotFound { .. } => 4001,
+        Self::BeyondBoundary { .. } => 4002,
         Self::Backend { .. } => 5001,
         }
     }
@@ -161,6 +165,10 @@ impl AppError {
             json!({ "failure": failure })
         }
         Self::EntryNotFound { id } => json!({ "id": id }),
+        // Positions are decimal strings on the wire, like every boundary.
+        Self::BeyondBoundary { requested, visible } => {
+            json!({ "requested": requested.to_string(), "visible": visible.to_string() })
+        }
         _ => json!({}),
         }
     }

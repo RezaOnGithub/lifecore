@@ -14,7 +14,7 @@ export const response = {
   "jsonrpc": "2.0",
   "result": {
     "database": "00000000-0000-4000-8000-000000000001",
-    "graph_revision": "00000000-0000-4000-8000-000000000012",
+    "graph_revision": "00000000-0000-4000-8000-000000000016",
     "suite": [
       {
         "configuration": "{}",
@@ -31,10 +31,10 @@ export const response = {
     ],
     "view": {
       "database": "00000000-0000-4000-8000-000000000001",
-      "end_exclusive": "4",
+      "end_exclusive": "6",
       "head": {
-        "origin": "00000000-0000-4000-8000-000000000005",
-        "position": "3"
+        "origin": "00000000-0000-4000-8000-000000000007",
+        "position": "5"
       }
     }
   }

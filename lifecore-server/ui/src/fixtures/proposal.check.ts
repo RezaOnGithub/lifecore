@@ -74,7 +74,7 @@ export const request = {
           "ty_name": "DependsOn"
         }
       ],
-      "plan_id": "lc1:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000004:00000000-0000-4000-8000-000000000008"
+      "plan_id": "lc1:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-00000000000b:00000000-0000-4000-8000-00000000000c"
     }
   }
 } satisfies RpcRequest<"proposal.check">;
@@ -152,10 +152,10 @@ export const response = {
               "kind": "prefixes",
               "last": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "4",
+                "end_exclusive": "6",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000005",
-                  "position": "3"
+                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "position": "5"
                 }
               }
             },
@@ -324,22 +324,38 @@ export const response = {
                   "intent": "revise",
                   "kind": "node",
                   "payload": {
-                    "notes": "Ask Teto",
+                    "priority": {
+                      "kind": "integer",
+                      "value": "2"
+                    },
                     "status": "done",
-                    "title": "Review the report"
+                    "title": "Write the report"
                   },
                   "predecessor": {
                     "existing": {
                       "origin": "00000000-0000-4000-8000-000000000005",
-                      "position": "2"
+                      "position": "1"
                     }
                   },
                   "ty_name": "Task"
+                },
+                {
+                  "from": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000007",
+                      "position": "4"
+                    }
+                  },
+                  "kind": "edge",
+                  "to": {
+                    "added": 0
+                  },
+                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {
                 "origin": "00000000-0000-4000-8000-000000000005",
-                "position": "2"
+                "position": "1"
               },
               "kind": "suggestion",
               "message": "this task may be done",
@@ -347,7 +363,7 @@ export const response = {
               "subjects": [
                 {
                   "origin": "00000000-0000-4000-8000-000000000005",
-                  "position": "2"
+                  "position": "1"
                 }
               ]
             },
@@ -363,10 +379,10 @@ export const response = {
               "kind": "prefixes",
               "last": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "5",
+                "end_exclusive": "6",
                 "head": {
                   "origin": "00000000-0000-4000-8000-000000000007",
-                  "position": "4"
+                  "position": "5"
                 }
               }
             },
@@ -376,7 +392,7 @@ export const response = {
                 "name": "Fixture_Suggestions",
                 "version": "1.0.0"
               },
-              "analyzer_certificate": "done:2",
+              "analyzer_certificate": "done:1",
               "database": "00000000-0000-4000-8000-000000000001",
               "kind": "suggestion"
             }
@@ -394,47 +410,34 @@ export const response = {
                   },
                   "predecessor": {
                     "existing": {
-                      "origin": "00000000-0000-4000-8000-000000000005",
-                      "position": "2"
+                      "origin": "00000000-0000-4000-8000-000000000007",
+                      "position": "4"
                     }
                   },
                   "ty_name": "Task"
-                },
-                {
-                  "from": {
-                    "existing": {
-                      "origin": "00000000-0000-4000-8000-000000000007",
-                      "position": "5"
-                    }
-                  },
-                  "kind": "edge",
-                  "to": {
-                    "added": 0
-                  },
-                  "ty_name": "DependsOn"
                 }
               ],
               "focus": {
-                "origin": "00000000-0000-4000-8000-000000000005",
-                "position": "2"
+                "origin": "00000000-0000-4000-8000-000000000007",
+                "position": "4"
               },
               "kind": "suggestion",
               "message": "this task may be done",
               "sticky": false,
               "subjects": [
                 {
-                  "origin": "00000000-0000-4000-8000-000000000005",
-                  "position": "2"
+                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "position": "4"
                 }
               ]
             },
             "evaluated_view": {
               "first": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "6",
+                "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000007",
-                  "position": "5"
+                  "origin": "00000000-0000-4000-8000-00000000000a",
+                  "position": "6"
                 }
               },
               "kind": "prefixes",
@@ -442,7 +445,7 @@ export const response = {
                 "database": "00000000-0000-4000-8000-000000000001",
                 "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "origin": "00000000-0000-4000-8000-00000000000a",
                   "position": "6"
                 }
               }
@@ -453,7 +456,84 @@ export const response = {
                 "name": "Fixture_Suggestions",
                 "version": "1.0.0"
               },
-              "analyzer_certificate": "done:2",
+              "analyzer_certificate": "done:4",
+              "database": "00000000-0000-4000-8000-000000000001",
+              "kind": "suggestion"
+            }
+          },
+          {
+            "diagnostic": {
+              "actions": [
+                {
+                  "intent": "revise",
+                  "kind": "node",
+                  "payload": {
+                    "notes": "Ask Teto",
+                    "status": "done",
+                    "title": "Review the report"
+                  },
+                  "predecessor": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000007",
+                      "position": "4"
+                    }
+                  },
+                  "ty_name": "Task"
+                },
+                {
+                  "from": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-00000000000a",
+                      "position": "7"
+                    }
+                  },
+                  "kind": "edge",
+                  "to": {
+                    "added": 0
+                  },
+                  "ty_name": "DependsOn"
+                }
+              ],
+              "focus": {
+                "origin": "00000000-0000-4000-8000-000000000007",
+                "position": "4"
+              },
+              "kind": "suggestion",
+              "message": "this task may be done",
+              "sticky": false,
+              "subjects": [
+                {
+                  "origin": "00000000-0000-4000-8000-000000000007",
+                  "position": "4"
+                }
+              ]
+            },
+            "evaluated_view": {
+              "first": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "8",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-00000000000a",
+                  "position": "7"
+                }
+              },
+              "kind": "prefixes",
+              "last": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "9",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-00000000000a",
+                  "position": "8"
+                }
+              }
+            },
+            "key": {
+              "analyzer": {
+                "configuration": "{}",
+                "name": "Fixture_Suggestions",
+                "version": "1.0.0"
+              },
+              "analyzer_certificate": "done:4",
               "database": "00000000-0000-4000-8000-000000000001",
               "kind": "suggestion"
             }
@@ -461,42 +541,42 @@ export const response = {
         ],
         "view": {
           "database": "00000000-0000-4000-8000-000000000001",
-          "end_exclusive": "7",
+          "end_exclusive": "9",
           "head": {
-            "origin": "00000000-0000-4000-8000-000000000007",
-            "position": "6"
+            "origin": "00000000-0000-4000-8000-00000000000a",
+            "position": "8"
           }
         }
       },
       "base": {
         "database": "00000000-0000-4000-8000-000000000001",
-        "end_exclusive": "4",
+        "end_exclusive": "6",
         "head": {
-          "origin": "00000000-0000-4000-8000-000000000005",
-          "position": "3"
+          "origin": "00000000-0000-4000-8000-000000000007",
+          "position": "5"
         }
       },
-      "base_revision": "00000000-0000-4000-8000-000000000004",
+      "base_revision": "00000000-0000-4000-8000-00000000000b",
       "database": "00000000-0000-4000-8000-000000000001",
       "operations": [
         {
           "entry": {
-            "origin": "00000000-0000-4000-8000-000000000007",
-            "position": "4"
+            "origin": "00000000-0000-4000-8000-00000000000a",
+            "position": "6"
           },
           "name": "report_done"
         },
         {
           "entry": {
-            "origin": "00000000-0000-4000-8000-000000000007",
-            "position": "5"
+            "origin": "00000000-0000-4000-8000-00000000000a",
+            "position": "7"
           },
           "name": "follow_up"
         },
         {
           "entry": {
-            "origin": "00000000-0000-4000-8000-000000000007",
-            "position": "6"
+            "origin": "00000000-0000-4000-8000-00000000000a",
+            "position": "8"
           },
           "name": "follow_up_after_report"
         }
@@ -598,10 +678,10 @@ export const rejectedResponse = {
               "kind": "prefixes",
               "last": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "5",
+                "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000009",
-                  "position": "4"
+                  "origin": "00000000-0000-4000-8000-00000000000d",
+                  "position": "6"
                 }
               }
             },
@@ -619,35 +699,35 @@ export const rejectedResponse = {
           {
             "diagnostic": {
               "focus": {
-                "origin": "00000000-0000-4000-8000-000000000009",
-                "position": "4"
+                "origin": "00000000-0000-4000-8000-00000000000d",
+                "position": "6"
               },
               "kind": "inconsistency",
               "message": "Type \"Undeclared\" is not declared in this view",
               "sticky": false,
               "subjects": [
                 {
-                  "origin": "00000000-0000-4000-8000-000000000009",
-                  "position": "4"
+                  "origin": "00000000-0000-4000-8000-00000000000d",
+                  "position": "6"
                 }
               ]
             },
             "evaluated_view": {
               "first": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "5",
+                "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000009",
-                  "position": "4"
+                  "origin": "00000000-0000-4000-8000-00000000000d",
+                  "position": "6"
                 }
               },
               "kind": "prefixes",
               "last": {
                 "database": "00000000-0000-4000-8000-000000000001",
-                "end_exclusive": "5",
+                "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000009",
-                  "position": "4"
+                  "origin": "00000000-0000-4000-8000-00000000000d",
+                  "position": "6"
                 }
               }
             },
@@ -657,7 +737,7 @@ export const rejectedResponse = {
                 "name": "Type_Check",
                 "version": "0.1.0"
               },
-              "analyzer_certificate": "{\"MissingType\":{\"subject\":{\"position\":\"4\",\"origin\":\"00000000-0000-4000-8000-000000000009\"},\"name\":\"Undeclared\"}}",
+              "analyzer_certificate": "{\"MissingType\":{\"subject\":{\"position\":\"6\",\"origin\":\"00000000-0000-4000-8000-00000000000d\"},\"name\":\"Undeclared\"}}",
               "database": "00000000-0000-4000-8000-000000000001",
               "kind": "inconsistency"
             }
@@ -791,10 +871,90 @@ export const rejectedResponse = {
               "kind": "prefixes",
               "last": {
                 "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "4",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "3"
+                }
+              }
+            },
+            "key": {
+              "analyzer": {
+                "configuration": "{}",
+                "name": "Fixture_Suggestions",
+                "version": "1.0.0"
+              },
+              "analyzer_certificate": "done:1",
+              "database": "00000000-0000-4000-8000-000000000001",
+              "kind": "suggestion"
+            }
+          },
+          {
+            "diagnostic": {
+              "actions": [
+                {
+                  "intent": "revise",
+                  "kind": "node",
+                  "payload": {
+                    "priority": {
+                      "kind": "integer",
+                      "value": "2"
+                    },
+                    "status": "done",
+                    "title": "Write the report"
+                  },
+                  "predecessor": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000005",
+                      "position": "1"
+                    }
+                  },
+                  "ty_name": "Task"
+                },
+                {
+                  "from": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000007",
+                      "position": "4"
+                    }
+                  },
+                  "kind": "edge",
+                  "to": {
+                    "added": 0
+                  },
+                  "ty_name": "DependsOn"
+                }
+              ],
+              "focus": {
+                "origin": "00000000-0000-4000-8000-000000000005",
+                "position": "1"
+              },
+              "kind": "suggestion",
+              "message": "this task may be done",
+              "sticky": false,
+              "subjects": [
+                {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "1"
+                }
+              ]
+            },
+            "evaluated_view": {
+              "first": {
+                "database": "00000000-0000-4000-8000-000000000001",
                 "end_exclusive": "5",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000009",
+                  "origin": "00000000-0000-4000-8000-000000000007",
                   "position": "4"
+                }
+              },
+              "kind": "prefixes",
+              "last": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "7",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-00000000000d",
+                  "position": "6"
                 }
               }
             },
@@ -812,28 +972,28 @@ export const rejectedResponse = {
         ],
         "view": {
           "database": "00000000-0000-4000-8000-000000000001",
-          "end_exclusive": "5",
+          "end_exclusive": "7",
           "head": {
-            "origin": "00000000-0000-4000-8000-000000000009",
-            "position": "4"
+            "origin": "00000000-0000-4000-8000-00000000000d",
+            "position": "6"
           }
         }
       },
       "base": {
         "database": "00000000-0000-4000-8000-000000000001",
-        "end_exclusive": "4",
+        "end_exclusive": "6",
         "head": {
-          "origin": "00000000-0000-4000-8000-000000000005",
-          "position": "3"
+          "origin": "00000000-0000-4000-8000-000000000007",
+          "position": "5"
         }
       },
-      "base_revision": "00000000-0000-4000-8000-000000000004",
+      "base_revision": "00000000-0000-4000-8000-00000000000b",
       "database": "00000000-0000-4000-8000-000000000001",
       "operations": [
         {
           "entry": {
-            "origin": "00000000-0000-4000-8000-000000000009",
-            "position": "4"
+            "origin": "00000000-0000-4000-8000-00000000000d",
+            "position": "6"
           },
           "name": "stray"
         }

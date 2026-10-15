@@ -1,17 +1,20 @@
 use crate::{
     AppError,
     proposal::{PlanId, Proposal, ProposalLocation, present},
+    query::{self, EdgeFilter, EntryInspection, Expansion, Seed, ViewQuery},
+    schema::{self, TypeList},
     storage::{self, LockedSnapshot, Publication, Snapshot, StatePath, SyncDirectory},
 };
 use lifecore::{
-    BasicValidationFailure, Entry, EntryId, LifeCoreError, LifeCoreList, Timestamp, View, ViewId,
+    BasicValidationFailure, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, Timestamp,
+    View, ViewError, ViewId,
     analysis::{
         AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, SuiteConfig,
     },
     inspection::{Currentness, EdgeSelection, NodeSelection},
     transaction::{self, Change, Checked},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -81,12 +84,65 @@ pub struct EntryListRequest {
     // Case-sensitive substring over node text values; edges have no payload.
     #[serde(default, deserialize_with = "present")]
     pub text: Option<String>,
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntryGetRequest {
     pub id: EntryId,
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryInspectRequest {
+    pub id: EntryId,
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeListRequest {
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewQueryRequest {
+    pub seeds: Vec<Seed>,
+    #[serde(default)]
+    pub expand: Vec<Expansion>,
+    #[serde(default)]
+    pub edges: EdgeFilter,
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
+}
+
+// An optional boundary is a decimal string like every position, and null is
+// not absence.
+fn boundary<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<usize>, D::Error> {
+    lifecore::decimal::deserialize(deserializer).map(Some)
+}
+
+// The prefix a read answers from: the whole history unless `as_of` narrows it.
+fn as_of(graph: &LifeCoreList, end_exclusive: Option<usize>) -> Result<View<'_>, AppError> {
+    let view = graph.view();
+    let Some(end_exclusive) = end_exclusive else {
+        return Ok(view);
+    };
+    view.prefix(end_exclusive).map_err(|error| match error {
+    ViewError::BeyondBoundary { requested, visible } => {
+        AppError::BeyondBoundary { requested, visible }
+    }
+    other => AppError::Internal {
+        message: other.to_string(),
+    },
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,11 +304,17 @@ pub struct EntryRecord {
 }
 
 impl EntryRecord {
-    fn new(view: View<'_>, entry: &Entry) -> Self {
+    pub(crate) fn new(view: View<'_>, entry: &Entry) -> Self {
         Self {
             entry: entry.clone(),
             current: view.is_stale(entry.id()) == Some(false),
         }
+    }
+    pub(crate) fn node(view: View<'_>, node: &Node) -> Self {
+        Self::new(view, &Entry::Node(node.clone()))
+    }
+    pub(crate) fn edge(view: View<'_>, edge: &Edge) -> Self {
+        Self::new(view, &Entry::Edge(edge.clone()))
     }
 }
 
@@ -493,7 +555,7 @@ impl Service {
 
     pub fn list_entries(&self, request: EntryListRequest) -> Result<EntryList, AppError> {
         let snapshot = storage::read(&self.state)?;
-        let view = snapshot.graph.view();
+        let view = as_of(&snapshot.graph, request.as_of)?;
         let ty_name = request.ty_name.as_deref();
         let mut entries = vec![];
         if request.kind != Some(EntryKind::Edge) {
@@ -527,7 +589,7 @@ impl Service {
 
     pub fn get_entry(&self, request: EntryGetRequest) -> Result<EntryLookup, AppError> {
         let snapshot = storage::read(&self.state)?;
-        let view = snapshot.graph.view();
+        let view = as_of(&snapshot.graph, request.as_of)?;
         let entry = view
             .get(request.id)
             .ok_or(AppError::EntryNotFound { id: request.id })?;
@@ -535,6 +597,26 @@ impl Service {
             view: view.id(),
             entry: EntryRecord::new(view, entry),
         })
+    }
+
+    pub fn inspect_entry(&self, request: EntryInspectRequest) -> Result<EntryInspection, AppError> {
+        let snapshot = storage::read(&self.state)?;
+        query::inspect(as_of(&snapshot.graph, request.as_of)?, request.id)
+    }
+
+    pub fn list_types(&self, request: TypeListRequest) -> Result<TypeList, AppError> {
+        let snapshot = storage::read(&self.state)?;
+        Ok(schema::list_types(as_of(&snapshot.graph, request.as_of)?))
+    }
+
+    pub fn query_view(&self, request: ViewQueryRequest) -> Result<ViewQuery, AppError> {
+        let snapshot = storage::read(&self.state)?;
+        query::query(
+            as_of(&snapshot.graph, request.as_of)?,
+            &request.seeds,
+            &request.expand,
+            &request.edges,
+        )
     }
 
     pub fn mint_plan_id(&self, _: NoParams) -> Result<MintedPlanId, AppError> {

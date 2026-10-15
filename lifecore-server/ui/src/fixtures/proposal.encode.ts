@@ -49,14 +49,14 @@ export const request = {
           "name": "extremes_link",
           "to": {
             "existing": {
-              "origin": "00000000-0000-4000-8000-000000000011",
+              "origin": "00000000-0000-4000-8000-000000000015",
               "position": "18446744073709551615"
             }
           },
           "ty_name": "DependsOn"
         }
       ],
-      "plan_id": "lc1:00000000-0000-4000-8000-00000000000e:00000000-0000-4000-8000-00000000000f:00000000-0000-4000-8000-000000000010"
+      "plan_id": "lc1:00000000-0000-4000-8000-000000000012:00000000-0000-4000-8000-000000000013:00000000-0000-4000-8000-000000000014"
     }
   }
 } satisfies RpcRequest<"proposal.encode">;
@@ -65,6 +65,6 @@ export const response = {
   "id": "encode",
   "jsonrpc": "2.0",
   "result": {
-    "text": "{\n  \"plan_id\": \"lc1:00000000-0000-4000-8000-00000000000e:00000000-0000-4000-8000-00000000000f:00000000-0000-4000-8000-000000000010\",\n  \"entries\": [\n    {\n      \"kind\": \"node\",\n      \"name\": \"extremes\",\n      \"ty_name\": \"Task\",\n      \"payload\": {\n        \"maximum\": {\n          \"kind\": \"integer\",\n          \"value\": \"9223372036854775807\"\n        },\n        \"minimum\": {\n          \"kind\": \"integer\",\n          \"value\": \"-9223372036854775808\"\n        },\n        \"nested\": [\n          {\n            \"kind\": \"integer\",\n            \"value\": \"1\"\n          },\n          {\n            \"kind\": \"record\",\n            \"value\": {\n              \"at\": {\n                \"kind\": \"timestamp\",\n                \"value\": \"2026-10-15T08:30:00.000000001Z\"\n              }\n            }\n          }\n        ],\n        \"title\": \"Bare integers decode in Rust\"\n      }\n    },\n    {\n      \"kind\": \"edge\",\n      \"name\": \"extremes_link\",\n      \"ty_name\": \"DependsOn\",\n      \"from\": {\n        \"added\": \"extremes\"\n      },\n      \"to\": {\n        \"existing\": {\n          \"position\": \"18446744073709551615\",\n          \"origin\": \"00000000-0000-4000-8000-000000000011\"\n        }\n      }\n    }\n  ]\n}\n"
+    "text": "{\n  \"plan_id\": \"lc1:00000000-0000-4000-8000-000000000012:00000000-0000-4000-8000-000000000013:00000000-0000-4000-8000-000000000014\",\n  \"entries\": [\n    {\n      \"kind\": \"node\",\n      \"name\": \"extremes\",\n      \"ty_name\": \"Task\",\n      \"payload\": {\n        \"maximum\": {\n          \"kind\": \"integer\",\n          \"value\": \"9223372036854775807\"\n        },\n        \"minimum\": {\n          \"kind\": \"integer\",\n          \"value\": \"-9223372036854775808\"\n        },\n        \"nested\": [\n          {\n            \"kind\": \"integer\",\n            \"value\": \"1\"\n          },\n          {\n            \"kind\": \"record\",\n            \"value\": {\n              \"at\": {\n                \"kind\": \"timestamp\",\n                \"value\": \"2026-10-15T08:30:00.000000001Z\"\n              }\n            }\n          }\n        ],\n        \"title\": \"Bare integers decode in Rust\"\n      }\n    },\n    {\n      \"kind\": \"edge\",\n      \"name\": \"extremes_link\",\n      \"ty_name\": \"DependsOn\",\n      \"from\": {\n        \"added\": \"extremes\"\n      },\n      \"to\": {\n        \"existing\": {\n          \"position\": \"18446744073709551615\",\n          \"origin\": \"00000000-0000-4000-8000-000000000015\"\n        }\n      }\n    }\n  ]\n}\n"
   }
 } satisfies RpcSuccess<"proposal.encode">;

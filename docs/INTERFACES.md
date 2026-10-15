@@ -187,14 +187,22 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | Method | Parameters | Result |
 | --- | --- | --- |
 | `database.describe` | none | `database`, `graph_revision`, current `view`, ordered `suite` |
-| `entries.list` | optional `kind` (`node`/`edge`), `ty_name`, `currentness` (`current` default, `historical`, `all`), `text` (node text search) | `database`, `graph_revision`, `view`, `entries` in append order |
-| `entries.get` | `id` (exact `EntryId`) | `view` and `entry` |
+| `entries.list` | optional `kind` (`node`/`edge`), `ty_name`, `currentness` (`current` default, `historical`, `all`), `text` (node text search), `as_of` | `database`, `graph_revision`, `view`, `entries` in append order |
+| `entries.get` | `id` (exact `EntryId`), optional `as_of` | `view` and `entry` |
+| `entries.inspect` | `id`, optional `as_of` | tagged by `kind`: a node with its `type` resolution, its `lineage` (the whole revision tree, root first) and its incident `edges` of any currentness (each with `direction` and the `other` endpoint); or an edge with `from` and `to` |
+| `types.list` | optional `as_of` | `view` and `types`: one summary per name the view knows, sorted by name, with its `resolution` (`builtin`, `declared` with the structured schema, `missing`, `ambiguous`, `malformed`) and node counts by currentness |
+| `views.query` | `seeds` (exact node `ids`, or a node selection), ordered `expand` steps (`hops`, `direction`, `ty_names`, `currentness`), an `edges` filter, optional `as_of` | `view`, `nodes` with their `provenance` (`seed`, or `reached` at a hop over an edge from a node), and the matching `edges` among them |
 | `plan_id.mint` | none | `plan_id` |
 | `proposal.check` | `proposal`, evaluation inputs | `accepted` and `report`: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |
 | `proposal.apply` | `proposal`, evaluation inputs | new `graph_revision` and the report with actual entry IDs |
 | `proposal.decode` | raw `text`, `format` (`json`/`toml`) | canonical `Proposal` |
 | `proposal.encode` | `proposal`, `format` | `text` |
 | `analyzers.add` | `name`, `configuration` (default `{}`), evaluation inputs | new `graph_revision`, `suite`, and the report |
+
+Read methods take an optional `as_of`, a decimal position: they answer from
+the prefix `[0, as_of)`, whose boundary the result's `view` names, and default
+to the whole history. A boundary past the visible end fails with
+`beyond_boundary` (4002). `ui/src/contract.ts` declares the exact shapes.
 
 Each entry record is the stored entry of
 [FILES §2.5](FILES.md#25-entry-shaped-types) with `current` beside its members.
@@ -227,6 +235,7 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 2006 | `rejected` | Inconsistencies; `data.report` has the complete report. For `init`, whose base was never published, the report omits `base_revision`. |
 | 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
 | 4001 | `entry_not_found` | The identity is not present in the selected view. |
+| 4002 | `beyond_boundary` | `as_of` exceeds the visible end; `data` carries `requested` and `visible` as decimal strings. |
 | 5001 | `backend_failure` | The host task running the call ended without a response, for example by panicking. A write it was making may or may not have been published; inspect the stored state. Never a rollback. |
 
 Invalid parameters (`-32602`, `invalid_params`) and internal errors (`-32603`,
