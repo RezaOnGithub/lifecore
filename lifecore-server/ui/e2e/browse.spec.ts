@@ -219,7 +219,7 @@ test("a row opens the inspector with payload, lineage, and relationships", async
   await expect(relationships.nth(0)).toContainText("Write the report");
   await expect(relationships.nth(1)).toContainText("←");
   await expect(relationships.nth(1)).toContainText("Publish the report");
-  await expect(main().getByRole("button", { name: "Revise" })).toBeDisabled();
+  await expect(main().getByRole("button", { name: "Revise" })).toBeEnabled();
 });
 
 test("following a relationship shows the revised node's lineage", async () => {

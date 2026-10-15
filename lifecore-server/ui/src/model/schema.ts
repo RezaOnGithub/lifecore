@@ -4,6 +4,7 @@ import type {
   FieldDecls,
   FieldStatus,
   Payload,
+  RecordPayload,
   Shape,
   TypeSchema,
 } from "../contract.ts";
@@ -114,6 +115,49 @@ function parseShape(words: Payload[]): Shape | null {
     }
     default:
       return null;
+  }
+}
+
+// Writes the structured schema as the word encoding of FILES §2.6, the
+// inverse of `parseDeclaration`. All five keys are written, empty where
+// nothing is declared, so a form-built declaration equals a hand-written
+// canonical one. Permission lists come out sorted and without repeats, as
+// the server's sets would; a repeated permission would be malformed.
+export function declarationBody(schema: TypeSchema): Body {
+  return {
+    name: schema.name,
+    fields: fieldDeclsEnvelope(schema.fields),
+    outgoing: canonicalNames(schema.outgoing),
+    incoming: canonicalNames(schema.incoming),
+    successors: canonicalNames(schema.successors),
+  };
+}
+
+function canonicalNames(names: readonly string[]): string[] {
+  return [...new Set(names)].sort();
+}
+
+function fieldDeclsEnvelope(decls: FieldDecls): RecordPayload {
+  const value: Body = {};
+  for (const [field, decl] of Object.entries(decls)) {
+    value[field] = [decl.status, ...shapeWordList(decl.shape)];
+  }
+  return { kind: "record", value };
+}
+
+// `record` ends the list with its envelope; `list` is followed by the
+// element's own words.
+function shapeWordList(shape: Shape): Payload[] {
+  switch (shape.kind) {
+    case "text":
+    case "integer":
+    case "boolean":
+    case "timestamp":
+      return [shape.kind];
+    case "list":
+      return ["list", ...shapeWordList(shape.element)];
+    case "record":
+      return ["record", fieldDeclsEnvelope(shape.fields)];
   }
 }
 

@@ -14,6 +14,16 @@ export function useOpen(): Open {
   return useContext(NavigationContext);
 }
 
+// Swaps the current screen without a Back step, as when the operation under
+// the editor is renamed.
+export const ReplaceContext = createContext<Open>(() => {
+  throw new Error("ReplaceContext has no provider");
+});
+
+export function useReplace(): Open {
+  return useContext(ReplaceContext);
+}
+
 export function Position({ id }: { id: EntryId }) {
   return <code className="pos">@{id.position}</code>;
 }
@@ -59,6 +69,21 @@ export function IdLink({ id }: { id: EntryId }) {
       onClick={() => open({ kind: "inspector", id })}
     >
       <Position id={id} />
+    </button>
+  );
+}
+
+// A draft operation linking to its editor, read "+name" as in the reference
+// chips.
+export function OperationLink({ name }: { name: string }) {
+  const open = useOpen();
+  return (
+    <button
+      type="button"
+      className="link"
+      onClick={() => open({ kind: "operation", name })}
+    >
+      +{name}
     </button>
   );
 }

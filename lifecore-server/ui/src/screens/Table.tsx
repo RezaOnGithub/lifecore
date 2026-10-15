@@ -6,8 +6,9 @@ import type {
   TypeSummary,
 } from "../contract.ts";
 import { latest, schemaOf, useAsOf, useCall, useTypes } from "../data.tsx";
+import { useDraft } from "../draft/context.tsx";
 import { FailureView } from "../failure.tsx";
-import { IdLink } from "../links.tsx";
+import { IdLink, useOpen } from "../links.tsx";
 import { typeName } from "../model/labels.ts";
 import { EntryTable } from "../views/EntryTable.tsx";
 import { CurrentnessSelect, ResolutionBadge } from "../views/widgets.tsx";
@@ -74,6 +75,8 @@ function ResolutionNote({
 export function TableScreen({ ty_name }: { ty_name: string }) {
   const asOf = useAsOf();
   const types = useTypes();
+  const { actions } = useDraft();
+  const open = useOpen();
   const [currentness, setCurrentness] = useState<Currentness>("current");
   const [text, setText] = useState("");
   const [applied, setApplied] = useState("");
@@ -104,7 +107,17 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
         );
   return (
     <section data-testid="table">
-      <h2>{typeName(ty_name)}</h2>
+      <h2>
+        {typeName(ty_name)}{" "}
+        <button
+          type="button"
+          onClick={() =>
+            open({ kind: "operation", name: actions.addNode(ty_name) })
+          }
+        >
+          New node of this type
+        </button>
+      </h2>
       <ResolutionNote types={types} ty_name={ty_name} />
       <div className="row">
         <label htmlFor="table-currentness">show</label>

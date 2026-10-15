@@ -511,6 +511,41 @@ them; none is a server contract.
 - The inspector of a `Type` node shows the parsed schema (the server's parse
   for a current declaration, else a client-side reading) and then the full
   payload table, so `name` and fields outside the grammar stay visible.
+- Drafts: one per database, kept in `localStorage` under
+  `lifecore.draft.<database>`. Only the proposal is saved, on every change, and
+  restored on load; check results and editor state are not, and an unreadable
+  stored draft is dropped. A plan ID is minted when the draft gets its first
+  operation and again only on an explicit Replan, which clears the stale check.
+- Operation names default to `<ty_name lowercased>_<n>`, with the smallest
+  free `n` and characters outside the name grammar replaced by `_`. Names
+  identify operations in the client, so a rename to a name in use is refused;
+  a name outside the grammar is kept while typed and left to the server to
+  reject. Renames update `added` references. Removing an operation clears the
+  references to it: a node becomes a root, an edge end must be picked again.
+  Appended imports get a `_<n>` suffix on a name collision.
+- Check is manual. The evaluation time is absent by default, `now`, or an
+  explicit timestamp. Apply is enabled only after an accepted check of
+  identical proposal JSON, plan ID included, so any edit disables it, and it
+  reuses that check's evaluation choice. A successful Apply clears the draft,
+  lists the assigned IDs until dismissed, and reloads every screen. A lost
+  apply answer, `publication_uncertain`, or `backend_failure` keeps the draft,
+  says the change may have been applied, and reloads the screens. Nothing is
+  retried automatically. Drafts always apply to the current state; while an
+  as-of boundary is set, the tray says so.
+- A finding belongs to the operation whose entry is the newest in the first
+  prefix it was emitted at. Findings first emitted before the base are listed
+  as already in history, and initialization findings as suite-level.
+  Provisional subjects link to their operations.
+- Revise and Branch copy the node's payload. Reconnection lists the
+  predecessor's current edges, read without `as_of`. Revise keeps all of them
+  by default and Branch none. Each kept edge becomes an explicit edge
+  operation, `<operation>_keep_<edge position>`, placed after the revision
+  ([SPEC §5](SPEC.md#5-current-and-historical-data)).
+- Picking: an editor's pick leaves a pending role (predecessor, from, or to).
+  While it is pending, every node inspector offers "Use as <role>", which sets
+  an `existing` reference and returns to the operation; edges cannot be
+  picked. Connect starts an edge from the inspected node and picks its `to`.
+  The client does not send a draft with an endpoint still unpicked.
 
 ## 6. Analysis lifetime and dismissal persistence
 

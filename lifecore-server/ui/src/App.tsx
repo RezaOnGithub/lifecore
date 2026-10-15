@@ -19,8 +19,9 @@ import {
   useAsOf,
   useCall,
 } from "./data.tsx";
+import { DraftProvider } from "./draft/context.tsx";
 import { FailureView } from "./failure.tsx";
-import { NavigationContext, useOpen } from "./links.tsx";
+import { NavigationContext, ReplaceContext, useOpen } from "./links.tsx";
 import { entryKey, typeName } from "./model/labels.ts";
 import { exploreReducer, initialExplore } from "./model/query.ts";
 import {
@@ -34,23 +35,23 @@ import type { RpcClient } from "./rpc.ts";
 import { DatabaseScreen } from "./screens/Database.tsx";
 import { ExploreScreen } from "./screens/Explore.tsx";
 import { InspectorScreen } from "./screens/Inspector.tsx";
+import { OperationScreen } from "./screens/Operation.tsx";
 import { TableScreen } from "./screens/Table.tsx";
+import { ImportView } from "./views/Import.tsx";
+import { Tray } from "./views/Tray.tsx";
 import { ResolutionBadge } from "./views/widgets.tsx";
 
 export function App({ client }: { client: RpcClient }) {
   const [asOf, setAsOf] = useState<DecimalString | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const bumpRefresh = useCallback(() => setRefresh((count) => count + 1), []);
   const source = useMemo(
-    () => ({ client, asOf, refresh }),
-    [client, asOf, refresh],
+    () => ({ client, asOf, refresh, bumpRefresh }),
+    [client, asOf, refresh, bumpRefresh],
   );
   return (
     <DataContext value={source}>
-      <Shell
-        asOf={asOf}
-        onAsOf={setAsOf}
-        onRefresh={() => setRefresh((count) => count + 1)}
-      />
+      <Shell asOf={asOf} onAsOf={setAsOf} onRefresh={bumpRefresh} />
     </DataContext>
   );
 }
@@ -70,6 +71,10 @@ function Shell({
     (screen: Screen) => dispatch({ kind: "open", screen }),
     [],
   );
+  const replace = useCallback(
+    (screen: Screen) => dispatch({ kind: "replace", screen }),
+    [],
+  );
   const description = useCall("database.describe", {});
   const types = useCall("types.list", useAsOf());
   const exploreFrom = (id: EntryId) => {
@@ -77,52 +82,74 @@ function Shell({
     open({ kind: "explore" });
   };
   const screen = nav.current;
+  // The draft is per database: the provider mounts once the id is known and
+  // remounts, restoring that database's draft, if it ever changes.
+  const database = latest(description)?.database ?? null;
   // Explore stays mounted, hidden under other screens, so its results
   // survive a detour through the inspector and Back.
   return (
     <NavigationContext value={open}>
-      <TypesContext value={latest(types)?.types ?? null}>
-        <div className="app">
-          <TopBar
-            description={description}
-            nav={nav}
-            dispatch={dispatch}
-            asOf={asOf}
-            onAsOf={onAsOf}
-            onRefresh={onRefresh}
-          />
-          {description.status === "failed" ? (
-            <main className="full">
-              <FailureView failure={description.failure} />
-            </main>
-          ) : (
-            <>
-              <Sidebar types={types} screen={screen} />
-              <main>
-                {screen.kind === "database" &&
-                  (description.status === "ready" ? (
-                    <DatabaseScreen description={description.result} />
-                  ) : (
-                    <p className="muted">Loading the database description…</p>
-                  ))}
-                {screen.kind === "table" && (
-                  <TableScreen key={screen.ty_name} ty_name={screen.ty_name} />
-                )}
-                {screen.kind === "inspector" && (
-                  <InspectorScreen
-                    key={entryKey(screen.id)}
-                    id={screen.id}
-                    onExplore={exploreFrom}
-                  />
-                )}
-                <div hidden={screen.kind !== "explore"}>
-                  <ExploreScreen state={explore} dispatch={dispatchExplore} />
-                </div>
-              </main>
-            </>
-          )}
-        </div>
-      </TypesContext>
+      <ReplaceContext value={replace}>
+        <TypesContext value={latest(types)?.types ?? null}>
+          <DraftProvider key={database ?? ""} database={database}>
+            <div className="app">
+              <TopBar
+                description={description}
+                nav={nav}
+                dispatch={dispatch}
+                asOf={asOf}
+                onAsOf={onAsOf}
+                onRefresh={onRefresh}
+              />
+              {description.status === "failed" ? (
+                <main className="full">
+                  <FailureView failure={description.failure} />
+                </main>
+              ) : (
+                <>
+                  <Sidebar types={types} screen={screen} />
+                  <main>
+                    {screen.kind === "database" &&
+                      (description.status === "ready" ? (
+                        <DatabaseScreen description={description.result} />
+                      ) : (
+                        <p className="muted">
+                          Loading the database description…
+                        </p>
+                      ))}
+                    {screen.kind === "table" && (
+                      <TableScreen
+                        key={screen.ty_name}
+                        ty_name={screen.ty_name}
+                      />
+                    )}
+                    {screen.kind === "inspector" && (
+                      <InspectorScreen
+                        key={entryKey(screen.id)}
+                        id={screen.id}
+                        onExplore={exploreFrom}
+                      />
+                    )}
+                    {/* Not keyed by name: a rename must not remount the
+                      editor under the user's cursor. */}
+                    {screen.kind === "operation" && (
+                      <OperationScreen name={screen.name} />
+                    )}
+                    {screen.kind === "import" && <ImportView />}
+                    <div hidden={screen.kind !== "explore"}>
+                      <ExploreScreen
+                        state={explore}
+                        dispatch={dispatchExplore}
+                      />
+                    </div>
+                  </main>
+                  <Tray screen={screen} />
+                </>
+              )}
+            </div>
+          </DraftProvider>
+        </TypesContext>
+      </ReplaceContext>
     </NavigationContext>
   );
 }

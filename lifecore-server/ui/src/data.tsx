@@ -12,10 +12,12 @@ import type { RpcClient } from "./rpc.ts";
 
 // What every read shares: the client, the selected boundary (null for the
 // whole history), and a counter the Refresh button bumps to re-fetch.
+// `bumpRefresh` bumps it from anywhere, such as after an applied draft.
 export interface DataSource {
   client: RpcClient;
   asOf: DecimalString | null;
   refresh: number;
+  bumpRefresh: () => void;
 }
 
 export const DataContext = createContext<DataSource | null>(null);

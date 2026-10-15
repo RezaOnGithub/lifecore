@@ -10,13 +10,16 @@ import type {
   ViewId,
 } from "../contract.ts";
 import { latest, useAsOf, useCall, useTypes } from "../data.tsx";
+import { useDraft } from "../draft/context.tsx";
 import { FailureView } from "../failure.tsx";
 import {
   CurrentBadge,
   IdLink,
   NodeLink,
+  OperationLink,
   Position,
   TypeLink,
+  useOpen,
 } from "../links.tsx";
 import { entryKey, rowLabel, sameId } from "../model/labels.ts";
 import { lineageRows } from "../model/lineage.ts";
@@ -94,6 +97,46 @@ function ownDeclaration(
   return parseDeclaration(node.payload);
 }
 
+// While an operation waits for a node, every node inspection offers itself;
+// an edge inspection says it cannot be picked.
+function PickBanner({ id }: { id: EntryId | null }) {
+  const { state, actions } = useDraft();
+  const open = useOpen();
+  const { picking } = state;
+  if (picking === null) {
+    return null;
+  }
+  return (
+    <div className="banner picking" role="status" data-testid="pick-banner">
+      {id === null ? (
+        <>
+          Edges cannot be picked as the {picking.role} of{" "}
+          <OperationLink name={picking.operation} />; open a node.
+        </>
+      ) : (
+        <>
+          Use this node as the {picking.role} of{" "}
+          <OperationLink name={picking.operation} />?{" "}
+          <button
+            type="button"
+            onClick={() => {
+              const operation = actions.resolvePick(id);
+              if (operation !== null) {
+                open({ kind: "operation", name: operation });
+              }
+            }}
+          >
+            Use as {picking.role}
+          </button>
+        </>
+      )}{" "}
+      <button type="button" onClick={() => actions.cancelPick()}>
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 function NodeInspection({
   inspection,
   onExplore,
@@ -104,10 +147,16 @@ function NodeInspection({
   const { entry, type, lineage, edges, view } = inspection;
   const [raw, setRaw] = useState(false);
   const types = useTypes();
+  const { actions } = useDraft();
+  const open = useOpen();
   const declaration =
     entry.ty_name === "Type" ? ownDeclaration(types, entry) : null;
+  const revise = (intent: "revise" | "branch") => {
+    open({ kind: "operation", name: actions.revise(entry, intent) });
+  };
   return (
     <article data-testid="inspector">
+      <PickBanner id={entry.id} />
       <h2>
         {rowLabel(entry)} <Position id={entry.id} />
       </h2>
@@ -126,14 +175,27 @@ function NodeInspection({
         <button type="button" onClick={() => onExplore(entry.id)}>
           Explore from here
         </button>
-        <span className="muted">authoring comes in Milestone 2:</span>
-        <button type="button" disabled title="not yet available">
+        <button
+          type="button"
+          title="a new revision with this payload; current edges are kept"
+          onClick={() => revise("revise")}
+        >
           Revise
         </button>
-        <button type="button" disabled title="not yet available">
+        <button
+          type="button"
+          title="a new branch with this payload; no edges are kept"
+          onClick={() => revise("branch")}
+        >
           Branch
         </button>
-        <button type="button" disabled title="not yet available">
+        <button
+          type="button"
+          title="a new edge from this node"
+          onClick={() =>
+            open({ kind: "operation", name: actions.connect(entry.id) })
+          }
+        >
           Connect
         </button>
       </div>
@@ -282,6 +344,7 @@ function EdgeInspection({
   } = inspection;
   return (
     <article data-testid="inspector">
+      <PickBanner id={null} />
       <h2>
         {entry.ty_name} <Position id={entry.id} />
       </h2>

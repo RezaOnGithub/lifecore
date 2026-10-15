@@ -5,7 +5,10 @@ export type Screen =
   | { kind: "database" }
   | { kind: "table"; ty_name: string }
   | { kind: "inspector"; id: EntryId }
-  | { kind: "explore" };
+  | { kind: "explore" }
+  // A draft operation, by its name; a renamed one is a different screen.
+  | { kind: "operation"; name: string }
+  | { kind: "import" };
 
 // In-memory navigation: the current screen and the stack Back pops. There is
 // no URL routing in the prototype.
@@ -16,6 +19,9 @@ export interface Navigation {
 
 export type NavigationAction =
   | { kind: "open"; screen: Screen }
+  // Swaps the current screen without a step, as when an operation is renamed
+  // under its editor.
+  | { kind: "replace"; screen: Screen }
   | { kind: "back" };
 
 export const initialNavigation: Navigation = {
@@ -29,6 +35,8 @@ export function sameScreen(a: Screen, b: Screen): boolean {
       return b.kind === "table" && a.ty_name === b.ty_name;
     case "inspector":
       return b.kind === "inspector" && sameId(a.id, b.id);
+    case "operation":
+      return b.kind === "operation" && a.name === b.name;
     default:
       return a.kind === b.kind;
   }
@@ -49,6 +57,8 @@ export function navigate(
         current: action.screen,
         history: [...state.history, state.current],
       };
+    case "replace":
+      return { ...state, current: action.screen };
     case "back": {
       const previous = state.history.at(-1);
       if (previous === undefined) {

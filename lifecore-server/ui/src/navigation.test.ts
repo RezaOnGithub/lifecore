@@ -38,3 +38,30 @@ test("reopening the current screen and backing out of the first are no-ops", () 
     opened,
   );
 });
+
+test("operations are screens by name and replace swaps without a step", () => {
+  const operation: Screen = { kind: "operation", name: "task_1" };
+  const opened = navigate(initialNavigation, {
+    kind: "open",
+    screen: operation,
+  });
+  assert.equal(
+    navigate(opened, {
+      kind: "open",
+      screen: { kind: "operation", name: "task_1" },
+    }),
+    opened,
+  );
+  const renamed = navigate(opened, {
+    kind: "replace",
+    screen: { kind: "operation", name: "task_2" },
+  });
+  assert.deepEqual(renamed, {
+    current: { kind: "operation", name: "task_2" },
+    history: [{ kind: "database" }],
+  });
+  assert.notEqual(
+    navigate(renamed, { kind: "open", screen: { kind: "import" } }),
+    renamed,
+  );
+});

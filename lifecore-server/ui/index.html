@@ -356,6 +356,253 @@
       .error.compact p {
         margin: 0;
       }
+      /* editors */
+      .editor .row > label {
+        color: #666;
+      }
+      .editor input[aria-invalid="true"],
+      .editor textarea[aria-invalid="true"] {
+        border: 1px solid #b00020;
+        background: #fff4f4;
+      }
+      .field-error {
+        color: #b00020;
+        font-size: 0.85rem;
+      }
+      .ref-chip {
+        display: inline-block;
+        border: 1px solid #aaa;
+        border-radius: 1rem;
+        padding: 0 0.5rem;
+        background: #f4f4f4;
+      }
+      .intent {
+        display: inline-flex;
+        gap: 0.6rem;
+        align-items: center;
+        margin-left: 0.5rem;
+      }
+      .payload-editor .row h4 {
+        margin: 0;
+      }
+      .fields-editor table.fields,
+      .decls-editor table.fields {
+        width: 100%;
+      }
+      table.fields td.value {
+        width: 100%;
+      }
+      table.fields > tbody > tr.undeclared > th {
+        font-style: italic;
+        color: #a60;
+      }
+      table.fields > tbody > tr.group > th {
+        background: #f4f4f4;
+        color: #666;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+      }
+      /* Nested bodies indent under their field; their headers must not
+         stick, or every level would pile up at the top while scrolling. */
+      .fields-editor.nested,
+      .decls-editor.nested {
+        margin: 0.2rem 0 0.2rem 0.5rem;
+        padding-left: 0.5rem;
+        border-left: 2px solid #ddd;
+      }
+      .fields-editor.nested table.fields thead th,
+      .decls-editor.nested table.fields thead th {
+        position: static;
+      }
+      .list-editor .row {
+        margin: 0.15rem 0;
+      }
+      .shape-builder {
+        display: inline-flex;
+        gap: 0.3rem;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .raw-editor textarea {
+        font-family: ui-monospace, monospace;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .raw-editor {
+        max-width: 60rem;
+      }
+      /* draft */
+      /* A third column for the draft tray; main keeps minmax(0, 1fr) so it
+         can shrink and scroll. */
+      .app {
+        grid-template-columns: 15rem minmax(0, 1fr) auto;
+      }
+      aside.tray {
+        border-left: 1px solid #c8c8c8;
+        background: #fbfbfb;
+        width: 24rem;
+        min-width: 0;
+        overflow: auto;
+        padding: 0.5rem 0.75rem;
+        box-sizing: border-box;
+      }
+      aside.tray.collapsed {
+        width: auto;
+        padding: 0.5rem 0.3rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      aside.tray.collapsed .strip {
+        writing-mode: vertical-rl;
+        color: #666;
+        font-size: 0.85rem;
+        white-space: nowrap;
+      }
+      .tray-title {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        color: #666;
+        margin: 0.25rem 0;
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .tray-spacer {
+        flex: 1;
+      }
+      aside.tray h3 {
+        font-size: 0.9rem;
+        margin: 0.75rem 0 0.25rem;
+      }
+      .plan {
+        font-size: 0.75rem;
+        color: #666;
+        overflow-wrap: anywhere;
+        margin: 0.2rem 0;
+      }
+      .operations {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .operations li.op {
+        border: 1px solid #ddd;
+        border-radius: 3px;
+        padding: 0.3rem 0.5rem;
+        margin: 0.3rem 0;
+        background: #fff;
+      }
+      .operations li.op.selected {
+        border-color: #06c;
+        background: #eef4ff;
+      }
+      .operations li.op.invalid {
+        border-color: #b00020;
+        background: #fff4f4;
+      }
+      .operations .row {
+        margin: 0;
+      }
+      .badge.kind {
+        text-transform: uppercase;
+        font-size: 0.65rem;
+      }
+      .badge.kind-inconsistency,
+      .badge.check-bad {
+        border-color: #b00020;
+        background: #fde8ea;
+      }
+      .badge.kind-warning,
+      .badge.check-warn {
+        border-color: #c80;
+        background: #fff3dc;
+      }
+      .badge.kind-suggestion {
+        border-color: #27a;
+        background: #e8f2fb;
+      }
+      .badge.check-ok {
+        border-color: #2a7;
+        background: #e6f7ee;
+      }
+      .ref-issue button.link {
+        color: #a60;
+        text-decoration: underline wavy;
+      }
+      .findings {
+        list-style: none;
+        margin: 0.2rem 0;
+        padding: 0;
+        font-size: 0.85rem;
+      }
+      .findings li {
+        padding: 0.15rem 0;
+        border-top: 1px dotted #ddd;
+      }
+      .findings .chips {
+        margin: 0.15rem 0 0;
+        font-size: 0.8rem;
+      }
+      .banner {
+        border: 1px solid #999;
+        background: #f4f4f4;
+        padding: 0.4rem 0.6rem;
+        margin: 0.4rem 0;
+        font-size: 0.9rem;
+        border-radius: 3px;
+        overflow-wrap: anywhere;
+      }
+      .banner .note {
+        margin: 0.3rem 0;
+      }
+      .banner ul {
+        margin: 0.2rem 0 0.2rem 1rem;
+        padding: 0;
+      }
+      .banner.asof {
+        border-color: #06c;
+        background: #e6f0ff;
+      }
+      .banner.stale,
+      .banner.busy {
+        border-color: #c80;
+        background: #fff3dc;
+      }
+      .banner.uncertain,
+      .banner.problem {
+        border-color: #b00020;
+        background: #fff4f4;
+      }
+      .banner.applied {
+        border-color: #2a7;
+        background: #e6f7ee;
+      }
+      .banner.picking {
+        border-color: #27a;
+        background: #e8f2fb;
+      }
+      aside.tray textarea.export {
+        width: 100%;
+        box-sizing: border-box;
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+      }
+      .importer textarea {
+        width: 100%;
+        max-width: 60rem;
+        box-sizing: border-box;
+        font-family: ui-monospace, monospace;
+      }
+      .reconnect-list {
+        list-style: none;
+        margin: 0.3rem 0;
+        padding: 0;
+      }
+      .reconnect-list li {
+        padding: 0.1rem 0;
+      }
     </style>
   </head>
   <body>
