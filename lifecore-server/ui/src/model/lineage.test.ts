@@ -34,6 +34,10 @@ test("a revision tree indents successors under their predecessor", () => {
   );
 });
 
+test("an empty lineage has no rows", () => {
+  assert.deepEqual(lineageRows([]), []);
+});
+
 test("a node whose predecessor is not listed is shown as a root", () => {
   const rows = lineageRows([node("5", "4"), node("6", "5")]);
   assert.deepEqual(

@@ -13,7 +13,7 @@ import { ValueCell } from "./Payload.tsx";
 
 export interface ExtraColumn<R extends NodeRecord> {
   key: string;
-  header: string;
+  header: ReactNode;
   cell: (row: R) => ReactNode;
   // Omitted for a column that does not sort.
   sortValue?: (row: R) => Payload | undefined;

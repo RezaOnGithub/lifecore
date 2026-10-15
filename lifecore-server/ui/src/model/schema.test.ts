@@ -78,6 +78,20 @@ test("omitted collections are empty and unreadable payloads are null", () => {
   assert.equal(parseDeclaration({ name: "X", outgoing: "DependsOn" }), null);
 });
 
+test("fields given as a list are unreadable; an empty name still parses", () => {
+  assert.equal(
+    parseDeclaration({ name: "X", fields: ["optional", "text"] }),
+    null,
+  );
+  assert.deepEqual(parseDeclaration({ name: "" }), {
+    name: "",
+    fields: {},
+    outgoing: [],
+    incoming: [],
+    successors: [],
+  });
+});
+
 test("the Type table summarizes a declaration", () => {
   assert.equal(
     declarationSummary(task),

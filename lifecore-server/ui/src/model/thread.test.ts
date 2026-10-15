@@ -102,6 +102,46 @@ test("a cycle is cut at the first revisit on the path", () => {
   );
 });
 
+test("an edge with an endpoint outside the result is ignored", () => {
+  const nodes = ["1", "2"].map(node);
+  const edges = [edge("10", "1", "9"), edge("11", "9", "2")];
+  const thread = buildThread(nodes, edges, {
+    ty_name: "DependsOn",
+    direction: "outgoing",
+  });
+  assert.deepEqual(rows(thread), [
+    ["node", "o:1", 0],
+    ["node", "o:2", 0],
+  ]);
+  assert.equal(thread.stripes.size, 0);
+});
+
+test("duplicate edges between a pair nest the child once", () => {
+  const nodes = ["1", "2"].map(node);
+  const edges = [edge("10", "1", "2"), edge("11", "1", "2")];
+  const thread = buildThread(nodes, edges, {
+    ty_name: "DependsOn",
+    direction: "outgoing",
+  });
+  assert.deepEqual(rows(thread), [
+    ["node", "o:1", 0],
+    ["node", "o:2", 1],
+  ]);
+  assert.equal(thread.stripes.size, 0);
+});
+
+test("without edges every node is a root in append order", () => {
+  const thread = buildThread(["2", "1"].map(node), [], {
+    ty_name: "",
+    direction: "outgoing",
+  });
+  assert.deepEqual(rows(thread), [
+    ["node", "o:2", 0],
+    ["node", "o:1", 0],
+  ]);
+  assert.equal(thread.stripes.size, 0);
+});
+
 test("stripes cycle through the palette with a suffix afterwards", () => {
   assert.deepEqual(stripeMark(0), { color: 0, suffix: "" });
   assert.deepEqual(stripeMark(7), { color: 7, suffix: "" });

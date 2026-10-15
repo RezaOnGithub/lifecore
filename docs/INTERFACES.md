@@ -462,6 +462,49 @@ database through `LIFECORE_STATE_FILE_PATH`, starts `lifecore serve`, reads the
 printed URL with its launch token from standard output, and opens it, so tests
 exercise the real access flow and the embedded client.
 
+### 5.2 Client decisions
+
+Presentation choices of the browsing client, recorded so the code can cite
+them; none is a server contract.
+
+- Row label: a node's `title` field when it is text, else `name` when text,
+  else the alphabetically first top-level text field, else
+  `<ty_name> @<position>`. Blank text does not count; an empty type name reads
+  "(unnamed)". `@position` is shown beside a field label. Labels are cut at 60
+  characters on screen with the full text as a tooltip.
+- `@position` is an entry's on-screen identity; the origin UUID is never shown.
+- As-of is one global client state set in the top bar, sent as `as_of` with
+  every read, and not part of Back history. `database.describe` is read
+  history-wide, so the Database screen counts the whole history, while the top
+  bar shows `view [0, as_of) of N entries` and tables and the inspector show
+  the `view` their own response names.
+- Navigation is in memory: Back pops a stack, reopening the current screen is
+  not a step, and Explore stays mounted under the other screens, so its form
+  and results, or its failure, survive a detour.
+- Table columns: label, `@position`, current, then the declared fields by
+  status (mandatory, encouraged, optional, deprecated) and name, then
+  undeclared fields present in the rows, marked. The `Type` table shows a
+  declaration summary instead of field columns. Cells render on one line
+  (`[a, b]`, `{owner: me}`, `true`), cut at 80 characters with the full text as
+  a tooltip. Integers sort by value, timestamps by instant at full precision,
+  everything else as text, absent cells last.
+- Currentness words: a node is current or superseded, an edge current or
+  historical; lists default to current, with historical and all on request.
+- Text filters are server-side (`text` of `entries.list` and of node seeds),
+  debounced by 300 ms.
+- Explore is bounded by the client, not the server, to 3 expansion steps of up
+  to 3 hops each. "Explore from here" in the inspector adds the node as a seed
+  and runs the query; a form that no longer matches the query on show says so
+  until Run.
+- Thread display: one edge type and one direction at a time; with outgoing,
+  the edge's `from` is the parent. A node's first occurrence is expanded, later
+  ones collapse to "also under"; a revisit on the current path is cut as a
+  cycle. Nodes that occur more than once get one of 8 stripe colors, then a
+  numeric suffix.
+- The inspector of a `Type` node shows the parsed schema (the server's parse
+  for a current declaration, else a client-side reading) and then the full
+  payload table, so `name` and fields outside the grammar stay visible.
+
 ## 6. Analysis lifetime and dismissal persistence
 
 Return `AnalysisOutput` as an ephemeral result. The service does not save an

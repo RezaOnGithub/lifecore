@@ -35,15 +35,35 @@ export function useAsOf(): AsOfParams {
   return asOf === null ? {} : { as_of: asOf };
 }
 
-export type Load<T> =
-  | { status: "idle" }
-  | { status: "loading" }
+type Settled<T> =
   | { status: "ready"; result: T }
   | { status: "failed"; failure: unknown };
 
+// A reload carries the result it is replacing, so screens can keep showing
+// it instead of flashing empty.
+export type Load<T> =
+  | { status: "idle" }
+  | { status: "loading"; previous?: T }
+  | Settled<T>;
+
+// The newest result a load holds: the ready one, or the one a reload is
+// about to replace.
+export function latest<T>(load: Load<T>): T | null {
+  switch (load.status) {
+    case "ready":
+      return load.result;
+    case "loading":
+      return load.previous ?? null;
+    default:
+      return null;
+  }
+}
+
 // Calls `method` whenever the JSON of `params`, the refresh counter, or `run`
 // changes; null params mean no call. Keying by JSON, not identity, lets
-// screens build params inline on every render.
+// screens build params inline on every render. The loading state is derived:
+// the stored answer names the key it answers, and any other key is loading,
+// so a changed key never renders a stale answer as ready.
 export function useCall<M extends Method>(
   method: M,
   params: Params<M> | null,
@@ -51,26 +71,25 @@ export function useCall<M extends Method>(
 ): Load<Result<M>> {
   const { client, refresh } = useData();
   const key = params === null ? null : JSON.stringify({ params, refresh, run });
-  const [load, setLoad] = useState<Load<Result<M>>>({
-    status: key === null ? "idle" : "loading",
-  });
+  const [settled, setSettled] = useState<{
+    key: string;
+    load: Settled<Result<M>>;
+  } | null>(null);
   useEffect(() => {
     if (key === null) {
-      setLoad({ status: "idle" });
       return;
     }
     let active = true;
-    setLoad({ status: "loading" });
     const { params: sent } = JSON.parse(key) as { params: Params<M> };
     client.call(method, sent).then(
       (result) => {
         if (active) {
-          setLoad({ status: "ready", result });
+          setSettled({ key, load: { status: "ready", result } });
         }
       },
       (failure: unknown) => {
         if (active) {
-          setLoad({ status: "failed", failure });
+          setSettled({ key, load: { status: "failed", failure } });
         }
       },
     );
@@ -78,11 +97,20 @@ export function useCall<M extends Method>(
       active = false;
     };
   }, [client, method, key]);
-  return load;
+  if (key === null) {
+    return { status: "idle" };
+  }
+  if (settled !== null && settled.key === key) {
+    return settled.load;
+  }
+  return settled?.load.status === "ready"
+    ? { status: "loading", previous: settled.load.result }
+    : { status: "loading" };
 }
 
 // The sidebar's type list, shared so screens can look up a schema without a
-// second `types.list` call; null until it has loaded.
+// second `types.list` call; null until it has loaded, and the last loaded
+// list while a reload is in flight.
 export const TypesContext = createContext<TypeSummary[] | null>(null);
 
 export function useTypes(): TypeSummary[] | null {

@@ -29,11 +29,19 @@
         font-size: 1rem;
         margin: 1rem 0 0.3rem;
       }
+      h4 {
+        font-size: 0.85rem;
+        color: #666;
+        margin: 0.6rem 0 0.2rem;
+      }
+      /* The shell fills the viewport; the top bar and sidebar stay put and
+         only the main pane and the sidebar scroll. minmax(0, 1fr) lets the
+         row shrink below its content so overflow: auto takes effect. */
       .app {
         display: grid;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
         grid-template-columns: 15rem 1fr;
-        min-height: 100vh;
+        height: 100vh;
       }
       header.top {
         grid-column: 1 / -1;
@@ -58,6 +66,11 @@
         text-transform: uppercase;
         color: #666;
         margin: 0.75rem 0 0.25rem;
+      }
+      nav.side .hint {
+        text-transform: none;
+        font-weight: normal;
+        font-style: italic;
       }
       main {
         padding: 0.75rem 1rem;
@@ -90,24 +103,42 @@
         white-space: nowrap;
         vertical-align: bottom;
       }
+      /* Separate borders: with collapsed ones Firefox drops the borders of a
+         sticky header once it scrolls. Each cell draws its right and bottom
+         edge, the first column its left edge, and the first row its top
+         edge, so the grid still reads as continuous. */
       table {
-        border-collapse: collapse;
+        border-collapse: separate;
+        border-spacing: 0;
       }
       th,
       td {
-        border: 1px solid #c8c8c8;
+        border-right: 1px solid #c8c8c8;
+        border-bottom: 1px solid #c8c8c8;
         padding: 0.15rem 0.4rem;
         text-align: left;
         vertical-align: top;
         font-size: 0.9rem;
       }
+      th:first-child,
+      td:first-child {
+        border-left: 1px solid #c8c8c8;
+      }
       thead th {
+        border-top: 1px solid #c8c8c8;
+        position: sticky;
+        top: 0;
+        z-index: 1;
         background: #f4f4f4;
         white-space: nowrap;
       }
       tr.historical td {
         color: #666;
         background: #fafafa;
+      }
+      table > tbody:first-child > tr:first-child > th,
+      table > tbody:first-child > tr:first-child > td {
+        border-top: 1px solid #c8c8c8;
       }
       .cell {
         max-width: 24rem;
@@ -225,9 +256,6 @@
         font-size: 0.85rem;
         color: #666;
       }
-      input[type="number"] {
-        width: 3.5rem;
-      }
       .toggle button {
         border: 1px solid #999;
         background: #f4f4f4;
@@ -313,6 +341,20 @@
         border: 1px solid #b00020;
         background: #fff4f4;
         padding: 0.5rem 1rem;
+      }
+      .error.compact {
+        padding: 0.3rem 0.5rem;
+        font-size: 0.85rem;
+        overflow-wrap: anywhere;
+      }
+      .error.compact h2 {
+        font-size: 0.9rem;
+        text-transform: none;
+        color: inherit;
+        margin: 0 0 0.25rem;
+      }
+      .error.compact p {
+        margin: 0;
       }
     </style>
   </head>

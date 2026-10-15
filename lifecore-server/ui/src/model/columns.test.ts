@@ -43,6 +43,48 @@ test("integers compare by value, other cells as text, absent last", () => {
   assert.equal(compareCells(undefined, undefined), 0);
 });
 
+test("timestamps compare by instant although Jiff omits a zero fraction", () => {
+  const ts = (value: string): Payload => ({ kind: "timestamp", value });
+  // As text `Z` follows `.`, which would put the whole second last.
+  assert.ok(
+    compareCells(ts("2026-10-15T08:30:00Z"), ts("2026-10-15T08:30:00.5Z")) < 0,
+  );
+  assert.ok(
+    compareCells(
+      ts("2026-10-15T08:30:00.000000001Z"),
+      ts("2026-10-15T08:30:00Z"),
+    ) > 0,
+  );
+  assert.ok(
+    compareCells(ts("2026-10-15T08:30:00.5Z"), ts("2026-10-15T08:30:00.25Z")) >
+      0,
+  );
+  assert.ok(
+    compareCells(
+      ts("2026-10-15T08:30:00.999999999Z"),
+      ts("2026-10-15T08:30:01Z"),
+    ) < 0,
+  );
+  assert.equal(
+    compareCells(ts("2026-10-15T08:30:00.10Z"), ts("2026-10-15T08:30:00.1Z")),
+    0,
+  );
+  // A timestamp against another kind still compares as text.
+  assert.ok(compareCells(ts("2026-10-15T08:30:00Z"), "2027") < 0);
+});
+
+test("booleans sort false before true", () => {
+  const bool = (value: boolean): Payload => ({ kind: "boolean", value });
+  assert.ok(compareCells(bool(false), bool(true)) < 0);
+  assert.equal(compareCells(bool(true), bool(true)), 0);
+  assert.deepEqual(
+    sortedBy([{ v: true }, { v: false }], (row) => bool(row.v), false).map(
+      (row) => row.v,
+    ),
+    [false, true],
+  );
+});
+
 test("sorting is stable and reversible", () => {
   const rows = [
     { n: "b", v: "2" },

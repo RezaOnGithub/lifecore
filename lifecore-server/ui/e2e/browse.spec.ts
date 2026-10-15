@@ -145,7 +145,8 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  await page.close();
+  // beforeAll may have failed before opening the page.
+  await page?.close();
 });
 
 const sidebar = () => page.getByTestId("types");
@@ -159,12 +160,13 @@ const inspector = () => page.getByTestId("inspector");
 test("the sidebar lists Task with its node counts and opens its table", async () => {
   const task = sidebar().getByRole("listitem").filter({ hasText: "Task" });
   await expect(task).toContainText("3/1");
-  await task.getByRole("button", { name: "Task" }).click();
+  await task.getByRole("button", { name: "Task", exact: true }).click();
   await expect(main().getByRole("heading", { name: "Task" })).toBeVisible();
   const rows = table().locator("table.entries tbody tr");
   await expect(rows).toHaveCount(3);
   // Declared columns follow status order, alphabetical within a status.
-  await expect(table().locator("table.entries thead th")).toContainText([
+  const headers = table().locator("table.entries thead th");
+  await expect(headers).toContainText([
     "label",
     "@position",
     "current",
@@ -179,8 +181,13 @@ test("the sidebar lists Task with its node counts and opens its table", async ()
   ]);
   const done = rows.filter({ hasText: "Write the report" });
   await expect(done).toContainText(`@${ids.report_done?.position}`);
-  await expect(done).toContainText("done");
-  await expect(done).toContainText("2");
+  const columns = await headers.allTextContents();
+  await expect(done.locator("td").nth(columns.indexOf("status"))).toHaveText(
+    "done",
+  );
+  await expect(done.locator("td").nth(columns.indexOf("priority"))).toHaveText(
+    "2",
+  );
 });
 
 test("historical rows appear on request and the text filter reaches the backend", async () => {
@@ -233,7 +240,10 @@ test("following a relationship shows the revised node's lineage", async () => {
   // The edge itself can be inspected and returned from.
   await page
     .getByTestId("relationships")
-    .locator("tbody tr td:last-child button")
+    .getByRole("button", {
+      name: `@${ids.review_after_report?.position}`,
+      exact: true,
+    })
     .click();
   await expect(
     main().getByRole("heading", { name: "DependsOn" }),
@@ -244,15 +254,16 @@ test("following a relationship shows the revised node's lineage", async () => {
   ).toBeVisible();
 });
 
-test("Explore from here seeds a one-hop query and groups the results by type", async () => {
+test("Explore from here seeds and runs a one-hop query grouped by type", async () => {
   await main().getByRole("button", { name: "Explore from here" }).click();
   await expect(main().getByRole("heading", { name: "Explore" })).toBeVisible();
   await expect(page.getByTestId("seeds")).toContainText(
     `@${ids.report_done?.position}`,
   );
-  await main().getByRole("button", { name: "Run" }).click();
+  // The query ran on arrival; Run is for later changes.
   const results = page.getByTestId("results");
   await expect(results).toContainText("2 nodes, 1 edge");
+  await expect(page.getByTestId("form-changed")).toHaveCount(0);
   await expect(results.getByRole("heading", { name: "Task" })).toBeVisible();
   // Result rows keep append order: the reached node was appended before
   // the revision that seeded the query.
@@ -260,7 +271,7 @@ test("Explore from here seeds a one-hop query and groups the results by type", a
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText("Review the report");
   await expect(rows.nth(0)).toContainText(
-    "hop 1 ← DependsOn from Write the report",
+    `hop 1 ← DependsOn @${ids.review_after_report?.position} from Write the report`,
   );
   await expect(rows.nth(1)).toContainText("Write the report");
   await expect(rows.nth(1)).toContainText("seed");
@@ -269,7 +280,7 @@ test("Explore from here seeds a one-hop query and groups the results by type", a
 test("the Thread display nests the dependency under its parent", async () => {
   await page
     .getByTestId("results")
-    .getByRole("button", { name: "Thread" })
+    .getByRole("button", { name: "Thread", exact: true })
     .click();
   const rows = page.getByTestId("thread").getByRole("listitem");
   await expect(rows).toHaveCount(2);
@@ -278,24 +289,55 @@ test("the Thread display nests the dependency under its parent", async () => {
   await expect(rows.nth(1)).toHaveAttribute("data-depth", "1");
   await expect(rows.nth(1)).toContainText("Write the report");
   // Reading the edge the other way makes the revised report the root.
-  await page
-    .getByTestId("results")
-    .getByLabel("direction")
-    .selectOption("incoming");
+  await page.getByTestId("thread-direction").selectOption("incoming");
   await expect(rows.nth(0)).toContainText("Write the report");
   await expect(rows.nth(1)).toContainText("Review the report");
 });
 
+test("a changed form says so until Run sends the new query", async () => {
+  await main().getByLabel("hops").selectOption("2");
+  await expect(page.getByTestId("form-changed")).toBeVisible();
+  await main().getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.getByTestId("form-changed")).toHaveCount(0);
+  await expect(page.getByTestId("results")).toContainText("3 nodes, 2 edges");
+  // The Thread display survived the rerun; read from → to, the second hop's
+  // publishing task is the root of the chain.
+  await page.getByTestId("thread-direction").selectOption("outgoing");
+  const rows = page.getByTestId("thread").getByRole("listitem");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toHaveAttribute("data-depth", "0");
+  await expect(rows.nth(0)).toContainText("Publish the report");
+  await expect(rows.nth(2)).toHaveAttribute("data-depth", "2");
+  await expect(rows.nth(2)).toContainText("Write the report");
+});
+
 test("an as-of boundary narrows every read and current resets it", async () => {
+  // A boundary past the end is refused before it is sent.
+  const total = (await page.getByTestId("entries").textContent()) ?? "0";
+  await banner()
+    .getByLabel("as of")
+    .fill(String(BigInt(total) + 1n));
+  await expect(banner().getByRole("button", { name: "Set" })).toBeDisabled();
+  await expect(banner()).toContainText(`max ${total}`);
   // Up to and including the original report: one Task, no revision yet.
   const boundary = String(BigInt(ids.report?.position ?? "0") + 1n);
   await banner().getByLabel("as of").fill(boundary);
   await banner().getByRole("button", { name: "Set" }).click();
-  await expect(page.getByTestId("as-of")).toHaveText(`as of ${boundary}`);
+  await expect(page.getByTestId("as-of")).toContainText(
+    `view [0, ${boundary}) of ${total} entries`,
+  );
   const task = sidebar().getByRole("listitem").filter({ hasText: "Task" });
   await expect(task).toContainText("1/0");
-  await task.getByRole("button", { name: "Task" }).click();
+  // The hidden Explore reran with a seed past the boundary; its failure is
+  // waiting on return.
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Explore", exact: true })
+    .click();
+  await expect(main().getByRole("alert")).toContainText("entry_not_found");
+  await task.getByRole("button", { name: "Task", exact: true }).click();
   await expect(table().locator("table.entries tbody tr")).toHaveCount(1);
+  await expect(table()).toContainText(`view [0, ${boundary})`);
   await banner().getByRole("button", { name: "current" }).click();
   await expect(page.getByTestId("as-of")).toHaveCount(0);
   await expect(table().locator("table.entries tbody tr")).toHaveCount(3);

@@ -9,16 +9,22 @@ export function sameId(a: EntryId, b: EntryId): boolean {
   return a.origin === b.origin && a.position === b.position;
 }
 
-export function shortUuid(uuid: string): string {
-  return uuid.slice(0, 8);
+// A type name as shown on screen: the empty name is legal and must stay
+// visible and clickable.
+export function typeName(name: string): string {
+  return name === "" ? "(unnamed)" : name;
 }
+
+// Labels longer than this are cut on screen, with the full text as a tooltip
+// (INTERFACES §5.2).
+export const LABEL_LIMIT = 60;
 
 function isLabelText(value: unknown): value is string {
   // Blank text would leave nothing to click on, so it does not label a row.
   return typeof value === "string" && value.trim() !== "";
 }
 
-// The payload field a row is labeled by (INTERFACES §5): `title` when text,
+// The payload field a row is labeled by (INTERFACES §5.2): `title` when text,
 // else `name` when text, else the alphabetically first top-level text field;
 // null when the row has none.
 export function labelField(node: Pick<NodeEntry, "payload">): string | null {
@@ -41,7 +47,7 @@ export function rowLabel(
 ): string {
   const field = labelField(node);
   if (field === null) {
-    return `${node.ty_name} @${node.id.position}`;
+    return `${typeName(node.ty_name)} @${node.id.position}`;
   }
   return String(node.payload[field]);
 }

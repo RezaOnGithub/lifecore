@@ -7,8 +7,9 @@ import type {
   TypeResolution,
   TypeSchema,
   TypeSummary,
+  ViewId,
 } from "../contract.ts";
-import { useAsOf, useCall, useTypes } from "../data.tsx";
+import { latest, useAsOf, useCall, useTypes } from "../data.tsx";
 import { FailureView } from "../failure.tsx";
 import {
   CurrentBadge,
@@ -21,7 +22,7 @@ import { entryKey, rowLabel, sameId } from "../model/labels.ts";
 import { lineageRows } from "../model/lineage.ts";
 import { parseDeclaration } from "../model/schema.ts";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
-import { ResolutionBadge } from "./Table.tsx";
+import { ResolutionBadge } from "../views/widgets.tsx";
 
 export function InspectorScreen({
   id,
@@ -32,16 +33,24 @@ export function InspectorScreen({
 }) {
   const asOf = useAsOf();
   const load = useCall("entries.inspect", { ...asOf, id });
+  // The screen is keyed by the entry, so a previous result is this entry
+  // under another boundary; it stays until the reload answers.
+  const result = latest(load);
   if (load.status === "failed") {
     return <FailureView failure={load.failure} />;
   }
-  if (load.status !== "ready") {
+  if (result === null) {
     return <p className="muted">loading…</p>;
   }
-  return load.result.kind === "node" ? (
-    <NodeInspection inspection={load.result} onExplore={onExplore} />
-  ) : (
-    <EdgeInspection inspection={load.result} />
+  return (
+    <>
+      {load.status === "loading" && <p className="muted">reloading…</p>}
+      {result.kind === "node" ? (
+        <NodeInspection inspection={result} onExplore={onExplore} />
+      ) : (
+        <EdgeInspection inspection={result} />
+      )}
+    </>
   );
 }
 
@@ -92,7 +101,7 @@ function NodeInspection({
   inspection: Extract<EntryInspection, { kind: "node" }>;
   onExplore: (id: EntryId) => void;
 }) {
-  const { entry, type, lineage, edges } = inspection;
+  const { entry, type, lineage, edges, view } = inspection;
   const [raw, setRaw] = useState(false);
   const types = useTypes();
   const declaration =
@@ -111,6 +120,7 @@ function NodeInspection({
             revises <IdLink id={entry.predecessor} />
           </span>
         )}
+        <span className="muted">view [0, {view.end_exclusive})</span>
       </div>
       <div className="row">
         <button type="button" onClick={() => onExplore(entry.id)}>
@@ -141,13 +151,20 @@ function NodeInspection({
         </h3>
         {raw ? (
           <RawJson value={entry.payload} />
-        ) : declaration !== null ? (
-          <SchemaView schema={declaration} />
         ) : (
-          <PayloadTable
-            payload={entry.payload}
-            schema={type.kind === "declared" ? type.schema : null}
-          />
+          <>
+            {declaration !== null && (
+              <>
+                <h4>declares</h4>
+                <SchemaView schema={declaration} />
+                <h4>payload</h4>
+              </>
+            )}
+            <PayloadTable
+              payload={entry.payload}
+              schema={type.kind === "declared" ? type.schema : null}
+            />
+          </>
         )}
       </section>
       <section>
@@ -256,7 +273,13 @@ function EdgeInspection({
     entry,
     from,
     to,
-  }: { entry: EdgeRecord; from: NodeRecord; to: NodeRecord } = inspection;
+    view,
+  }: {
+    entry: EdgeRecord;
+    from: NodeRecord;
+    to: NodeRecord;
+    view: ViewId;
+  } = inspection;
   return (
     <article data-testid="inspector">
       <h2>
@@ -265,6 +288,7 @@ function EdgeInspection({
       <div className="row">
         <span className="muted">edge</span>
         <CurrentBadge current={entry.current} kind="edge" />
+        <span className="muted">view [0, {view.end_exclusive})</span>
       </div>
       <table className="payload">
         <tbody>

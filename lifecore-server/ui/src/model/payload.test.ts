@@ -20,6 +20,15 @@ test("payload values format compactly", () => {
   );
 });
 
+test("empty collections and records inside lists format", () => {
+  assert.equal(formatPayload([]), "[]");
+  assert.equal(formatPayload({ kind: "record", value: {} }), "{}");
+  assert.equal(
+    formatPayload([{ kind: "record", value: { a: "1", b: [] } }, "c"]),
+    "[{a: 1, b: []}, c]",
+  );
+});
+
 test("long values truncate with an ellipsis", () => {
   assert.equal(truncate("abcdef", 4), "abc…");
   assert.equal(truncate("abcd", 4), "abcd");

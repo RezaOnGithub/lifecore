@@ -3,6 +3,7 @@ import type {
   IntegerPayload,
   NodeEntry,
   Payload,
+  TimestampPayload,
   TypeSchema,
 } from "../contract.ts";
 import { formatPayload } from "./payload.ts";
@@ -69,8 +70,34 @@ function isInteger(value: Payload): value is IntegerPayload {
   );
 }
 
-// Two integers compare by value, anything else by its formatted text; an
-// absent cell sorts last either way.
+function isTimestamp(value: Payload): value is TimestampPayload {
+  return (
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    value.kind === "timestamp"
+  );
+}
+
+// Jiff's spelling: the instant to the second, an optional fraction, and `Z`.
+const TIMESTAMP = /^(.*?)(?:\.(\d+))?Z$/;
+
+// Jiff omits a zero fraction, so as text `…:00Z` would sort after `…:00.5Z`
+// (`Z` follows `.`). The seconds compare first, then the fractions padded to
+// nanoseconds; a spelling outside the pattern falls back to text.
+function compareTimestamps(a: string, b: string): number {
+  const x = TIMESTAMP.exec(a);
+  const y = TIMESTAMP.exec(b);
+  if (x === null || y === null) {
+    return compareStrings(a, b);
+  }
+  return (
+    compareStrings(x[1] ?? "", y[1] ?? "") ||
+    compareStrings((x[2] ?? "").padEnd(9, "0"), (y[2] ?? "").padEnd(9, "0"))
+  );
+}
+
+// Two integers compare by value, two timestamps by instant, anything else by
+// its formatted text; an absent cell sorts last either way.
 export function compareCells(
   a: Payload | undefined,
   b: Payload | undefined,
@@ -88,6 +115,9 @@ export function compareCells(
       return -1;
     }
     return x > y ? 1 : 0;
+  }
+  if (isTimestamp(a) && isTimestamp(b)) {
+    return compareTimestamps(a.value, b.value);
   }
   return compareStrings(formatPayload(a), formatPayload(b));
 }

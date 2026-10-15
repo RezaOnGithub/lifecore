@@ -9,6 +9,10 @@ export function DatabaseScreen({ description }: { description: Description }) {
   return (
     <section aria-label="Database description">
       <h2>Database</h2>
+      <p className="muted">
+        The description reads the whole history; the as-of boundary applies to
+        the other screens.
+      </p>
       <table className="payload">
         <tbody>
           <tr>
@@ -25,11 +29,17 @@ export function DatabaseScreen({ description }: { description: Description }) {
           </tr>
           <tr>
             <th scope="row">Entries</th>
-            <td>{description.view.end_exclusive}</td>
+            <td>
+              {description.view.end_exclusive}{" "}
+              <span className="muted">(whole history)</span>
+            </td>
           </tr>
           <tr>
             <th scope="row">Newest entry</th>
-            <td>{headLabel(description.view.head)}</td>
+            <td>
+              {headLabel(description.view.head)}{" "}
+              <span className="muted">(whole history)</span>
+            </td>
           </tr>
           <tr>
             <th scope="row">Analyzer suite</th>

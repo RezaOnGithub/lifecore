@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -2196,24 +2197,245 @@ fn inspection_resolves_the_node_type_in_the_inspected_view() {
     other => panic!("expected a node inspection, got {other:?}"),
     };
     assert_eq!(ty(ids[0], None), TypeResolution::Builtin);
-    // Before the malformed declarations, names resolve by their own ones.
-    assert_eq!(ty(ids[2], Some(4)), TypeResolution::Missing);
+    assert_eq!(ty(ids[4], None), TypeResolution::Builtin);
+    // Each name resolves by its own current declarations, before and after
+    // the malformed ones are appended, as `types.list` judges it.
+    for as_of in [Some(4), Some(5), None] {
+        assert_eq!(ty(ids[2], as_of), TypeResolution::Missing, "{as_of:?}");
+        assert_eq!(
+            ty(ids[3], as_of),
+            TypeResolution::Ambiguous {
+                declarations: vec![ids[0], ids[1]],
+            },
+            "{as_of:?}"
+        );
+    }
+    // Only a node of the malformed type sees the malformed declaration.
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "a_tag", "kind": "node", "ty_name": "Tag", "payload": {"text": "t"}},
+        ]))))
+        .unwrap();
+    let tag = applied.report.operations[0].entry;
     assert_eq!(
-        ty(ids[3], Some(4)),
-        TypeResolution::Ambiguous {
-            declarations: vec![ids[0], ids[1]],
+        ty(tag, None),
+        TypeResolution::Malformed {
+            declaration: ids[4],
+            message: schema_error(tag_declaration()),
         }
     );
-    // A malformed current declaration fails every other name's resolution,
-    // naming the first one in append order, as `resolve_type` does.
-    let malformed = TypeResolution::Malformed {
-        declaration: ids[4],
-        message: schema_error(tag_declaration()),
+    assert_eq!(ty(ids[2], None), TypeResolution::Missing);
+}
+
+// Positions 0 to 5 under TypeCheck: the `Task` declaration, tasks A and B,
+// their edge, a same-name revision of the declaration adding an optional
+// field, and task C.
+fn revised_task(scratch: &Scratch) -> (Vec<EntryId>, Type) {
+    let mut ids = populated(scratch);
+    let revised = Type::new(
+        "Task",
+        &[
+            ("title", (ValueType::Text, FieldStatus::Mandatory)),
+            ("status", (ValueType::Text, FieldStatus::Optional)),
+            ("notes", (ValueType::Text, FieldStatus::Encouraged)),
+            ("priority", (ValueType::Integer, FieldStatus::Optional)),
+        ],
+        &["DependsOn"],
+        &["DependsOn"],
+        &[],
+    );
+    let applied = scratch
+        .service()
+        .apply(request(proposal(json!([
+            {"name": "task_type_2", "kind": "node", "ty_name": "Type",
+                "predecessor": existing(ids[0]), "intent": "revise", "payload": revised.to_body()},
+            task("c", "C"),
+        ]))))
+        .unwrap();
+    ids.extend(applied.report.operations.iter().map(|o| o.entry));
+    (ids, revised)
+}
+
+fn node_type(service: &Service, id: EntryId, as_of: Option<usize>) -> TypeResolution {
+    match service.inspect_entry(EntryInspectRequest { id, as_of }) {
+    Ok(EntryInspection::Node { ty, .. }) => ty,
+    other => panic!("expected a node inspection, got {other:?}"),
+    }
+}
+
+fn summary(listed: &schema::TypeList, name: &str) -> schema::TypeSummary {
+    listed
+        .types
+        .iter()
+        .find(|summary| summary.name == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("{name} is not listed: {listed:?}"))
+}
+
+#[test]
+fn a_same_name_declaration_revision_resolves_from_its_append_onward() {
+    let scratch = Scratch::new();
+    let (ids, revised) = revised_task(&scratch);
+    let service = scratch.service();
+    let old_schema = schema::TypeSchema::from(&Type::from_body(&task_type()).unwrap());
+    let new_schema = schema::TypeSchema::from(&revised);
+    let counts = |current, historical| NodeCounts {
+        current,
+        historical,
     };
-    assert_eq!(ty(ids[2], Some(5)), malformed);
-    assert_eq!(ty(ids[2], None), malformed);
-    assert_eq!(ty(ids[3], None), malformed);
-    assert_eq!(ty(ids[4], None), TypeResolution::Builtin);
+    // Before, at, and after the revision: the name resolves to the
+    // declaration current in that view, and the superseded one counts as a
+    // historical `Type` node from the revision onward.
+    for (as_of, declaration, schema, tasks, types) in [
+        (Some(4), ids[0], &old_schema, counts(2, 0), counts(1, 0)),
+        (Some(5), ids[4], &new_schema, counts(2, 0), counts(1, 1)),
+        (None, ids[4], &new_schema, counts(3, 0), counts(1, 1)),
+    ] {
+        let listed = service.list_types(TypeListRequest { as_of }).unwrap();
+        assert_eq!(listed.view.end_exclusive, as_of.unwrap_or(6));
+        assert_eq!(
+            listed
+                .types
+                .iter()
+                .map(|summary| summary.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Task", "Type"],
+            "{as_of:?}"
+        );
+        let expected = TypeResolution::Declared {
+            declaration,
+            schema: schema.clone(),
+        };
+        let task = summary(&listed, "Task");
+        assert_eq!(task.resolution, expected, "{as_of:?}");
+        assert_eq!(task.nodes, tasks, "{as_of:?}");
+        let ty = summary(&listed, "Type");
+        assert_eq!(ty.resolution, TypeResolution::Builtin);
+        assert_eq!(ty.nodes, types, "{as_of:?}");
+        for id in [ids[1], ids[2]] {
+            assert_eq!(node_type(&service, id, as_of), expected, "{as_of:?}");
+        }
+    }
+    assert_eq!(
+        node_type(&service, ids[5], None),
+        TypeResolution::Declared {
+            declaration: ids[4],
+            schema: new_schema,
+        }
+    );
+    // The declarations themselves are `Type` nodes forming one revision tree.
+    for id in [ids[0], ids[4]] {
+        let Ok(EntryInspection::Node {
+            entry, ty, lineage, ..
+        }) = service.inspect_entry(EntryInspectRequest { id, as_of: None })
+        else {
+            panic!("expected a node inspection")
+        };
+        assert_eq!(entry.current, id == ids[4]);
+        assert_eq!(ty, TypeResolution::Builtin);
+        assert_eq!(
+            lineage.iter().map(|r| r.entry.id()).collect::<Vec<_>>(),
+            [ids[0], ids[4]]
+        );
+    }
+}
+
+#[test]
+fn a_declaration_revised_to_another_name_leaves_its_old_nodes_missing() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&[]).unwrap();
+    let text = [("text", (ValueType::Text, FieldStatus::Mandatory))];
+    let note = Type::new("Note", &text, &[], &[], &[]);
+    let memo = Type::new("Memo", &text, &[], &[], &[]);
+    // Positions 0 to 3: the `Note` declaration, a note, the declaration
+    // revised under the name `Memo`, and another note.
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "note", "kind": "node", "ty_name": "Type", "payload": note.to_body()},
+            {"name": "first", "kind": "node", "ty_name": "Note", "payload": {"text": "one"}},
+        ]))))
+        .unwrap();
+    let mut ids = applied
+        .report
+        .operations
+        .iter()
+        .map(|o| o.entry)
+        .collect::<Vec<_>>();
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "memo", "kind": "node", "ty_name": "Type", "predecessor": existing(ids[0]),
+                "intent": "revise", "payload": memo.to_body()},
+            {"name": "second", "kind": "node", "ty_name": "Note", "payload": {"text": "two"}},
+        ]))))
+        .unwrap();
+    ids.extend(applied.report.operations.iter().map(|o| o.entry));
+    let counts = |current, historical| NodeCounts {
+        current,
+        historical,
+    };
+    let declared = |declaration, ty: &Type| TypeResolution::Declared {
+        declaration,
+        schema: schema::TypeSchema::from(ty),
+    };
+    // Before the revision `Note` is declared; from the revision onward it is
+    // missing while its nodes still use it, and `Memo` is declared unused.
+    let before = service
+        .list_types(TypeListRequest { as_of: Some(2) })
+        .unwrap();
+    assert_eq!(
+        before
+            .types
+            .iter()
+            .map(|summary| summary.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Note", "Type"]
+    );
+    assert_eq!(summary(&before, "Note").resolution, declared(ids[0], &note));
+    assert_eq!(summary(&before, "Note").nodes, counts(1, 0));
+    assert_eq!(summary(&before, "Type").nodes, counts(1, 0));
+    assert_eq!(
+        node_type(&service, ids[1], Some(2)),
+        declared(ids[0], &note)
+    );
+    for (as_of, notes) in [(Some(3), counts(1, 0)), (None, counts(2, 0))] {
+        let listed = service.list_types(TypeListRequest { as_of }).unwrap();
+        assert_eq!(
+            listed
+                .types
+                .iter()
+                .map(|summary| summary.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Memo", "Note", "Type"],
+            "{as_of:?}"
+        );
+        assert_eq!(summary(&listed, "Note").resolution, TypeResolution::Missing);
+        assert_eq!(summary(&listed, "Note").nodes, notes, "{as_of:?}");
+        assert_eq!(summary(&listed, "Memo").resolution, declared(ids[2], &memo));
+        assert_eq!(summary(&listed, "Memo").nodes, counts(0, 0));
+        assert_eq!(summary(&listed, "Type").nodes, counts(1, 1));
+        assert_eq!(node_type(&service, ids[1], as_of), TypeResolution::Missing);
+    }
+    assert_eq!(node_type(&service, ids[3], None), TypeResolution::Missing);
+    // The empty prefix holds no entry and selects no node.
+    let call = |method: &str, params: Value| {
+        let line =
+            json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    let response = call("entries.inspect", json!({"id": ids[1], "as_of": "0"}));
+    assert_eq!(response["error"]["code"], 4001, "{response}");
+    assert_eq!(response["error"]["data"]["kind"], "entry_not_found");
+    let response = call(
+        "views.query",
+        json!({"seeds": [{"kind": "nodes"}], "expand": [{}], "as_of": "0"}),
+    );
+    assert_eq!(
+        response["result"],
+        json!({"view": {"database": response["result"]["view"]["database"],
+            "end_exclusive": "0", "head": null}, "nodes": [], "edges": []}),
+        "{response}"
+    );
 }
 
 #[test]
@@ -2231,7 +2453,7 @@ fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
     };
     let seeds = |ids: &[EntryId]| vec![Seed::Ids { ids: ids.to_vec() }];
     let step = Expansion {
-        hops: 1,
+        hops: NonZeroUsize::MIN,
         direction: Direction::Both,
         ty_names: None,
         currentness: Currentness::Current,
@@ -2414,7 +2636,7 @@ fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
     let result = query(
         seeds(&[ids[5]]),
         vec![Expansion {
-            hops: 5,
+            hops: NonZeroUsize::new(5).unwrap(),
             ..incoming
         }],
         EdgeFilter::default(),
@@ -2499,8 +2721,8 @@ fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
         ]
     );
     assert_eq!(edges(&result), [ids[6]]);
-    // Boundaries past the end, seeds the view lacks or that are edges, and
-    // a step without hops are errors.
+    // Boundaries past the end and seeds the view lacks or that are edges are
+    // errors.
     assert!(matches!(
         query(seeds(&[ids[2]]), vec![], EdgeFilter::default(), Some(9)),
         Err(AppError::BeyondBoundary {
@@ -2515,18 +2737,6 @@ fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
     assert!(matches!(
         query(seeds(&[ids[3]]), vec![], EdgeFilter::default(), None),
         Err(AppError::EntryNotFound { id }) if id == ids[3]
-    ));
-    assert!(matches!(
-        query(
-            seeds(&[ids[2]]),
-            vec![Expansion {
-                hops: 0,
-                ..step.clone()
-            }],
-            EdgeFilter::default(),
-            None
-        ),
-        Err(AppError::InvalidParams { .. })
     ));
     // No seeds is an empty result.
     let result = query(vec![], vec![step], EdgeFilter::default(), None).unwrap();
@@ -2549,7 +2759,7 @@ fn edge_type_filters_apply_to_expansion_and_to_the_returned_edges() {
             .unwrap()
     };
     let step = |ty_names: Option<Vec<String>>| Expansion {
-        hops: 1,
+        hops: NonZeroUsize::MIN,
         direction: Direction::Both,
         ty_names,
         currentness: Currentness::Current,
@@ -2650,7 +2860,8 @@ fn as_of_and_query_parameters_are_decoded_strictly_through_rpc() {
         assert_eq!(response["error"]["data"]["kind"], "beyond_boundary");
     }
     // Null, numbers, non-canonical strings, and unknown members are invalid
-    // parameters, as are missing hops and foreign seed kinds.
+    // parameters, as are zero hops (refused before the boundary is applied),
+    // empty type lists, and foreign seed kinds.
     for (method, params) in [
         ("entries.list", json!({"as_of": null})),
         ("entries.list", json!({"as_of": 4})),
@@ -2684,6 +2895,18 @@ fn as_of_and_query_parameters_are_decoded_strictly_through_rpc() {
         ("views.query", json!({"seeds": [], "expand": [{"hops": 0}]})),
         (
             "views.query",
+            json!({"seeds": [], "expand": [{"hops": 0}], "as_of": "9"}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [], "expand": [{"ty_names": []}]}),
+        ),
+        (
+            "views.query",
+            json!({"seeds": [], "edges": {"ty_names": []}}),
+        ),
+        (
+            "views.query",
             json!({"seeds": [], "expand": [{"hops": "1"}]}),
         ),
         (
@@ -2715,6 +2938,17 @@ fn as_of_and_query_parameters_are_decoded_strictly_through_rpc() {
         );
         assert_eq!(response["error"]["data"]["kind"], "invalid_params");
     }
+    let empty = call(
+        "views.query",
+        json!({"seeds": [], "edges": {"ty_names": []}}),
+    );
+    assert!(
+        empty["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("an empty ty_names list matches nothing; omit it for any type"),
+        "{empty}"
+    );
     // Defaults: one hop, both directions, any type, current edges.
     let result = call(
         "views.query",

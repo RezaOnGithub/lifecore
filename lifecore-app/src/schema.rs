@@ -1,6 +1,6 @@
 use lifecore::{
     EntryId, Payload, View, ViewId,
-    typing::{self, ResolutionError, SchemaError, Type, TypeDefinition, ValueType},
+    typing::{self, SchemaError, Type, ValueType},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -117,30 +117,64 @@ pub enum TypeResolution {
     },
 }
 
-impl TypeResolution {
-    // The view's own answer for one name. A malformed current declaration
-    // fails every resolution but the built-in one, whatever its name.
-    pub fn resolve(view: View<'_>, name: &str) -> Self {
-        match view.resolve_type(name) {
-        Ok(Some(TypeDefinition::Builtin)) => Self::Builtin,
-        Ok(Some(TypeDefinition::Declared { id, schema })) => Self::Declared {
-            declaration: id,
-            schema: (&schema).into(),
-        },
-        Ok(None) => Self::Missing,
-        Err(ResolutionError::Ambiguous { entries, .. }) => Self::Ambiguous {
-            declarations: entries,
-        },
-        Err(ResolutionError::Malformed { id, error }) => Self::malformed(id, &error),
+type Declaration = (EntryId, Result<Type, SchemaError>);
+
+// The current declarations of a view grouped by the `name` text of their
+// payloads, in append order within each name. A declaration that does not
+// parse is grouped under its `name` text when it has one, else under the
+// empty string.
+struct Declarations(BTreeMap<String, Vec<Declaration>>);
+
+impl Declarations {
+    fn current(view: View<'_>) -> Self {
+        let mut grouped = BTreeMap::<String, Vec<Declaration>>::new();
+        for node in view
+            .fresh_nodes()
+            .filter(|node| node.ty_name == Type::TYPE_NAME)
+        {
+            let parsed = Type::from_body(&node.payload);
+            let name = match (&parsed, node.payload.get("name")) {
+            (Ok(schema), _) => schema.name.clone(),
+            (Err(_), Some(Payload::Text(name))) => name.clone(),
+            (Err(_), _) => String::new(),
+            };
+            grouped.entry(name).or_default().push((node.id, parsed));
         }
+        Self(grouped)
     }
 
-    fn malformed(declaration: EntryId, error: &SchemaError) -> Self {
-        Self::Malformed {
-            declaration,
+    fn names(&self) -> impl Iterator<Item = &str> {
+        self.0.keys().map(String::as_str)
+    }
+
+    // Judges a name by its own current declarations (SPEC 6.2), unlike
+    // `View::resolve_type`, which fails every name once any current
+    // declaration is malformed. Two or more declarations are ambiguous whether
+    // or not they parse: the name has no single declaration to read.
+    fn resolve(&self, name: &str) -> TypeResolution {
+        if name == Type::TYPE_NAME {
+            return TypeResolution::Builtin;
+        }
+        match self.0.get(name).map(Vec::as_slice) {
+        None | Some([]) => TypeResolution::Missing,
+        Some([(id, Ok(schema))]) => TypeResolution::Declared {
+            declaration: *id,
+            schema: schema.into(),
+        },
+        Some([(id, Err(error))]) => TypeResolution::Malformed {
+            declaration: *id,
             message: error.to_string(),
+        },
+        Some(found) => TypeResolution::Ambiguous {
+            declarations: found.iter().map(|(id, _)| *id).collect(),
+        },
         }
     }
+}
+
+// How one name resolves in the view, judged by its own declarations.
+pub fn resolve_name(view: View<'_>, name: &str) -> TypeResolution {
+    Declarations::current(view).resolve(name)
 }
 
 // Nodes whose `ty_name` is the summarized name, by currentness in the view.
@@ -166,11 +200,8 @@ pub struct TypeList {
 }
 
 // One summary per name the view knows, sorted by name: the built-in `Type`,
-// every name with a current declaration, and every name a node uses. Unlike
-// `resolve_type`, which fails every name once any current declaration is
-// malformed, the list judges each name by its own declarations: two or more
-// are ambiguous, one that does not parse is malformed. A malformed
-// declaration is listed under its `name` text when it has one.
+// every name with a current declaration, and every name a node uses, each
+// resolved by its own declarations as `resolve_name` does.
 pub fn list_types(view: View<'_>) -> TypeList {
     let mut counts = BTreeMap::<String, NodeCounts>::new();
     for node in view.nodes() {
@@ -181,46 +212,15 @@ pub fn list_types(view: View<'_>) -> TypeList {
             counts.current += 1;
         }
     }
-    let mut declarations = BTreeMap::<String, Vec<(EntryId, Result<Type, SchemaError>)>>::new();
-    for node in view
-        .fresh_nodes()
-        .filter(|node| node.ty_name == Type::TYPE_NAME)
-    {
-        let parsed = Type::from_body(&node.payload);
-        let name = match (&parsed, node.payload.get("name")) {
-        (Ok(schema), _) => schema.name.clone(),
-        (Err(_), Some(Payload::Text(name))) => name.clone(),
-        (Err(_), _) => String::new(),
-        };
-        declarations
-            .entry(name)
-            .or_default()
-            .push((node.id, parsed));
-    }
+    let declarations = Declarations::current(view);
     let mut names = BTreeSet::from([Type::TYPE_NAME.to_string()]);
     names.extend(counts.keys().cloned());
-    names.extend(declarations.keys().cloned());
+    names.extend(declarations.names().map(str::to_string));
     let types = names
         .into_iter()
         .map(|name| {
+            let resolution = declarations.resolve(&name);
             let nodes = counts.remove(&name).unwrap_or_default();
-            let mut found = declarations.remove(&name).unwrap_or_default();
-            let resolution = if name == Type::TYPE_NAME {
-                TypeResolution::Builtin
-            } else if found.len() > 1 {
-                TypeResolution::Ambiguous {
-                    declarations: found.into_iter().map(|(id, _)| id).collect(),
-                }
-            } else {
-                match found.pop() {
-                None => TypeResolution::Missing,
-                Some((id, Ok(schema))) => TypeResolution::Declared {
-                    declaration: id,
-                    schema: (&schema).into(),
-                },
-                Some((id, Err(error))) => TypeResolution::malformed(id, &error),
-                }
-            };
             TypeSummary {
                 name,
                 resolution,

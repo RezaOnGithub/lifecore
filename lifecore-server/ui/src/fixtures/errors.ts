@@ -231,7 +231,7 @@ export const application = {
         "data": {
           "kind": "invalid_params"
         },
-        "message": "invalid parameters: an expansion step needs at least one hop"
+        "message": "invalid parameters: invalid value: integer `0`, expected a nonzero usize at line 1 column 20"
       },
       "id": "call",
       "jsonrpc": "2.0"

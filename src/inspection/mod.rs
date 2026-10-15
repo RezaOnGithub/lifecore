@@ -15,7 +15,7 @@ pub enum Currentness {
 }
 
 impl Currentness {
-    fn includes(self, view: View<'_>, id: EntryId) -> bool {
+    pub fn includes(self, view: View<'_>, id: EntryId) -> bool {
         match (self, view.is_stale(id)) {
         (_, None) => false,
         (Self::All, _) => true,

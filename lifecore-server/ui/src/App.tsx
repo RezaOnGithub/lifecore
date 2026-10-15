@@ -14,14 +14,15 @@ import type {
 import {
   DataContext,
   type Load,
+  latest,
   TypesContext,
   useAsOf,
   useCall,
 } from "./data.tsx";
 import { FailureView } from "./failure.tsx";
 import { NavigationContext, useOpen } from "./links.tsx";
-import { entryKey } from "./model/labels.ts";
-import { addSeed, emptyForm } from "./model/query.ts";
+import { entryKey, typeName } from "./model/labels.ts";
+import { exploreReducer, initialExplore } from "./model/query.ts";
 import {
   initialNavigation,
   type Navigation,
@@ -33,7 +34,8 @@ import type { RpcClient } from "./rpc.ts";
 import { DatabaseScreen } from "./screens/Database.tsx";
 import { ExploreScreen } from "./screens/Explore.tsx";
 import { InspectorScreen } from "./screens/Inspector.tsx";
-import { ResolutionBadge, TableScreen } from "./screens/Table.tsx";
+import { TableScreen } from "./screens/Table.tsx";
+import { ResolutionBadge } from "./views/widgets.tsx";
 
 export function App({ client }: { client: RpcClient }) {
   const [asOf, setAsOf] = useState<DecimalString | null>(null);
@@ -63,7 +65,7 @@ function Shell({
   onRefresh: () => void;
 }) {
   const [nav, dispatch] = useReducer(navigate, initialNavigation);
-  const [explore, setExplore] = useState(emptyForm);
+  const [explore, dispatchExplore] = useReducer(exploreReducer, initialExplore);
   const open = useCallback(
     (screen: Screen) => dispatch({ kind: "open", screen }),
     [],
@@ -71,15 +73,15 @@ function Shell({
   const description = useCall("database.describe", {});
   const types = useCall("types.list", useAsOf());
   const exploreFrom = (id: EntryId) => {
-    setExplore((form) => addSeed(form, id));
+    dispatchExplore({ kind: "seed", id });
     open({ kind: "explore" });
   };
   const screen = nav.current;
+  // Explore stays mounted, hidden under other screens, so its results
+  // survive a detour through the inspector and Back.
   return (
     <NavigationContext value={open}>
-      <TypesContext
-        value={types.status === "ready" ? types.result.types : null}
-      >
+      <TypesContext value={latest(types)?.types ?? null}>
         <div className="app">
           <TopBar
             description={description}
@@ -113,10 +115,8 @@ function Shell({
                     onExplore={exploreFrom}
                   />
                 )}
-                {/* Explore stays mounted so its results survive a detour
-                    through the inspector and Back. */}
                 <div hidden={screen.kind !== "explore"}>
-                  <ExploreScreen form={explore} onChange={setExplore} />
+                  <ExploreScreen state={explore} dispatch={dispatchExplore} />
                 </div>
               </main>
             </>
@@ -146,9 +146,16 @@ function TopBar({
 }) {
   const [draft, setDraft] = useState("");
   const valid = BOUNDARY.test(draft);
+  const visible =
+    description.status === "ready"
+      ? description.result.view.end_exclusive
+      : null;
+  // The server refuses a boundary past the end as well; checking here only
+  // spares a request that is bound to fail.
+  const beyond = valid && visible !== null && BigInt(draft) > BigInt(visible);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (valid) {
+    if (valid && !beyond) {
       onAsOf(draft);
     }
   };
@@ -169,12 +176,22 @@ function TopBar({
               {description.result.database}
             </code>
           </button>
-          <span>
-            entries{" "}
-            <strong data-testid="entries">
-              {description.result.view.end_exclusive}
-            </strong>
-          </span>
+          {asOf === null ? (
+            <span>
+              entries{" "}
+              <strong data-testid="entries">
+                {description.result.view.end_exclusive}
+              </strong>
+            </span>
+          ) : (
+            <span className="badge asof" data-testid="as-of">
+              view [0, {asOf}) of{" "}
+              <strong data-testid="entries">
+                {description.result.view.end_exclusive}
+              </strong>{" "}
+              entries
+            </span>
+          )}
         </>
       )}
       <form className="row" onSubmit={submit}>
@@ -189,24 +206,20 @@ function TopBar({
             onChange={(event) => setDraft(event.target.value.trim())}
           />
         </label>
-        <button type="submit" disabled={!valid}>
+        <button type="submit" disabled={!valid || beyond}>
           Set
         </button>
+        {beyond && <span className="muted">max {visible}</span>}
         {asOf !== null && (
-          <>
-            <span className="badge asof" data-testid="as-of">
-              as of {asOf}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                onAsOf(null);
-                setDraft("");
-              }}
-            >
-              current
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => {
+              onAsOf(null);
+              setDraft("");
+            }}
+          >
+            current
+          </button>
         )}
       </form>
       <span className="spacer" />
@@ -224,16 +237,28 @@ function TopBar({
   );
 }
 
+// The list on show is the last one loaded: a reload only adds a hint, so the
+// entries, and the active one, stay where they are.
 function Sidebar({ types, screen }: { types: Load<TypeList>; screen: Screen }) {
   const open = useOpen();
+  const list = latest(types);
   return (
     <nav className="side" aria-label="Types">
-      <h2>Types</h2>
-      {types.status === "loading" && <p className="muted">loading…</p>}
-      {types.status === "failed" && <FailureView failure={types.failure} />}
-      {types.status === "ready" && (
+      <h2>
+        Types{" "}
+        {types.status === "loading" && list !== null && (
+          <span className="hint">reloading…</span>
+        )}
+      </h2>
+      {types.status === "loading" && list === null && (
+        <p className="muted">loading…</p>
+      )}
+      {types.status === "failed" && (
+        <FailureView failure={types.failure} compact />
+      )}
+      {list !== null && (
         <ul className="types" data-testid="types">
-          {types.result.types.map((type) => (
+          {list.types.map((type) => (
             <li
               key={type.name}
               className={
@@ -247,7 +272,7 @@ function Sidebar({ types, screen }: { types: Load<TypeList>; screen: Screen }) {
                 className="link"
                 onClick={() => open({ kind: "table", ty_name: type.name })}
               >
-                {type.name === "" ? <em>(unnamed)</em> : type.name}
+                {typeName(type.name)}
               </button>{" "}
               <span className="counts" title="current / historical nodes">
                 {type.nodes.current}/{type.nodes.historical}

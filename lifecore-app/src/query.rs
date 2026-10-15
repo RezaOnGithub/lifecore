@@ -1,10 +1,18 @@
-use crate::{AppError, proposal::present, schema::TypeResolution, service::EntryRecord};
+use crate::{
+    AppError,
+    proposal::present,
+    schema::{self, TypeResolution},
+    service::EntryRecord,
+};
 use lifecore::{
-    Entry, EntryId, Node, View, ViewId,
+    Edge, Entry, EntryId, Node, View, ViewId,
     inspection::{Currentness, Direction, EdgeSelection, NodeSelection},
 };
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+};
 
 // The side of the inspected node an incident edge is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,12 +63,23 @@ pub fn inspect(view: View<'_>, id: EntryId) -> Result<EntryInspection, AppError>
     let entry = view.get(id).ok_or(AppError::EntryNotFound { id })?;
     Ok(match entry {
     Entry::Node(node) => {
-        let root = view.root_of(id);
-        let lineage = view
-            .nodes()
-            .filter(|other| view.root_of(other.id) == root)
-            .map(|other| EntryRecord::node(view, other))
-            .collect();
+        // The root is the last ancestor, or the node itself when it has none.
+        let root = view.ancestors(id).last().map_or(id, |ancestor| ancestor.id);
+        // A predecessor precedes its successors, so one pass in append order
+        // meets every member's predecessor before the member itself: a node
+        // is in the tree exactly when it is the root or its predecessor is.
+        let mut members = BTreeSet::from([root]);
+        let mut lineage = vec![];
+        for other in view.nodes() {
+            if other.id == root
+                || other
+                    .predecessor
+                    .is_some_and(|predecessor| members.contains(&predecessor))
+            {
+                members.insert(other.id);
+                lineage.push(EntryRecord::node(view, other));
+            }
+        }
         let mut edges = vec![];
         for edge in view.edges_of(id) {
             let (direction, other) = if edge.from == id {
@@ -77,7 +96,7 @@ pub fn inspect(view: View<'_>, id: EntryId) -> Result<EntryInspection, AppError>
         EntryInspection::Node {
             view: view.id(),
             entry: EntryRecord::node(view, node),
-            ty: TypeResolution::resolve(view, &node.ty_name),
+            ty: schema::resolve_name(view, &node.ty_name),
             lineage,
             edges,
         }
@@ -109,31 +128,43 @@ pub enum Seed {
 }
 
 // One expansion step: follow matching edges `hops` times from the frontier.
+// A step without hops is refused when decoded, before any view is selected.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expansion {
     #[serde(default = "one")]
-    pub hops: usize,
+    pub hops: NonZeroUsize,
     #[serde(default)]
     pub direction: Direction,
-    // Absent means any relationship type.
-    #[serde(default, deserialize_with = "present")]
+    #[serde(default, deserialize_with = "ty_names")]
     pub ty_names: Option<Vec<String>>,
     #[serde(default)]
     pub currentness: Currentness,
 }
 
-fn one() -> usize {
-    1
+fn one() -> NonZeroUsize {
+    NonZeroUsize::MIN
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EdgeFilter {
-    #[serde(default, deserialize_with = "present")]
+    #[serde(default, deserialize_with = "ty_names")]
     pub ty_names: Option<Vec<String>>,
     #[serde(default)]
     pub currentness: Currentness,
+}
+
+// Absent means any relationship type. An empty list would match nothing, so
+// it is refused when decoded rather than answered with an empty result.
+fn ty_names<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
+    let names = Vec::<String>::deserialize(deserializer)?;
+    if names.is_empty() {
+        return Err(D::Error::custom(
+            "an empty ty_names list matches nothing; omit it for any type",
+        ));
+    }
+    Ok(Some(names))
 }
 
 // Why a node is in the result: a seed, or first reached at `hop` over the
@@ -166,22 +197,18 @@ fn matches(ty_names: Option<&[String]>, ty_name: &str) -> bool {
     ty_names.is_none_or(|names| names.iter().any(|name| name == ty_name))
 }
 
-// Seeds, then each step breadth first. A hop walks the view's edges once in
-// append order and crosses every one that joins a frontier node to a node
-// not yet found, so the earliest edge decides a node's provenance whatever
-// order the seeds were given in. The frontier after a step is the nodes its
-// last hop added. Edges are then the matching ones among the result nodes.
+// Seeds, then each step breadth first. A hop reads the frontier's incident
+// edges and crosses, in append order, every matching one that joins a
+// frontier node to a node not yet found, so the earliest edge decides a
+// node's provenance whatever order the seeds were given in. The frontier
+// after a step is the nodes its last hop added. Edges are then the matching
+// ones among the result nodes.
 pub fn query<'a>(
     view: View<'a>,
     seeds: &[Seed],
     expand: &[Expansion],
     filter: &EdgeFilter,
 ) -> Result<ViewQuery, AppError> {
-    if expand.iter().any(|step| step.hops == 0) {
-        return Err(AppError::InvalidParams {
-            message: "an expansion step needs at least one hop".into(),
-        });
-    }
     // Keyed by position, which is append order within one view.
     let mut found = BTreeMap::<usize, (&Node, Provenance)>::new();
     let mut frontier = BTreeSet::new();
@@ -218,34 +245,46 @@ pub fn query<'a>(
         }
         }
     }
+    // Every edge of the view under each of its endpoints, in append order
+    // within each list, so a hop reads only the frontier's incident edges.
+    let mut incident = BTreeMap::<EntryId, Vec<&'a Edge>>::new();
+    for edge in view.edges() {
+        incident.entry(edge.from).or_default().push(edge);
+        if edge.to != edge.from {
+            incident.entry(edge.to).or_default().push(edge);
+        }
+    }
     let mut hop = 0;
     for step in expand {
-        let selection = EdgeSelection {
-            ty_name: None,
-            currentness: step.currentness,
-        };
-        for _ in 0..step.hops {
+        for _ in 0..step.hops.get() {
             if frontier.is_empty() {
                 break;
             }
             hop += 1;
-            let mut next = BTreeSet::new();
-            for edge in view.select_edges(selection) {
-                if !matches(step.ty_names.as_deref(), &edge.ty_name) {
-                    continue;
+            // Candidate crossings are gathered per frontier node and then
+            // applied in edge order, so the earliest edge still decides the
+            // provenance of a node several frontier nodes reach.
+            let mut crossings = vec![];
+            for &node in &frontier {
+                for edge in incident.get(&node).into_iter().flatten().copied() {
+                    if !matches(step.ty_names.as_deref(), &edge.ty_name)
+                        || !step.currentness.includes(view, edge.id)
+                    {
+                        continue;
+                    }
+                    let reached = match step.direction {
+                    Direction::Outgoing if edge.from == node => edge.to,
+                    Direction::Incoming if edge.to == node => edge.from,
+                    Direction::Both if edge.from == node => edge.to,
+                    Direction::Both => edge.from,
+                    Direction::Outgoing | Direction::Incoming => continue,
+                    };
+                    crossings.push((edge.id.position(), edge, node, reached));
                 }
-                let crossing = match step.direction {
-                Direction::Outgoing => frontier
-                    .contains(&edge.from)
-                    .then_some((edge.from, edge.to)),
-                Direction::Incoming => frontier.contains(&edge.to).then_some((edge.to, edge.from)),
-                Direction::Both if frontier.contains(&edge.from) => Some((edge.from, edge.to)),
-                Direction::Both if frontier.contains(&edge.to) => Some((edge.to, edge.from)),
-                Direction::Both => None,
-                };
-                let Some((from, reached)) = crossing else {
-                    continue;
-                };
+            }
+            crossings.sort_by_key(|(position, ..)| *position);
+            let mut next = BTreeSet::new();
+            for (_, edge, from, reached) in crossings {
                 if found.contains_key(&reached.position()) {
                     continue;
                 }

@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type { EntryId, NodeEntry } from "./contract.ts";
-import { labelField, rowLabel } from "./model/labels.ts";
+import { LABEL_LIMIT, labelField, rowLabel, typeName } from "./model/labels.ts";
+import { truncate } from "./model/payload.ts";
 import type { Screen } from "./navigation.ts";
 
 export type Open = (screen: Screen) => void;
@@ -27,14 +28,16 @@ export function NodeLink({
   position?: boolean;
 }) {
   const open = useOpen();
+  const label = rowLabel(node);
   return (
     <>
       <button
         type="button"
         className="link"
+        title={label.length > LABEL_LIMIT ? label : undefined}
         onClick={() => open({ kind: "inspector", id: node.id })}
       >
-        {rowLabel(node)}
+        {truncate(label, LABEL_LIMIT)}
       </button>
       {position && labelField(node) !== null && (
         <>
@@ -68,7 +71,7 @@ export function TypeLink({ name }: { name: string }) {
       className="link"
       onClick={() => open({ kind: "table", ty_name: name })}
     >
-      {name}
+      {typeName(name)}
     </button>
   );
 }

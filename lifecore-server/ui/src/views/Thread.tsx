@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { EdgeRecord, NodeRecord } from "../contract.ts";
 import { CurrentBadge, NodeLink } from "../links.tsx";
-import { entryKey, rowLabel } from "../model/labels.ts";
+import { entryKey, LABEL_LIMIT, rowLabel } from "../model/labels.ts";
+import { truncate } from "../model/payload.ts";
 import {
   buildThread,
   type ParentRelation,
@@ -33,10 +34,11 @@ export function ThreadView({
   const seen = new Map<string, number>();
   return (
     <section>
-      <div className="row">
+      <div className="row" data-testid="thread-controls">
         <label>
           parent → child by{" "}
           <select
+            data-testid="thread-relation"
             value={relation.ty_name}
             disabled={edgeTypes.length === 0}
             onChange={(event) =>
@@ -54,6 +56,7 @@ export function ThreadView({
         <label>
           direction{" "}
           <select
+            data-testid="thread-direction"
             value={relation.direction}
             disabled={edgeTypes.length === 0}
             onChange={(event) =>
@@ -113,7 +116,8 @@ export function ThreadView({
               {row.kind === "repeat" && (
                 <span className="muted">
                   {" "}
-                  also under {under ? rowLabel(under) : "the roots"}
+                  also under{" "}
+                  {under ? truncate(rowLabel(under), LABEL_LIMIT) : "the roots"}
                 </span>
               )}
               {row.kind === "cycle" && <span className="muted"> (cycle)</span>}
