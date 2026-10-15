@@ -174,8 +174,8 @@ fn cyclic_components(nodes: &BTreeSet<EntryId>, edges: &[SelectedEdge]) -> Vec<C
         neighbors.dedup();
     }
 
-    //A The iterative two-pass traversal avoids making graph size a call-stack
-    //A limit while preserving stable visitation order.
+    // The iterative two-pass traversal avoids making graph size a call-stack
+    // limit while preserving stable visitation order.
     let mut visited = BTreeSet::new();
     let mut finish_order = Vec::with_capacity(nodes.len());
     for start in nodes {
@@ -348,8 +348,8 @@ impl TypedAnalyzer for DagCheck {
                     .chain(&component.edges)
                     .copied()
                     .collect(),
-                //A The least node, not the newest entry, so the focus stays the same
-                //A at every prefix where the component persists and ranges merge.
+                // The least node, not the newest entry, so the focus stays the same
+                // at every prefix where the component persists and ranges merge.
                 focus: component.nodes.first().copied(),
                 message: Self::message_text(component),
                 kind: match message.disposition {

@@ -32,9 +32,9 @@ impl Drop for Scratch {
     }
 }
 
-//A Runs the built binary with stdin on a file holding two request lines. The
-//A child shares the file offset with this process, so whatever the child did
-//A not read is still here afterwards.
+// Runs the built binary with stdin on a file holding two request lines. The
+// child shares the file offset with this process, so whatever the child did
+// not read is still here afterwards.
 #[test]
 fn rpc_leaves_the_line_after_its_request_unread() {
     let scratch = Scratch::new();
@@ -66,12 +66,12 @@ fn rpc_leaves_the_line_after_its_request_unread() {
     let mut rest = String::new();
     input.read_to_string(&mut rest).unwrap();
     assert_eq!(rest, format!("{second}\n"));
-    //A The second request was neither read nor executed.
+    // The second request was neither read nor executed.
     assert_eq!(fs::read(&state).unwrap(), before);
 }
 
-//A A preview that is not accepted is a result on stdout, but the dedicated
-//A command still reports it through its exit status.
+// A preview that is not accepted is a result on stdout, but the dedicated
+// command still reports it through its exit status.
 #[test]
 fn check_exits_nonzero_for_a_proposal_that_is_not_accepted() {
     let scratch = Scratch::new();
@@ -101,7 +101,7 @@ fn check_exits_nonzero_for_a_proposal_that_is_not_accepted() {
     }
 }
 
-//A Sends one HTTP/1.1 request and returns the status line and body.
+// Sends one HTTP/1.1 request and returns the status line and body.
 fn post(port: u16, headers: &[String], body: &str) -> (String, Value) {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
     let mut request = format!("POST /rpc HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
@@ -122,9 +122,9 @@ fn post(port: u16, headers: &[String], body: &str) -> (String, Value) {
     )
 }
 
-//A The URL with its launch token is the only stdout line; the server listens
-//A on loopback, answers a valid call, refuses one without the token before
-//A dispatch, and exits cleanly on SIGTERM.
+// The URL with its launch token is the only stdout line; the server listens
+// on loopback, answers a valid call, refuses one without the token before
+// dispatch, and exits cleanly on SIGTERM.
 #[test]
 fn serve_prints_a_loopback_url_and_stops_on_sigterm() {
     let scratch = Scratch::new();
@@ -177,8 +177,8 @@ fn serve_prints_a_loopback_url_and_stops_on_sigterm() {
     assert_eq!(rest, "");
 }
 
-//A The database is resolved and read at startup; without one, `serve` prints
-//A the error object and no URL.
+// The database is resolved and read at startup; without one, `serve` prints
+// the error object and no URL.
 #[test]
 fn serve_refuses_to_start_without_a_database() {
     let scratch = Scratch::new();

@@ -99,8 +99,8 @@ fn malformed_declarations_return_typed_findings() {
     ));
 }
 
-//A A declaration in the nested-envelope encoding `Type::to_body` produced
-//A before field declarations became word lists: one mandatory text field.
+// A declaration in the nested-envelope encoding `Type::to_body` produced
+// before field declarations became word lists: one mandatory text field.
 fn former_declaration(fields_key: &str, successors_key: &str) -> Body {
     let presence_and_shape = Payload::Record(Body::from([
         (
@@ -132,7 +132,7 @@ fn the_former_envelope_encoding_is_a_malformed_declaration() {
                 kind: SchemaErrorKind::UnknownField,
             },
         ),
-        //A Even under the current keys, a per-field record is not a word list.
+        // Even under the current keys, a per-field record is not a word list.
         (
             former_declaration("fields", "successors"),
             SchemaError {
@@ -162,7 +162,7 @@ fn the_former_envelope_encoding_is_a_malformed_declaration() {
             graph.view().resolve_type("A"),
             Err(ResolutionError::Malformed { id, error }) if id == ids[0] && error == expected
         ));
-        //A With TypeCheck configured, the declaration is rejected, not stored.
+        // With TypeCheck configured, the declaration is rejected, not stored.
         let checked = prepare(
             &LifeCoreList::default(),
             &[configure(), changes[0].clone()],
@@ -677,14 +677,14 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
     let mut dismissals = Dismissals::default();
     let groups = report.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 2);
-    //A Each warning holds at prefixes 2 and 3, so it is one observation.
+    // Each warning holds at prefixes 2 and 3, so it is one observation.
     assert!(groups.iter().all(|g| {
         g.observations.len() == 1
             && g.selected.len() == 1
             && boundaries(g.observations[0].evaluated_view) == Some((2, 3))
     }));
     let key = groups[0].key.clone();
-    //A The subject is inside the typed finding; no boundary is.
+    // The subject is inside the typed finding; no boundary is.
     assert_eq!(
         certificate(&key),
         serde_json::json!({"Field": {"subject": ids[1],
@@ -759,7 +759,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
         2
     );
     assert!(dismissals.restore(&key));
-    //A Revising the node at prefix 4 ends both ranges at prefix 3.
+    // Revising the node at prefix 4 ends both ranges at prefix 3.
     assert_eq!(after.warnings().count(), 2);
     assert!(
         after
@@ -780,7 +780,7 @@ fn apply_checked(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
 fn certificate(key: &FindingKey) -> serde_json::Value {
     serde_json::from_str(&key.analyzer_certificate.0).unwrap()
 }
-//A The inclusive prefix boundaries; `None` at initialization.
+// The inclusive prefix boundaries; `None` at initialization.
 fn boundaries(view: EvaluatedView) -> Option<(usize, usize)> {
     match view {
     EvaluatedView::Prefixes { first, last } => Some((first.end_exclusive, last.end_exclusive)),
@@ -800,7 +800,7 @@ fn a_bad_transition_is_reported_once_at_its_own_prefix_and_rejects_the_plan() {
             node("A", Body::new(), None),
         ],
     );
-    //A Two further appends follow the bad transition at position 3.
+    // Two further appends follow the bad transition at position 3.
     let checked = prepare(
         &graph,
         &[
@@ -816,8 +816,8 @@ fn a_bad_transition_is_reported_once_at_its_own_prefix_and_rejects_the_plan() {
     assert_eq!(analysis.view.end_exclusive, 6);
     let errors = analysis.errors().collect::<Vec<_>>();
     assert_eq!(errors.len(), 1);
-    //A Judged once, at the prefix that appended the child, so the range does
-    //A not extend to the later boundaries.
+    // Judged once, at the prefix that appended the child, so the range does
+    // not extend to the later boundaries.
     assert_eq!(boundaries(errors[0].evaluated_view), Some((4, 4)));
     assert_eq!(errors[0].diagnostic.focus, Some(child));
     assert_eq!(errors[0].diagnostic.subjects, [child].into());
@@ -825,7 +825,7 @@ fn a_bad_transition_is_reported_once_at_its_own_prefix_and_rejects_the_plan() {
         certificate(&errors[0].key),
         serde_json::json!({"BadSuccessor": {"subject": child, "parent_type": "A", "child_type": "B"}})
     );
-    //A Inconsistencies are selected in a current report whatever their boundary.
+    // Inconsistencies are selected in a current report whatever their boundary.
     let dismissals = Dismissals::default();
     let groups = analysis.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 1);
@@ -854,7 +854,7 @@ fn a_bad_transition_deep_in_history_still_blocks_configuring_typecheck() {
             node("C", Body::new(), None),
         ],
     )[0];
-    //A The head view no longer judges the transition; replaying prefix 4 does.
+    // The head view no longer judges the transition; replaying prefix 4 does.
     assert!(findings(&graph, 6).is_empty());
     let checked = prepare(&graph, &[configure()], &mut runner()).unwrap();
     let errors = checked.analysis().errors().collect::<Vec<_>>();
@@ -899,8 +899,8 @@ fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
     .unwrap();
     assert!(!revoke.analysis().has_error());
     revoke.accepted().unwrap().commit(&mut graph).unwrap();
-    //A The recorded transition at position 3 stays valid under full replay, but
-    //A a new one is judged under the revised declaration.
+    // The recorded transition at position 3 stays valid under full replay, but
+    // a new one is judged under the revised declaration.
     let accepted = runner().run(&graph).unwrap();
     assert!(!accepted.has_error());
     let checked = prepare(
@@ -961,7 +961,7 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
             if *subject == child && parent_type == "A" && child_type == "B"
     ));
     assert!(bad_successor(6).is_empty());
-    //A The former loop judged it again at every later prefix.
+    // The former loop judged it again at every later prefix.
     let reference = AllChildrenTypeCheck
         .analyze_inner(graph.view(), &Default::default())
         .unwrap();
@@ -969,8 +969,8 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
         f,
         TypeCheckMessage::BadSuccessor { subject, .. } if *subject == child
     )));
-    //A Emitted once, the finding's range stays at its own prefix in every
-    //A later view; only identical re-emissions would extend it.
+    // Emitted once, the finding's range stays at its own prefix in every
+    // later view; only identical re-emissions would extend it.
     let suite = SuiteConfig(vec![Config {
         name: TypeCheckFactory::name().into(),
         config: String::new(),
@@ -1015,7 +1015,7 @@ fn a_warning_that_holds_until_the_head_is_one_observation_per_subject() {
     let analysis = checked.analysis();
     assert_eq!(analysis.view.end_exclusive, 21);
     assert!(!analysis.has_error());
-    //A Without merging, task i would have one observation per later prefix.
+    // Without merging, task i would have one observation per later prefix.
     assert_eq!(analysis.observations().count(), 20);
     let warnings = analysis.warnings().collect::<Vec<_>>();
     assert_eq!(warnings.len(), 20);
@@ -1031,7 +1031,7 @@ fn a_warning_that_holds_until_the_head_is_one_observation_per_subject() {
         checked.accepted().unwrap().commit(&mut graph).unwrap();
         graph
     };
-    //A An earlier view ends every range at its own boundary.
+    // An earlier view ends every range at its own boundary.
     let suite = SuiteConfig(vec![Config {
         name: TypeCheckFactory::name().into(),
         config: String::new(),
@@ -1072,7 +1072,7 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
             if *subject == child && name == "A"
     )));
 
-    //A The built-in metatype permits only declaration successors.
+    // The built-in metatype permits only declaration successors.
     let mut graph = LifeCoreList::default();
     let child = append(
         &mut graph,
@@ -1090,16 +1090,16 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
     )));
 }
 
-//A The transition loop from a07483e, verbatim apart from the later `successors`,
-//A `BadSuccessor`, and `subject` changes, and independent of
-//A `TypeCheck::transition`: every child in the view is judged against the
-//A prefix before it, at every prefix containing it.
+// The transition loop from a07483e, verbatim apart from the later `successors`,
+// `BadSuccessor`, and `subject` changes, and independent of
+// `TypeCheck::transition`: every child in the view is judged against the
+// prefix before it, at every prefix containing it.
 fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
     use TypeCheckMessage::*;
     let mut output = Vec::new();
     for child in view.nodes().filter(|n| n.parent.is_some()) {
-        //A A later schema cannot revoke a past transition; each child is judged
-        //A immediately before its append.
+        // A later schema cannot revoke a past transition; each child is judged
+        // immediately before its append.
         let before = view
             .prefix(child.id.position())
             .expect("child is inside view");
@@ -1144,7 +1144,7 @@ fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
     output
 }
 
-//A The former analyzer: unchanged current-state checks plus the loop above.
+// The former analyzer: unchanged current-state checks plus the loop above.
 struct AllChildrenTypeCheck;
 
 impl TypedAnalyzer for AllChildrenTypeCheck {
@@ -1169,8 +1169,8 @@ impl TypedAnalyzer for AllChildrenTypeCheck {
     }
 }
 
-//A Registered under TypeCheck's name and version, so finding keys compare
-//A directly with TypeCheck's own.
+// Registered under TypeCheck's name and version, so finding keys compare
+// directly with TypeCheck's own.
 struct AllChildrenFactory;
 
 impl AnalyzerFactory for AllChildrenFactory {
@@ -1183,8 +1183,8 @@ impl AnalyzerFactory for AllChildrenFactory {
     }
 }
 
-//A Each finding key with the boundary that first emitted it, in first-emission
-//A order; `None` is initialization.
+// Each finding key with the boundary that first emitted it, in first-emission
+// order; `None` is initialization.
 fn first_emissions(output: &AnalysisOutput) -> Vec<(&FindingKey, Option<usize>)> {
     let mut first = Vec::<(&FindingKey, Option<usize>)>::new();
     for observation in output.observations() {
@@ -1196,7 +1196,7 @@ fn first_emissions(output: &AnalysisOutput) -> Vec<(&FindingKey, Option<usize>)>
     first
 }
 
-//A The number of (observation, prefix) emissions an output covers.
+// The number of (observation, prefix) emissions an output covers.
 fn covered(output: &AnalysisOutput) -> usize {
     output
         .observations()
@@ -1217,8 +1217,8 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
     let mut repeated = 0;
     for end_exclusive in 0..=graph.view().len() {
         let view = graph.view().prefix(end_exclusive).unwrap();
-        //A At the typed level, each prefix yields the current-state findings plus
-        //A the former loop's judgment of the newest entry alone.
+        // At the typed level, each prefix yields the current-state findings plus
+        // the former loop's judgment of the newest entry alone.
         let newest_entry = view.entries().next_back().map(|entry| entry.id());
         let mut expected = TypeCheck::current_state(view);
         expected.extend(
@@ -1237,8 +1237,8 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
         let reference = reference_runner.run_view(view, &suite).unwrap();
         assert_eq!(first_emissions(&newest), first_emissions(&reference));
         assert_eq!(newest.has_error(), reference.has_error());
-        //A Newest-only replay drops only repeated judgments of older children,
-        //A which the former loop's ranges extend over.
+        // Newest-only replay drops only repeated judgments of older children,
+        // which the former loop's ranges extend over.
         assert!(newest.observations().all(|o| {
             reference.observations().any(|r| {
                 r.key == o.key
@@ -1284,8 +1284,8 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     let v = |n: i64| Body::from([("v".into(), n.into())]);
     let mut graphs = vec![];
 
-    //A A valid transition, a revoked permission, then a bad transition and a
-    //A same-type revision of the valid child.
+    // A valid transition, a revoked permission, then a bad transition and a
+    // same-type revision of the valid child.
     let mut graph = LifeCoreList::default();
     let mut a = with_field("A");
     a.successors.insert("B".into());
@@ -1310,10 +1310,10 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    //A Missing parent types: a declared successor of an undeclared root, and a
-    //A branch from a stale node whose declaration was retired. When a child keeps
-    //A its parent's missing type, the repeated judgment equals the current-state
-    //A finding and deduplicates; the declared successor's does not.
+    // Missing parent types: a declared successor of an undeclared root, and a
+    // branch from a stale node whose declaration was retired. When a child keeps
+    // its parent's missing type, the repeated judgment equals the current-state
+    // finding and deduplicates; the declared successor's does not.
     let mut graph = LifeCoreList::default();
     let ids = append(
         &mut graph,
@@ -1335,7 +1335,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    //A An ambiguous parent type, later disambiguated by renaming a declaration.
+    // An ambiguous parent type, later disambiguated by renaming a declaration.
     let mut graph = LifeCoreList::default();
     let mut other_a = with_field("A");
     other_a.outgoing.insert("link".into());
@@ -1357,7 +1357,7 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    //A A malformed declaration blocks resolving the parent type until repaired.
+    // A malformed declaration blocks resolving the parent type until repaired.
     let mut graph = LifeCoreList::default();
     let ids = append(
         &mut graph,
@@ -1377,9 +1377,9 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    //A Edges whose endpoints are superseded, a permitted change into a
-    //A declaration, and a forbidden change between ordinary types, followed by
-    //A an unrelated append.
+    // Edges whose endpoints are superseded, a permitted change into a
+    // declaration, and a forbidden change between ordinary types, followed by
+    // an unrelated append.
     let mut graph = LifeCoreList::default();
     let a = Type::new("A", &[], &["link"], &[], &["Type"]);
     let b = Type::new("B", &[], &[], &["link"], &[]);
@@ -1414,8 +1414,8 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    //A A declaration revised into an ordinary node, immediately followed by an
-    //A edge from that node, so the prefix ending at the edge must not judge it.
+    // A declaration revised into an ordinary node, immediately followed by an
+    // edge from that node, so the prefix ending at the edge must not judge it.
     let mut graph = LifeCoreList::default();
     let linked = Type::new("A", &[], &["link"], &["link"], &[]);
     append(
@@ -1435,8 +1435,8 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    //A Each fixture has later prefixes at which the former loop repeated a
-    //A transition judgment.
+    // Each fixture has later prefixes at which the former loop repeated a
+    // transition judgment.
     for graph in &graphs {
         assert!(!graph.view().is_empty());
         assert!(assert_replay_matches_all_children(graph) > 0);

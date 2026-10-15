@@ -14,9 +14,9 @@ pub enum Error {
     Check(#[from] transaction::Error),
 }
 
-//A Selecting an observation is explicit. Its ordered actions are checked anew
-//A against the supplied base and runner inputs; checking never commits them.
-//A Revision intent is validated by `transaction::prepare` like any other plan.
+// Selecting an observation is explicit. Its ordered actions are checked anew
+// against the supplied base and runner inputs; checking never commits them.
+// Revision intent is validated by `transaction::prepare` like any other plan.
 pub fn prepare_suggestion(
     graph: &LifeCoreList,
     observation: &Observation,

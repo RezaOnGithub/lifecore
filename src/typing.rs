@@ -137,10 +137,10 @@ impl View<'_> {
     }
 }
 
-//A Declaration lists are flat, so unlike nested payloads their depth is not
-//A bounded by the codecs' recursion limits. Parsing, dropping, and comparing a
-//A `ValueType` recurse once per level, so a long run of `list` words would
-//A otherwise overflow the stack instead of being reported.
+// Declaration lists are flat, so unlike nested payloads their depth is not
+// bounded by the codecs' recursion limits. Parsing, dropping, and comparing a
+// `ValueType` recurse once per level, so a long run of `list` words would
+// otherwise overflow the stack instead of being reported.
 const MAX_SHAPE_DEPTH: usize = 64;
 
 impl Type {
@@ -235,10 +235,10 @@ impl ValueType {
         }
         }
     }
-    //A Parses the shape that starts at `start` in a declaration list and returns
-    //A it with the index just after it. Indexes in errors are positions in that
-    //A list, so a caller adds only the field path. `depth` counts the `list` and
-    //A `record` words enclosing this shape, across nested records.
+    // Parses the shape that starts at `start` in a declaration list and returns
+    // it with the index just after it. Indexes in errors are positions in that
+    // list, so a caller adds only the field path. `depth` counts the `list` and
+    // `record` words enclosing this shape, across nested records.
     fn from_words(
         words: &[Payload],
         start: usize,
@@ -306,8 +306,8 @@ fn check_fields(
 ) {
     for (name, field) in fields {
         path.push(PathPart::Field(name.clone()));
-        //A Presence is membership, including empty lists and records. Shape is checked
-        //A separately.
+        // Presence is membership, including empty lists and records. Shape is checked
+        // separately.
         let value = body.get(name);
         let kind = match (field.status, value.is_some()) {
         (FieldStatus::Mandatory, false) => Some(FieldIssueKind::MissingMandatory),
@@ -369,8 +369,8 @@ fn fields_from_payload(
         .collect()
 }
 
-//A A declaration is `[presence, shape words...]`; a `record` word takes the next
-//A element as its sub-field declarations, so it ends the list.
+// A declaration is `[presence, shape words...]`; a `record` word takes the next
+// element as its sub-field declarations, so it ends the list.
 fn field_from_payload(value: &Payload, depth: usize) -> Result<FieldDecl, SchemaError> {
     let Payload::List(words) = value else {
         return Err(wrong_shape(PayloadKind::List, value));

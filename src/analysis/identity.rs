@@ -10,7 +10,7 @@ use super::MessageType;
 pub struct AnalyzerIdentity {
     pub name: String,
     pub version: Version,
-    //A Preserve the caller's exact spelling even if the analyzer normalizes it.
+    // Preserve the caller's exact spelling even if the analyzer normalizes it.
     pub configuration: String,
 }
 
@@ -30,7 +30,7 @@ pub struct FindingKey {
     pub database: Uuid,
     pub analyzer: AnalyzerIdentity,
     pub kind: MessageType,
-    //A The analyzer owns this complete semantic identity; shared code never
-    //A parses it or substitutes a digest for exact equality.
+    // The analyzer owns this complete semantic identity; shared code never
+    // parses it or substitutes a digest for exact equality.
     pub analyzer_certificate: AnalyzerCertificate,
 }

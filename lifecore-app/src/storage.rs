@@ -13,13 +13,13 @@ use uuid::Uuid;
 
 pub const STATE_PATH_VARIABLE: &str = "LIFECORE_STATE_FILE_PATH";
 pub const DEFAULT_STATE_FILE: &str = "LifeCoreState.json";
-//A A check takes about a second at 4,000 entries and grows roughly quadratically
-//A (PLAN section 5), so a waiting writer must outlast a competing apply rather
-//A than a brief write.
+// A check takes about a second at 4,000 entries and grows roughly quadratically
+// (PLAN section 5), so a waiting writer must outlast a competing apply rather
+// than a brief write.
 pub const DEFAULT_BUSY_RETRY: Duration = Duration::from_secs(10);
 const BUSY_POLL: Duration = Duration::from_millis(20);
 
-//A The selected snapshot path and its stable sibling lock file.
+// The selected snapshot path and its stable sibling lock file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatePath {
     path: PathBuf,
@@ -33,8 +33,8 @@ impl StatePath {
         Self::resolve_from(std::env::var_os(STATE_PATH_VARIABLE), &cwd)
     }
 
-    //A A set variable always wins, even when empty or unusable: selection never
-    //A falls back to the default or searches parent directories.
+    // A set variable always wins, even when empty or unusable: selection never
+    // falls back to the default or searches parent directories.
     pub fn resolve_from(variable: Option<OsString>, cwd: &Path) -> Result<Self, AppError> {
         let selected = match variable {
         Some(value) if value.is_empty() => return Err(AppError::EmptyStatePath),
@@ -58,8 +58,8 @@ impl StatePath {
         PathBuf::from(lock)
     }
 
-    //A A bare file name has an empty parent, which names no directory to open
-    //A or synchronize; it lives in the current directory.
+    // A bare file name has an empty parent, which names no directory to open
+    // or synchronize; it lives in the current directory.
     pub(crate) fn directory(&self) -> &Path {
         match self.path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -86,8 +86,8 @@ impl Snapshot {
     }
 }
 
-//A Reads open the path afresh and parse one complete file; atomic replacement
-//A means they see either the old or the new snapshot. No lock is needed.
+// Reads open the path afresh and parse one complete file; atomic replacement
+// means they see either the old or the new snapshot. No lock is needed.
 pub(crate) fn read(state: &StatePath) -> Result<Snapshot, AppError> {
     let text = fs::read_to_string(state.path()).map_err(|error| match error.kind() {
     io::ErrorKind::NotFound => AppError::DatabaseMissing {
@@ -117,9 +117,9 @@ pub(crate) fn require_existing(state: &StatePath) -> Result<(), AppError> {
     }
 }
 
-//A Initialization preconditions checked before the lock file is created, so a
-//A refused `init` leaves nothing behind. The no-clobber link in `publish_new`
-//A still decides a race with a concurrent `init`.
+// Initialization preconditions checked before the lock file is created, so a
+// refused `init` leaves nothing behind. The no-clobber link in `publish_new`
+// still decides a race with a concurrent `init`.
 pub(crate) fn require_initializable(state: &StatePath) -> Result<(), AppError> {
     if fs::symlink_metadata(state.path()).is_ok() {
         return Err(AppError::DatabaseExists {
@@ -137,18 +137,18 @@ pub(crate) fn require_initializable(state: &StatePath) -> Result<(), AppError> {
     }
 }
 
-//A Holding this value is writer exclusion over one state path. Closing the
-//A file releases the lock; the lock file itself is never removed or replaced.
+// Holding this value is writer exclusion over one state path. Closing the
+// file releases the lock; the lock file itself is never removed or replaced.
 #[derive(Debug)]
 pub(crate) struct WriterLock {
     _file: File,
     state: StatePath,
 }
 
-//A A snapshot read while holding writer exclusion, together with that lock.
-//A Only this can replace a published snapshot, so a mutation cannot store
-//A changes to a snapshot read before the lock was taken, or publish to a
-//A different path than it locked and read.
+// A snapshot read while holding writer exclusion, together with that lock.
+// Only this can replace a published snapshot, so a mutation cannot store
+// changes to a snapshot read before the lock was taken, or publish to a
+// different path than it locked and read.
 #[derive(Debug)]
 pub(crate) struct LockedSnapshot {
     lock: WriterLock,
@@ -164,9 +164,9 @@ impl WriterLock {
         })
     }
 
-    //A Initialization never replaces an existing path: a hard link fails if the
-    //A target exists, where a rename would silently clobber it. This requires a
-    //A filesystem with hard links.
+    // Initialization never replaces an existing path: a hard link fails if the
+    // target exists, where a rename would silently clobber it. This requires a
+    // filesystem with hard links.
     pub(crate) fn publish_new(
         &self,
         snapshot: &Snapshot,
@@ -198,9 +198,9 @@ impl LockedSnapshot {
         &mut self.snapshot
     }
 
-    //A Atomically replaces the published snapshot, keeping its file mode.
-    //A Failures before the rename leave the previous snapshot intact; a failure
-    //A afterwards is an uncertain publication, not a rollback.
+    // Atomically replaces the published snapshot, keeping its file mode.
+    // Failures before the rename leave the previous snapshot intact; a failure
+    // afterwards is an uncertain publication, not a rollback.
     pub(crate) fn publish(&self, sync: SyncDirectory) -> Result<Publication, AppError> {
         let state = &self.lock.state;
         let permissions = fs::metadata(state.path())
@@ -247,16 +247,16 @@ pub(crate) fn lock(state: &StatePath, retry: Duration) -> Result<WriterLock, App
     }
 }
 
-//A Synchronizes the containing directory after replacement. The service holds
-//A it as a function so tests can inject a failure after the rename.
+// Synchronizes the containing directory after replacement. The service holds
+// it as a function so tests can inject a failure after the rename.
 pub(crate) type SyncDirectory = fn(&Path) -> io::Result<()>;
 
 pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
     File::open(directory)?.sync_all()
 }
 
-//A Whether a publication that replaced the snapshot was also synchronized. An
-//A uncertain one may or may not persist, but the new state is already visible.
+// Whether a publication that replaced the snapshot was also synchronized. An
+// uncertain one may or may not persist, but the new state is already visible.
 #[must_use]
 pub(crate) enum Publication {
     Complete,
@@ -272,10 +272,10 @@ fn encode(snapshot: &Snapshot) -> Result<Vec<u8>, AppError> {
     Ok(bytes)
 }
 
-//A Writes and synchronizes a complete temporary file beside the target, so the
-//A later rename or link never exposes a partial snapshot. Permissions are set
-//A before any content is written, so a private snapshot never has a readable
-//A temporary copy.
+// Writes and synchronizes a complete temporary file beside the target, so the
+// later rename or link never exposes a partial snapshot. Permissions are set
+// before any content is written, so a private snapshot never has a readable
+// temporary copy.
 fn stage(
     state: &StatePath,
     bytes: &[u8],
@@ -303,7 +303,7 @@ fn stage(
         .and_then(|()| file.write_all(bytes))
         .and_then(|()| file.sync_all());
     if let Err(error) = written {
-        //A Best effort: a leftover temporary file does not affect the snapshot.
+        // Best effort: a leftover temporary file does not affect the snapshot.
         fs::remove_file(&temporary).ok();
         return Err(AppError::PublicationFailed {
             message: error.to_string(),

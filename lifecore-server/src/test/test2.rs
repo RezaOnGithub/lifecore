@@ -45,7 +45,7 @@ use uuid::Uuid;
 const PORT: u16 = 4242;
 const TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
-//A A private directory per test, removed afterwards.
+// A private directory per test, removed afterwards.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -57,7 +57,7 @@ impl Scratch {
     fn state(&self) -> StatePath {
         StatePath::new(self.0.join(DEFAULT_STATE_FILE))
     }
-    //A A database with TypeCheck, as `lifecore init` creates it.
+    // A database with TypeCheck, as `lifecore init` creates it.
     fn initialized(&self) -> StatePath {
         let state = self.state();
         service(state.clone())
@@ -83,8 +83,8 @@ fn configured(name: &str) -> Config {
     }
 }
 
-//A Test analyzers: one that fails, one that panics, and one that suggests.
-//A The first two misbehave only on a nonempty prefix, so `init` succeeds.
+// Test analyzers: one that fails, one that panics, and one that suggests.
+// The first two misbehave only on a nonempty prefix, so `init` succeeds.
 #[derive(Clone, Copy)]
 enum Scripted {
     Failing,
@@ -107,8 +107,8 @@ impl Analyzer for Scripted {
     fn version(&self) -> Version {
         Version::new(1, 0, 0)
     }
-    //A The suggesting analyzer also speaks at initialization, so recorded
-    //A outputs include an `Initialization` observation.
+    // The suggesting analyzer also speaks at initialization, so recorded
+    // outputs include an `Initialization` observation.
     fn initialize(&mut self, _: &EvaluationInputs) -> Result<Vec<Message>, String> {
         let Self::Suggesting = self else {
             return Ok(vec![]);
@@ -134,8 +134,8 @@ impl Analyzer for Scripted {
     }
 }
 
-//A Suggests revising the first current, unfinished Task to done, and making a
-//A second one depend on the revision.
+// Suggests revising the first current, unfinished Task to done, and making a
+// second one depend on the revision.
 fn suggest_done(view: View<'_>) -> Vec<Message> {
     let mut open = view
         .fresh_nodes()
@@ -207,7 +207,7 @@ fn call_text(id: &str, method: &str, params: Value) -> String {
     json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
 }
 
-//A A one-node proposal that TypeCheck accepts: a new type declaration.
+// A one-node proposal that TypeCheck accepts: a new type declaration.
 fn declare(name: &str) -> String {
     call_text(
         "declare",
@@ -228,7 +228,7 @@ fn valid_headers(port: u16) -> Headers {
     ]
 }
 
-//A Replaces, adds, or (with `None`) removes one header.
+// Replaces, adds, or (with `None`) removes one header.
 fn with(mut headers: Headers, name: &'static str, value: Option<&str>) -> Headers {
     headers.retain(|(existing, _)| *existing != name);
     if let Some(value) = value {
@@ -256,7 +256,7 @@ fn json_body(bytes: &[u8]) -> Value {
     serde_json::from_slice(bytes).unwrap()
 }
 
-//A Holds the writer lock as a competing process would, until dropped.
+// Holds the writer lock as a competing process would, until dropped.
 fn hold_writer_lock(state: &StatePath) -> File {
     let file = File::options()
         .read(true)
@@ -302,8 +302,8 @@ fn launch_tokens_are_256_random_bits_that_debug_never_prints() {
     assert!(!printed.contains(&revealed), "{printed}");
 }
 
-//A Each request would append a type declaration if dispatched; the stored
-//A snapshot proves none was. The same request with valid headers then applies.
+// Each request would append a type declaration if dispatched; the stored
+// snapshot proves none was. The same request with valid headers then applies.
 #[tokio::test]
 async fn requests_failing_an_access_check_are_rejected_before_dispatch() {
     let scratch = Scratch::new();
@@ -448,7 +448,7 @@ async fn requests_failing_an_access_check_are_rejected_before_dispatch() {
             StatusCode::MISDIRECTED_REQUEST,
             "host",
         ),
-        //A A rebinding name with a foreign origin fails on the host first.
+        // A rebinding name with a foreign origin fails on the host first.
         (
             with(
                 with(valid.clone(), "host", Some("rebound.example:4242")),
@@ -474,7 +474,7 @@ async fn requests_failing_an_access_check_are_rejected_before_dispatch() {
         );
         assert_eq!(scratch.bytes(), stored, "{headers:?}");
     }
-    //A An absolute-form target names its own authority, which must agree.
+    // An absolute-form target names its own authority, which must agree.
     let (status, _, body) = send(
         &router,
         request("POST", "http://evil.example/rpc", &valid, declare("Note")),
@@ -485,8 +485,8 @@ async fn requests_failing_an_access_check_are_rejected_before_dispatch() {
         (StatusCode::MISDIRECTED_REQUEST, json!("host"))
     );
     assert_eq!(scratch.bytes(), stored);
-    //A Accepted spellings: either loopback name with its own origin, a
-    //A lowercase scheme, and media type parameters.
+    // Accepted spellings: either loopback name with its own origin, a
+    // lowercase scheme, and media type parameters.
     let accepted = with(
         with(
             with(valid.clone(), "host", Some(&format!("localhost:{PORT}"))),
@@ -569,7 +569,7 @@ async fn static_assets_need_no_token_but_pass_the_host_and_origin_checks() {
             assert_eq!(actual, status, "{path} {headers:?}");
         }
     }
-    //A A client directory is read on every request, so a rebuild shows on refresh.
+    // A client directory is read on every request, so a rebuild shows on refresh.
     let directory = scratch.0.join("ui");
     fs::create_dir(&directory).unwrap();
     fs::write(directory.join("index.html"), "<p>first</p>").unwrap();
@@ -587,8 +587,8 @@ async fn static_assets_need_no_token_but_pass_the_host_and_origin_checks() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-//A HTTP framing allows formatted bodies; every envelope or body failure past
-//A the access checks is a JSON-RPC error with HTTP 200.
+// HTTP framing allows formatted bodies; every envelope or body failure past
+// the access checks is a JSON-RPC error with HTTP 200.
 #[tokio::test]
 async fn rpc_bodies_may_span_lines_and_their_failures_stay_json_rpc() {
     let scratch = Scratch::new();
@@ -632,8 +632,8 @@ async fn rpc_bodies_may_span_lines_and_their_failures_stay_json_rpc() {
     }
 }
 
-//A A busy writer lock and a panicking call both come back as structured
-//A JSON-RPC errors carrying the caller's ID, and neither mutates the state.
+// A busy writer lock and a panicking call both come back as structured
+// JSON-RPC errors carrying the caller's ID, and neither mutates the state.
 #[tokio::test]
 async fn busy_writers_and_failed_tasks_answer_with_structured_errors() {
     let scratch = Scratch::new();
@@ -682,7 +682,7 @@ async fn busy_writers_and_failed_tasks_answer_with_structured_errors() {
             .contains("fixture analyzer panicked at boundary 1")
     );
     assert_eq!(scratch.bytes(), stored);
-    //A The server keeps answering afterwards.
+    // The server keeps answering afterwards.
     let (_, _, body) = send(
         &router,
         request(
@@ -696,9 +696,9 @@ async fn busy_writers_and_failed_tasks_answer_with_structured_errors() {
     assert!(json_body(&body)["result"].is_object());
 }
 
-//A Dropping the response future is what the server does when a connection
-//A closes mid-call. The blocking task still publishes, and nothing reports a
-//A rollback.
+// Dropping the response future is what the server does when a connection
+// closes mid-call. The blocking task still publishes, and nothing reports a
+// rollback.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_goes_away_does_not_cancel_its_write() {
     let scratch = Scratch::new();
@@ -728,8 +728,8 @@ async fn a_client_that_goes_away_does_not_cancel_its_write() {
     assert_eq!(declared_types(&service(state)), ["Note"]);
 }
 
-//A Shutdown stops accepting connections, lets the running call finish and
-//A answer its client, and only then returns.
+// Shutdown stops accepting connections, lets the running call finish and
+// answer its client, and only then returns.
 #[tokio::test(flavor = "multi_thread")]
 async fn shutdown_waits_for_running_calls_to_finish_and_answer() {
     let scratch = Scratch::new();
@@ -783,9 +783,9 @@ async fn shutdown_waits_for_running_calls_to_finish_and_answer() {
     );
 }
 
-//A Fixtures replace random UUIDs, in order of first appearance, and the
-//A scratch directory with stable stand-ins, so an unchanged Rust shape writes
-//A byte-identical files.
+// Fixtures replace random UUIDs, in order of first appearance, and the
+// scratch directory with stable stand-ins, so an unchanged Rust shape writes
+// byte-identical files.
 struct Normalizer {
     scratch: String,
     uuids: HashMap<String, String>,
@@ -838,9 +838,9 @@ fn is_uuid(text: &str) -> bool {
         })
 }
 
-//A One generated TypeScript module: each export is a Rust-produced JSON value
-//A that `satisfies` its declared contract type, so tsc checks literal tags
-//A and rejects members the contract does not declare.
+// One generated TypeScript module: each export is a Rust-produced JSON value
+// that `satisfies` its declared contract type, so tsc checks literal tags
+// and rejects members the contract does not declare.
 struct Module {
     file: String,
     text: String,
@@ -862,8 +862,8 @@ fn module(file: String, imports: &[&str], exports: Vec<(&str, String, Value)>) -
     Module { file, text }
 }
 
-//A Maps every method to its module, so tsc requires a fixture for each method
-//A the contract declares and rejects one it does not.
+// Maps every method to its module, so tsc requires a fixture for each method
+// the contract declares and rejects one it does not.
 fn index_module() -> Module {
     let mut text =
         format!("{GENERATED}import type {{ Method, MethodFixture }} from \"../contract.ts\";\n");
@@ -884,8 +884,8 @@ fn index_module() -> Module {
     }
 }
 
-//A The fixture service: the built-in analyzers and the scripted ones, over a
-//A database whose suite also suggests, so outputs include suggested actions.
+// The fixture service: the built-in analyzers and the scripted ones, over a
+// database whose suite also suggests, so outputs include suggested actions.
 struct Recorder {
     service: Service,
     normalizer: Normalizer,
@@ -897,12 +897,12 @@ impl Recorder {
         let response = self.raw(&request.to_string());
         (self.normalizer.value(request), response)
     }
-    //A Exactly the server's path from body to response.
+    // Exactly the server's path from body to response.
     fn raw(&mut self, body: &str) -> Value {
         let response = serde_json::to_value(respond(&self.service, body.as_bytes())).unwrap();
         self.normalizer.value(response)
     }
-    //A An unrecorded call's raw result, for identities a later request needs.
+    // An unrecorded call's raw result, for identities a later request needs.
     fn raw_result(&self, method: &str, params: Value) -> Value {
         let line = call_text("setup", method, params);
         let response = serde_json::to_value(rpc::handle(&self.service, &line)).unwrap();
@@ -953,7 +953,7 @@ fn task_declaration() -> Value {
     })
 }
 
-//A Every application error kind; the recorded fixtures must match it exactly.
+// Every application error kind; the recorded fixtures must match it exactly.
 const ERROR_KINDS: [&str; 21] = [
     "state_path_empty",
     "working_directory",
@@ -978,8 +978,8 @@ const ERROR_KINDS: [&str; 21] = [
     "internal",
 ];
 
-//A Has no wildcard, so a new `AppError` variant fails to compile here; add its
-//A kind to `ERROR_KINDS`, which then requires a recorded sample.
+// Has no wildcard, so a new `AppError` variant fails to compile here; add its
+// kind to `ERROR_KINDS`, which then requires a recorded sample.
 fn listed(error: &AppError) {
     match error {
     AppError::EmptyStatePath
@@ -1006,9 +1006,9 @@ fn listed(error: &AppError) {
     }
 }
 
-//A Representative requests and responses of every method, application error
-//A kind, protocol error, and HTTP rejection, recorded from real calls where a
-//A call can produce them.
+// Representative requests and responses of every method, application error
+// kind, protocol error, and HTTP rejection, recorded from real calls where a
+// call can produce them.
 async fn fixtures(scratch: &Scratch) -> Vec<Module> {
     let state = scratch.state();
     let mut recorder = Recorder {
@@ -1027,7 +1027,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         .unwrap();
     let mut modules = vec![];
 
-    //A A request may omit `params`.
+    // A request may omit `params`.
     let mint_request = json!({"jsonrpc": "2.0", "id": 1, "method": "plan_id.mint"});
     let mint = (
         mint_request.clone(),
@@ -1037,7 +1037,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "plan_id.mint",
         vec![("request", "response", mint)],
     ));
-    //A Later requests carry raw identities; recording normalizes them.
+    // Later requests carry raw identities; recording normalizes them.
     let first_plan = recorder.raw_result("plan_id.mint", json!({}))["plan_id"].clone();
 
     let declared = recorder.call(
@@ -1058,7 +1058,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "proposal.apply",
         vec![("request", "response", declared)],
     ));
-    //A Raw identities for later requests; recorded requests normalize them.
+    // Raw identities for later requests; recorded requests normalize them.
     let raw_entries =
         recorder.raw_result("entries.list", json!({"currentness": "all"}))["entries"].clone();
     let report_id = raw_entries[1]["id"].clone();
@@ -1289,8 +1289,8 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
     ))
     .unwrap();
     samples.push(recorder.normalizer.value(response));
-    //A Errors outside RPC dispatch, or that need a fault this test cannot
-    //A cause portably, are serialized from constructed values.
+    // Errors outside RPC dispatch, or that need a fault this test cannot
+    // cause portably, are serialized from constructed values.
     let host_errors = [
         StatePath::resolve_from(Some("".into()), &scratch.0).unwrap_err(),
         AppError::WorkingDirectory {
@@ -1410,10 +1410,10 @@ fn fixture_directory() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/src/fixtures"))
 }
 
-//A Writes the fixtures the frontend type-check reads. Files are rewritten
-//A only when stale, so an unchanged run leaves `ui/src` untouched and does not
-//A rebundle the client; a stale or extra file fails the test after it was
-//A refreshed, so the change is reviewed and committed.
+// Writes the fixtures the frontend type-check reads. Files are rewritten
+// only when stale, so an unchanged run leaves `ui/src` untouched and does not
+// rebundle the client; a stale or extra file fails the test after it was
+// refreshed, so the change is reviewed and committed.
 #[tokio::test(flavor = "multi_thread")]
 async fn typescript_fixtures_match_the_rust_shapes() {
     let scratch = Scratch::new();

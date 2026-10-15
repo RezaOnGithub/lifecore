@@ -12,8 +12,8 @@ fn node(name: &str) -> Change {
     }))
 }
 
-//A Imports a snapshot of `graph` under another suite. Deserialization is the
-//A import boundary: it validates structure but runs no analyzers.
+// Imports a snapshot of `graph` under another suite. Deserialization is the
+// import boundary: it validates structure but runs no analyzers.
 fn with_suite(graph: &LifeCoreList, suite: serde_json::Value) -> LifeCoreList {
     let mut stored = serde_json::to_value(graph).unwrap();
     stored["suite"] = suite;
@@ -209,7 +209,7 @@ fn serialization_formatting_does_not_invalidate_an_exact_base() {
         .unwrap();
     let original = serde_json::to_vec_pretty(&graph).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&original).unwrap();
-    //A Value sorts object keys; compact encoding also removes whitespace.
+    // Value sorts object keys; compact encoding also removes whitespace.
     let reformatted = serde_json::to_vec(&value).unwrap();
     assert_ne!(reformatted, original);
     let mut receiver = serde_json::from_slice(&reformatted).unwrap();
@@ -400,12 +400,12 @@ fn revision_intent_is_checked_immediately_before_each_append() {
         intent(&[revision("A2", Existing(root), None)]),
         Err(Error::MissingIntent { operation: 0 })
     ));
-    //A Before any successor exists, both intents accept the current root.
+    // Before any successor exists, both intents accept the current root.
     for kind in [RevisionIntent::Revise, RevisionIntent::Branch] {
         assert!(intent(&[revision("A2", Existing(root), Some(kind))]).is_ok());
     }
-    //A After an earlier operation in the same plan supersedes the root, the
-    //A intermediate prefix rejects `revise` but still permits `branch`.
+    // After an earlier operation in the same plan supersedes the root, the
+    // intermediate prefix rejects `revise` but still permits `branch`.
     let first = revision("A2", Existing(root), Some(RevisionIntent::Revise));
     assert!(matches!(
         intent(&[
@@ -422,7 +422,7 @@ fn revision_intent_is_checked_immediately_before_each_append() {
     .accepted()
     .unwrap();
     assert_eq!(split.view().fresh_successors(root).count(), 2);
-    //A Revising the plan's own successor is valid at its later prefix.
+    // Revising the plan's own successor is valid at its later prefix.
     assert!(
         intent(&[
             first,
@@ -431,8 +431,8 @@ fn revision_intent_is_checked_immediately_before_each_append() {
         .is_ok()
     );
     assert_eq!(graph, before);
-    //A After a committed successor, the same revision fails against the new base
-    //A while a branch from the superseded root still succeeds.
+    // After a committed successor, the same revision fails against the new base
+    // while a branch from the superseded root still succeeds.
     prepare(
         &graph,
         &[revision("A2", Existing(root), Some(RevisionIntent::Revise))],
@@ -453,7 +453,7 @@ fn revision_intent_is_checked_immediately_before_each_append() {
     assert_eq!(graph, after);
 }
 
-//A Emits a warning at every prefix and an inconsistency at the configured one.
+// Emits a warning at every prefix and an inconsistency at the configured one.
 struct BoundaryAnalyzer(Option<usize>);
 impl crate::analysis::AnalyzerFactory for BoundaryAnalyzer {
     fn analyzer_name(&self) -> &'static str {
@@ -515,7 +515,7 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
         .commit(&mut graph)
         .unwrap();
     let before = graph.clone();
-    //A Reject the base boundary, an intermediate boundary, and the final one.
+    // Reject the base boundary, an intermediate boundary, and the final one.
     for rejected_at in [1, 2, 4] {
         let mut changes = plan();
         changes.push(Change::AddAnalyzer {
@@ -525,7 +525,7 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
         let Checked::Rejected(rejection) = prepare(&graph, &changes, &mut runner).unwrap() else {
             panic!("an inconsistent candidate must not become committable")
         };
-        //A Three staged entries and one configuration change, each mapped.
+        // Three staged entries and one configuration change, each mapped.
         let operations = rejection.operations();
         assert_eq!(operations.len(), 4);
         assert_eq!(operations[3], None);
@@ -543,8 +543,8 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
             analysis.implementations[0].configuration,
             rejected_at.to_string()
         );
-        //A The advisory emitted at every boundary is one observation covering
-        //A them all, alongside the blocking finding.
+        // The advisory emitted at every boundary is one observation covering
+        // them all, alongside the blocking finding.
         let warnings = analysis.warnings().collect::<Vec<_>>();
         assert_eq!(warnings.len(), 1);
         assert_eq!(
@@ -562,13 +562,13 @@ fn rejections_keep_the_analysis_but_no_candidate_graph() {
         };
         assert_eq!(at, last);
         assert_eq!(at.end_exclusive, rejected_at);
-        //A Prefixes up to the base are the committed history itself.
+        // Prefixes up to the base are the committed history itself.
         if rejected_at <= 1 {
             assert_eq!(at, graph.view().prefix(rejected_at).unwrap().id());
         }
         assert_eq!(graph, before);
     }
-    //A Commit hands back the analysis that certified the plan.
+    // Commit hands back the analysis that certified the plan.
     let mut changes = plan();
     changes.push(Change::AddAnalyzer {
         name: "Boundary".into(),

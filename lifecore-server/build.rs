@@ -15,9 +15,9 @@ const PLACEHOLDER: &str = "<!doctype html>
 </html>
 ";
 
-//A Bundles the client with the installed esbuild into OUT_DIR, where the
-//A server embeds `index.html` and `app.js`. It never installs packages; with
-//A LIFECORE_UI=skip it embeds a placeholder so builds need no Node.
+// Bundles the client with the installed esbuild into OUT_DIR, where the
+// server embeds `index.html` and `app.js`. It never installs packages; with
+// LIFECORE_UI=skip it embeds a placeholder so builds need no Node.
 fn main() {
     println!("cargo::rerun-if-env-changed=LIFECORE_UI");
     for input in [
@@ -77,7 +77,7 @@ fn write(path: &Path, text: &str) {
         .unwrap_or_else(|error| panic!("cannot write {}: {error}", path.display()));
 }
 
-//A Cargo fails the build once the script exits after reporting an error.
+// Cargo fails the build once the script exits after reporting an error.
 fn fail(message: &str) {
     println!("cargo::error={message}");
 }

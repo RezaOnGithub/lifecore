@@ -29,9 +29,9 @@ pub struct Proposal {
     pub entries: Vec<ProposalEntry>,
 }
 
-//A The authoring form of an operation: named, with aliases to earlier
-//A operations, and limited to what an author may write. It lowers to
-//A `transaction::EntryChange`; FILES §2.5 compares the entry-shaped types.
+// The authoring form of an operation: named, with aliases to earlier
+// operations, and limited to what an author may write. It lowers to
+// `transaction::EntryChange`; FILES §2.5 compares the entry-shaped types.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", try_from = "RawEntry")]
 pub enum ProposalEntry {
@@ -61,8 +61,8 @@ enum RawKind {
     Edge,
 }
 
-//A Entries decode through this flat shape rather than a buffered tagged enum,
-//A so errors inside a payload keep their exact source location.
+// Entries decode through this flat shape rather than a buffered tagged enum,
+// so errors inside a payload keep their exact source location.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEntry {
@@ -82,8 +82,8 @@ struct RawEntry {
     to: Option<ProposalReference>,
 }
 
-//A Optional control fields and parameters are either omitted or valid; JSON
-//A null is not an alternative spelling of absence.
+// Optional control fields and parameters are either omitted or valid; JSON
+// null is not an alternative spelling of absence.
 pub(crate) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
@@ -160,7 +160,7 @@ pub enum ProposalReference {
     Added(String),
 }
 
-//A `lc1:<database>:<graph revision>:<proposal>`, each a lowercase hyphenated UUID.
+// `lc1:<database>:<graph revision>:<proposal>`, each a lowercase hyphenated UUID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlanId {
     pub database: Uuid,
@@ -191,7 +191,7 @@ impl FromStr for PlanId {
         if version != "lc1" {
             return Err(format!("unsupported plan ID version {version:?}"));
         }
-        //A Only the canonical spelling is accepted, so a token has one form.
+        // Only the canonical spelling is accepted, so a token has one form.
         let uuid = |part: &str| {
             Uuid::try_parse(part)
                 .ok()
@@ -246,9 +246,9 @@ impl fmt::Display for Format {
     }
 }
 
-//A `path` locates the failure inside the proposal, as in
-//A `entries[0].payload.n`; line and column are one-based positions in the
-//A decoded text when it is a whole document.
+// `path` locates the failure inside the proposal, as in
+// `entries[0].payload.n`; line and column are one-based positions in the
+// decoded text when it is a whole document.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecodeError {
     pub format: Format,
@@ -267,7 +267,7 @@ impl fmt::Display for DecodeError {
         if let Some(path) = &self.path {
             write!(f, " at {path}")?;
         }
-        //A serde_json's own message already names the position.
+        // serde_json's own message already names the position.
         if let (Format::Toml, Some(line), Some(column)) = (self.format, self.line, self.column) {
             write!(f, " (line {line}, column {column})")?;
         }
@@ -318,7 +318,7 @@ pub fn decode(text: &str, format: Format) -> Result<Proposal, DecodeError> {
     }
 }
 
-//A TOML reports byte offsets; convert one to a one-based line and column.
+// TOML reports byte offsets; convert one to a one-based line and column.
 fn position(text: &str, offset: usize) -> (usize, usize) {
     let before = &text[..offset.min(text.len())];
     let line = before.matches('\n').count() + 1;
@@ -326,10 +326,10 @@ fn position(text: &str, offset: usize) -> (usize, usize) {
     (line, column)
 }
 
-//A Serde sees a native TOML datetime as a map under a private marker key, so a
-//A record or body would silently store it as a field. No proposal field takes
-//A one. A bare `-0` would silently become 0 where JSON rejects it as a float.
-//A Both are refused here, before Serde, with their source position.
+// Serde sees a native TOML datetime as a map under a private marker key, so a
+// record or body would silently store it as a field. No proposal field takes
+// one. A bare `-0` would silently become 0 where JSON rejects it as a float.
+// Both are refused here, before Serde, with their source position.
 fn reject_toml_only_values(
     text: &str,
     table: &DeTable<'_>,
@@ -424,9 +424,9 @@ fn valid_name(name: &str) -> bool {
 }
 
 impl Proposal {
-    //A Lowering resolves names to operation indexes and checks that exact
-    //A references exist in the base. All graph rules, including intent, are
-    //A left to `transaction::prepare` at each prefix.
+    // Lowering resolves names to operation indexes and checks that exact
+    // references exist in the base. All graph rules, including intent, are
+    // left to `transaction::prepare` at each prefix.
     pub fn lower(
         &self,
         base: View<'_>,

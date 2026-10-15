@@ -7,8 +7,8 @@ use axum::{
 };
 use std::path::PathBuf;
 
-//A Where the client comes from: the copy `build.rs` embedded, or a directory
-//A read on every request, so a refresh picks up an `esbuild --watch` rebuild.
+// Where the client comes from: the copy `build.rs` embedded, or a directory
+// read on every request, so a refresh picks up an `esbuild --watch` rebuild.
 #[derive(Clone, Debug)]
 pub enum Ui {
     Embedded,
@@ -18,7 +18,7 @@ pub enum Ui {
 pub(crate) const INDEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.html"));
 pub(crate) const SCRIPT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.js"));
 
-//A Scripts load only from this origin; inline styles in index.html are allowed.
+// Scripts load only from this origin; inline styles in index.html are allowed.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 #[derive(Clone, Copy)]

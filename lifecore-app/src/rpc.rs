@@ -10,9 +10,9 @@ use serde::{
 use serde_json::{Value, value::RawValue};
 use std::{collections::BTreeMap, fmt};
 
-//A A restricted single-call JSON-RPC 2.0 profile: every request has a non-null
-//A ID and gets exactly one response. Batches and notifications are rejected
-//A before dispatch.
+// A restricted single-call JSON-RPC 2.0 profile: every request has a non-null
+// ID and gets exactly one response. Batches and notifications are rejected
+// before dispatch.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Response {
     pub jsonrpc: &'static str,
@@ -36,8 +36,8 @@ impl Response {
             outcome,
         }
     }
-    //A Answers a call with an application error raised outside dispatch, such
-    //A as an unusable state path or a host task that ended without a response.
+    // Answers a call with an application error raised outside dispatch, such
+    // as an unusable state path or a host task that ended without a response.
     pub fn error(id: Value, error: &AppError) -> Self {
         Self::new(id, Outcome::Error(error.to_object()))
     }
@@ -83,11 +83,11 @@ pub fn encode_proposal(request: EncodeRequest) -> Result<Encoded, AppError> {
         .map_err(|message| AppError::Internal { message })
 }
 
-//A A `proposal` parameter is decoded on its own, from its raw text, so its
-//A failures are malformed proposals located by a path inside it, as for a
-//A change file, and repeated payload fields are still seen. Line and column
-//A are dropped because they would count from the member, not the request;
-//A serde_json's message text still names that member-relative position.
+// A `proposal` parameter is decoded on its own, from its raw text, so its
+// failures are malformed proposals located by a path inside it, as for a
+// change file, and repeated payload fields are still seen. Line and column
+// are dropped because they would count from the member, not the request;
+// serde_json's message text still names that member-relative position.
 fn embedded(proposal: &RawValue) -> Result<Proposal, AppError> {
     proposal::decode(proposal.get(), Format::Json).map_err(|error| {
         AppError::MalformedProposal(DecodeError {
@@ -133,8 +133,8 @@ fn call<P: DeserializeOwned, R: Serialize>(
     })
 }
 
-//A Every method `dispatch` answers, in its order, so hosts and the client
-//A fixtures can prove they cover each one.
+// Every method `dispatch` answers, in its order, so hosts and the client
+// fixtures can prove they cover each one.
 pub const METHODS: [&str; 9] = [
     "database.describe",
     "entries.list",
@@ -147,8 +147,8 @@ pub const METHODS: [&str; 9] = [
     "analyzers.add",
 ];
 
-//A Method names are provisional; the UI stages reshape them (PLAN 4.3).
-//A `init` and filesystem path selection are deliberately absent.
+// Method names are provisional; the UI stages reshape them (PLAN 4.3).
+// `init` and filesystem path selection are deliberately absent.
 fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, DispatchError> {
     match method {
     "database.describe" => call(params, |p| service.describe(p)),
@@ -169,8 +169,8 @@ fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, Disp
     }
 }
 
-//A A validated single call, ready for dispatch. Parameters stay raw JSON text
-//A until the method's own types decode them.
+// A validated single call, ready for dispatch. Parameters stay raw JSON text
+// until the method's own types decode them.
 #[derive(Clone, Debug)]
 pub struct Request {
     pub id: Value,
@@ -192,15 +192,15 @@ impl Request {
         Response::new(self.id, outcome)
     }
 
-    //A Answers the call with an error raised before a service was available,
-    //A such as an unusable state path.
+    // Answers the call with an error raised before a service was available,
+    // such as an unusable state path.
     pub fn fail(self, error: &AppError) -> Response {
         Response::error(self.id, error)
     }
 }
 
-//A Request members in source order, so a repeated member is refused rather
-//A than silently replaced by the last one.
+// Request members in source order, so a repeated member is refused rather
+// than silently replaced by the last one.
 struct Members(Vec<(String, Box<RawValue>)>);
 
 impl<'de> Deserialize<'de> for Members {
@@ -227,10 +227,10 @@ pub fn parse_error(message: impl Into<String>) -> Response {
     Response::new(Value::Null, Outcome::Error(protocol_error(-32700, message)))
 }
 
-//A Validate the envelope before dispatch, echoing a usable ID in protocol
-//A errors where the request supplied one. The text is one complete request in
-//A either framing: an HTTP body may span lines, and the CLI passes exactly one
-//A line.
+// Validate the envelope before dispatch, echoing a usable ID in protocol
+// errors where the request supplied one. The text is one complete request in
+// either framing: an HTTP body may span lines, and the CLI passes exactly one
+// line.
 pub fn parse_request(text: &str) -> Result<Request, Response> {
     let invalid = |id: Value, message: String| {
         Response::new(id, Outcome::Error(protocol_error(-32600, message)))

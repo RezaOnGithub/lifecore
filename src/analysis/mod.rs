@@ -15,8 +15,8 @@ pub use identity::{AnalyzerCertificate, AnalyzerIdentity, EvaluationInputs, Find
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default, Debug)]
 pub struct SuiteConfig(pub Vec<Config>);
 
-//A Serialized as `configuration`, the word `AnalyzerIdentity` and the
-//A `analyzers.add` request use for the same verbatim string.
+// Serialized as `configuration`, the word `AnalyzerIdentity` and the
+// `analyzers.add` request use for the same verbatim string.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -39,20 +39,20 @@ pub enum MessageKind {
     Suggestion(Vec<EntryChange>),
 }
 
-//A What an analyzer says about one finding at one prefix, apart from its
-//A identity. Every subject and the focus must be visible in that prefix;
-//A initialization has neither.
+// What an analyzer says about one finding at one prefix, apart from its
+// identity. Every subject and the focus must be visible in that prefix;
+// initialization has neither.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Diagnostic {
     pub subjects: BTreeSet<EntryId>,
-    //A The entry a reader should look at first. Keep it stable while the finding
-    //A holds, so re-emissions at consecutive prefixes merge into one range.
+    // The entry a reader should look at first. Keep it stable while the finding
+    // holds, so re-emissions at consecutive prefixes merge into one range.
     pub focus: Option<EntryId>,
     pub message: String,
     pub kind: MessageKind,
-    //A Sticky advisories stay visible at later prefixes until dismissed or filtered.
-    //A They have no automatic expiry and do not assert current applicability.
+    // Sticky advisories stay visible at later prefixes until dismissed or filtered.
+    // They have no automatic expiry and do not assert current applicability.
     pub sticky: bool,
 }
 
@@ -83,8 +83,8 @@ pub trait InnerMessageType: Clone + Debug + PartialEq + Eq + Hash {
     fn ty(&self) -> MessageType;
 }
 
-//A Keep structured domain findings until analyzer-owned conversion. Tests can
-//A assert their variants and details independently of presentation wording.
+// Keep structured domain findings until analyzer-owned conversion. Tests can
+// assert their variants and details independently of presentation wording.
 pub trait TypedAnalyzer: Send + Sync {
     type MSG: InnerMessageType;
     fn version(&self) -> Version;
@@ -97,8 +97,8 @@ pub trait TypedAnalyzer: Send + Sync {
     fn convert_message(&self, message: Self::MSG) -> Message;
 }
 
-//A Direct object-safe implementations are supported alongside the typed adapter.
-//A Setup receives only frozen inputs; all graph access is through View.
+// Direct object-safe implementations are supported alongside the typed adapter.
+// Setup receives only frozen inputs; all graph access is through View.
 pub trait Analyzer: Send + Sync {
     fn version(&self) -> Version;
     fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Message>, String>;
@@ -130,9 +130,9 @@ pub trait AnalyzerFactory {
     fn analyzer_name(&self) -> &'static str;
 }
 
-//A `Prefixes` is the contiguous range of replayed prefixes, both ends
-//A inclusive, at which an analyzer emitted the same diagnostic; `first` equals
-//A `last` for a single prefix.
+// `Prefixes` is the contiguous range of replayed prefixes, both ends
+// inclusive, at which an analyzer emitted the same diagnostic; `first` equals
+// `last` for a single prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EvaluatedView {
     Initialization,
@@ -157,7 +157,7 @@ pub struct ExecutionFailure {
     pub message: String,
 }
 
-//A The evaluation inputs are those of the enclosing `AnalysisOutput`.
+// The evaluation inputs are those of the enclosing `AnalysisOutput`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
@@ -216,7 +216,7 @@ impl AnalysisRunner {
     ) -> Result<AnalysisOutput, LifeCoreError> {
         self.run_view_with_hasher(view, suite, BuildHasherDefault::<DefaultHasher>::default())
     }
-    //A Tests supply a colliding hasher to exercise complete-value comparison.
+    // Tests supply a colliding hasher to exercise complete-value comparison.
     fn run_view_with_hasher<S: BuildHasher>(
         &mut self,
         view: View<'_>,
@@ -262,8 +262,8 @@ impl AnalysisRunner {
             })?;
             recorder.record(identity, view.id().database, None, output)?;
         }
-        //A Preserve suite order and full replay, including the empty prefix.
-        //A Deduplication never skips an invocation or the inconsistency gate.
+        // Preserve suite order and full replay, including the empty prefix.
+        // Deduplication never skips an invocation or the inconsistency gate.
         for (analyzer, identity) in analyzers.iter().zip(&report.implementations) {
             for end_exclusive in 0..=view.len() {
                 let prefix = view.prefix(end_exclusive).expect("bounded replay prefix");
@@ -283,21 +283,21 @@ impl AnalysisRunner {
     }
 }
 
-//A Collects observations in emission order. A diagnostic re-emitted at the
-//A next prefix extends the range of the observation with the same key and
-//A diagnostic instead of adding another, so a finding that holds from its
-//A append to the head is one observation rather than one per prefix.
+// Collects observations in emission order. A diagnostic re-emitted at the
+// next prefix extends the range of the observation with the same key and
+// diagnostic instead of adding another, so a finding that holds from its
+// append to the head is one observation rather than one per prefix.
 struct Recorder<S> {
     observations: Vec<Observation>,
-    //A Indices by a hash of (key, diagnostic) rather than a second owned copy
-    //A of every diagnostic. A hash collision still compares complete values,
-    //A both to deduplicate and to choose the range to extend.
+    // Indices by a hash of (key, diagnostic) rather than a second owned copy
+    // of every diagnostic. A hash collision still compares complete values,
+    // both to deduplicate and to choose the range to extend.
     index: HashMap<u64, Vec<usize>>,
     hasher: S,
 }
 
 impl<S: BuildHasher> Recorder<S> {
-    //A `prefix` is `None` for initialization.
+    // `prefix` is `None` for initialization.
     fn record(
         &mut self,
         identity: &AnalyzerIdentity,
@@ -367,7 +367,7 @@ impl<S: BuildHasher> Recorder<S> {
                 else {
                     continue;
                 };
-                //A A duplicated suite entry replays prefixes already covered.
+                // A duplicated suite entry replays prefixes already covered.
                 if (first.end_exclusive..=last.end_exclusive).contains(&at.end_exclusive) {
                     return;
                 }

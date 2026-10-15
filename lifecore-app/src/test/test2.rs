@@ -25,10 +25,10 @@ use std::{
 };
 use uuid::Uuid;
 
-//A Short enough to keep busy tests fast; see `with_busy_retry`.
+// Short enough to keep busy tests fast; see `with_busy_retry`.
 const SHORT_RETRY: Duration = Duration::from_millis(50);
 
-//A A private directory per test, removed afterwards.
+// A private directory per test, removed afterwards.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -116,7 +116,7 @@ fn task(name: &str, title: &str) -> Value {
         "payload": {"title": title, "notes": "n"}})
 }
 
-//A Initialize with TypeCheck, declare Task, and add two tasks and an edge.
+// Initialize with TypeCheck, declare Task, and add two tasks and an edge.
 fn populated(scratch: &Scratch) -> Vec<EntryId> {
     let service = scratch.service();
     service.init(&typecheck()).unwrap();
@@ -201,7 +201,7 @@ fn equivalent_json_and_toml_proposals_decode_equally_and_export_canonically() {
             Payload::Integer(i64::MIN)
         ])
     );
-    //A A record whose fields look like an envelope stays a record.
+    // A record whose fields look like an envelope stays a record.
     assert_eq!(
         payload["details"],
         Payload::Record(Body::from([
@@ -214,7 +214,7 @@ fn equivalent_json_and_toml_proposals_decode_equally_and_export_canonically() {
     for format in [Format::Json, Format::Toml] {
         let text = proposal::encode(&from_json, format).unwrap();
         assert_eq!(proposal::decode(&text, format).unwrap(), from_json);
-        //A Exports always use integer envelopes, never the bare shorthand.
+        // Exports always use integer envelopes, never the bare shorthand.
         assert!(!text.contains("= 9223372036854775807"));
         assert!(!text.contains(": 9223372036854775807"));
         assert!(text.contains("9223372036854775807\""));
@@ -258,7 +258,7 @@ fn acknowledges_and_plan_ids_are_preserved_across_formats() {
 #[test]
 fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
     let toml_cases = [
-        //A A native TOML datetime is not timestamp payload syntax.
+        // A native TOML datetime is not timestamp payload syntax.
         "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = 2026-09-30T17:00:00Z }\n",
         "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 9223372036854775808 }\n",
         "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { n = 1.5 }\n",
@@ -283,7 +283,7 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
     }
     let error = proposal::decode(toml_cases[0], Format::Toml).unwrap_err();
     assert_eq!(error.line, Some(5));
-    //A A file that still carries the removed version field fails as unknown.
+    // A file that still carries the removed version field fails as unknown.
     for (text, format) in [
         ("format_version = 1\nentries = []\n", Format::Toml),
         (r#"{"format_version":1,"entries":[]}"#, Format::Json),
@@ -295,7 +295,7 @@ fn malformed_files_envelopes_and_tokens_are_rejected_with_locations() {
             "{error}"
         );
     }
-    //A Plain timestamp-like and digit strings remain text.
+    // Plain timestamp-like and digit strings remain text.
     let text = "[[entries]]\nname = \"a\"\nkind = \"node\"\ntype = \"T\"\npayload = { at = \"2026-09-30T17:00:00Z\", n = \"42\" }\n";
     let decoded = proposal::decode(text, Format::Toml).unwrap();
     let proposal::ProposalEntry::Node { payload, .. } = &decoded.entries[0] else {
@@ -327,7 +327,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
     let datetime = "native TOML";
     let zero = "-0 is not";
     for (payload, path, token, message) in [
-        //A The whole payload, a record value, and a timestamp value.
+        // The whole payload, a record value, and a timestamp value.
         (
             "2026-09-30T17:00:00Z",
             "entries[0].payload",
@@ -346,7 +346,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
             "2026",
             datetime,
         ),
-        //A Local dates and times, and datetimes nested in lists.
+        // Local dates and times, and datetimes nested in lists.
         (
             "{ d = 2026-09-30 }",
             "entries[0].payload.d",
@@ -377,7 +377,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
         );
         assert!(error.message.starts_with(message), "{error}");
     }
-    //A Zero itself and quoted datetime text are ordinary values.
+    // Zero itself and quoted datetime text are ordinary values.
     let decoded = proposal::decode(
         &entry("{ n = 0, m = -1, t = \"2026-09-30T17:00:00Z\" }"),
         Format::Toml,
@@ -389,7 +389,7 @@ fn native_toml_datetimes_and_negative_zero_are_rejected_before_serde() {
     assert_eq!(payload["n"], Payload::Integer(0));
     assert_eq!(payload["m"], Payload::Integer(-1));
     assert_eq!(payload["t"], Payload::Text("2026-09-30T17:00:00Z".into()));
-    //A JSON rejects `-0` too; serde_json reads it as a float.
+    // JSON rejects `-0` too; serde_json reads it as a float.
     assert!(
         proposal::decode(
             r#"{"entries":[{"name":"a","kind":"node","type":"T","payload":{"n":-0}}]}"#,
@@ -442,8 +442,8 @@ fn lowering_resolves_names_and_rejects_invalid_references_with_locations() {
         (edge.from, edge.to),
         (Reference::Added(0), Reference::Existing(ids[2]))
     );
-    //A A suggestion carries the same `Vec<EntryChange>`, so acknowledgment can
-    //A compare it with a lowered proposal by plain equality.
+    // A suggestion carries the same `Vec<EntryChange>`, so acknowledgment can
+    // compare it with a lowered proposal by plain equality.
     assert_eq!(
         lowered,
         vec![
@@ -559,7 +559,7 @@ fn init_supports_both_suites_and_never_clobbers() {
         service.apply(request(proposal(json!([])))),
         Err(AppError::DatabaseMissing { .. })
     ));
-    //A Ordinary operations never create the database or its lock file.
+    // Ordinary operations never create the database or its lock file.
     assert!(!scratch.state().path().exists());
     assert!(!scratch.state().lock_path().exists());
     let initialized = service.init(&typecheck()).unwrap();
@@ -594,7 +594,7 @@ fn init_supports_both_suites_and_never_clobbers() {
         }]),
         Err(AppError::Analyzer(_))
     ));
-    //A A refused init leaves neither the database nor a lock file behind.
+    // A refused init leaves neither the database nor a lock file behind.
     assert!(!other.state().path().exists());
     assert!(!other.state().lock_path().exists());
     let copied = Scratch::new();
@@ -614,7 +614,7 @@ fn init_supports_both_suites_and_never_clobbers() {
     assert_eq!(object.code, 1001);
     assert_eq!(object.data.unwrap()["kind"], "directory_missing");
     assert!(!other.0.join("missing").exists());
-    //A A directory or garbage at the selected path is an error, not a fallback.
+    // A directory or garbage at the selected path is an error, not a fallback.
     fs::write(other.state().path(), "not a snapshot").unwrap();
     assert!(matches!(
         other.service().describe(NoParams {}),
@@ -636,7 +636,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
     assert_eq!(entries[0]["payload"]["title"], "A");
     assert_eq!(entries[0]["current"], true);
     assert_eq!(response["result"]["view"]["end_exclusive"], "4");
-    //A Revise A through the exact identity found above.
+    // Revise A through the exact identity found above.
     let a: EntryId = serde_json::from_value(entries[0]["id"].clone()).unwrap();
     let before = service.describe(NoParams {}).unwrap();
     let applied = service
@@ -657,7 +657,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
         .map(|o| o.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, ["a2", "a2_b"]);
-    //A The reported mapping is the actual stored identity after reload.
+    // The reported mapping is the actual stored identity after reload.
     let reloaded = service
         .get_entry(EntryGetRequest {
             id: applied.report.operations[0].entry,
@@ -695,7 +695,7 @@ fn apply_publishes_revisions_that_reload_and_lookup_through_rpc() {
             .collect::<Vec<_>>(),
         vec![ids[1], ids[3]]
     );
-    //A A standalone check of a further revision previews without storing.
+    // A standalone check of a further revision previews without storing.
     let stored = scratch.bytes();
     let preview = service
         .check(request(proposal(json!([
@@ -767,7 +767,7 @@ fn revision_intent_is_enforced_at_intermediate_prefixes() {
         };
         assert!(text.contains(message), "{text}");
     }
-    //A A split through `branch` is valid at the same intermediate prefix.
+    // A split through `branch` is valid at the same intermediate prefix.
     let split = service.apply(request(revise_twice("branch"))).unwrap();
     assert_eq!(split.report.operations.len(), 2);
 }
@@ -785,7 +785,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     let described = service.describe(NoParams {}).unwrap();
     let first = service.mint_plan_id(NoParams {}).unwrap().plan_id;
     let second = service.mint_plan_id(NoParams {}).unwrap().plan_id;
-    //A Minting shares the base, distinguishes proposals, and changes nothing.
+    // Minting shares the base, distinguishes proposals, and changes nothing.
     assert_eq!(
         (first.database, first.graph_revision),
         (second.database, second.graph_revision)
@@ -793,7 +793,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     assert_ne!(first.proposal, second.proposal);
     assert_eq!(first.graph_revision, described.graph_revision);
     assert_eq!(service.describe(NoParams {}).unwrap(), described);
-    //A A matching token checks; an empty apply is a no-op keeping the revision.
+    // A matching token checks; an empty apply is a no-op keeping the revision.
     service.check(with(first, json!([task("c", "C")]))).unwrap();
     let before = scratch.bytes();
     let noop = service.apply(with(first, json!([]))).unwrap();
@@ -807,7 +807,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
         service.apply(with(foreign, json!([task("c", "C")]))),
         Err(AppError::ForeignDatabase { .. })
     ));
-    //A Keep a copy of this state to build an equal-count divergent history.
+    // Keep a copy of this state to build an equal-count divergent history.
     let copy = scratch.bytes();
     let applied = service.apply(with(first, json!([task("c", "C")]))).unwrap();
     let stored = scratch.bytes();
@@ -825,7 +825,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     let current = service.mint_plan_id(NoParams {}).unwrap().plan_id;
     assert_eq!(current.graph_revision, applied.graph_revision);
     fs::write(scratch.state().path(), &copy).unwrap();
-    //A Without its encouraged notes, the divergent task draws one warning.
+    // Without its encouraged notes, the divergent task draws one warning.
     let divergent = service
         .apply(request(proposal(json!([
             {"name": "x", "kind": "node", "type": "Task", "payload": {"title": "X"}}
@@ -835,7 +835,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
         divergent.report.analysis.view.end_exclusive,
         applied.report.analysis.view.end_exclusive
     );
-    //A The report carries the analysis that certified the stored state.
+    // The report carries the analysis that certified the stored state.
     let stored_graph = storage::read(&scratch.state()).unwrap().graph;
     let mut runner = AnalysisRunner::default();
     runner
@@ -866,7 +866,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
         service.apply(with(current, json!([task("d", "D")]))),
         Err(AppError::StaleBase { .. })
     ));
-    //A A suite-only change also rotates the revision.
+    // A suite-only change also rotates the revision.
     let before_suite = service.mint_plan_id(NoParams {}).unwrap().plan_id;
     let added = service
         .add_analyzer(AddAnalyzerRequest {
@@ -884,8 +884,8 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     ));
 }
 
-//A A hand-written declaration in the FILES §2.6 form. `fields` is a record
-//A payload, so it keeps its envelope; scalar and list shapes need none.
+// A hand-written declaration in the FILES §2.6 form. `fields` is a record
+// payload, so it keeps its envelope; scalar and list shapes need none.
 const DECLARATION_TOML: &str = r#"
 [[entries]]
 name = "task_type"
@@ -989,7 +989,7 @@ fn rejected_proposals_report_full_context_and_store_nothing() {
     let ids = populated(&scratch);
     let service = scratch.service();
     let stored = scratch.bytes();
-    //A The second task lacks its mandatory title; the first lacks encouraged notes.
+    // The second task lacks its mandatory title; the first lacks encouraged notes.
     let rejected = || {
         request(proposal(json!([
             {"name": "ok", "kind": "node", "type": "Task", "payload": {"title": "ok"}},
@@ -998,8 +998,8 @@ fn rejected_proposals_report_full_context_and_store_nothing() {
                 "from": {"added": "ok"}, "to": existing(ids[2])},
         ])))
     };
-    //A A preview reports the rejection as a result; apply refuses it as an
-    //A error carrying the same complete report.
+    // A preview reports the rejection as a result; apply refuses it as an
+    // error carrying the same complete report.
     let checked = service.check(rejected()).unwrap();
     assert!(!checked.accepted);
     let Err(AppError::Rejected(applied)) = service.apply(rejected()) else {
@@ -1048,7 +1048,7 @@ fn add_analyzer_replays_history_and_rejects_an_old_cycle() {
     let scratch = Scratch::new();
     let ids = populated(&scratch);
     let service = scratch.service();
-    //A Close a cycle, then revise B so the current graph is acyclic again.
+    // Close a cycle, then revise B so the current graph is acyclic again.
     service
         .apply(request(proposal(json!([
             {"name": "b_a", "kind": "edge", "type": "DependsOn",
@@ -1078,7 +1078,7 @@ fn add_analyzer_replays_history_and_rejects_an_old_cycle() {
         EvaluatedView::Initialization => panic!("cycles have a prefix"),
         })
         .collect::<Vec<_>>();
-    //A The revision appended after the closing edge ends the cycle.
+    // The revision appended after the closing edge ends the cycle.
     assert_eq!(boundaries, vec![(5, 5)]);
     assert_eq!(scratch.bytes(), stored);
     assert!(matches!(add("not json"), Err(AppError::Analyzer(_))));
@@ -1114,12 +1114,12 @@ fn competing_writers_get_a_busy_error_and_no_mutation() {
         service.apply(request(proposal(json!([task("c", "C")])))),
         Err(AppError::Busy { .. })
     ));
-    //A An existing database is refused before the lock is consulted.
+    // An existing database is refused before the lock is consulted.
     assert!(matches!(
         service.init(&[]),
         Err(AppError::DatabaseExists { .. })
     ));
-    //A Readers and standalone checks need no lock.
+    // Readers and standalone checks need no lock.
     assert!(
         service
             .check(request(proposal(json!([task("c", "C")]))))
@@ -1128,7 +1128,7 @@ fn competing_writers_get_a_busy_error_and_no_mutation() {
     );
     assert_eq!(scratch.bytes(), stored);
     drop(holder);
-    //A A new database is initialized under the same exclusion.
+    // A new database is initialized under the same exclusion.
     let fresh = Scratch::new();
     let fresh_holder = storage::lock(&fresh.state(), Duration::ZERO).unwrap();
     assert!(matches!(
@@ -1140,9 +1140,9 @@ fn competing_writers_get_a_busy_error_and_no_mutation() {
     fresh.service().init(&[]).unwrap();
 }
 
-//A The lock holder publishes and releases while other writers wait. Each
-//A waiting writer must reload after acquiring the lock, never check a snapshot
-//A read before it.
+// The lock holder publishes and releases while other writers wait. Each
+// waiting writer must reload after acquiring the lock, never check a snapshot
+// read before it.
 #[test]
 fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     let scratch = Scratch::new();
@@ -1162,7 +1162,7 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     };
     let stale = waiting("stale", Some(old));
     let tokenless = waiting("tokenless", None);
-    //A Give both writers time to start waiting on the held lock.
+    // Give both writers time to start waiting on the held lock.
     std::thread::sleep(Duration::from_millis(200));
     let mut locked = lock.read().unwrap();
     let snapshot = locked.snapshot_mut();
@@ -1199,8 +1199,8 @@ fn a_waiting_writer_reloads_the_state_published_under_the_lock() {
     };
     assert_eq!(expected, old.graph_revision);
     assert_ne!(actual, old.graph_revision);
-    //A The tokenless writer checked the held publication, not its own earlier
-    //A view of the file.
+    // The tokenless writer checked the held publication, not its own earlier
+    // view of the file.
     let applied = tokenless.join().unwrap().unwrap();
     assert_eq!(applied.report.base_revision, Some(held_revision));
     assert_eq!(applied.report.base.end_exclusive, 5);
@@ -1224,8 +1224,8 @@ fn failed_publication_before_replacement_preserves_state() {
     let service = scratch.service();
     let stored = scratch.bytes();
     fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o555)).unwrap();
-    //A Privileged users bypass directory permissions; nothing to observe then.
-    //A `publication_onto_a_directory_fails_before_replacement` covers them.
+    // Privileged users bypass directory permissions; nothing to observe then.
+    // `publication_onto_a_directory_fails_before_replacement` covers them.
     let enforced = fs::write(scratch.0.join("probe"), "").is_err();
     let result = service.apply(request(proposal(json!([task("c", "C")]))));
     fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1236,9 +1236,9 @@ fn failed_publication_before_replacement_preserves_state() {
     }
 }
 
-//A Replacement fails even for privileged users when the target is a
-//A non-empty directory, so this runs as root too. The snapshot is read under
-//A the lock first; the path then turns into a directory before publication.
+// Replacement fails even for privileged users when the target is a
+// non-empty directory, so this runs as root too. The snapshot is read under
+// the lock first; the path then turns into a directory before publication.
 #[test]
 fn publication_onto_a_directory_fails_before_replacement() {
     let scratch = Scratch::new();
@@ -1289,7 +1289,7 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     let Published::Initialized(initialized) = outcome.as_ref() else {
         panic!("expected the initialization outcome")
     };
-    //A The initialized database is already visible.
+    // The initialized database is already visible.
     let described = scratch.service().describe(NoParams {}).unwrap();
     assert_eq!(described.database, initialized.database);
     assert_eq!(described.graph_revision, initialized.graph_revision);
@@ -1307,8 +1307,8 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     assert_eq!(error["data"]["kind"], "publication_uncertain");
     let outcome = &error["data"]["outcome"];
     assert_eq!(outcome["report"]["operations"][0]["name"], "c");
-    //A The carried outcome names the new revision and the actual entry, both
-    //A visible in the stored state.
+    // The carried outcome names the new revision and the actual entry, both
+    // visible in the stored state.
     let described = scratch.service().describe(NoParams {}).unwrap();
     assert_eq!(
         outcome["graph_revision"],
@@ -1501,7 +1501,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
         serde_json::to_value(rpc::handle(&service, &line)).unwrap()
     };
     let bad = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"n":1.5}}]}"#;
-    //A Raw text keeps a repeated payload field visible to the decoder.
+    // Raw text keeps a repeated payload field visible to the decoder.
     let repeated = r#"{"entries":[{"name":"a","kind":"node","type":"Task","payload":{"title":"x","title":"y"}}]}"#;
     let file_error = proposal::decode(bad, Format::Json).unwrap_err();
     assert_eq!(file_error.path.as_deref(), Some("entries[0].payload.n"));
@@ -1521,7 +1521,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
             assert_eq!(error["data"]["kind"], "malformed_proposal");
             assert_eq!(error["data"]["decode"]["path"], path);
             assert_eq!(error["data"]["decode"]["format"], "json");
-            //A Positions would count from the member, so only the path is given.
+            // Positions would count from the member, so only the path is given.
             assert!(error["data"]["decode"].get("line").is_none());
         }
     }
@@ -1530,8 +1530,8 @@ fn rpc_proposal_parameters_fail_like_change_files() {
         response["error"]["data"]["decode"]["message"],
         file_error.message
     );
-    //A Every other parameter failure, including null for an optional
-    //A parameter, is an invalid-parameters error.
+    // Every other parameter failure, including null for an optional
+    // parameter, is an invalid-parameters error.
     let good = r#"{"entries":[]}"#;
     for (method, params) in [
         (
@@ -1578,7 +1578,7 @@ fn rpc_proposal_parameters_fail_like_change_files() {
         );
     }
     assert_eq!(scratch.bytes(), stored);
-    //A Surrounding whitespace is not part of the request.
+    // Surrounding whitespace is not part of the request.
     let response = serde_json::to_value(rpc::handle(
         &service,
         r#"  {"jsonrpc":"2.0","id":9,"method":"plan_id.mint"}  "#,
@@ -1587,9 +1587,9 @@ fn rpc_proposal_parameters_fail_like_change_files() {
     assert!(response["result"]["plan_id"].is_string(), "{response}");
 }
 
-//A Records are the core entry, in proposal vocabulary, with `current` beside
-//A its fields; currentness is judged in the listed view, before and after the
-//A revision that supersedes a node and its edge.
+// Records are the core entry, in proposal vocabulary, with `current` beside
+// its fields; currentness is judged in the listed view, before and after the
+// revision that supersedes a node and its edge.
 #[test]
 fn entry_records_are_core_entries_with_currentness_beside_them() {
     let scratch = Scratch::new();
@@ -1630,7 +1630,7 @@ fn entry_records_are_core_entries_with_currentness_beside_them() {
         json!({"kind": "node", "id": id(revised), "type": "Task", "predecessor": id(ids[1]),
             "payload": {"title": "A2", "notes": "n"}, "current": true})
     );
-    //A The same shape decodes back into the record.
+    // The same shape decodes back into the record.
     let record: EntryRecord = serde_json::from_value(after[4].clone()).unwrap();
     assert_eq!(record.entry.id(), revised);
     assert!(record.current);
@@ -1653,7 +1653,7 @@ fn every_listed_method_dispatches_and_no_other_does() {
     }
 }
 
-//A HTTP bodies may be formatted across lines; the envelope rules are the same.
+// HTTP bodies may be formatted across lines; the envelope rules are the same.
 #[test]
 fn a_request_may_span_lines_when_its_framing_allows() {
     let scratch = Scratch::new();

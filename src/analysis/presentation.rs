@@ -55,7 +55,7 @@ impl Dismissals {
         }
         Ok(())
     }
-    //A Restore is keyed by the stored record, without requiring an emitted finding.
+    // Restore is keyed by the stored record, without requiring an emitted finding.
     pub fn restore(&mut self, key: &FindingKey) -> bool {
         let before = self.records.len();
         self.records.retain(|record| record.key != *key);
@@ -109,8 +109,8 @@ impl AnalysisOutput {
         options: ReportOptions,
         hasher: S,
     ) -> Vec<FindingGroup<'a>> {
-        //A The map is only an index; output follows first observation order.
-        //A HashMap compares complete keys even if hashes collide.
+        // The map is only an index; output follows first observation order.
+        // HashMap compares complete keys even if hashes collide.
         let mut index = HashMap::<&FindingKey, usize, S>::with_hasher(hasher);
         let mut groups = Vec::<FindingGroup<'a>>::new();
         for observation in self.observations() {
@@ -134,8 +134,8 @@ impl AnalysisOutput {
             AdvisoryFilter::Suggestions => ty == MessageType::Suggestion,
             AdvisoryFilter::None => false,
             };
-            //A A current report shows what held at its own boundary, plus sticky
-            //A advisories whose range ended earlier.
+            // A current report shows what held at its own boundary, plus sticky
+            // advisories whose range ended earlier.
             let boundary = options.selection == ReportSelection::History
                 || match observation.evaluated_view {
                 EvaluatedView::Initialization => true,

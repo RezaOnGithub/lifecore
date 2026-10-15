@@ -21,15 +21,15 @@ pub enum ViewError {
 #[derive(Clone, Copy)]
 pub struct View<'a> {
     database: Uuid,
-    //A Store only the visible slice. No analyzer operation can expand into a future suffix.
+    // Store only the visible slice. No analyzer operation can expand into a future suffix.
     entries: &'a [Entry],
-    //A The staleness index narrowed to the same slice. A stored first-child position
-    //A may lie beyond this view, so queries only compare it with `len()`.
+    // The staleness index narrowed to the same slice. A stored first-child position
+    // may lie beyond this view, so queries only compare it with `len()`.
     first_child: &'a [Option<usize>],
 }
 
-//A Debug output omits the staleness index: its values can name positions past
-//A this view, and printing them would expose the future suffix.
+// Debug output omits the staleness index: its values can name positions past
+// this view, and printing them would expose the future suffix.
 impl std::fmt::Debug for View<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
@@ -69,7 +69,7 @@ impl<'a> View<'a> {
     pub fn is_empty(self) -> bool {
         self.entries.is_empty()
     }
-    //A A view contains positions [0, end_exclusive); a prefix can only narrow it.
+    // A view contains positions [0, end_exclusive); a prefix can only narrow it.
     pub fn prefix(self, end_exclusive: usize) -> Result<Self, ViewError> {
         let entries = self
             .entries
@@ -105,7 +105,7 @@ impl<'a> View<'a> {
     }
     pub fn is_stale(self, id: EntryId) -> Option<bool> {
         match self.get(id)? {
-        //A A node is stale exactly when its first child is visible.
+        // A node is stale exactly when its first child is visible.
         Entry::Node(_) => {
             Some(self.first_child[id.position].is_some_and(|child| child < self.len()))
         }
@@ -126,8 +126,8 @@ impl<'a> View<'a> {
     pub fn children(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         self.nodes().filter(move |n| n.parent == Some(id))
     }
-    //A Roots and current endpoints need an inclusive walk; public ancestry starts
-    //A at the parent so a node is never its own ancestor.
+    // Roots and current endpoints need an inclusive walk; public ancestry starts
+    // at the parent so a node is never its own ancestor.
     fn lineage(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         std::iter::successors(self.node(id), move |node| {
             node.parent.and_then(|id| self.node(id))
@@ -155,8 +155,8 @@ impl<'a> View<'a> {
         if self.database != other.database {
             return Err(ViewError::DifferentHistory);
         }
-        //A Compare identities and contents: a matching count or lifetime proves no
-        //A ancestry.
+        // Compare identities and contents: a matching count or lifetime proves no
+        // ancestry.
         Ok(self
             .entries
             .iter()

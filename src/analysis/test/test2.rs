@@ -216,7 +216,7 @@ type InvocationLog = Arc<Mutex<Vec<(i64, Option<usize>)>>>;
 struct AdvisoryFactory {
     version: &'static str,
     fail: Option<EvaluatedView>,
-    //A A focus claimed at initialization, which has no graph.
+    // A focus claimed at initialization, which has no graph.
     invalid: Option<EntryId>,
     log: InvocationLog,
     received_configs: Arc<Mutex<Vec<String>>>,
@@ -281,7 +281,7 @@ impl Analyzer for Advisories {
         if let Some(node) = view.nodes().next()
             && view.is_stale(node.id) == Some(false)
         {
-            //A The wording names the boundary, so these do not merge into a range.
+            // The wording names the boundary, so these do not merge into a range.
             let message = Message {
                 analyzer_certificate: local_certificate("missing_summary", &[node.id], "summary"),
                 diagnostic: Diagnostic {
@@ -888,8 +888,8 @@ fn colliding_content_hashes_neither_merge_observations_nor_extend_the_wrong_rang
         message.diagnostic.message = text.into();
         message
     };
-    //A `a` and `b` differ only in key, `a` and `c` only in diagnostic; `a`
-    //A also recurs after a gap, so two equal observations share the bucket.
+    // `a` and `b` differ only in key, `a` and `c` only in diagnostic; `a`
+    // also recurs after a gap, so two equal observations share the bucket.
     let script = move |view: View<'_>| {
         let at = view.len();
         let mut output = vec![];
@@ -1139,7 +1139,7 @@ fn repair_checks_stale_intent_references_source_and_every_prefix() {
     assert!(rejected.accepted().is_err());
 }
 
-//A Emits `setup` at initialization and what `script` returns for each prefix.
+// Emits `setup` at initialization and what `script` returns for each prefix.
 type Script = Arc<dyn Fn(View<'_>) -> Vec<Message> + Send + Sync>;
 
 #[derive(Clone)]
@@ -1201,7 +1201,7 @@ fn scripted_message(
         },
     }
 }
-//A `count` root nodes, so prefixes run from 0 to `count`.
+// `count` root nodes, so prefixes run from 0 to `count`.
 fn roots(count: usize) -> LifeCoreList {
     let mut graph = LifeCoreList::default();
     let changes = (0..count)
@@ -1222,14 +1222,14 @@ fn roots(count: usize) -> LifeCoreList {
         .unwrap();
     graph
 }
-//A Each observation's certificate with its boundaries, in output order.
+// Each observation's certificate with its boundaries, in output order.
 fn ranges(output: &crate::analysis::AnalysisOutput) -> Vec<(&str, Option<(usize, usize)>)> {
     output
         .observations()
         .map(|o| (o.key.analyzer_certificate.0.as_str(), boundaries(o)))
         .collect()
 }
-//A `copies` identical suite entries.
+// `copies` identical suite entries.
 fn scripted_suite(copies: usize) -> SuiteConfig {
     SuiteConfig(vec![
         Config {
@@ -1239,7 +1239,7 @@ fn scripted_suite(copies: usize) -> SuiteConfig {
         copies
     ])
 }
-//A The inclusive prefix boundaries of an observation; `None` at initialization.
+// The inclusive prefix boundaries of an observation; `None` at initialization.
 fn boundaries(observation: &Observation) -> Option<(usize, usize)> {
     match observation.evaluated_view {
     EvaluatedView::Initialization => None,
@@ -1271,7 +1271,7 @@ fn normalization_rejects_future_and_foreign_subjects_and_focus() {
         cases.extend([subject, focus]);
     }
     for diagnostic in cases {
-        //A The future entry is visible in the head view, but not at earlier prefixes.
+        // The future entry is visible in the head view, but not at earlier prefixes.
         let mut runner = scripted_runner(move |_| vec![diagnostic.clone()]);
         assert!(matches!(
             runner.run_view(graph.view(), &scripted_suite(1)),
@@ -1399,8 +1399,8 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
             .run_view(graph.view(), &suite)
             .unwrap()
     );
-    //A Initialization stays distinct from prefix zero; the same diagnostic at
-    //A every prefix is one range.
+    // Initialization stays distinct from prefix zero; the same diagnostic at
+    // every prefix is one range.
     let observations: Vec<_> = report.observations().collect();
     assert_eq!(observations.len(), 2);
     assert_eq!(
@@ -1517,7 +1517,7 @@ fn suggestion_rejects_divergent_sources_and_inconsistent_or_newly_stale_intent()
         prepare_suggestion(&receiver, &observation, &mut runner),
         Err(Error::View(_))
     ));
-    //A Both ends of a range must be prefixes of the supplied graph.
+    // Both ends of a range must be prefixes of the supplied graph.
     let mut diverging = observation.clone();
     diverging.evaluated_view = EvaluatedView::Prefixes {
         first: graph.view().id(),
@@ -1576,8 +1576,8 @@ fn suggestion_checks_an_invalid_intermediate_prefix_even_with_a_valid_final_view
         .unwrap();
     let before = graph.clone();
     let checked = prepare_suggestion(&graph, &observation, &mut runner).unwrap();
-    //A The rejection's complete output covers the final boundary and names
-    //A only the invalid intermediate prefix.
+    // The rejection's complete output covers the final boundary and names
+    // only the invalid intermediate prefix.
     let Err(rejected) = checked.accepted() else {
         panic!("the invalid intermediate prefix must prevent commit")
     };
@@ -1635,7 +1635,7 @@ fn re_emission_extends_a_range_and_a_gap_starts_another_at_every_boundary() {
         let view = graph.view().prefix(end_exclusive).unwrap();
         let output = runner.run_view(view, &scripted_suite(1)).unwrap();
         assert_eq!(ranges(&output), expected, "boundary {end_exclusive}");
-        //A Ranges name exact prefixes of the evaluated view.
+        // Ranges name exact prefixes of the evaluated view.
         for observation in output.observations() {
             let EvaluatedView::Prefixes { first, last } = observation.evaluated_view else {
                 panic!("prefix observation")
@@ -1646,7 +1646,7 @@ fn re_emission_extends_a_range_and_a_gap_starts_another_at_every_boundary() {
     }
     let output = runner.run_view(graph.view(), &scripted_suite(1)).unwrap();
     let dismissals = Dismissals::default();
-    //A Only the range that reaches the head is current.
+    // Only the range that reaches the head is current.
     let current = output.groups(&dismissals, ReportOptions::default());
     assert_eq!(current.len(), 1);
     assert_eq!(
@@ -1729,7 +1729,7 @@ fn a_range_ending_before_the_view_is_current_only_when_sticky() {
             .map(|g| g.key.analyzer_certificate.0.clone())
             .collect::<Vec<_>>()
     };
-    //A At its own boundary both are current and neither is historical.
+    // At its own boundary both are current and neither is historical.
     let at_two = runner
         .run_view(graph.view().prefix(2).unwrap(), &scripted_suite(1))
         .unwrap();

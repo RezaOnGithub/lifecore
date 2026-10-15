@@ -57,7 +57,7 @@ fn rpc_executes_exactly_one_line_and_prints_one_compact_response() {
     let (success, output, consumed) =
         call(&format!("{first}\n{second}\n"), || Ok(scratch.service()));
     assert!(success);
-    //A The second line is neither read past nor executed.
+    // The second line is neither read past nor executed.
     assert_eq!(consumed, first.len() as u64 + 1);
     assert_eq!(output.matches('\n').count(), 1);
     assert!(output.ends_with('\n'));
@@ -73,7 +73,7 @@ fn rpc_executes_exactly_one_line_and_prints_one_compact_response() {
         fs::read(scratch.0.join("LifeCoreState.json")).unwrap(),
         before
     );
-    //A EOF can terminate the only line.
+    // EOF can terminate the only line.
     let (success, output, _) = call(first, || Ok(scratch.service()));
     assert!(success);
     assert_eq!(output.lines().count(), 1);

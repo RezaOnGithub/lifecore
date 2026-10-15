@@ -2,9 +2,9 @@ use crate::Body;
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
-//A Origin distinguishes unrelated databases and independently prepared draft
-//A suffixes. A committed entry retains its original handle across snapshots
-//A and reloads.
+// Origin distinguishes unrelated databases and independently prepared draft
+// suffixes. A committed entry retains its original handle across snapshots
+// and reloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntryId {
@@ -19,10 +19,10 @@ impl EntryId {
     }
 }
 
-//A Entries serialize in the proposal vocabulary (FILES 2.5), so the snapshot,
-//A analysis output, RPC results, and change files share one language:
-//A `type`, `predecessor` (omitted for a root), and `payload`, tagged by `kind`
-//A within `Entry`.
+// Entries serialize in the proposal vocabulary (FILES 2.5), so the snapshot,
+// analysis output, RPC results, and change files share one language:
+// `type`, `predecessor` (omitted for a root), and `payload`, tagged by `kind`
+// within `Entry`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
@@ -57,8 +57,8 @@ pub enum Entry {
     Edge(Edge),
 }
 
-//A An optional field is either omitted or valid; JSON null is not a second
-//A spelling of absence.
+// An optional field is either omitted or valid; JSON null is not a second
+// spelling of absence.
 pub(crate) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {

@@ -9,11 +9,11 @@ use serde::Serialize;
 use std::{fmt, io};
 use subtle::ConstantTimeEq;
 
-//A The per-launch secret. Debug never prints it; only the startup URL does.
+// The per-launch secret. Debug never prints it; only the startup URL does.
 pub(crate) struct Token(String);
 
 impl Token {
-    //A 256 bits from the operating system's CSPRNG, as lowercase hex.
+    // 256 bits from the operating system's CSPRNG, as lowercase hex.
     pub(crate) fn generate() -> io::Result<Self> {
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
@@ -36,8 +36,8 @@ impl fmt::Debug for Token {
     }
 }
 
-//A What the adapter accepts before dispatch (INTERFACES 3.2): the bound
-//A loopback authority under either name, and the launch token.
+// What the adapter accepts before dispatch (INTERFACES 3.2): the bound
+// loopback authority under either name, and the launch token.
 #[derive(Debug)]
 pub(crate) struct Access {
     hosts: [String; 2],
@@ -63,8 +63,8 @@ pub(crate) enum Reason {
     Body,
 }
 
-//A The body of every HTTP rejection, so the client can tell an access failure
-//A from a JSON-RPC error without parsing prose.
+// The body of every HTTP rejection, so the client can tell an access failure
+// from a JSON-RPC error without parsing prose.
 #[derive(Serialize)]
 pub(crate) struct Rejection<'a> {
     pub(crate) kind: Reason,
@@ -90,7 +90,7 @@ pub(crate) fn reject(status: StatusCode, kind: Reason, message: &str) -> Respons
     response
 }
 
-//A A repeated header is ambiguous, so it is treated like a wrong one.
+// A repeated header is ambiguous, so it is treated like a wrong one.
 fn single(headers: &HeaderMap, name: HeaderName) -> Result<Option<&HeaderValue>, ()> {
     let mut values = headers.get_all(name).iter();
     match (values.next(), values.next()) {
@@ -99,9 +99,9 @@ fn single(headers: &HeaderMap, name: HeaderName) -> Result<Option<&HeaderValue>,
     }
 }
 
-//A Every route, assets included: a rebinding host name or a foreign page never
-//A reaches an asset or the dispatcher. The `Host` check defeats DNS rebinding;
-//A an `Origin`, when sent, must be the page's own origin under that host.
+// Every route, assets included: a rebinding host name or a foreign page never
+// reaches an asset or the dispatcher. The `Host` check defeats DNS rebinding;
+// an `Origin`, when sent, must be the page's own origin under that host.
 pub(crate) async fn require_local_origin(
     State(shared): State<Shared>,
     request: Request,
@@ -143,10 +143,10 @@ pub(crate) async fn require_local_origin(
     next.run(request).await
 }
 
-//A `/rpc` only, after the Host and Origin checks and before the body is read.
-//A The token is compared in constant time. A JSON content type keeps HTML
-//A forms out, and a cross-origin fetch that sets it, or the Authorization
-//A header, needs a CORS preflight that is never approved.
+// `/rpc` only, after the Host and Origin checks and before the body is read.
+// The token is compared in constant time. A JSON content type keeps HTML
+// forms out, and a cross-origin fetch that sets it, or the Authorization
+// header, needs a CORS preflight that is never approved.
 pub(crate) async fn require_token_and_json(
     State(shared): State<Shared>,
     request: Request,
@@ -180,13 +180,13 @@ pub(crate) async fn require_token_and_json(
     next.run(request).await
 }
 
-//A `Bearer <token>`; the scheme is case-insensitive (RFC 9110 11.1).
+// `Bearer <token>`; the scheme is case-insensitive (RFC 9110 11.1).
 fn bearer(value: &[u8]) -> Option<&[u8]> {
     let (scheme, token) = value.split_at_checked(7)?;
     scheme.eq_ignore_ascii_case(b"bearer ").then_some(token)
 }
 
-//A The media type's essence, ignoring parameters such as `charset`.
+// The media type's essence, ignoring parameters such as `charset`.
 fn is_json(value: &str) -> bool {
     value
         .split(';')

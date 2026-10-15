@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
 
-//A Called once per operation, so each request gets fresh analyzer instances
-//A and its own frozen evaluation inputs. Only this constructor must be
-//A `Send + Sync`, so one service can answer requests on several threads;
-//A the factories and analyzers it builds stay on the calling thread.
+// Called once per operation, so each request gets fresh analyzer instances
+// and its own frozen evaluation inputs. Only this constructor must be
+// `Send + Sync`, so one service can answer requests on several threads;
+// the factories and analyzers it builds stay on the calling thread.
 pub type Factories = Box<dyn Fn() -> Vec<Box<dyn AnalyzerFactory>> + Send + Sync>;
 
-//A The synchronous application service shared by the CLI and RPC. It keeps no
-//A graph or analysis state between calls; every call reopens the snapshot.
+// The synchronous application service shared by the CLI and RPC. It keeps no
+// graph or analysis state between calls; every call reopens the snapshot.
 pub struct Service {
     state: StatePath,
     factories: Factories,
@@ -34,8 +34,8 @@ pub struct Service {
 #[serde(deny_unknown_fields)]
 pub struct NoParams {}
 
-//A RPC decodes the proposal member separately, as raw JSON, so its failures
-//A report a location inside the proposal; see `rpc`.
+// RPC decodes the proposal member separately, as raw JSON, so its failures
+// report a location inside the proposal; see `rpc`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProposalRequest<P = Proposal> {
@@ -78,7 +78,7 @@ pub struct EntryListRequest {
     pub ty_name: Option<String>,
     #[serde(default)]
     pub currentness: Currentness,
-    //A Case-sensitive substring over node text values; edges have no payload.
+    // Case-sensitive substring over node text values; edges have no payload.
     #[serde(default, deserialize_with = "present")]
     pub text: Option<String>,
 }
@@ -116,13 +116,13 @@ pub struct OperationEntry {
     pub entry: EntryId,
 }
 
-//A The complete context of one check: the exact base it was prepared against,
-//A the operation-to-entry mapping (provisional for previews), and the full
-//A unfiltered analysis of every prefix.
+// The complete context of one check: the exact base it was prepared against,
+// the operation-to-entry mapping (provisional for previews), and the full
+// unfiltered analysis of every prefix.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProposalReport {
     pub database: Uuid,
-    //A Absent only for `init`, whose empty base was never published.
+    // Absent only for `init`, whose empty base was never published.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_revision: Option<Uuid>,
     pub base: ViewId,
@@ -130,9 +130,9 @@ pub struct ProposalReport {
     pub analysis: AnalysisOutput,
 }
 
-//A A preview is a result whether or not it would be accepted; `apply` of the
-//A same proposal against the same base would reject it exactly when
-//A `accepted` is false.
+// A preview is a result whether or not it would be accepted; `apply` of the
+// same proposal against the same base would reject it exactly when
+// `accepted` is false.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckResult {
     pub accepted: bool,
@@ -152,8 +152,8 @@ pub struct AnalyzerAdded {
     pub report: ProposalReport,
 }
 
-//A The result a mutation would have returned. An uncertain publication
-//A carries it, since the new state may already be visible.
+// The result a mutation would have returned. An uncertain publication
+// carries it, since the new state may already be visible.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Published {
@@ -190,8 +190,8 @@ fn settle<T: Into<Published>>(publication: Publication, result: T) -> Result<T, 
     }
 }
 
-//A A `ProposalReport` without its analysis, which is moved out of the checked
-//A plan once nothing else needs it, rather than copied.
+// A `ProposalReport` without its analysis, which is moved out of the checked
+// plan once nothing else needs it, rather than copied.
 struct ReportContext {
     database: Uuid,
     base_revision: Option<Uuid>,
@@ -211,9 +211,9 @@ impl ReportContext {
     }
 }
 
-//A Commit an accepted plan into the loaded snapshot, returning whether
-//A graph/suite state changed. Every node, edge, or analyzer operation does and
-//A gets a fresh revision; an empty plan is a no-op that keeps it.
+// Commit an accepted plan into the loaded snapshot, returning whether
+// graph/suite state changed. Every node, edge, or analyzer operation does and
+// gets a fresh revision; an empty plan is a no-op that keeps it.
 fn commit(
     snapshot: &mut Snapshot,
     checked: Checked,
@@ -236,9 +236,9 @@ fn commit(
     Ok((context.report(analysis), changed))
 }
 
-//A A stored entry plus its currentness in the selected view. The core entry
-//A already serializes in proposal vocabulary, so the record is that entry's
-//A fields with `current` beside them.
+// A stored entry plus its currentness in the selected view. The core entry
+// already serializes in proposal vocabulary, so the record is that entry's
+// fields with `current` beside them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryRecord {
     #[serde(flatten)]
@@ -269,8 +269,8 @@ pub struct EntryLookup {
     pub entry: EntryRecord,
 }
 
-//A The host captures `now` once, before evaluation; neither runner nor
-//A analyzers read the clock.
+// The host captures `now` once, before evaluation; neither runner nor
+// analyzers read the clock.
 fn evaluation_inputs(time: Option<Timestamp>, now: bool) -> Result<EvaluationInputs, AppError> {
     let evaluation_time = match (time, now) {
     (Some(_), true) => {
@@ -308,9 +308,9 @@ fn verify_plan_id(snapshot: &Snapshot, plan_id: Option<PlanId>) -> Result<(), Ap
     Ok(())
 }
 
-//A Translate core preparation failures into application errors, attaching the
-//A proposal entry when one is identifiable. Each proposal entry appends exactly
-//A one history entry, so a staged position maps back to its operation.
+// Translate core preparation failures into application errors, attaching the
+// proposal entry when one is identifiable. Each proposal entry appends exactly
+// one history entry, so a staged position maps back to its operation.
 fn preparation_error(
     error: transaction::Error,
     proposal: Option<&Proposal>,
@@ -368,7 +368,7 @@ impl Service {
         }
     }
 
-    //A How long a writer keeps retrying a held lock before reporting `busy`.
+    // How long a writer keeps retrying a held lock before reporting `busy`.
     pub fn with_busy_retry(self, busy_retry: Duration) -> Self {
         Self { busy_retry, ..self }
     }
@@ -391,7 +391,7 @@ impl Service {
         Ok(runner)
     }
 
-    //A Stage and check changes against one loaded snapshot; nothing is stored.
+    // Stage and check changes against one loaded snapshot; nothing is stored.
     fn prepare(
         &self,
         snapshot: &Snapshot,
@@ -446,7 +446,7 @@ impl Service {
         self.prepare(snapshot, Some(proposal), &changes, inputs)
     }
 
-    //A Publish a changed snapshot under the writer lock it was read with.
+    // Publish a changed snapshot under the writer lock it was read with.
     fn publish(&self, locked: &LockedSnapshot, changed: bool) -> Result<Publication, AppError> {
         if !changed {
             return Ok(Publication::Complete);
@@ -464,8 +464,8 @@ impl Service {
                 config: config.config.clone(),
             })
             .collect::<Vec<_>>();
-        //A The initial suite is added through the ordinary checked path, so
-        //A missing factories and invalid configurations are rejected here too.
+        // The initial suite is added through the ordinary checked path, so
+        // missing factories and invalid configurations are rejected here too.
         let (checked, mut context) = self.prepare(&snapshot, None, &changes, Default::default())?;
         context.base_revision = None;
         commit(&mut snapshot, checked, context)?;
@@ -511,7 +511,7 @@ impl Service {
             };
             entries.extend(view.select_edges(selection).map(|edge| edge.id));
         }
-        //A Entry collections use append order.
+        // Entry collections use append order.
         entries.sort_by_key(|id| id.position());
         Ok(EntryList {
             database: database(&snapshot.graph),
@@ -547,8 +547,8 @@ impl Service {
         })
     }
 
-    //A A preview: it reads one snapshot without the writer lock and stores
-    //A nothing. A proposal that `apply` would reject is still a result.
+    // A preview: it reads one snapshot without the writer lock and stores
+    // nothing. A proposal that `apply` would reject is still a result.
     pub fn check(&self, request: ProposalRequest) -> Result<CheckResult, AppError> {
         if request.proposal.acknowledges.is_some() {
             return Err(AppError::AcknowledgmentUnsupported);
@@ -562,11 +562,11 @@ impl Service {
         })
     }
 
-    //A Always checks anew under writer exclusion, from reload through
-    //A publication, so the concrete base cannot change underneath it.
+    // Always checks anew under writer exclusion, from reload through
+    // publication, so the concrete base cannot change underneath it.
     pub fn apply(&self, request: ProposalRequest) -> Result<ApplyResult, AppError> {
-        //A TODO: verify `acknowledges` by replay (PLAN 4.4). Until then it is
-        //A rejected rather than silently ignored.
+        // TODO: verify `acknowledges` by replay (PLAN 4.4). Until then it is
+        // rejected rather than silently ignored.
         if request.proposal.acknowledges.is_some() {
             return Err(AppError::AcknowledgmentUnsupported);
         }
@@ -584,8 +584,8 @@ impl Service {
         settle(publication, applied)
     }
 
-    //A Appends to the ordered suite through a one-operation transaction, so the
-    //A full replay under the extended suite must pass for every prefix.
+    // Appends to the ordered suite through a one-operation transaction, so the
+    // full replay under the extended suite must pass for every prefix.
     pub fn add_analyzer(&self, request: AddAnalyzerRequest) -> Result<AnalyzerAdded, AppError> {
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         storage::require_existing(&self.state)?;

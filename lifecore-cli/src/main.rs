@@ -118,9 +118,9 @@ fn service() -> Result<Service, AppError> {
     Ok(Service::new(StatePath::resolve()?, Box::new(factories)))
 }
 
-//A The database is selected once, at startup, and must already be readable;
-//A no remote method selects a path or initializes one. The URL with its token
-//A is the only line on stdout, so a launcher can read it.
+// The database is selected once, at startup, and must already be readable;
+// no remote method selects a path or initializes one. The URL with its token
+// is the only line on stdout, so a launcher can read it.
 fn serve(port: u16, ui_dir: Option<PathBuf>) -> ExitCode {
     let state = match StatePath::resolve() {
     Ok(state) => state,
@@ -180,8 +180,8 @@ fn proposal_request(file: &Path, evaluation: Evaluation) -> Result<ProposalReque
     })
 }
 
-//A Dedicated commands print the same result or error object an RPC call would
-//A carry, as JSON on stdout; a short diagnostic also goes to stderr on failure.
+// Dedicated commands print the same result or error object an RPC call would
+// carry, as JSON on stdout; a short diagnostic also goes to stderr on failure.
 fn emit<T: Serialize>(result: Result<T, AppError>) -> ExitCode {
     let (text, code) = match result {
     Ok(value) => (serde_json::to_string_pretty(&value), ExitCode::SUCCESS),
@@ -205,9 +205,9 @@ fn emit<T: Serialize>(result: Result<T, AppError>) -> ExitCode {
     }
 }
 
-//A Consumes bytes through the first newline, or to EOF, and returns them
-//A without the newline. Callers pass an unbuffered reader, so every byte after
-//A the newline stays unread for whoever holds the input next.
+// Consumes bytes through the first newline, or to EOF, and returns them
+// without the newline. Callers pass an unbuffered reader, so every byte after
+// the newline stays unread for whoever holds the input next.
 fn read_line(input: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut line = vec![];
     let mut byte = [0];
@@ -222,16 +222,16 @@ fn read_line(input: &mut impl Read) -> io::Result<Vec<u8>> {
     }
 }
 
-//A The standard stdin handle buffers up to 8 KiB, which would consume input
-//A after the request line. A duplicate of the descriptor reads the same open
-//A file unbuffered.
+// The standard stdin handle buffers up to 8 KiB, which would consume input
+// after the request line. A duplicate of the descriptor reads the same open
+// file unbuffered.
 fn raw_stdin() -> io::Result<File> {
     let handle = std::os::fd::AsFd::as_fd(&io::stdin()).try_clone_to_owned()?;
     Ok(File::from(handle))
 }
 
-//A Reads at most one line: a newline or EOF ends it, and nothing after it is
-//A read or executed. Exactly one compact response line is written.
+// Reads at most one line: a newline or EOF ends it, and nothing after it is
+// read or executed. Exactly one compact response line is written.
 fn run_rpc(
     input: &mut impl Read,
     output: &mut impl Write,
@@ -296,8 +296,8 @@ fn main() -> ExitCode {
     Command::Check { file, evaluation } => {
         let checked =
             proposal_request(&file, evaluation).and_then(|request| service()?.check(request));
-        //A A rejected preview is a result, not an error, but the command still
-        //A reports it through its exit status.
+        // A rejected preview is a result, not an error, but the command still
+        // reports it through its exit status.
         let accepted = checked.as_ref().map_or(true, |result| result.accepted);
         let code = emit(checked);
         if accepted {

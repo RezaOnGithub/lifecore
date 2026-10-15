@@ -92,8 +92,8 @@ fn checker_groups_cycles_and_algorithm_handles_self_loops() {
             .components
             .is_empty()
     );
-    //A Storage rejects self-edges; retain the SCC algorithm's self-loop case
-    //A directly.
+    // Storage rejects self-edges; retain the SCC algorithm's self-loop case
+    // directly.
     let selected = [SelectedEdge {
         index: ids[3],
         from: ids[0],
@@ -159,8 +159,8 @@ fn index_range_selects_prefixes_without_cropping_membership() {
 #[test]
 fn diagnostics_name_the_whole_component_and_focus_on_its_least_node() {
     let (graph, ids) = graph();
-    //A Both dispositions focus on the least node, not on the entry that closed
-    //A the cycle, so the focus is the same at every prefix.
+    // Both dispositions focus on the least node, not on the entry that closed
+    // the cycle, so the focus is the same at every prefix.
     for (on_cycle, ty) in [
         (CycleDisposition::Warning, MessageType::Warning),
         (CycleDisposition::Inconsistency, MessageType::Inconsistency),
@@ -226,8 +226,8 @@ fn transaction_rejects_a_historical_cycle_even_if_the_final_graph_is_acyclic() {
         },
     ];
     let checked = prepare(&graph, &changes, &mut runner).unwrap();
-    //A Only the prefix that closes the cycle is inconsistent; the revision after
-    //A it cannot excuse that boundary.
+    // Only the prefix that closes the cycle is inconsistent; the revision after
+    // it cannot excuse that boundary.
     let boundaries = checked
         .analysis()
         .errors()
@@ -295,7 +295,7 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     let mut dismissals = Dismissals::default();
     let groups = plain.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 1);
-    //A The cycle closes at prefix 6 and persists through the unrelated append.
+    // The cycle closes at prefix 6 and persists through the unrelated append.
     assert_eq!(groups[0].observations.len(), 1);
     assert_eq!(
         groups[0].observations[0].evaluated_view,
@@ -386,7 +386,7 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
             .len(),
         1
     );
-    //A Revising A ends the cycle at prefix 8; the range stops at 7.
+    // Revising A ends the cycle at prefix 8; the range stops at 7.
     let warnings = after.warnings().collect::<Vec<_>>();
     assert_eq!(warnings.len(), 1);
     assert_eq!(

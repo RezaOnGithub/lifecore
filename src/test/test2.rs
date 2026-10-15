@@ -391,7 +391,7 @@ fn schemas_round_trip_as_named_records_and_nested_shapes_report_precise_paths() 
     );
 }
 
-//A A declaration list of words, optionally ending in a sub-field record.
+// A declaration list of words, optionally ending in a sub-field record.
 fn words(words: &[&str], fields: Option<Body>) -> Payload {
     let mut list = words
         .iter()
@@ -401,7 +401,7 @@ fn words(words: &[&str], fields: Option<Body>) -> Payload {
     Payload::List(list)
 }
 
-//A `levels` record-shaped fields nested through a sub-field `r`, around a text.
+// `levels` record-shaped fields nested through a sub-field `r`, around a text.
 fn nested_records(levels: usize) -> Payload {
     (0..levels).fold(words(&["optional", "text"], None), |inner, _| {
         words(
@@ -489,12 +489,12 @@ fn declarations_encode_fields_as_word_lists_and_round_trip_every_shape() {
     ]);
     assert_eq!(ty.to_body(), expected);
     assert_eq!(Type::from_body(&expected).unwrap(), ty);
-    //A Every collection but the name may be omitted, and then is empty.
+    // Every collection but the name may be omitted, and then is empty.
     assert_eq!(
         Type::from_body(&Body::from([("name".into(), "Bare".into())])).unwrap(),
         Type::new("Bare", &[], &[], &[], &[])
     );
-    //A The deepest accepted nesting, through lists and through records.
+    // The deepest accepted nesting, through lists and through records.
     let deep = (0..64).fold(Text, |element, _| list(element));
     let ty = Type::new("Deep", &[("d", (deep, Optional))], &[], &[], &[]);
     assert_eq!(Type::from_body(&ty.to_body()).unwrap(), ty);
@@ -529,7 +529,7 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
     below_records.push(Index(1));
     let declarations = [
         ("text".into(), at(&[]), wrong(K::List, K::Text)),
-        //A The per-field record that preceded word lists.
+        // The per-field record that preceded word lists.
         (
             Payload::Record(Body::from([
                 (
@@ -552,7 +552,7 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
             at(&[Index(0)]),
             UnknownPresence("required".into()),
         ),
-        //A Presence comes first, so a leading shape word is an unknown presence.
+        // Presence comes first, so a leading shape word is an unknown presence.
         (
             words(&["text", "optional"], None),
             at(&[Index(0)]),
@@ -628,7 +628,7 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
             at(&[Index(3)]),
             TrailingElements,
         ),
-        //A Errors inside a sub-field record continue the path through it.
+        // Errors inside a sub-field record continue the path through it.
         (
             words(
                 &["optional", "list", "record"],
@@ -641,7 +641,7 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
             UnknownPresence("sometimes".into()),
         ),
         (lists(65), at(&[Index(65)]), TooDeep),
-        //A A flat list far deeper than the stack could recurse is still reported.
+        // A flat list far deeper than the stack could recurse is still reported.
         (lists(100_000), at(&[Index(65)]), TooDeep),
         (nested_records(65), at(&below_records), TooDeep),
     ];
@@ -687,7 +687,7 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
             vec![field("successors"), Index(2)],
             DuplicatePermission("A".into()),
         ),
-        //A The former names of `fields` and `successors` are unknown keys.
+        // The former names of `fields` and `successors` are unknown keys.
         (
             named("body", Payload::Record(Body::new())),
             vec![field("body")],
@@ -736,8 +736,8 @@ fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary(
         ],
     );
     for end_exclusive in 0..=full.view().len() {
-        //A Rebuild the truncated history through deserialization, so its derived
-        //A staleness index is built from the retained entries alone.
+        // Rebuild the truncated history through deserialization, so its derived
+        // staleness index is built from the retained entries alone.
         let mut stored = serde_json::to_value(&full).unwrap();
         stored["entries"]
             .as_array_mut()
@@ -746,7 +746,7 @@ fn prefix_inspection_matches_the_same_stored_history_truncated_at_that_boundary(
         let truncated: LifeCoreList = serde_json::from_value(stored).unwrap();
         let bounded = full.view().prefix(end_exclusive).unwrap();
         assert_eq!(bounded.id(), truncated.view().id());
-        //A Debug output must not reveal first-child positions past the boundary.
+        // Debug output must not reveal first-child positions past the boundary.
         assert_eq!(format!("{bounded:?}"), format!("{:?}", truncated.view()));
         for id in &ids {
             assert_eq!(bounded.get(*id), truncated.view().get(*id));
@@ -792,8 +792,8 @@ fn payloads_export_canonical_envelopes_and_accept_bare_integer_shorthand() {
     }});
     assert_eq!(serde_json::to_value(&value).unwrap(), canonical);
     assert_eq!(serde_json::from_value::<Payload>(canonical).unwrap(), value);
-    //A Shorthand works at every nesting level and at both i64 extrema, and the
-    //A envelope may list `value` before `kind`.
+    // Shorthand works at every nesting level and at both i64 extrema, and the
+    // envelope may list `value` before `kind`.
     let shorthand = r#"{"value": {
         "title": "Submit report",
         "priority": 2,
@@ -812,8 +812,8 @@ fn payloads_export_canonical_envelopes_and_accept_bare_integer_shorthand() {
         serde_json::to_string(&Payload::Integer(i64::MAX)).unwrap(),
         r#"{"kind":"integer","value":"9223372036854775807"}"#
     );
-    //A Quoted digits outside an envelope and record fields named like tags
-    //A remain ordinary values.
+    // Quoted digits outside an envelope and record fields named like tags
+    // remain ordinary values.
     assert_eq!(
         serde_json::from_str::<Payload>(r#""42""#).unwrap(),
         Payload::Text("42".into())
@@ -867,7 +867,7 @@ fn malformed_payload_envelopes_and_integers_are_rejected_without_coercion() {
             "accepted {input}"
         );
     }
-    //A Zero has exactly one spelling in either input form.
+    // Zero has exactly one spelling in either input form.
     for input in [r#"{"kind":"integer","value":"0"}"#, "0"] {
         assert_eq!(
             serde_json::from_str::<Payload>(input).unwrap(),
@@ -896,7 +896,7 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
     assert!(serde_json::from_str::<EntryChange>(&entry_change).is_err());
     assert!(serde_json::from_str::<Change>(&change).is_err());
     assert!(serde_json::from_str::<LifeCoreList>(&graph).is_err());
-    //A The same documents without the repeated field decode.
+    // The same documents without the repeated field decode.
     let single = |text: &str| text.replace(r#","a":"y""#, "");
     assert_eq!(
         serde_json::from_str::<Body>(&single(&duplicated)).unwrap(),
@@ -923,8 +923,8 @@ fn timestamp_payloads_follow_jiff_serde_and_keep_nanoseconds() {
             Payload::Timestamp(time)
         );
     }
-    //A Jiff accepts an offset and represents the same instant; LifeCore adds no
-    //A normalization profile of its own.
+    // Jiff accepts an offset and represents the same instant; LifeCore adds no
+    // normalization profile of its own.
     let offset: Payload =
         serde_json::from_str(r#"{"kind":"timestamp","value":"2026-09-30T20:00:00+03:00"}"#)
             .unwrap();
@@ -960,8 +960,8 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
         serde_json::from_value::<EntryId>(zero).unwrap().position(),
         0
     );
-    //A The static type bounds the range; bare numbers, signs, and non-canonical
-    //A spellings are not accepted, since a position is part of an identity.
+    // The static type bounds the range; bare numbers, signs, and non-canonical
+    // spellings are not accepted, since a position is part of an identity.
     let mut far = encoded.clone();
     far["position"] = usize::MAX.to_string().into();
     assert_eq!(
@@ -987,7 +987,7 @@ fn large_control_integers_are_decimal_strings_in_identities_and_views() {
     }
 }
 
-//A The scan `View::is_stale` used before the staleness index, kept as its reference.
+// The scan `View::is_stale` used before the staleness index, kept as its reference.
 fn scanned_is_stale(view: View<'_>, id: EntryId) -> Option<bool> {
     match view.get(id)? {
     Entry::Node(_) => Some(view.nodes().any(|n| n.parent == Some(id))),
@@ -995,7 +995,7 @@ fn scanned_is_stale(view: View<'_>, id: EntryId) -> Option<bool> {
     }
 }
 
-//A Probes every identity known to the test, visible or not, at every prefix.
+// Probes every identity known to the test, visible or not, at every prefix.
 fn assert_staleness_matches_scan(view: View<'_>, probes: &[EntryId]) {
     for end_exclusive in 0..=view.len() {
         let prefix = view.prefix(end_exclusive).unwrap();
@@ -1031,8 +1031,8 @@ fn edge(from: crate::transaction::Reference, to: crate::transaction::Reference) 
     }))
 }
 
-//A Revisions, a split, branching from a stale node, and edges whose endpoints
-//A are superseded later, committed across two plans.
+// Revisions, a split, branching from a stale node, and edges whose endpoints
+// are superseded later, committed across two plans.
 fn staleness_fixture() -> (LifeCoreList, Vec<EntryId>) {
     let mut graph = LifeCoreList::default();
     let mut ids = append(
@@ -1068,9 +1068,9 @@ fn indexed_staleness_matches_the_scan_for_every_entry_at_every_prefix() {
     let mut other = LifeCoreList::default();
     let foreign = append(&mut other, &[node("A", None), node("A2", Some(Added(0)))]);
     assert_staleness_matches_scan(graph.view(), &foreign);
-    //A Spot checks around the relevant appends: A before and after its first
-    //A child at 5, a later sibling leaving that boundary unchanged, and edges 3
-    //A and 8 becoming stale through their source and target respectively.
+    // Spot checks around the relevant appends: A before and after its first
+    // child at 5, a later sibling leaving that boundary unchanged, and edges 3
+    // and 8 becoming stale through their source and target respectively.
     let view = graph.view();
     for (end_exclusive, a, b, edge_ab, edge_a4b) in [
         (5, false, false, Some(false), None),
@@ -1137,7 +1137,7 @@ fn staged_and_independent_candidates_extend_their_own_index() {
     .unwrap();
     assert_staleness_matches_scan(staged.view(), &independent.added());
     assert_staleness_matches_scan(independent.view(), &staged.added());
-    //A Staging clones the base; neither candidate changes it or the other.
+    // Staging clones the base; neither candidate changes it or the other.
     assert_eq!(graph.staleness(), before);
     assert_eq!(graph.view().is_stale(ids[7]), Some(false));
     assert_eq!(graph.view().is_stale(ids[12]), Some(false));
@@ -1175,8 +1175,8 @@ fn a_rejected_entry_is_never_indexed() {
     let mut other = LifeCoreList::default();
     let foreign = append(&mut other, &[node("A", None), node("B", None)])[1];
     assert_eq!(foreign.position(), ids[1].position());
-    //A None of these parents is an exact earlier node: a foreign identity at B's
-    //A position, an edge, and a position past the history.
+    // None of these parents is an exact earlier node: a foreign identity at B's
+    // position, an edge, and a position past the history.
     for parent in [
         foreign,
         ids[3],
@@ -1202,8 +1202,8 @@ fn a_rejected_entry_is_never_indexed() {
         assert_eq!(staged, graph);
         assert_eq!(staged.staleness(), graph.staleness());
     }
-    //A The same shape with an exact parent is indexed once validated, and the
-    //A next staged entry already sees that parent as stale.
+    // The same shape with an exact parent is indexed once validated, and the
+    // next staged entry already sees that parent as stale.
     let mut staged = graph.clone();
     staged
         .stage(Entry::Node(Node {
@@ -1245,7 +1245,7 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
     assert_eq!(loaded.staleness(), graph.staleness());
     assert_eq!(serde_json::to_value(&loaded).unwrap(), stored);
     assert_staleness_matches_scan(loaded.view(), &[]);
-    //A Debug output shows the stored history as before the index existed.
+    // Debug output shows the stored history as before the index existed.
     let view = graph.view();
     assert_eq!(
         format!("{graph:?}"),
@@ -1256,17 +1256,17 @@ fn the_staleness_index_is_rebuilt_on_load_and_never_serialized() {
             graph.analysis_suite()
         )
     );
-    //A A stored index cannot be supplied; a new graph starts with an empty one.
+    // A stored index cannot be supplied; a new graph starts with an empty one.
     let mut injected = stored.clone();
     injected["staleness"] = serde_json::json!([null]);
     assert!(serde_json::from_value::<LifeCoreList>(injected).is_err());
     assert!(LifeCoreList::default().staleness().is_empty());
 }
 
-//A Stored entries and core operations use the proposal vocabulary: `kind`,
-//A `type`, `predecessor`, `payload`, and lowercase `existing`/`added`
-//A references. A root has no `predecessor` member, and null is not accepted
-//A as its absence anywhere.
+// Stored entries and core operations use the proposal vocabulary: `kind`,
+// `type`, `predecessor`, `payload`, and lowercase `existing`/`added`
+// references. A root has no `predecessor` member, and null is not accepted
+// as its absence anywhere.
 #[test]
 fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
     let mut graph = LifeCoreList::default();
@@ -1324,7 +1324,7 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
         serde_json::from_value::<Vec<EntryChange>>(encoded.clone()).unwrap(),
         changes
     );
-    //A `Change` adds only the suite operation; entry operations keep their shape.
+    // `Change` adds only the suite operation; entry operations keep their shape.
     let suite_change = Change::AddAnalyzer {
         name: "Type_Check".into(),
         config: "{}".into(),
@@ -1347,8 +1347,8 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
         serde_json::to_value(&suite).unwrap(),
         serde_json::json!([{"name": "Type_Check", "configuration": "{}"}])
     );
-    //A Null absences, the former core spellings, and members of the other kind
-    //A are all rejected.
+    // Null absences, the former core spellings, and members of the other kind
+    // are all rejected.
     let mut nulls = vec![];
     let mut root = stored.clone();
     root["entries"][0]["predecessor"] = serde_json::Value::Null;

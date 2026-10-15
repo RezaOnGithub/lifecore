@@ -10,9 +10,9 @@ use crate::{
 #[serde(rename_all = "snake_case")]
 pub enum Reference {
     Existing(EntryId),
-    //A Zero-based operation index within this plan, resolved only after that
-    //A operation succeeds. It is bounded by the size of one plan, so it stays a
-    //A JSON number, unlike entry positions.
+    // Zero-based operation index within this plan, resolved only after that
+    // operation succeeds. It is bounded by the size of one plan, so it stays a
+    // JSON number, unlike entry positions.
     Added(usize),
 }
 
@@ -54,9 +54,9 @@ pub struct NewEdge {
     pub to: Reference,
 }
 
-//A A node or edge operation, and never a suite change. A lowered proposal and
-//A a suggestion's actions are both `Vec<EntryChange>`, so comparing them is
-//A plain equality. It serializes like a proposal entry without its name.
+// A node or edge operation, and never a suite change. A lowered proposal and
+// a suggestion's actions are both `Vec<EntryChange>`, so comparing them is
+// plain equality. It serializes like a proposal entry without its name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum EntryChange {
@@ -66,10 +66,10 @@ pub enum EntryChange {
     AddEdge(NewEdge),
 }
 
-//A The core staging input: no names or encodings, earlier operations by index,
-//A and no identity until `prepare` assigns one. Only `init` and `add-analyzer`
-//A build `AddAnalyzer`. Serde requires the untagged entry variant to be last;
-//A it carries its own `kind`.
+// The core staging input: no names or encodings, earlier operations by index,
+// and no identity until `prepare` assigns one. Only `init` and `add-analyzer`
+// build `AddAnalyzer`. Serde requires the untagged entry variant to be last;
+// it carries its own `kind`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Change {
@@ -105,10 +105,10 @@ pub enum Error {
     RevisesSuperseded { operation: usize },
 }
 
-//A The outcome of a full check. Only an accepted plan owns a candidate graph
-//A and can commit it. A rejection keeps the complete analysis and the
-//A provisional operation mapping but no graph, so a state that failed its
-//A checks cannot be committed, published, or inspected as history.
+// The outcome of a full check. Only an accepted plan owns a candidate graph
+// and can commit it. A rejection keeps the complete analysis and the
+// provisional operation mapping but no graph, so a state that failed its
+// checks cannot be committed, published, or inspected as history.
 #[derive(Debug)]
 pub enum Checked {
     Accepted(PreparedTransaction),
@@ -122,14 +122,14 @@ impl Checked {
         Self::Rejected(rejection) => &rejection.analysis,
         }
     }
-    //A One slot per change, in plan order; configuration changes append no entry.
+    // One slot per change, in plan order; configuration changes append no entry.
     pub fn operations(&self) -> &[Option<EntryId>] {
         match self {
         Self::Accepted(prepared) => &prepared.operations,
         Self::Rejected(rejection) => &rejection.operations,
         }
     }
-    //A For a caller that reports the analysis without committing.
+    // For a caller that reports the analysis without committing.
     pub fn into_analysis(self) -> AnalysisOutput {
         match self {
         Self::Accepted(prepared) => prepared.analysis,
@@ -161,8 +161,8 @@ impl Rejection {
 
 #[derive(Debug)]
 pub struct PreparedTransaction {
-    //A Commit requires the receiver to match the original state, preventing a
-    //A concurrently prepared candidate from overwriting intervening changes.
+    // Commit requires the receiver to match the original state, preventing a
+    // concurrently prepared candidate from overwriting intervening changes.
     base_end_exclusive: usize,
     original_suite: SuiteConfig,
     candidate: LifeCoreList,
@@ -184,12 +184,12 @@ impl PreparedTransaction {
         self.operations.iter().flatten().copied().collect()
     }
 
-    //A Returns the analysis that certified the committed graph, so a caller can
-    //A report it without keeping a copy.
+    // Returns the analysis that certified the committed graph, so a caller can
+    // report it without keeping a copy.
     pub fn commit(self, receiver: &mut LifeCoreList) -> Result<AnalysisOutput, Error> {
-        //A The candidate retains the exact original prefix, so only the original
-        //A boundary and ordered suite need a separate snapshot. Compare contents,
-        //A not serialization or hashes, including changes that append no entries.
+        // The candidate retains the exact original prefix, so only the original
+        // boundary and ordered suite need a separate snapshot. Compare contents,
+        // not serialization or hashes, including changes that append no entries.
         if receiver.view().len() != self.base_end_exclusive
             || self.candidate.view().extends(receiver.view()).is_err()
             || receiver.analysis_suite() != &self.original_suite
@@ -212,8 +212,8 @@ pub fn prepare(
     let mut candidate = graph.clone();
     let origin = uuid::Uuid::new_v4();
     let mut operations = Vec::<Option<EntryId>>::new();
-    //A One isolated clone owns the entire suffix. No public unchecked mutation or
-    //A rollback journal.
+    // One isolated clone owns the entire suffix. No public unchecked mutation or
+    // rollback journal.
     for (operation, change) in changes.iter().enumerate() {
         let resolve = |reference: Reference| match reference {
         Reference::Existing(id) => Ok(id),
@@ -256,8 +256,8 @@ pub fn prepare(
         candidate
             .stage(entry)
             .map_err(LifeCoreError::BasicValidationFailure)?;
-        //A Intent is judged in the view immediately before this append, which
-        //A includes earlier operations of the same plan.
+        // Intent is judged in the view immediately before this append, which
+        // includes earlier operations of the same plan.
         if let Change::Entry(EntryChange::AddNode(node)) = change {
             let before = candidate.view().prefix(id.position).expect("staged entry");
             match (parent, node.intent) {
@@ -273,9 +273,9 @@ pub fn prepare(
         }
         operations.push(Some(id));
     }
-    //A Full replay certifies old history and every candidate prefix under the
-    //A resulting suite. Any inconsistency rejects the plan and drops the
-    //A candidate; its analysis stays complete for reporting.
+    // Full replay certifies old history and every candidate prefix under the
+    // resulting suite. Any inconsistency rejects the plan and drops the
+    // candidate; its analysis stays complete for reporting.
     let analysis = runner.run(&candidate)?;
     if analysis.has_error() {
         return Ok(Checked::Rejected(Rejection {

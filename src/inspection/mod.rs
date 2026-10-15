@@ -62,7 +62,7 @@ pub struct Resolution<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeResolution {
-    //A Edges carry relationship labels rather than node type declarations.
+    // Edges carry relationship labels rather than node type declarations.
     NotApplicableToEdge,
     MissingDeclaration,
     Resolved(TypeDefinition),
@@ -82,8 +82,8 @@ pub struct ResolutionDifference<'base, 'target> {
 }
 
 impl<'base, 'target> ResolutionDifference<'base, 'target> {
-    //A Only distinct resolutions of the same immutable entry form a difference.
-    //A Private fields and shared accessors preserve that invariant after construction.
+    // Only distinct resolutions of the same immutable entry form a difference.
+    // Private fields and shared accessors preserve that invariant after construction.
     pub fn new(at_base: Resolution<'base>, at_target: Resolution<'target>) -> Option<Self> {
         if at_base.entry != at_target.entry || at_base == at_target {
             return None;
@@ -160,8 +160,8 @@ impl<'a> View<'a> {
             })
     }
 
-    //A Ancestors and descendants exclude the starting revision. Fresh successors
-    //A include it when current. All traversal retains exact revision identities.
+    // Ancestors and descendants exclude the starting revision. Fresh successors
+    // include it when current. All traversal retains exact revision identities.
     pub fn descendants(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
         self.nodes()
             .filter(move |node| self.ancestors(node.id).any(|n| n.id == id))
@@ -193,8 +193,8 @@ impl<'a> View<'a> {
         }
     }
 
-    //A The target must extend the entire base, including entry contents. Added
-    //A positions are [base_view.end_exclusive, target_view.end_exclusive).
+    // The target must extend the entire base, including entry contents. Added
+    // positions are [base_view.end_exclusive, target_view.end_exclusive).
     pub fn compare<'target>(
         self,
         target: View<'target>,
@@ -291,7 +291,7 @@ fn contains_text(value: &Payload, needle: &str) -> bool {
 }
 
 fn dot_quote(text: &str) -> String {
-    //A Escape backslashes first, including Graphviz's own label substitutions.
+    // Escape backslashes first, including Graphviz's own label substitutions.
     format!(
         "\"{}\"",
         text.replace('\\', "\\\\")

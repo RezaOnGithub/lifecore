@@ -21,8 +21,8 @@ pub enum BasicValidationFailure {
     InvalidDatabase,
 }
 
-//A Fields stay private to this module: entries and the suite change only
-//A through the staging methods below, which keep the derived index in step.
+// Fields stay private to this module: entries and the suite change only
+// through the staging methods below, which keep the derived index in step.
 #[derive(Clone, Serialize)]
 pub struct LifeCoreList {
     id: Uuid,
@@ -32,7 +32,7 @@ pub struct LifeCoreList {
     staleness: StalenessIndex,
 }
 
-//A The staleness index is derived from `entries`, so it takes no part in equality.
+// The staleness index is derived from `entries`, so it takes no part in equality.
 impl PartialEq for LifeCoreList {
     fn eq(&self, other: &Self) -> bool {
         let Self {
@@ -46,7 +46,7 @@ impl PartialEq for LifeCoreList {
 }
 impl Eq for LifeCoreList {}
 
-//A Debug prints the stored history only, as it did before the derived index.
+// Debug prints the stored history only, as it did before the derived index.
 impl std::fmt::Debug for LifeCoreList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
@@ -63,11 +63,11 @@ impl std::fmt::Debug for LifeCoreList {
     }
 }
 
-//A Derived and never serialized: one slot per entry, holding the position of that
-//A node's first child. History is append-only, so a slot is set at most once and
-//A one index serves every prefix view and candidate clone; `View` compares each
-//A value with its own length. Only entries already validated against the prefix
-//A before them are indexed, so an invalid parent never marks an earlier node stale.
+// Derived and never serialized: one slot per entry, holding the position of that
+// node's first child. History is append-only, so a slot is set at most once and
+// one index serves every prefix view and candidate clone; `View` compares each
+// value with its own length. Only entries already validated against the prefix
+// before them are indexed, so an invalid parent never marks an earlier node stale.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct StalenessIndex(Vec<Option<usize>>);
 
@@ -87,8 +87,8 @@ impl StalenessIndex {
     }
 }
 
-//A Deserialization is an import boundary. Invalid parents must never reach
-//A traversal.
+// Deserialization is an import boundary. Invalid parents must never reach
+// traversal.
 impl<'de> Deserialize<'de> for LifeCoreList {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -132,15 +132,15 @@ impl LifeCoreList {
     pub(crate) fn staleness(&self) -> &[Option<usize>] {
         self.staleness.as_slice()
     }
-    //A Revalidates the whole history with a freshly built index; the stored one is
-    //A not consulted, but debug builds check that it still matches.
+    // Revalidates the whole history with a freshly built index; the stored one is
+    // not consulted, but debug builds check that it still matches.
     pub fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
         let rebuilt = self.validate()?;
         debug_assert_eq!(rebuilt, self.staleness, "stored staleness index diverged");
         Ok(())
     }
-    //A Staging appends one entry, validates the resulting history, and indexes the
-    //A entry only after it passes. A failure leaves the receiver unchanged.
+    // Staging appends one entry, validates the resulting history, and indexes the
+    // entry only after it passes. A failure leaves the receiver unchanged.
     pub(crate) fn stage(&mut self, entry: Entry) -> Result<(), BasicValidationFailure> {
         self.entries.push(entry);
         let rebuilt = match self.validate() {
@@ -155,12 +155,12 @@ impl LifeCoreList {
         debug_assert_eq!(rebuilt, self.staleness, "extended staleness index diverged");
         Ok(())
     }
-    //A Staging appends one configuration to the suite; it adds no entry.
+    // Staging appends one configuration to the suite; it adds no entry.
     pub(crate) fn stage_analyzer(&mut self, config: Config) {
         self.suite.0.push(config);
     }
-    //A Validation and indexing share one pass: each entry is checked against the
-    //A prefix before it, whose index holds only entries that already passed.
+    // Validation and indexing share one pass: each entry is checked against the
+    // prefix before it, whose index holds only entries that already passed.
     fn validate(&self) -> Result<StalenessIndex, BasicValidationFailure> {
         if self.id.is_nil() {
             return Err(BasicValidationFailure::InvalidDatabase);
@@ -171,8 +171,8 @@ impl LifeCoreList {
             if id.position != position || id.origin.is_nil() {
                 return Err(BasicValidationFailure::InvalidIdentity { position });
             }
-            //A Every reference and duplicate decision uses the prefix immediately before
-            //A this entry.
+            // Every reference and duplicate decision uses the prefix immediately before
+            // this entry.
             let before = View::new(self.id, &self.entries[..position], staleness.as_slice());
             let require_node = |target| {
                 before

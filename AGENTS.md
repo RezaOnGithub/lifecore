@@ -122,11 +122,11 @@ is most likely to trip, with the owning section.
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` for Claude, naming the
   model, e.g. `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Add agent-authored tests only in a module matching `*::test::test2`.
-- Prefix agent-authored Rust comments with `//A`; do not add block comments,
-  Rust doc comments, or doctests unless requested. Leave existing comment styles
-  alone unless their content needs changing.
-- Explain non-obvious invariants, boundary choices, and ordering constraints;
-  avoid narrating self-explanatory code.
+- Write `//` line comments that explain non-obvious invariants, boundary
+  choices, and ordering constraints, not self-explanatory code. Mark concrete
+  deferred work `// TODO:` and necessary workarounds `// HACK:`, and note
+  material ones in the handoff. Add no block comments, doc comments, or
+  doctests unless requested.
 - Treat every way a value can be observed as part of its contract, not only its
   intended accessors: trait implementations (`Debug`, `Display`, `Serialize`,
   `Hash`, `PartialEq`), error and panic messages, and ordering. A prefix-bounded
@@ -137,5 +137,3 @@ is most likely to trip, with the owning section.
 - Give each documented contract one owning document; elsewhere, link to it
   instead of restating it. Keep this file to guidance for every change and to
   invariants the code already upholds.
-- Use `//A TODO:` for concrete deferred work and `//A HACK:` for a necessary
-  workaround. Explain the impact and next step in the handoff when material.

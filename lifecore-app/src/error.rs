@@ -30,8 +30,8 @@ pub enum AppError {
         "publication failed before replacing the database; stored state is unchanged: {message}"
     )]
     PublicationFailed { message: String },
-    //A The new state is already visible, so the caller gets the result it would
-    //A have had and can inspect whether its write is there; see FILES 8.1.
+    // The new state is already visible, so the caller gets the result it would
+    // have had and can inspect whether its write is there; see FILES 8.1.
     #[error(
         "the new state was published, but synchronization failed, so it may or may not persist: {message}"
     )]
@@ -62,9 +62,9 @@ pub enum AppError {
     EntryNotFound { id: EntryId },
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
-    //A Raised by a host, not the service: the task running a call ended
-    //A without a response, for example by panicking. A write it was making may
-    //A or may not have been published, so this is never a rollback.
+    // Raised by a host, not the service: the task running a call ended
+    // without a response, for example by panicking. A write it was making may
+    // or may not have been published, so this is never a rollback.
     #[error(
         "the request's task failed before it responded, so any write it was making may or may not have been published: {message}"
     )]
@@ -73,9 +73,9 @@ pub enum AppError {
     Internal { message: String },
 }
 
-//A One JSON-RPC-shaped error object shared by `rpc`, HTTP, and the dedicated
-//A commands. Codes outside the reserved JSON-RPC range identify application
-//A errors; `data.kind` is the stable machine-readable name.
+// One JSON-RPC-shaped error object shared by `rpc`, HTTP, and the dedicated
+// commands. Codes outside the reserved JSON-RPC range identify application
+// errors; `data.kind` is the stable machine-readable name.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ErrorObject {
     pub code: i64,

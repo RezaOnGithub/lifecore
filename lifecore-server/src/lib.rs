@@ -29,18 +29,18 @@ use tokio_util::task::TaskTracker;
 
 pub use assets::Ui;
 
-//A Far beyond any plausible change file; a larger body is rejected before
-//A dispatch.
+// Far beyond any plausible change file; a larger body is rejected before
+// dispatch.
 const BODY_LIMIT: usize = 64 * 1024 * 1024;
 
 pub struct Options {
-    //A Zero lets the operating system choose a free port.
+    // Zero lets the operating system choose a free port.
     pub port: u16,
     pub ui: Ui,
 }
 
-//A Everything a request can reach. The service keeps no state between calls;
-//A `tasks` only tracks running calls so shutdown can wait for them.
+// Everything a request can reach. The service keeps no state between calls;
+// `tasks` only tracks running calls so shutdown can wait for them.
 #[derive(Clone)]
 struct Shared {
     service: Arc<Service>,
@@ -49,16 +49,16 @@ struct Shared {
     tasks: TaskTracker,
 }
 
-//A Binds the loopback interface, reports the client URL with a fresh launch
-//A token to `ready`, and serves until SIGINT or SIGTERM. Shutdown stops
-//A accepting connections and returns once every running call has finished.
+// Binds the loopback interface, reports the client URL with a fresh launch
+// token to `ready`, and serves until SIGINT or SIGTERM. Shutdown stops
+// accepting connections and returns once every running call has finished.
 pub fn serve(service: Service, options: Options, ready: impl FnOnce(&str)) -> io::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        //A Signal handlers are in place before the URL is announced, so a
-        //A launcher may stop the server as soon as it has read the URL.
+        // Signal handlers are in place before the URL is announced, so a
+        // launcher may stop the server as soon as it has read the URL.
         let shutdown = shutdown_signal()?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, options.port)).await?;
         let port = listener.local_addr()?.port();
@@ -105,8 +105,8 @@ async fn run(
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await?;
-    //A Calls whose clients disconnected are still running; publication must
-    //A not be cut short by the process exiting.
+    // Calls whose clients disconnected are still running; publication must
+    // not be cut short by the process exiting.
     tasks.close();
     if !tasks.is_empty() {
         eprintln!(
@@ -118,8 +118,8 @@ async fn run(
     Ok(())
 }
 
-//A The first SIGINT or SIGTERM starts an orderly shutdown; a second one exits
-//A at once, which atomic publication makes safe for the stored snapshot.
+// The first SIGINT or SIGTERM starts an orderly shutdown; a second one exits
+// at once, which atomic publication makes safe for the stored snapshot.
 fn shutdown_signal() -> io::Result<impl Future<Output = ()> + Send + 'static> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
@@ -139,8 +139,8 @@ fn shutdown_signal() -> io::Result<impl Future<Output = ()> + Send + 'static> {
     })
 }
 
-//A Reported when the connection closed before the response was ready. The
-//A blocking task keeps running and its outcome stands; nothing is rolled back.
+// Reported when the connection closed before the response was ready. The
+// blocking task keeps running and its outcome stands; nothing is rolled back.
 struct Pending {
     answered: bool,
 }
@@ -155,9 +155,9 @@ impl Drop for Pending {
     }
 }
 
-//A One blocking task per call, running the shared decoder and dispatcher on
-//A the synchronous service exactly as one CLI invocation would. The task is
-//A not cancelled when the client goes away.
+// One blocking task per call, running the shared decoder and dispatcher on
+// the synchronous service exactly as one CLI invocation would. The task is
+// not cancelled when the client goes away.
 async fn call(State(shared): State<Shared>, body: Result<Bytes, BytesRejection>) -> Response {
     let body = match body {
     Ok(body) => body,
@@ -170,8 +170,8 @@ async fn call(State(shared): State<Shared>, body: Result<Bytes, BytesRejection>)
     let task = shared
         .tasks
         .spawn_blocking(move || encode(&respond(&service, &body)));
-    //A A join error means the task never produced a response, so its request
-    //A ID is unknown here.
+    // A join error means the task never produced a response, so its request
+    // ID is unknown here.
     let bytes = task.await.unwrap_or_else(|error| {
         encode(&rpc::Response::error(
             Value::Null,
@@ -191,9 +191,9 @@ async fn call(State(shared): State<Shared>, body: Result<Bytes, BytesRejection>)
         .into_response()
 }
 
-//A A panic is caught after the envelope was read, so the structured error
-//A carries the caller's request ID. Builds with `panic = "abort"`, such as
-//A this workspace's dev profile, end the process instead.
+// A panic is caught after the envelope was read, so the structured error
+// carries the caller's request ID. Builds with `panic = "abort"`, such as
+// this workspace's dev profile, end the process instead.
 fn respond(service: &Service, body: &[u8]) -> rpc::Response {
     let text = match std::str::from_utf8(body) {
     Ok(text) => text,

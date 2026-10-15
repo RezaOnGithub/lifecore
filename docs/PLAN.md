@@ -223,6 +223,9 @@ by the frontend toolchain. No feature screens yet.
   database, opens the printed URL, and sees the description.
 - [x] Add the frontend checks to AGENTS.md "Checks", including
   `LIFECORE_UI=skip` for Rust-only runs.
+- [x] Retire the `//A` comment prefix: convert every `//A` comment in the
+  repository, including `TODO:` and `HACK:` markers, to plain `//`, and fold
+  the AGENTS.md commenting rules into one bullet.
 
 Exit: `lifecore serve` prints a URL that opens in Firefox and shows the database
 description; requests without the token, without a JSON content type, from a

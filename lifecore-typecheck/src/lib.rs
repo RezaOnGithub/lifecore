@@ -127,13 +127,13 @@ impl TypedAnalyzer for TypeCheck {
         _inputs: &EvaluationInputs,
     ) -> Result<Vec<Self::MSG>, String> {
         let mut output = Self::current_state(view);
-        //A A later schema cannot revoke a past transition. Each successor is judged
-        //A once, at the prefix it ends, against the view immediately before its
-        //A append. The runner replays every prefix, so every transition in history
-        //A is still judged, and its certificate omits the evaluated boundary. This
-        //A relies on every transition finding being an inconsistency, which current
-        //A reports select at any boundary; a nonsticky advisory judged only here
-        //A would drop out of later current reports.
+        // A later schema cannot revoke a past transition. Each successor is judged
+        // once, at the prefix it ends, against the view immediately before its
+        // append. The runner replays every prefix, so every transition in history
+        // is still judged, and its certificate omits the evaluated boundary. This
+        // relies on every transition finding being an inconsistency, which current
+        // reports select at any boundary; a nonsticky advisory judged only here
+        // would drop out of later current reports.
         if let Some(child) = view.entries().next_back().and_then(Entry::as_node) {
             output.extend(Self::transition(view, child));
         }
@@ -142,8 +142,8 @@ impl TypedAnalyzer for TypeCheck {
     fn convert_message(&self, finding: Self::MSG) -> Message {
         let subject = finding.subject();
         Message {
-            //A The typed variant carries its exact subject and distinguishing
-            //A details but no boundary, so identity spans prefixes.
+            // The typed variant carries its exact subject and distinguishing
+            // details but no boundary, so identity spans prefixes.
             analyzer_certificate: AnalyzerCertificate(
                 serde_json::to_string(&finding).expect("typed TypeCheck finding"),
             ),
@@ -162,8 +162,8 @@ impl TypedAnalyzer for TypeCheck {
 }
 
 impl TypeCheck {
-    //A Declarations, missing types, fields, and edge endpoints of the current
-    //A graph in `view`.
+    // Declarations, missing types, fields, and edge endpoints of the current
+    // graph in `view`.
     fn current_state(view: View<'_>) -> Vec<TypeCheckMessage> {
         use TypeCheckMessage::*;
         let mut output = Vec::new();
@@ -184,10 +184,10 @@ impl TypeCheck {
                         name: ty.name.clone(),
                     });
                 }
-                //A NOTDO: No ambiguity tracking here yet. DuplicateType rejects the
-                //A candidate, but retaining the last declaration makes subsequent body
-                //A and edge findings depend on declaration order. Track ambiguous names
-                //A separately to suppress dependent checks without reporting MissingType.
+                // NOTDO: No ambiguity tracking here yet. DuplicateType rejects the
+                // candidate, but retaining the last declaration makes subsequent body
+                // and edge findings depend on declaration order. Track ambiguous names
+                // separately to suppress dependent checks without reporting MissingType.
                 types.insert(ty.name.clone(), (node.id, ty));
             }
             }
@@ -218,8 +218,8 @@ impl TypeCheck {
         for edge in view.fresh_edges() {
             for (endpoint, outgoing) in [(edge.from, true), (edge.to, false)] {
                 let node = view.node(endpoint).expect("validated endpoint");
-                //A Built-in Type has no ordinary edge permissions. Missing declarations
-                //A already have diagnostics.
+                // Built-in Type has no ordinary edge permissions. Missing declarations
+                // already have diagnostics.
                 let allowed = if node.ty_name == Type::TYPE_NAME {
                     false
                 } else if let Some((_, ty)) = types.get(&node.ty_name) {
@@ -239,8 +239,8 @@ impl TypeCheck {
         }
         output
     }
-    //A Judges a successor against the view immediately before its append; the
-    //A finding's subject is the child.
+    // Judges a successor against the view immediately before its append; the
+    // finding's subject is the child.
     fn transition(view: View<'_>, child: &Node) -> Option<TypeCheckMessage> {
         use TypeCheckMessage::*;
         let subject = child.id;

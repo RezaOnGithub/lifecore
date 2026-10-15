@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serializer, de::Error};
 use std::{borrow::Cow, fmt::Display, str::FromStr};
 
-//A Large control integers travel as decimal strings so JavaScript clients never
-//A round them. Use with `#[serde(with = "lifecore::decimal")]`.
+// Large control integers travel as decimal strings so JavaScript clients never
+// round them. Use with `#[serde(with = "lifecore::decimal")]`.
 pub fn serialize<T: Display, S: Serializer>(value: &T, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.collect_str(value)
 }
@@ -12,10 +12,10 @@ pub fn deserialize<'de, T: FromStr, D: Deserializer<'de>>(deserializer: D) -> Re
     parse(&text).map_err(D::Error::custom)
 }
 
-//A Accept only the canonical display spelling: `0`, or an optional minus sign
-//A and ASCII digits without a leading zero. Positions are identities, so
-//A `042` and `-0` must not name the same entry as `42` and `0`. `FromStr` alone
-//A would accept all of these and a leading plus sign.
+// Accept only the canonical display spelling: `0`, or an optional minus sign
+// and ASCII digits without a leading zero. Positions are identities, so
+// `042` and `-0` must not name the same entry as `42` and `0`. `FromStr` alone
+// would accept all of these and a leading plus sign.
 pub fn parse<T: FromStr>(text: &str) -> Result<T, String> {
     let digits = text.strip_prefix('-').unwrap_or(text);
     let canonical = !digits.is_empty()

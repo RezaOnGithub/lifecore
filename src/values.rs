@@ -10,8 +10,8 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-//A Field names to payload values. Its own `Deserialize` rejects repeated field
-//A names instead of keeping the last value, wherever a body appears.
+// Field names to payload values. Its own `Deserialize` rejects repeated field
+// names instead of keeping the last value, wherever a body appears.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct Body(BTreeMap<String, Payload>);
@@ -75,9 +75,9 @@ impl<'de> Deserialize<'de> for Body {
     }
 }
 
-//A Canonical encoding: text and lists are native; every other kind is a
-//A `{kind, value}` envelope, integers carrying decimal strings. Input also
-//A accepts bare i64 integers as shorthand.
+// Canonical encoding: text and lists are native; every other kind is a
+// `{kind, value}` envelope, integers carrying decimal strings. Input also
+// accepts bare i64 integers as shorthand.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Payload {
     Text(String),
@@ -178,8 +178,8 @@ impl<'de> Visitor<'de> for PayloadVisitor {
     }
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Payload, A::Error> {
         use de::Error;
-        //A Object/table key order is not significant, so `value` may arrive
-        //A before `kind` and is buffered in a kind-neutral form.
+        // Object/table key order is not significant, so `value` may arrive
+        // before `kind` and is buffered in a kind-neutral form.
         let mut kind: Option<String> = None;
         let mut value: Option<EnvelopeValue> = None;
         while let Some(key) = map.next_key::<String>()? {
@@ -198,7 +198,7 @@ impl<'de> Visitor<'de> for PayloadVisitor {
             .map_err(A::Error::custom),
         ("boolean", EnvelopeValue::Boolean(value)) => Ok(Payload::Boolean(value)),
         ("timestamp", EnvelopeValue::Text(text)) => {
-            //A Delegate to Jiff's own Serde parser; there is no LifeCore profile.
+            // Delegate to Jiff's own Serde parser; there is no LifeCore profile.
             Timestamp::deserialize(text.into_deserializer()).map(Payload::Timestamp)
         }
         ("record", EnvelopeValue::Record(fields)) => Ok(Payload::Record(fields)),
