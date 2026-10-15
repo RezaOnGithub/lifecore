@@ -44,12 +44,14 @@ export const response = {
           {
             "diagnostic": {
               "focus": null,
-              "kind": "Warning",
+              "kind": "warning",
               "message": "suggestions consider current tasks only",
               "sticky": false,
               "subjects": []
             },
-            "evaluated_view": "Initialization",
+            "evaluated_view": {
+              "kind": "initialization"
+            },
             "key": {
               "analyzer": {
                 "configuration": "{}",
@@ -58,7 +60,7 @@ export const response = {
               },
               "analyzer_certificate": "scope",
               "database": "00000000-0000-4000-8000-000000000001",
-              "kind": "Warning"
+              "kind": "warning"
             }
           },
           {
@@ -67,7 +69,7 @@ export const response = {
                 "origin": "00000000-0000-4000-8000-000000000005",
                 "position": "1"
               },
-              "kind": "Warning",
+              "kind": "warning",
               "message": "Field [Field(\"notes\")]: MissingEncouraged",
               "sticky": false,
               "subjects": [
@@ -78,22 +80,21 @@ export const response = {
               ]
             },
             "evaluated_view": {
-              "Prefixes": {
-                "first": {
-                  "database": "00000000-0000-4000-8000-000000000001",
-                  "end_exclusive": "2",
-                  "head": {
-                    "origin": "00000000-0000-4000-8000-000000000005",
-                    "position": "1"
-                  }
-                },
-                "last": {
-                  "database": "00000000-0000-4000-8000-000000000001",
-                  "end_exclusive": "4",
-                  "head": {
-                    "origin": "00000000-0000-4000-8000-000000000005",
-                    "position": "3"
-                  }
+              "first": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "2",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "1"
+                }
+              },
+              "kind": "prefixes",
+              "last": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "4",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "3"
                 }
               }
             },
@@ -105,120 +106,37 @@ export const response = {
               },
               "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000005\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
               "database": "00000000-0000-4000-8000-000000000001",
-              "kind": "Warning"
+              "kind": "warning"
             }
           },
           {
             "diagnostic": {
-              "focus": {
-                "origin": "00000000-0000-4000-8000-000000000005",
-                "position": "1"
-              },
-              "kind": {
-                "Suggestion": [
-                  {
-                    "intent": "revise",
-                    "kind": "node",
-                    "payload": {
-                      "priority": {
-                        "kind": "integer",
-                        "value": "2"
-                      },
-                      "status": "done",
-                      "title": "Write the report"
-                    },
-                    "predecessor": {
-                      "existing": {
-                        "origin": "00000000-0000-4000-8000-000000000005",
-                        "position": "1"
-                      }
-                    },
-                    "type": "Task"
-                  }
-                ]
-              },
-              "message": "this task may be done",
-              "sticky": false,
-              "subjects": [
+              "actions": [
                 {
-                  "origin": "00000000-0000-4000-8000-000000000005",
-                  "position": "1"
-                }
-              ]
-            },
-            "evaluated_view": {
-              "Prefixes": {
-                "first": {
-                  "database": "00000000-0000-4000-8000-000000000001",
-                  "end_exclusive": "2",
-                  "head": {
-                    "origin": "00000000-0000-4000-8000-000000000005",
-                    "position": "1"
-                  }
-                },
-                "last": {
-                  "database": "00000000-0000-4000-8000-000000000001",
-                  "end_exclusive": "2",
-                  "head": {
-                    "origin": "00000000-0000-4000-8000-000000000005",
-                    "position": "1"
-                  }
-                }
-              }
-            },
-            "key": {
-              "analyzer": {
-                "configuration": "{}",
-                "name": "Fixture_Suggestions",
-                "version": "1.0.0"
-              },
-              "analyzer_certificate": "done:1",
-              "database": "00000000-0000-4000-8000-000000000001",
-              "kind": "Suggestion"
-            }
-          },
-          {
-            "diagnostic": {
-              "focus": {
-                "origin": "00000000-0000-4000-8000-000000000005",
-                "position": "1"
-              },
-              "kind": {
-                "Suggestion": [
-                  {
-                    "intent": "revise",
-                    "kind": "node",
-                    "payload": {
-                      "priority": {
-                        "kind": "integer",
-                        "value": "2"
-                      },
-                      "status": "done",
-                      "title": "Write the report"
+                  "intent": "revise",
+                  "kind": "node",
+                  "payload": {
+                    "priority": {
+                      "kind": "integer",
+                      "value": "2"
                     },
-                    "predecessor": {
-                      "existing": {
-                        "origin": "00000000-0000-4000-8000-000000000005",
-                        "position": "1"
-                      }
-                    },
-                    "type": "Task"
+                    "status": "done",
+                    "title": "Write the report"
                   },
-                  {
-                    "from": {
-                      "existing": {
-                        "origin": "00000000-0000-4000-8000-000000000005",
-                        "position": "2"
-                      }
-                    },
-                    "kind": "edge",
-                    "to": {
-                      "added": 0
-                    },
-                    "type": "DependsOn"
-                  }
-                ]
+                  "predecessor": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000005",
+                      "position": "1"
+                    }
+                  },
+                  "type": "Task"
+                }
+              ],
+              "focus": {
+                "origin": "00000000-0000-4000-8000-000000000005",
+                "position": "1"
               },
+              "kind": "suggestion",
               "message": "this task may be done",
               "sticky": false,
               "subjects": [
@@ -229,22 +147,21 @@ export const response = {
               ]
             },
             "evaluated_view": {
-              "Prefixes": {
-                "first": {
-                  "database": "00000000-0000-4000-8000-000000000001",
-                  "end_exclusive": "3",
-                  "head": {
-                    "origin": "00000000-0000-4000-8000-000000000005",
-                    "position": "2"
-                  }
-                },
-                "last": {
-                  "database": "00000000-0000-4000-8000-000000000001",
-                  "end_exclusive": "4",
-                  "head": {
-                    "origin": "00000000-0000-4000-8000-000000000005",
-                    "position": "3"
-                  }
+              "first": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "2",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "1"
+                }
+              },
+              "kind": "prefixes",
+              "last": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "2",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "1"
                 }
               }
             },
@@ -256,7 +173,87 @@ export const response = {
               },
               "analyzer_certificate": "done:1",
               "database": "00000000-0000-4000-8000-000000000001",
-              "kind": "Suggestion"
+              "kind": "suggestion"
+            }
+          },
+          {
+            "diagnostic": {
+              "actions": [
+                {
+                  "intent": "revise",
+                  "kind": "node",
+                  "payload": {
+                    "priority": {
+                      "kind": "integer",
+                      "value": "2"
+                    },
+                    "status": "done",
+                    "title": "Write the report"
+                  },
+                  "predecessor": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000005",
+                      "position": "1"
+                    }
+                  },
+                  "type": "Task"
+                },
+                {
+                  "from": {
+                    "existing": {
+                      "origin": "00000000-0000-4000-8000-000000000005",
+                      "position": "2"
+                    }
+                  },
+                  "kind": "edge",
+                  "to": {
+                    "added": 0
+                  },
+                  "type": "DependsOn"
+                }
+              ],
+              "focus": {
+                "origin": "00000000-0000-4000-8000-000000000005",
+                "position": "1"
+              },
+              "kind": "suggestion",
+              "message": "this task may be done",
+              "sticky": false,
+              "subjects": [
+                {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "1"
+                }
+              ]
+            },
+            "evaluated_view": {
+              "first": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "3",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "2"
+                }
+              },
+              "kind": "prefixes",
+              "last": {
+                "database": "00000000-0000-4000-8000-000000000001",
+                "end_exclusive": "4",
+                "head": {
+                  "origin": "00000000-0000-4000-8000-000000000005",
+                  "position": "3"
+                }
+              }
+            },
+            "key": {
+              "analyzer": {
+                "configuration": "{}",
+                "name": "Fixture_Suggestions",
+                "version": "1.0.0"
+              },
+              "analyzer_certificate": "done:1",
+              "database": "00000000-0000-4000-8000-000000000001",
+              "kind": "suggestion"
             }
           }
         ],

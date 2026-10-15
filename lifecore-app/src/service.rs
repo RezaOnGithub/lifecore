@@ -153,9 +153,10 @@ pub struct AnalyzerAdded {
 }
 
 // The result a mutation would have returned. An uncertain publication
-// carries it, since the new state may already be visible.
+// carries it, since the new state may already be visible. Tagged by `kind`,
+// because an apply result and an added analyzer differ only by `suite`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(untagged)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Published {
     Initialized(Initialized),
     Applied(ApplyResult),

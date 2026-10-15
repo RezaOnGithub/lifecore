@@ -92,6 +92,13 @@ details = { kind = "record", value = { owner = "Teto" } }
 }
 ```
 
+Every enumeration that the snapshot, analysis output, RPC, or change files
+carry spells its names in lowercase snake case, such as `node`, `revise`,
+`suggestion`, or `false_positive`, and one whose alternatives carry members is
+tagged by a `kind` member beside them, as payload envelopes are. Section 2.5
+gives the entry shapes and [SPEC §8.2](SPEC.md#82-finding-identity-and-observations)
+the finding shapes.
+
 Empty lists and records retain their distinct kinds. Floats and null are not
 payload variants. Absent optional control fields are omitted when exporting
 both formats; JSON null is not an alternative payload encoding. No coercion or
@@ -313,17 +320,16 @@ Explicit duplicates fail rather than being silently skipped.
 
 Several types describe "an entry" at different stages. They differ in how they
 refer to other entries and in what they may contain, so none can stand in for
-another. All of them serialize in this document's vocabulary, so the snapshot,
-analysis output, RPC results, and change files speak one language: `kind`
-(`node` or `edge`), `type`, and either `predecessor` (omitted for a root),
-`intent` where an operation carries one, and `payload`, or `from` and `to`;
-references are `existing` or `added`. They differ only in the members of their
-stage, shown below.
+another. All of them serialize in the vocabulary of
+[section 2.1](#21-syntax-and-values): `kind` (`node` or `edge`), `type`, and
+either `predecessor` (omitted for a root), `intent` where an operation carries
+one, and `payload`, or `from` and `to`; references are `existing` or `added`.
+They differ only in the members of their stage, shown below.
 
 | Type | Stage | Refers to other entries by | Why it is its own type |
 | --- | --- | --- | --- |
 | `ProposalEntry` (`lifecore-app`) | Authoring and transport: files, RPC, drafts | Operation name (`added = "name"`) or exact ID | Carries author-facing names and this document's vocabulary. Contains only what an author may write: no suite changes. Lowering checks names and resolves them to operation indexes, producing `EntryChange`. |
-| `transaction::EntryChange` | Core staging input for node and edge operations | Operation index (`Reference::Added(n)`, serialized `{ added = n }` with a number) or exact ID | The core API, free of names. Has no identity yet; `prepare` assigns IDs. Serialized like a `ProposalEntry` without `name`, as in a suggestion's actions. A lowered proposal and a suggestion's actions are both `Vec<EntryChange>`, so [acknowledgment](SUGGESTIONS.md#3-verification-by-replay) compares by equality, and neither can change the suite. `transaction::Change` wraps it beside `AddAnalyzer` (`kind = "analyzer"`, with `name` and `configuration`), which only `init` and `add-analyzer` build. |
+| `transaction::EntryChange` | Core staging input for node and edge operations | Operation index (`Reference::Added(n)`, serialized `{ added = n }` with a number) or exact ID | The core API, free of names. Has no identity yet; `prepare` assigns IDs. Serialized like a `ProposalEntry` without `name`, as in a suggestion's actions. A lowered proposal and a suggestion's actions are both `Vec<EntryChange>`, so [acknowledgment](SUGGESTIONS.md#3-verification-by-replay) compares by equality, and neither can change the suite. `transaction::Change` wraps it beside `AddAnalyzer`, which only `init` and `add-analyzer` build; no file or payload carries a `Change`. |
 | `Entry` (`Node`, `Edge`) | Stored history | Exact ID only | An immutable record with its own assigned `EntryId` in `id`, as stored in the snapshot. |
 | `EntryRecord` (`lifecore-app`) | Read results (`entries.list`, `entries.get`) | Exact ID | The stored `Entry` with `current`, its currentness in the selected view, beside its members. |
 

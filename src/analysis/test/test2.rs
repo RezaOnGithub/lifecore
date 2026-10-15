@@ -1420,11 +1420,15 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
     let encoded = serde_json::to_value(&report).unwrap();
     assert_eq!(
         encoded["observations"][0]["evaluated_view"],
-        "Initialization"
+        serde_json::json!({"kind": "initialization"})
     );
     assert_eq!(
-        encoded["observations"][1]["evaluated_view"]["Prefixes"]["first"],
-        serde_json::to_value(graph.view().prefix(0).unwrap().id()).unwrap()
+        encoded["observations"][1]["evaluated_view"],
+        serde_json::json!({
+            "kind": "prefixes",
+            "first": graph.view().prefix(0).unwrap().id(),
+            "last": graph.view().id(),
+        })
     );
     assert_eq!(report.inputs, inputs);
     let reloaded: crate::analysis::AnalysisOutput =
@@ -1766,4 +1770,116 @@ fn a_range_ending_before_the_view_is_current_only_when_sticky() {
             "{current}"
         );
     }
+}
+
+// Findings use the shared lowercase vocabulary: a category word in the key, a
+// diagnostic tagged by that same word with a suggestion's `actions` beside it,
+// a `kind`-tagged evaluated view, and snake_case dismissal reasons. Only the
+// encoding is fixed here; what a key contains is unchanged.
+#[test]
+fn findings_serialize_in_the_lowercase_kind_vocabulary() {
+    let (graph, future) = fixture();
+    let view = graph.view();
+    let action = EntryChange::AddNode(NewNode {
+        ty_name: "A".into(),
+        body: Body::new(),
+        parent: Some(Existing(future)),
+        intent: Some(RevisionIntent::Revise),
+    });
+    let mut suggestion = repair_observation(view, vec![action.clone()]);
+    suggestion.diagnostic.focus = Some(future);
+    suggestion.diagnostic.subjects = BTreeSet::from([future]);
+    let id = serde_json::to_value(future).unwrap();
+    let encoded = serde_json::to_value(&suggestion).unwrap();
+    assert_eq!(encoded["key"]["kind"], "suggestion");
+    assert_eq!(
+        encoded["evaluated_view"],
+        serde_json::json!({"kind": "prefixes", "first": view.id(), "last": view.id()})
+    );
+    assert_eq!(
+        encoded["diagnostic"],
+        serde_json::json!({"kind": "suggestion", "actions": [action], "subjects": [id],
+            "focus": id, "message": "Explicit repair", "sticky": true})
+    );
+    assert_eq!(
+        serde_json::from_value::<Observation>(encoded.clone()).unwrap(),
+        suggestion
+    );
+    // An empty suggestion still carries its (empty) actions.
+    let empty = repair_observation(view, vec![]);
+    let encoded_empty = serde_json::to_value(&empty).unwrap();
+    assert_eq!(
+        encoded_empty["diagnostic"]["actions"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        serde_json::from_value::<Observation>(encoded_empty).unwrap(),
+        empty
+    );
+    let mut warning = suggestion.clone();
+    warning.key.kind = MessageType::Warning;
+    warning.diagnostic.kind = MessageKind::Warning;
+    warning.evaluated_view = EvaluatedView::Initialization;
+    let encoded_warning = serde_json::to_value(&warning).unwrap();
+    assert_eq!(encoded_warning["key"]["kind"], "warning");
+    assert_eq!(encoded_warning["diagnostic"]["kind"], "warning");
+    assert!(encoded_warning["diagnostic"].get("actions").is_none());
+    assert_eq!(
+        encoded_warning["evaluated_view"],
+        serde_json::json!({"kind": "initialization"})
+    );
+    assert_eq!(
+        serde_json::from_value::<Observation>(encoded_warning.clone()).unwrap(),
+        warning
+    );
+    assert_eq!(
+        serde_json::to_value(MessageType::Inconsistency).unwrap(),
+        "inconsistency"
+    );
+    for (reason, word) in [
+        (DismissalReason::Acknowledged, "acknowledged"),
+        (DismissalReason::FalsePositive, "false_positive"),
+        (DismissalReason::NoLongerRelevant, "no_longer_relevant"),
+    ] {
+        assert_eq!(serde_json::to_value(reason).unwrap(), word);
+    }
+    // The former spellings, a category without its actions or with foreign
+    // ones, and unknown members are all rejected.
+    let mutate = |base: &serde_json::Value, edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut changed = base.clone();
+        edit(&mut changed);
+        serde_json::from_value::<Observation>(changed).is_err()
+    };
+    let rejected = [
+        mutate(&encoded, &|o| o["key"]["kind"] = "Suggestion".into()),
+        mutate(&encoded, &|o| {
+            o["diagnostic"].as_object_mut().unwrap().remove("actions");
+        }),
+        mutate(&encoded, &|o| {
+            o["diagnostic"]["actions"] = serde_json::Value::Null
+        }),
+        mutate(&encoded, &|o| {
+            o["diagnostic"]["kind"] = serde_json::json!({"Suggestion": [action]})
+        }),
+        mutate(&encoded, &|o| o["diagnostic"]["extra"] = true.into()),
+        mutate(&encoded, &|o| o["evaluated_view"]["extra"] = true.into()),
+        mutate(
+            &encoded,
+            &|o| {
+                o["evaluated_view"] =
+                    serde_json::json!({"Prefixes": {"first": view.id(), "last": view.id()}})
+            },
+        ),
+        mutate(&encoded_warning, &|o| {
+            o["diagnostic"]["actions"] = serde_json::json!([])
+        }),
+        mutate(&encoded_warning, &|o| {
+            o["evaluated_view"]["extra"] = true.into()
+        }),
+        mutate(&encoded_warning, &|o| {
+            o["evaluated_view"] = "Initialization".into()
+        }),
+    ];
+    assert_eq!(rejected, [true; 10]);
+    assert!(serde_json::from_value::<DismissalReason>(serde_json::json!("FalsePositive")).is_err());
 }

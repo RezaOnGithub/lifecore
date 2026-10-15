@@ -887,14 +887,12 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
     );
     let new_node = format!(r#"{{"type":"T","payload":{duplicated}}}"#);
     let entry_change = format!(r#"{{"kind":"node","type":"T","payload":{duplicated}}}"#);
-    let change = entry_change.clone();
     let entry = node.replacen('{', r#"{"kind":"node","#, 1);
     let graph = format!(r#"{{"id":"{origin}","entries":[{entry}],"suite":[]}}"#);
     assert!(serde_json::from_str::<Body>(&duplicated).is_err());
     assert!(serde_json::from_str::<crate::Node>(&node).is_err());
     assert!(serde_json::from_str::<NewNode>(&new_node).is_err());
     assert!(serde_json::from_str::<EntryChange>(&entry_change).is_err());
-    assert!(serde_json::from_str::<Change>(&change).is_err());
     assert!(serde_json::from_str::<LifeCoreList>(&graph).is_err());
     // The same documents without the repeated field decode.
     let single = |text: &str| text.replace(r#","a":"y""#, "");
@@ -904,7 +902,6 @@ fn bodies_reject_duplicate_fields_wherever_they_appear() {
     );
     serde_json::from_str::<crate::Node>(&single(&node)).unwrap();
     serde_json::from_str::<EntryChange>(&single(&entry_change)).unwrap();
-    serde_json::from_str::<Change>(&single(&change)).unwrap();
     serde_json::from_str::<LifeCoreList>(&single(&graph)).unwrap();
 }
 
@@ -1324,21 +1321,6 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
         serde_json::from_value::<Vec<EntryChange>>(encoded.clone()).unwrap(),
         changes
     );
-    // `Change` adds only the suite operation; entry operations keep their shape.
-    let suite_change = Change::AddAnalyzer {
-        name: "Type_Check".into(),
-        config: "{}".into(),
-    };
-    assert_eq!(
-        serde_json::to_value(&suite_change).unwrap(),
-        serde_json::json!({"kind": "analyzer", "name": "Type_Check", "configuration": "{}"})
-    );
-    let wrapped = Change::Entry(changes[2].clone());
-    assert_eq!(serde_json::to_value(&wrapped).unwrap(), encoded[2]);
-    for change in [suite_change, wrapped] {
-        let text = serde_json::to_string(&change).unwrap();
-        assert_eq!(serde_json::from_str::<Change>(&text).unwrap(), change);
-    }
     let suite = crate::analysis::SuiteConfig(vec![crate::analysis::Config {
         name: "Type_Check".into(),
         config: "{}".into(),

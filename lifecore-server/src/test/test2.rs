@@ -1197,7 +1197,7 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         },
     ));
     let key = json!({"database": Uuid::nil(), "analyzer": {"name": "Fixture_Suggestions", "version": "1.0.0", "configuration": "{}"},
-        "kind": "Suggestion", "analyzer_certificate": "done:1"});
+        "kind": "suggestion", "analyzer_certificate": "done:1"});
     samples.push(call(
         recorder,
         "proposal.apply",

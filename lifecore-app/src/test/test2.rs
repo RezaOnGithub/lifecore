@@ -235,7 +235,7 @@ fn acknowledges_and_plan_ids_are_preserved_across_formats() {
     value["acknowledges"] = json!({
         "database": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "analyzer": {"name": "Repairs", "version": "1.2.0-rc.1+build", "configuration": " {} "},
-        "kind": "Suggestion",
+        "kind": "suggestion",
         "analyzer_certificate": "opaque \"certificate\"\n"
     });
     let original: Proposal = serde_json::from_value(value).unwrap();
@@ -1306,6 +1306,7 @@ fn synchronization_failure_after_replacement_is_uncertain_and_carries_the_outcom
     assert_eq!(error["code"], 1008, "{response}");
     assert_eq!(error["data"]["kind"], "publication_uncertain");
     let outcome = &error["data"]["outcome"];
+    assert_eq!(outcome["kind"], "applied");
     assert_eq!(outcome["report"]["operations"][0]["name"], "c");
     // The carried outcome names the new revision and the actual entry, both
     // visible in the stored state.

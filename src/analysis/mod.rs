@@ -1,6 +1,6 @@
 use crate::{EntryId, LifeCoreError, LifeCoreList, View, ViewId, transaction::EntryChange};
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Debug,
@@ -25,14 +25,18 @@ pub struct Config {
     pub config: String,
 }
 
+// A finding's category, serialized in lowercase like every tag in the shared
+// vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MessageType {
     Inconsistency,
     Warning,
     Suggestion,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// Serialized only inside `Diagnostic`, flattened into its `kind` and `actions`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MessageKind {
     Inconsistency,
     Warning,
@@ -41,9 +45,11 @@ pub enum MessageKind {
 
 // What an analyzer says about one finding at one prefix, apart from its
 // identity. Every subject and the focus must be visible in that prefix;
-// initialization has neither.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+// initialization has neither. Serialized flat and tagged by its category in
+// `kind`, the word its finding key uses, with a suggestion's ordered
+// `actions` beside it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(try_from = "StoredDiagnostic")]
 pub struct Diagnostic {
     pub subjects: BTreeSet<EntryId>,
     // The entry a reader should look at first. Keep it stable while the finding
@@ -54,6 +60,59 @@ pub struct Diagnostic {
     // Sticky advisories stay visible at later prefixes until dismissed or filtered.
     // They have no automatic expiry and do not assert current applicability.
     pub sticky: bool,
+}
+
+impl Serialize for Diagnostic {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let actions = match &self.kind {
+        MessageKind::Suggestion(actions) => Some(actions),
+        MessageKind::Inconsistency | MessageKind::Warning => None,
+        };
+        let mut state =
+            serializer.serialize_struct("Diagnostic", 5 + usize::from(actions.is_some()))?;
+        state.serialize_field("kind", &self.kind.ty())?;
+        if let Some(actions) = actions {
+            state.serialize_field("actions", actions)?;
+        }
+        state.serialize_field("subjects", &self.subjects)?;
+        state.serialize_field("focus", &self.focus)?;
+        state.serialize_field("message", &self.message)?;
+        state.serialize_field("sticky", &self.sticky)?;
+        state.end()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredDiagnostic {
+    kind: MessageType,
+    #[serde(default, deserialize_with = "crate::entries::present")]
+    actions: Option<Vec<EntryChange>>,
+    subjects: BTreeSet<EntryId>,
+    focus: Option<EntryId>,
+    message: String,
+    sticky: bool,
+}
+
+// A suggestion always carries `actions`, possibly empty; nothing else may.
+impl TryFrom<StoredDiagnostic> for Diagnostic {
+    type Error = &'static str;
+    fn try_from(stored: StoredDiagnostic) -> Result<Self, Self::Error> {
+        let kind = match (stored.kind, stored.actions) {
+        (MessageType::Suggestion, Some(actions)) => MessageKind::Suggestion(actions),
+        (MessageType::Suggestion, None) => return Err("a suggestion requires `actions`"),
+        (_, Some(_)) => return Err("only a suggestion carries `actions`"),
+        (MessageType::Inconsistency, None) => MessageKind::Inconsistency,
+        (MessageType::Warning, None) => MessageKind::Warning,
+        };
+        Ok(Self {
+            subjects: stored.subjects,
+            focus: stored.focus,
+            message: stored.message,
+            kind,
+            sticky: stored.sticky,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -133,10 +192,31 @@ pub trait AnalyzerFactory {
 // `Prefixes` is the contiguous range of replayed prefixes, both ends
 // inclusive, at which an analyzer emitted the same diagnostic; `first` equals
 // `last` for a single prefix.
+// Serialized as `{"kind": "initialization"}` or `{"kind": "prefixes", first,
+// last}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", from = "StoredView")]
 pub enum EvaluatedView {
     Initialization,
     Prefixes { first: ViewId, last: ViewId },
+}
+
+// Decoding form of `EvaluatedView`: an internally tagged unit variant would
+// ignore unknown members, so initialization decodes as an empty struct.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum StoredView {
+    Initialization {},
+    Prefixes { first: ViewId, last: ViewId },
+}
+
+impl From<StoredView> for EvaluatedView {
+    fn from(stored: StoredView) -> Self {
+        match stored {
+        StoredView::Initialization {} => Self::Initialization,
+        StoredView::Prefixes { first, last } => Self::Prefixes { first, last },
+        }
+    }
 }
 
 impl EvaluatedView {

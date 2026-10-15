@@ -68,19 +68,11 @@ pub enum EntryChange {
 
 // The core staging input: no names or encodings, earlier operations by index,
 // and no identity until `prepare` assigns one. Only `init` and `add-analyzer`
-// build `AddAnalyzer`. Serde requires the untagged entry variant to be last;
-// it carries its own `kind`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+// build `AddAnalyzer`. No file or payload carries one, so it has no Serde form.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Change {
-    #[serde(rename = "analyzer")]
-    AddAnalyzer {
-        name: String,
-        #[serde(rename = "configuration")]
-        config: String,
-    },
-    #[serde(untagged)]
     Entry(EntryChange),
+    AddAnalyzer { name: String, config: String },
 }
 
 impl From<EntryChange> for Change {

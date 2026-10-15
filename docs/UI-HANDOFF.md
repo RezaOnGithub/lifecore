@@ -196,7 +196,10 @@ These follow from the merged backend; the linked documents own the details.
   in analysis output all use the proposal vocabulary (`kind`, `type`,
   `predecessor`, `payload`, `existing`, `added`). A suggested action's `added`
   is the index of an earlier action, a number, where a proposal's is an
-  operation name ([FILES §2.5](FILES.md#25-entry-shaped-types)).
+  operation name ([FILES §2.5](FILES.md#25-entry-shaped-types)). Findings follow
+  the same lowercase, `kind`-tagged convention: a key's `kind` is the word its
+  diagnostic is tagged with, and a suggestion's `actions` sit beside it
+  ([SPEC §8.2](SPEC.md#82-finding-identity-and-observations)).
 - **Type declarations.** They are written by hand as well as by forms: a field
   is a list of presence and shape words
   ([FILES §2.6](FILES.md#26-type-declaration-payloads)), and the schema manager

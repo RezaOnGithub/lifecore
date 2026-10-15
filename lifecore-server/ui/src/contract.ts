@@ -105,29 +105,29 @@ export interface AnalyzerIdentity {
 export interface EvaluationInputs {
   evaluation_time: TimestampString | null;
 }
-export type MessageType = "Inconsistency" | "Warning" | "Suggestion";
+// A finding's category; a diagnostic carries the same word in its `kind`.
+export type MessageType = "inconsistency" | "warning" | "suggestion";
 export interface FindingKey {
   database: Uuid;
   analyzer: AnalyzerIdentity;
   kind: MessageType;
   analyzer_certificate: AnalyzerCertificate;
 }
-export type MessageKind =
-  | "Inconsistency"
-  | "Warning"
-  | { Suggestion: EntryChange[] };
-export interface Diagnostic {
+interface DiagnosticBody {
   subjects: EntryId[];
   focus: EntryId | null;
   message: string;
-  kind: MessageKind;
   sticky: boolean;
 }
+// A suggestion's ordered actions, possibly empty, sit beside its `kind`.
+export type Diagnostic =
+  | (DiagnosticBody & { kind: "inconsistency" | "warning" })
+  | (DiagnosticBody & { kind: "suggestion"; actions: EntryChange[] });
 // The contiguous range of prefixes, both ends inclusive, at which the same
 // diagnostic was emitted.
 export type EvaluatedView =
-  | "Initialization"
-  | { Prefixes: { first: ViewId; last: ViewId } };
+  | { kind: "initialization" }
+  | { kind: "prefixes"; first: ViewId; last: ViewId };
 export interface Observation {
   key: FindingKey;
   evaluated_view: EvaluatedView;
@@ -227,8 +227,12 @@ export interface Initialized {
 export interface Encoded {
   text: string;
 }
-// What a mutation would have returned; carried by `publication_uncertain`.
-export type Published = Initialized | ApplyResult | AnalyzerAdded;
+// What a mutation would have returned, tagged by `kind`; carried by
+// `publication_uncertain`.
+export type Published =
+  | ({ kind: "initialized" } & Initialized)
+  | ({ kind: "applied" } & ApplyResult)
+  | ({ kind: "analyzer_added" } & AnalyzerAdded);
 
 // ---- Requests (INTERFACES §3.1) ----
 

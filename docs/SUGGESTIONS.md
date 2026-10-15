@@ -37,7 +37,7 @@ a ready-made `Proposal`:
   "acknowledges": {
     "database": "<database-uuid>",
     "analyzer": { "name": "<analyzer>", "version": "1.2.0", "configuration": "{}" },
-    "kind": "Suggestion",
+    "kind": "suggestion",
     "analyzer_certificate": "<opaque certificate>"
   },
   "entries": [

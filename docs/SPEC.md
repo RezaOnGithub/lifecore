@@ -509,6 +509,15 @@ messages were emitted. It supports Serde round trips. Outputs are ephemeral;
 [INTERFACES §6](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence)
 owns their lifetime and the independent persistence of dismissals.
 
+Serialized, a finding key's `kind` is its category in lowercase:
+`inconsistency`, `warning`, or `suggestion`. A diagnostic is flat and tagged by
+the same word in its own `kind`; a suggestion also carries its ordered
+`actions`, possibly empty, and nothing else does. An evaluated view is
+`{"kind": "initialization"}` or `{"kind": "prefixes", "first": …, "last": …}`.
+These encodings follow the shared vocabulary of
+[FILES §2.1](FILES.md#21-syntax-and-values); they do not change what a key or
+diagnostic contains.
+
 ### 8.3 Presentation and dismissal
 
 The default report selects initialization output, observations whose range
@@ -549,7 +558,8 @@ assessment must express that assessment through its own domain semantics.
 `analysis::presentation` groups, filters, and renders reports. `Dismissals` is
 serializable display state, with exact-key listing, lookup, dismissal, and restore
 even when the finding is not currently emitted. Each record has a
-`DismissalReason` (`Acknowledged`, `FalsePositive`, or `NoLongerRelevant`) and
+`DismissalReason` (`Acknowledged`, `FalsePositive`, or `NoLongerRelevant`,
+serialized `acknowledged`, `false_positive`, and `no_longer_relevant`) and
 `note: Option<String>`. Updating a record replaces its reason and note. No reason
 establishes resolution. Dismissal loading, writer exclusion, and atomic
 publication belong to the shared application service used by HTTP and CLI.
