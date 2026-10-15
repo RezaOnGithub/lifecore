@@ -54,31 +54,52 @@ function printedUrl(server: ChildProcess): Promise<string> {
   });
 }
 
-export default async function globalSetup() {
-  const binary = process.env.LIFECORE_BIN ?? build();
-  const scratch = mkdtempSync(path.join(tmpdir(), "lifecore-e2e-"));
-  const env = {
-    ...process.env,
-    LIFECORE_STATE_FILE_PATH: path.join(scratch, "LifeCoreState.json"),
-  };
-  const initialized = JSON.parse(
-    execFileSync(binary, ["init"], { env, encoding: "utf8" }),
-  );
-  const server = spawn(binary, ["serve"], {
-    env,
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  const url = await printedUrl(server);
-  if (!/^http:\/\/127\.0\.0\.1:\d+\/#token=[0-9a-f]{64}$/.test(url)) {
-    server.kill("SIGTERM");
-    throw new Error(`unexpected URL from lifecore serve: ${url}`);
-  }
-  process.env.LIFECORE_URL = url;
-  process.env.LIFECORE_DATABASE = initialized.database;
-  return async () => {
+// Stops the server, if it is still running, and removes the scratch database.
+async function cleanUp(server: ChildProcess | undefined, scratch: string) {
+  if (server && server.exitCode === null && server.signalCode === null) {
     const exited = new Promise((resolve) => server.once("exit", resolve));
     server.kill("SIGTERM");
     await exited;
-    rmSync(scratch, { recursive: true, force: true });
-  };
+  }
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+export default async function globalSetup() {
+  if (process.env.LIFECORE_UI === "skip") {
+    throw new Error(
+      "LIFECORE_UI=skip is set, so lifecore would embed a placeholder instead of the client; unset it to run the browser tests",
+    );
+  }
+  const binary = process.env.LIFECORE_BIN ?? build();
+  const scratch = mkdtempSync(path.join(tmpdir(), "lifecore-e2e-"));
+  let server: ChildProcess | undefined;
+  try {
+    const env = {
+      ...process.env,
+      LIFECORE_STATE_FILE_PATH: path.join(scratch, "LifeCoreState.json"),
+    };
+    const initialized = JSON.parse(
+      execFileSync(binary, ["init"], { env, encoding: "utf8" }),
+    );
+    server = spawn(binary, ["serve"], {
+      env,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    const url = await printedUrl(server);
+    if (!/^http:\/\/127\.0\.0\.1:\d+\/#token=[0-9a-f]{64}$/.test(url)) {
+      throw new Error(`unexpected URL from lifecore serve: ${url}`);
+    }
+    const page = await (await fetch(url.slice(0, url.indexOf("#")))).text();
+    if (!page.includes('<div id="root">')) {
+      throw new Error(
+        `${binary} serves the placeholder page, not the client; run \`npm ci\` here and build lifecore without LIFECORE_UI=skip`,
+      );
+    }
+    process.env.LIFECORE_URL = url;
+    process.env.LIFECORE_DATABASE = initialized.database;
+  } catch (error) {
+    await cleanUp(server, scratch);
+    throw error;
+  }
+  return () => cleanUp(server, scratch);
 }
