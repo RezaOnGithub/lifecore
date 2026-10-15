@@ -17,6 +17,9 @@ impl EntryId {
     pub fn position(self) -> usize {
         self.position
     }
+    pub fn origin(self) -> Uuid {
+        self.origin
+    }
 }
 
 // Entries serialize under their field names, the proposal vocabulary of FILES

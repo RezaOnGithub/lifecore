@@ -7,12 +7,16 @@ import * as entries_get from "./entries.get.ts";
 import * as entries_inspect from "./entries.inspect.ts";
 import * as types_list from "./types.list.ts";
 import * as views_query from "./views.query.ts";
+import * as views_render from "./views.render.ts";
 import * as plan_id_mint from "./plan_id.mint.ts";
 import * as proposal_check from "./proposal.check.ts";
 import * as proposal_apply from "./proposal.apply.ts";
 import * as proposal_decode from "./proposal.decode.ts";
 import * as proposal_encode from "./proposal.encode.ts";
 import * as analyzers_add from "./analyzers.add.ts";
+import * as analysis_run from "./analysis.run.ts";
+import * as findings_dismiss from "./findings.dismiss.ts";
+import * as findings_restore from "./findings.restore.ts";
 
 export const methods = {
   "database.describe": database_describe,
@@ -21,10 +25,14 @@ export const methods = {
   "entries.inspect": entries_inspect,
   "types.list": types_list,
   "views.query": views_query,
+  "views.render": views_render,
   "plan_id.mint": plan_id_mint,
   "proposal.check": proposal_check,
   "proposal.apply": proposal_apply,
   "proposal.decode": proposal_decode,
   "proposal.encode": proposal_encode,
   "analyzers.add": analyzers_add,
+  "analysis.run": analysis_run,
+  "findings.dismiss": findings_dismiss,
+  "findings.restore": findings_restore,
 } satisfies { [M in Method]: MethodFixture<M> };

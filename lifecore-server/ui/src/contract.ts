@@ -258,6 +258,17 @@ export interface ExecutionFailure {
   evaluated_view: EvaluatedView;
   message: string;
 }
+// A stored dismissal record (INTERFACES §6), keyed by the complete finding
+// key; an inconsistency can never have one.
+export type DismissalReason =
+  | "acknowledged"
+  | "false_positive"
+  | "no_longer_relevant";
+export interface Dismissal {
+  key: FindingKey;
+  reason: DismissalReason;
+  note: string | null;
+}
 
 // ---- Proposals (FILES §2) ----
 
@@ -340,12 +351,32 @@ export interface Initialized {
 export interface Encoded {
   text: string;
 }
+// A replayed analysis beside the stored dismissal records of the same
+// snapshot read; presentation applies them, the analysis never does.
+export interface AnalysisRun {
+  analysis: AnalysisOutput;
+  dismissals: Dismissal[];
+}
+// Every stored dismissal record after an edit, in storage order.
+export interface DismissalList {
+  dismissals: Dismissal[];
+}
+export interface RestoreResult {
+  dismissals: Dismissal[];
+  restored: boolean;
+}
+export type RenderFormat = "dot" | "svg";
+export interface Rendered {
+  format: RenderFormat;
+  text: string;
+}
 // What a mutation would have returned, tagged by `kind`; carried by
-// `publication_uncertain`.
+// `publication_uncertain`. Both dismissal edits carry the stored records.
 export type Published =
   | ({ kind: "initialized" } & Initialized)
   | ({ kind: "applied" } & ApplyResult)
-  | ({ kind: "analyzer_added" } & AnalyzerAdded);
+  | ({ kind: "analyzer_added" } & AnalyzerAdded)
+  | ({ kind: "dismissed" } & DismissalList);
 
 // ---- Requests (INTERFACES §3.1) ----
 
@@ -393,6 +424,18 @@ export interface AddAnalyzerParams extends EvaluationParams {
   name: string;
   configuration?: string;
 }
+export interface AnalysisRunParams extends AsOfParams, EvaluationParams {}
+export interface DismissParams {
+  key: FindingKey;
+  reason: DismissalReason;
+  note?: string;
+}
+export interface RestoreParams {
+  key: FindingKey;
+}
+export interface ViewRenderParams extends ViewQueryParams {
+  format: RenderFormat;
+}
 
 export interface Methods {
   "database.describe": { params: NoParams; result: Description };
@@ -401,12 +444,16 @@ export interface Methods {
   "entries.inspect": { params: EntryInspectParams; result: EntryInspection };
   "types.list": { params: AsOfParams; result: TypeList };
   "views.query": { params: ViewQueryParams; result: ViewQuery };
+  "views.render": { params: ViewRenderParams; result: Rendered };
   "plan_id.mint": { params: NoParams; result: MintedPlanId };
   "proposal.check": { params: ProposalParams; result: CheckResult };
   "proposal.apply": { params: ProposalParams; result: ApplyResult };
   "proposal.decode": { params: DecodeParams; result: Proposal };
   "proposal.encode": { params: EncodeParams; result: Encoded };
   "analyzers.add": { params: AddAnalyzerParams; result: AnalyzerAdded };
+  "analysis.run": { params: AnalysisRunParams; result: AnalysisRun };
+  "findings.dismiss": { params: DismissParams; result: DismissalList };
+  "findings.restore": { params: RestoreParams; result: RestoreResult };
 }
 export type Method = keyof Methods;
 export type Params<M extends Method> = Methods[M]["params"];
@@ -452,6 +499,9 @@ export type ApplicationErrorData =
       requested: DecimalString;
       visible: DecimalString;
     }
+  | { kind: "cannot_dismiss_inconsistency"; key: FindingKey }
+  | { kind: "graphviz_unavailable"; message: string }
+  | { kind: "graphviz_failed"; message: string }
   | { kind: "invalid_params" }
   | { kind: "backend_failure" }
   | { kind: "internal" };
@@ -477,6 +527,9 @@ export interface ErrorCodes {
   analyzer_failure: 3001;
   entry_not_found: 4001;
   beyond_boundary: 4002;
+  cannot_dismiss_inconsistency: 4003;
+  graphviz_unavailable: 4004;
+  graphviz_failed: 4005;
   invalid_params: -32602;
   backend_failure: 5001;
   internal: -32603;

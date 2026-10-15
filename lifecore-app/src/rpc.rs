@@ -164,12 +164,16 @@ methods! {
     EntriesInspect => "entries.inspect",
     TypesList => "types.list",
     ViewsQuery => "views.query",
+    ViewsRender => "views.render",
     PlanIdMint => "plan_id.mint",
     ProposalCheck => "proposal.check",
     ProposalApply => "proposal.apply",
     ProposalDecode => "proposal.decode",
     ProposalEncode => "proposal.encode",
     AnalyzersAdd => "analyzers.add",
+    AnalysisRun => "analysis.run",
+    FindingsDismiss => "findings.dismiss",
+    FindingsRestore => "findings.restore",
 }
 
 impl Method {
@@ -190,6 +194,7 @@ fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, Disp
     Method::EntriesInspect => call(params, |p| service.inspect_entry(p)),
     Method::TypesList => call(params, |p| service.list_types(p)),
     Method::ViewsQuery => call(params, |p| service.query_view(p)),
+    Method::ViewsRender => call(params, |p| service.render_view(p)),
     Method::PlanIdMint => call(params, |p| service.mint_plan_id(p)),
     Method::ProposalCheck => call(params, |p| service.check(proposal_request(p)?)),
     Method::ProposalApply => call(params, |p| service.apply(proposal_request(p)?)),
@@ -201,6 +206,9 @@ fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, Disp
         })
     }),
     Method::AnalyzersAdd => call(params, |p| service.add_analyzer(p)),
+    Method::AnalysisRun => call(params, |p| service.run_analysis(p)),
+    Method::FindingsDismiss => call(params, |p| service.dismiss_finding(p)),
+    Method::FindingsRestore => call(params, |p| service.restore_finding(p)),
     }
 }
 

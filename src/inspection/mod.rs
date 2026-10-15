@@ -294,7 +294,7 @@ fn contains_text(value: &Payload, needle: &str) -> bool {
     }
 }
 
-fn dot_quote(text: &str) -> String {
+pub fn dot_quote(text: &str) -> String {
     // Escape backslashes first, including Graphviz's own label substitutions.
     format!(
         "\"{}\"",

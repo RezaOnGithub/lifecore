@@ -2,6 +2,7 @@ use crate::{
     AppError,
     proposal::{PlanId, Proposal, ProposalLocation, present},
     query::{self, EdgeFilter, EntryInspection, Expansion, Seed, ViewQuery},
+    render::{self, RenderFormat, Rendered},
     schema::{self, TypeList},
     storage::{self, LockedSnapshot, Publication, Snapshot, StatePath, SyncDirectory},
 };
@@ -9,7 +10,9 @@ use lifecore::{
     BasicValidationFailure, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, Timestamp,
     View, ViewError, ViewId,
     analysis::{
-        AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, SuiteConfig,
+        AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, FindingKey,
+        SuiteConfig,
+        presentation::{CannotDismissInconsistency, Dismissal, DismissalReason},
     },
     inspection::{Currentness, EdgeSelection, NodeSelection},
     transaction::{self, Change, Checked},
@@ -123,6 +126,48 @@ pub struct ViewQueryRequest {
     pub as_of: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisRunRequest {
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
+    #[serde(default, deserialize_with = "present")]
+    pub evaluation_time: Option<Timestamp>,
+    #[serde(default)]
+    pub now: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DismissRequest {
+    pub key: FindingKey,
+    pub reason: DismissalReason,
+    #[serde(default, deserialize_with = "present")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreRequest {
+    pub key: FindingKey,
+}
+
+// The `views.query` parameters plus the output format. They are spelled out
+// rather than flattened, because Serde cannot deny unknown fields through a
+// flattened member.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewRenderRequest {
+    pub seeds: Vec<Seed>,
+    #[serde(default)]
+    pub expand: Vec<Expansion>,
+    #[serde(default)]
+    pub edges: EdgeFilter,
+    #[serde(default, deserialize_with = "boundary")]
+    pub as_of: Option<usize>,
+    pub format: RenderFormat,
+}
+
 // An optional boundary is a decimal string like every position, and null is
 // not absence.
 fn boundary<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<usize>, D::Error> {
@@ -208,15 +253,37 @@ pub struct AnalyzerAdded {
     pub report: ProposalReport,
 }
 
+// A replayed analysis beside the stored dismissal records of the same
+// snapshot read; presentation applies them, the analysis never does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisRun {
+    pub analysis: AnalysisOutput,
+    pub dismissals: Vec<Dismissal>,
+}
+
+// Every stored dismissal record after an edit, in storage order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DismissalList {
+    pub dismissals: Vec<Dismissal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreResult {
+    pub dismissals: Vec<Dismissal>,
+    pub restored: bool,
+}
+
 // The result a mutation would have returned. An uncertain publication
 // carries it, since the new state may already be visible. Tagged by `kind`,
-// because an apply result and an added analyzer differ only by `suite`.
+// because an apply result and an added analyzer differ only by `suite`. Both
+// dismissal edits carry the stored records after the edit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Published {
     Initialized(Initialized),
     Applied(ApplyResult),
     AnalyzerAdded(AnalyzerAdded),
+    Dismissed(DismissalList),
 }
 
 impl From<Initialized> for Published {
@@ -234,6 +301,20 @@ impl From<ApplyResult> for Published {
 impl From<AnalyzerAdded> for Published {
     fn from(result: AnalyzerAdded) -> Self {
         Self::AnalyzerAdded(result)
+    }
+}
+
+impl From<DismissalList> for Published {
+    fn from(result: DismissalList) -> Self {
+        Self::Dismissed(result)
+    }
+}
+
+impl From<RestoreResult> for Published {
+    fn from(result: RestoreResult) -> Self {
+        Self::Dismissed(DismissalList {
+            dismissals: result.dismissals,
+        })
     }
 }
 
@@ -349,6 +430,10 @@ fn evaluation_inputs(time: Option<Timestamp>, now: bool) -> Result<EvaluationInp
 
 fn database(graph: &LifeCoreList) -> Uuid {
     graph.view().id().database
+}
+
+fn dismissals(snapshot: &Snapshot) -> Vec<Dismissal> {
+    snapshot.dismissals.records().cloned().collect()
 }
 
 fn verify_plan_id(snapshot: &Snapshot, plan_id: Option<PlanId>) -> Result<(), AppError> {
@@ -617,6 +702,70 @@ impl Service {
             &request.expand,
             &request.edges,
         )
+    }
+
+    pub fn render_view(&self, request: ViewRenderRequest) -> Result<Rendered, AppError> {
+        let snapshot = storage::read(&self.state)?;
+        let query = query::query(
+            as_of(&snapshot.graph, request.as_of)?,
+            &request.seeds,
+            &request.expand,
+            &request.edges,
+        )?;
+        render::render(&query, request.format)
+    }
+
+    // A replay of the selected prefix with fresh analyzers; nothing is
+    // stored, and the records come from the same snapshot read.
+    pub fn run_analysis(&self, request: AnalysisRunRequest) -> Result<AnalysisRun, AppError> {
+        let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
+        let snapshot = storage::read(&self.state)?;
+        let view = as_of(&snapshot.graph, request.as_of)?;
+        // The ordered suite is not versioned by history (INTERFACES 4), so a
+        // prefix replays under the suite stored now, whatever was in force
+        // when its entries were appended.
+        let analysis = self
+            .runner(inputs)?
+            .run_view(view, snapshot.graph.analysis_suite())
+            .map_err(AppError::Analyzer)?;
+        Ok(AnalysisRun {
+            analysis,
+            dismissals: dismissals(&snapshot),
+        })
+    }
+
+    // Dismissal edits reread under writer exclusion and publish with the
+    // graph untouched, so the revision stays (INTERFACES 4).
+    pub fn dismiss_finding(&self, request: DismissRequest) -> Result<DismissalList, AppError> {
+        storage::require_existing(&self.state)?;
+        let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
+        locked
+            .snapshot_mut()
+            .dismissals
+            .dismiss(request.key.clone(), request.reason, request.note)
+            .map_err(
+                |CannotDismissInconsistency| AppError::CannotDismissInconsistency {
+                    key: Box::new(request.key),
+                },
+            )?;
+        let publication = self.publish(&locked, true)?;
+        let list = DismissalList {
+            dismissals: dismissals(locked.snapshot()),
+        };
+        settle(publication, list)
+    }
+
+    pub fn restore_finding(&self, request: RestoreRequest) -> Result<RestoreResult, AppError> {
+        storage::require_existing(&self.state)?;
+        let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
+        let restored = locked.snapshot_mut().dismissals.restore(&request.key);
+        // Nothing is published when no record matched.
+        let publication = self.publish(&locked, restored)?;
+        let result = RestoreResult {
+            dismissals: dismissals(locked.snapshot()),
+            restored,
+        };
+        settle(publication, result)
     }
 
     pub fn mint_plan_id(&self, _: NoParams) -> Result<MintedPlanId, AppError> {

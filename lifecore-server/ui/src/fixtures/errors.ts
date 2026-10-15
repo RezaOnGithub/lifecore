@@ -112,6 +112,29 @@ export const application = {
       "jsonrpc": "2.0"
     }
   ],
+  "cannot_dismiss_inconsistency": [
+    {
+      "error": {
+        "code": 4003,
+        "data": {
+          "key": {
+            "analyzer": {
+              "configuration": "{}",
+              "name": "Type_Check",
+              "version": "0.1.0"
+            },
+            "analyzer_certificate": "{\"UnknownType\":{\"subject\":{\"origin\":\"00000000-0000-4000-8000-00000000001b\",\"position\":\"3\"},\"ty_name\":\"Undeclared\"}}",
+            "database": "00000000-0000-4000-8000-00000000001b",
+            "kind": "inconsistency"
+          },
+          "kind": "cannot_dismiss_inconsistency"
+        },
+        "message": "inconsistencies cannot be dismissed"
+      },
+      "id": "call",
+      "jsonrpc": "2.0"
+    }
+  ],
   "database_exists": [
     {
       "error": {
@@ -197,6 +220,34 @@ export const application = {
         "message": "the plan ID names database 00000000-0000-4000-8000-000000000017, but the selected database is 00000000-0000-4000-8000-000000000001"
       },
       "id": "call",
+      "jsonrpc": "2.0"
+    }
+  ],
+  "graphviz_failed": [
+    {
+      "error": {
+        "code": 4005,
+        "data": {
+          "kind": "graphviz_failed",
+          "message": "dot exited with exit status: 1; stderr: Error: <stdin>: syntax error in line 1 near 'x'"
+        },
+        "message": "Graphviz failed: dot exited with exit status: 1; stderr: Error: <stdin>: syntax error in line 1 near 'x'"
+      },
+      "id": "graphviz_failed",
+      "jsonrpc": "2.0"
+    }
+  ],
+  "graphviz_unavailable": [
+    {
+      "error": {
+        "code": 4004,
+        "data": {
+          "kind": "graphviz_unavailable",
+          "message": "No such file or directory (os error 2)"
+        },
+        "message": "Graphviz is not available: No such file or directory (os error 2)"
+      },
+      "id": "graphviz_unavailable",
       "jsonrpc": "2.0"
     }
   ],
@@ -336,7 +387,7 @@ export const application = {
         "data": {
           "kind": "publication_uncertain",
           "outcome": {
-            "graph_revision": "00000000-0000-4000-8000-00000000001b",
+            "graph_revision": "00000000-0000-4000-8000-00000000001c",
             "kind": "applied",
             "report": {
               "analysis": {
@@ -374,14 +425,14 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "scope",
-                      "database": "00000000-0000-4000-8000-00000000001c",
+                      "database": "00000000-0000-4000-8000-00000000001d",
                       "kind": "warning"
                     }
                   },
                   {
                     "diagnostic": {
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-00000000001d",
+                        "origin": "00000000-0000-4000-8000-00000000001e",
                         "position": "1"
                       },
                       "kind": "warning",
@@ -389,26 +440,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-00000000001c",
+                        "database": "00000000-0000-4000-8000-00000000001d",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "1"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-00000000001c",
+                        "database": "00000000-0000-4000-8000-00000000001d",
                         "end_exclusive": "4",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "3"
                         }
                       }
@@ -419,8 +470,8 @@ export const application = {
                         "name": "Type_Check",
                         "version": "0.1.0"
                       },
-                      "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-00000000001d\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
-                      "database": "00000000-0000-4000-8000-00000000001c",
+                      "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-00000000001e\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
+                      "database": "00000000-0000-4000-8000-00000000001d",
                       "kind": "warning"
                     }
                   },
@@ -440,7 +491,7 @@ export const application = {
                           },
                           "predecessor": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-00000000001d",
+                              "origin": "00000000-0000-4000-8000-00000000001e",
                               "position": "1"
                             }
                           },
@@ -448,7 +499,7 @@ export const application = {
                         }
                       ],
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-00000000001d",
+                        "origin": "00000000-0000-4000-8000-00000000001e",
                         "position": "1"
                       },
                       "kind": "suggestion",
@@ -456,26 +507,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-00000000001c",
+                        "database": "00000000-0000-4000-8000-00000000001d",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "1"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-00000000001c",
+                        "database": "00000000-0000-4000-8000-00000000001d",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "1"
                         }
                       }
@@ -487,7 +538,7 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "done:1",
-                      "database": "00000000-0000-4000-8000-00000000001c",
+                      "database": "00000000-0000-4000-8000-00000000001d",
                       "kind": "suggestion"
                     }
                   },
@@ -507,7 +558,7 @@ export const application = {
                           },
                           "predecessor": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-00000000001d",
+                              "origin": "00000000-0000-4000-8000-00000000001e",
                               "position": "1"
                             }
                           },
@@ -516,7 +567,7 @@ export const application = {
                         {
                           "from": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-00000000001d",
+                              "origin": "00000000-0000-4000-8000-00000000001e",
                               "position": "2"
                             }
                           },
@@ -528,7 +579,7 @@ export const application = {
                         }
                       ],
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-00000000001d",
+                        "origin": "00000000-0000-4000-8000-00000000001e",
                         "position": "1"
                       },
                       "kind": "suggestion",
@@ -536,26 +587,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-00000000001c",
+                        "database": "00000000-0000-4000-8000-00000000001d",
                         "end_exclusive": "3",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "2"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-00000000001c",
+                        "database": "00000000-0000-4000-8000-00000000001d",
                         "end_exclusive": "4",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001d",
+                          "origin": "00000000-0000-4000-8000-00000000001e",
                           "position": "3"
                         }
                       }
@@ -567,58 +618,88 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "done:1",
-                      "database": "00000000-0000-4000-8000-00000000001c",
+                      "database": "00000000-0000-4000-8000-00000000001d",
                       "kind": "suggestion"
                     }
                   }
                 ],
                 "view": {
-                  "database": "00000000-0000-4000-8000-00000000001c",
+                  "database": "00000000-0000-4000-8000-00000000001d",
                   "end_exclusive": "4",
                   "head": {
-                    "origin": "00000000-0000-4000-8000-00000000001d",
+                    "origin": "00000000-0000-4000-8000-00000000001e",
                     "position": "3"
                   }
                 }
               },
               "base": {
-                "database": "00000000-0000-4000-8000-00000000001c",
+                "database": "00000000-0000-4000-8000-00000000001d",
                 "end_exclusive": "0",
                 "head": null
               },
-              "base_revision": "00000000-0000-4000-8000-00000000001e",
-              "database": "00000000-0000-4000-8000-00000000001c",
+              "base_revision": "00000000-0000-4000-8000-00000000001f",
+              "database": "00000000-0000-4000-8000-00000000001d",
               "operations": [
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001d",
+                    "origin": "00000000-0000-4000-8000-00000000001e",
                     "position": "0"
                   },
                   "name": "task_type"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001d",
+                    "origin": "00000000-0000-4000-8000-00000000001e",
                     "position": "1"
                   },
                   "name": "report"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001d",
+                    "origin": "00000000-0000-4000-8000-00000000001e",
                     "position": "2"
                   },
                   "name": "review"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001d",
+                    "origin": "00000000-0000-4000-8000-00000000001e",
                     "position": "3"
                   },
                   "name": "review_after_report"
                 }
               ]
             }
+          }
+        },
+        "message": "the new state was published, but synchronization failed, so it may or may not persist: Input/output error (os error 5)"
+      },
+      "id": "publication_uncertain",
+      "jsonrpc": "2.0"
+    },
+    {
+      "error": {
+        "code": 1008,
+        "data": {
+          "kind": "publication_uncertain",
+          "outcome": {
+            "dismissals": [
+              {
+                "key": {
+                  "analyzer": {
+                    "configuration": "{}",
+                    "name": "Type_Check",
+                    "version": "0.1.0"
+                  },
+                  "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-00000000001e\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
+                  "database": "00000000-0000-4000-8000-00000000001d",
+                  "kind": "warning"
+                },
+                "note": "Notes come with the draft.",
+                "reason": "false_positive"
+              }
+            ],
+            "kind": "dismissed"
           }
         },
         "message": "the new state was published, but synchronization failed, so it may or may not persist: Input/output error (os error 5)"

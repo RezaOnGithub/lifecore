@@ -2,17 +2,23 @@ use crate::{
     AppError, Service,
     proposal::{self, Format, PlanId, Proposal},
     query::{EdgeFilter, EntryInspection, Expansion, Incidence, Provenance, Seed, ViewQuery},
+    render::{self, RenderFormat},
     rpc,
     schema::{self, NodeCounts, TypeResolution},
     service::{
-        AddAnalyzerRequest, EntryGetRequest, EntryInspectRequest, EntryListRequest, EntryRecord,
-        NoParams, ProposalRequest, Published, TypeListRequest, ViewQueryRequest,
+        AddAnalyzerRequest, AnalysisRunRequest, DismissRequest, EntryGetRequest,
+        EntryInspectRequest, EntryListRequest, EntryRecord, NoParams, ProposalRequest, Published,
+        RestoreRequest, TypeListRequest, ViewQueryRequest, ViewRenderRequest,
     },
     storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
 use lifecore::{
     Body, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp,
-    analysis::{AnalysisRunner, AnalyzerFactory, Config, EvaluatedView, MessageType},
+    analysis::{
+        AnalysisRunner, AnalyzerCertificate, AnalyzerFactory, Config, EvaluatedView, FindingKey,
+        MessageType,
+        presentation::{Dismissal, DismissalReason},
+    },
     inspection::{Currentness, Direction},
     transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
     typing::{FieldDecl, FieldStatus, Type, ValueType},
@@ -25,6 +31,7 @@ use std::{
     fs, io,
     num::NonZeroUsize,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::Duration,
 };
 use uuid::Uuid;
@@ -2966,4 +2973,673 @@ fn as_of_and_query_parameters_are_decoded_strictly_through_rpc() {
     assert_eq!(result["result"]["edges"].as_array().unwrap().len(), 2);
     assert_eq!(result["result"]["edges"][0]["kind"], "edge");
     assert_eq!(result["result"]["view"]["end_exclusive"], "8");
+}
+
+// Appends to `populated` a task without its encouraged `notes`, which
+// TypeCheck warns about from its append (position 4, boundary 5) onward.
+fn warned(scratch: &Scratch) -> EntryId {
+    let applied = scratch
+        .service()
+        .apply(request(proposal(json!([
+            {"name": "c", "kind": "node", "ty_name": "Task", "payload": {"title": "C"}},
+        ]))))
+        .unwrap();
+    applied.report.operations[0].entry
+}
+
+fn render_dot(service: &Service, seeds: Vec<Seed>, as_of: Option<usize>) -> String {
+    service
+        .render_view(ViewRenderRequest {
+            seeds,
+            expand: vec![],
+            edges: EdgeFilter::default(),
+            as_of,
+            format: RenderFormat::Dot,
+        })
+        .unwrap()
+        .text
+}
+
+fn run(service: &Service, as_of: Option<usize>) -> crate::service::AnalysisRun {
+    service
+        .run_analysis(AnalysisRunRequest {
+            as_of,
+            evaluation_time: None,
+            now: false,
+        })
+        .unwrap()
+}
+
+fn boundaries(view: EvaluatedView) -> (usize, usize) {
+    match view {
+    EvaluatedView::Prefixes { first, last } => (first.end_exclusive, last.end_exclusive),
+    EvaluatedView::Initialization => panic!("expected a prefix range"),
+    }
+}
+
+#[test]
+fn analysis_run_replays_the_stored_suite_at_the_selected_boundary() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    populated(&scratch);
+    let clean = run(&service, None);
+    assert_eq!(clean.analysis.view.end_exclusive, 4);
+    assert_eq!(clean.analysis.inputs.evaluation_time, None);
+    assert_eq!(
+        clean
+            .analysis
+            .implementations
+            .iter()
+            .map(|identity| identity.name.as_str())
+            .collect::<Vec<_>>(),
+        [TypeCheckFactory::name()]
+    );
+    assert_eq!(clean.analysis.observations().count(), 0);
+    assert!(clean.dismissals.is_empty());
+    let c = warned(&scratch);
+    let at: Timestamp = "2026-01-02T03:04:05.000000006Z".parse().unwrap();
+    let warned = service
+        .run_analysis(AnalysisRunRequest {
+            as_of: None,
+            evaluation_time: Some(at),
+            now: false,
+        })
+        .unwrap();
+    assert_eq!(warned.analysis.view.end_exclusive, 5);
+    assert_eq!(warned.analysis.inputs.evaluation_time, Some(at));
+    let observations = warned.analysis.observations().collect::<Vec<_>>();
+    assert_eq!(observations.len(), 1);
+    let warning = observations[0];
+    assert_eq!(warning.key.kind, MessageType::Warning);
+    assert_eq!(warning.key.analyzer.name, TypeCheckFactory::name());
+    assert_eq!(
+        warning.key.database,
+        service.describe(NoParams {}).unwrap().database
+    );
+    assert_eq!(warning.diagnostic.focus, Some(c));
+    assert_eq!(warning.diagnostic.subjects, BTreeSet::from([c]));
+    assert_eq!(boundaries(warning.evaluated_view), (5, 5));
+    // The prefix before the append is clean; the one ending with it warns,
+    // and a later append extends the range.
+    assert_eq!(run(&service, Some(4)).analysis.observations().count(), 0);
+    let at_append = run(&service, Some(5));
+    assert_eq!(at_append.analysis.view.end_exclusive, 5);
+    assert_eq!(
+        at_append
+            .analysis
+            .observations()
+            .map(|o| (o.key.clone(), o.evaluated_view))
+            .collect::<Vec<_>>(),
+        [(warning.key.clone(), warning.evaluated_view)]
+    );
+    service
+        .apply(request(proposal(json!([task("d", "D")]))))
+        .unwrap();
+    let extended = run(&service, None);
+    let ranges = extended
+        .analysis
+        .observations()
+        .map(|o| boundaries(o.evaluated_view))
+        .collect::<Vec<_>>();
+    assert_eq!(ranges, [(5, 6)]);
+    assert_eq!(
+        boundaries(
+            run(&service, Some(5))
+                .analysis
+                .observations()
+                .next()
+                .unwrap()
+                .evaluated_view
+        ),
+        (5, 5)
+    );
+    // The suite is not versioned by history: an analyzer added now replays
+    // every prefix, so an earlier boundary reports it too.
+    service
+        .add_analyzer(AddAnalyzerRequest {
+            name: DagCheckFactory::name().into(),
+            configuration: r#"{"on_cycle":"warning"}"#.into(),
+            evaluation_time: None,
+            now: false,
+        })
+        .unwrap();
+    let names = |as_of| {
+        run(&service, as_of)
+            .analysis
+            .implementations
+            .iter()
+            .map(|identity| identity.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(Some(2)),
+        [TypeCheckFactory::name(), DagCheckFactory::name()]
+    );
+    assert_eq!(names(None), names(Some(2)));
+    // The host captures `now` once, refuses both inputs, and bounds the view.
+    let now = service
+        .run_analysis(AnalysisRunRequest {
+            as_of: None,
+            evaluation_time: None,
+            now: true,
+        })
+        .unwrap();
+    assert!(now.analysis.inputs.evaluation_time.is_some());
+    assert!(matches!(
+        service.run_analysis(AnalysisRunRequest {
+            as_of: None,
+            evaluation_time: Some(at),
+            now: true,
+        }),
+        Err(AppError::InvalidParams { .. })
+    ));
+    assert!(matches!(
+        service.run_analysis(AnalysisRunRequest {
+            as_of: Some(7),
+            evaluation_time: None,
+            now: false,
+        }),
+        Err(AppError::BeyondBoundary {
+            requested: 7,
+            visible: 6
+        })
+    ));
+    // Through RPC: the carried inputs, strict parameters, and the records.
+    let call = |params: Value| {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "analysis.run", "params": params})
+            .to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    let response = call(json!({"as_of": "5", "evaluation_time": "2026-01-02T03:04:05.000000006Z"}));
+    let result = &response["result"];
+    assert_eq!(
+        result["analysis"]["view"]["end_exclusive"], "5",
+        "{response}"
+    );
+    assert_eq!(
+        result["analysis"]["inputs"]["evaluation_time"],
+        "2026-01-02T03:04:05.000000006Z"
+    );
+    assert_eq!(
+        result["analysis"]["observations"][0]["key"]["kind"],
+        "warning"
+    );
+    assert_eq!(result["dismissals"], json!([]));
+    assert_eq!(
+        call(json!({}))["result"]["analysis"]["inputs"]["evaluation_time"],
+        Value::Null
+    );
+    for params in [
+        json!({"as_of": null}),
+        json!({"as_of": 5}),
+        json!({"evaluation_time": null}),
+        json!({"now": "yes"}),
+        json!({"seeds": []}),
+    ] {
+        let response = call(params.clone());
+        assert_eq!(response["error"]["code"], -32602, "{params} {response}");
+    }
+    assert_eq!(call(json!({"as_of": "9"}))["error"]["code"], 4002);
+}
+
+#[test]
+fn dismissals_persist_without_rotating_the_revision_and_refuse_inconsistencies() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    populated(&scratch);
+    warned(&scratch);
+    let key = run(&service, None)
+        .analysis
+        .observations()
+        .next()
+        .unwrap()
+        .key
+        .clone();
+    let revision = service.describe(NoParams {}).unwrap().graph_revision;
+    let stored = scratch.bytes();
+    let dismiss = |key: &FindingKey, reason, note: Option<&str>| {
+        service.dismiss_finding(DismissRequest {
+            key: key.clone(),
+            reason,
+            note: note.map(Into::into),
+        })
+    };
+    let dismissed = dismiss(
+        &key,
+        DismissalReason::FalsePositive,
+        Some("notes come later"),
+    )
+    .unwrap();
+    assert_eq!(
+        dismissed.dismissals,
+        [Dismissal {
+            key: key.clone(),
+            reason: DismissalReason::FalsePositive,
+            note: Some("notes come later".into()),
+        }]
+    );
+    assert_ne!(scratch.bytes(), stored);
+    assert_eq!(
+        service.describe(NoParams {}).unwrap().graph_revision,
+        revision
+    );
+    // A fresh service rereads the record beside the replayed analysis, which
+    // the dismissal never changes.
+    let reread = run(&scratch.service(), None);
+    assert_eq!(reread.dismissals, dismissed.dismissals);
+    assert_eq!(reread.analysis.observations().count(), 1);
+    // Dismissing again updates the one record in place.
+    let updated = dismiss(&key, DismissalReason::Acknowledged, None).unwrap();
+    assert_eq!(
+        updated.dismissals,
+        [Dismissal {
+            key: key.clone(),
+            reason: DismissalReason::Acknowledged,
+            note: None,
+        }]
+    );
+    // A key nothing currently emits is still stored, after the existing one.
+    let unseen = FindingKey {
+        kind: MessageType::Suggestion,
+        analyzer_certificate: AnalyzerCertificate("never emitted".into()),
+        ..key.clone()
+    };
+    let two = dismiss(&unseen, DismissalReason::NoLongerRelevant, None).unwrap();
+    assert_eq!(
+        two.dismissals.iter().map(|d| &d.key).collect::<Vec<_>>(),
+        [&key, &unseen]
+    );
+    // An inconsistency key is refused before anything is stored, emitted or
+    // not; the error carries the key.
+    let inconsistency = FindingKey {
+        kind: MessageType::Inconsistency,
+        ..key.clone()
+    };
+    let stored = scratch.bytes();
+    let error = dismiss(&inconsistency, DismissalReason::Acknowledged, None).unwrap_err();
+    assert!(
+        matches!(&error, AppError::CannotDismissInconsistency { key } if **key == inconsistency),
+        "{error}"
+    );
+    let object = error.to_object();
+    assert_eq!(object.code, 4003);
+    assert_eq!(
+        object.data,
+        Some(json!({"kind": "cannot_dismiss_inconsistency", "key": inconsistency}))
+    );
+    assert_eq!(scratch.bytes(), stored);
+    // Restore removes exactly the matching record and says whether one was
+    // there; nothing is published otherwise.
+    let restored = service
+        .restore_finding(RestoreRequest { key: key.clone() })
+        .unwrap();
+    assert!(restored.restored);
+    assert_eq!(
+        restored
+            .dismissals
+            .iter()
+            .map(|d| &d.key)
+            .collect::<Vec<_>>(),
+        [&unseen]
+    );
+    let stored = scratch.bytes();
+    let again = service
+        .restore_finding(RestoreRequest { key: key.clone() })
+        .unwrap();
+    assert!(!again.restored);
+    assert_eq!(again.dismissals, restored.dismissals);
+    assert_eq!(scratch.bytes(), stored);
+    assert_eq!(
+        service.describe(NoParams {}).unwrap().graph_revision,
+        revision
+    );
+    assert_eq!(
+        run(&scratch.service(), None).dismissals,
+        restored.dismissals
+    );
+    // Writers queue behind the lock like every mutation.
+    let holder = storage::lock(&scratch.state(), Duration::ZERO).unwrap();
+    let quick = scratch.service().with_busy_retry(SHORT_RETRY);
+    assert!(matches!(
+        quick.dismiss_finding(DismissRequest {
+            key: key.clone(),
+            reason: DismissalReason::Acknowledged,
+            note: None,
+        }),
+        Err(AppError::Busy { .. })
+    ));
+    assert!(matches!(
+        quick.restore_finding(RestoreRequest {
+            key: unseen.clone()
+        }),
+        Err(AppError::Busy { .. })
+    ));
+    drop(holder);
+    assert_eq!(scratch.bytes(), stored);
+    // Through RPC: snake_case reasons, a null note refused, and the 4003
+    // payload.
+    let call = |method: &str, params: Value| {
+        let line =
+            json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    for params in [
+        json!({"key": key, "reason": "no_longer_relevant", "note": null}),
+        json!({"key": key, "reason": "NoLongerRelevant"}),
+        json!({"key": key}),
+        json!({"reason": "acknowledged"}),
+        json!({"key": key, "reason": "acknowledged", "sticky": true}),
+    ] {
+        let response = call("findings.dismiss", params.clone());
+        assert_eq!(response["error"]["code"], -32602, "{params} {response}");
+    }
+    let refused = call(
+        "findings.dismiss",
+        json!({"key": inconsistency, "reason": "acknowledged"}),
+    );
+    assert_eq!(refused["error"]["code"], 4003, "{refused}");
+    assert_eq!(
+        refused["error"]["data"],
+        json!({"kind": "cannot_dismiss_inconsistency", "key": inconsistency})
+    );
+    let response = call(
+        "findings.dismiss",
+        json!({"key": key, "reason": "no_longer_relevant"}),
+    );
+    assert_eq!(
+        response["result"]["dismissals"][1],
+        json!({"key": key, "reason": "no_longer_relevant", "note": null}),
+        "{response}"
+    );
+    let response = call("findings.restore", json!({"key": unseen}));
+    assert_eq!(response["result"]["restored"], true, "{response}");
+    assert_eq!(
+        response["result"]["dismissals"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        call(
+            "findings.restore",
+            json!({"key": unseen, "reason": "acknowledged"})
+        )["error"]["code"],
+        -32602
+    );
+    // An uncertain publication carries the stored records, tagged for the
+    // client like every other outcome.
+    let failing = scratch.service().with_sync_directory(failed_sync);
+    let error = failing
+        .restore_finding(RestoreRequest { key: key.clone() })
+        .unwrap_err();
+    let AppError::PublicationUncertain { outcome, .. } = &error else {
+        panic!("expected an uncertain publication, got {error}")
+    };
+    assert_eq!(
+        **outcome,
+        Published::Dismissed(crate::service::DismissalList { dismissals: vec![] })
+    );
+    assert_eq!(
+        serde_json::to_value(outcome).unwrap(),
+        json!({"kind": "dismissed", "dismissals": []})
+    );
+    assert_eq!(run(&scratch.service(), None).dismissals, []);
+}
+
+// The DOT lines of the `split` subgraph one hop around B over every edge.
+fn around_b(scratch: &Scratch, format: RenderFormat) -> crate::render::Rendered {
+    let ids = split(scratch);
+    scratch
+        .service()
+        .render_view(ViewRenderRequest {
+            seeds: vec![Seed::Ids { ids: vec![ids[2]] }],
+            expand: vec![Expansion {
+                hops: NonZeroUsize::MIN,
+                direction: Direction::Both,
+                ty_names: None,
+                currentness: Currentness::All,
+            }],
+            edges: EdgeFilter {
+                ty_names: None,
+                currentness: Currentness::All,
+            },
+            as_of: None,
+            format,
+        })
+        .unwrap()
+}
+
+#[test]
+fn render_draws_only_the_queried_subgraph_as_dot() {
+    let scratch = Scratch::new();
+    let rendered = around_b(&scratch, RenderFormat::Dot);
+    let service = scratch.service();
+    let described = service.describe(NoParams {}).unwrap();
+    let ids = service
+        .list_entries(EntryListRequest {
+            currentness: Currentness::All,
+            ..Default::default()
+        })
+        .unwrap()
+        .entries
+        .iter()
+        .map(|record| record.entry.id())
+        .collect::<Vec<_>>();
+    // Each apply mints its own origin, so an href names the entry's own.
+    let href = |position: usize| format!("href=\"#inspect/{}/{position}\"", ids[position].origin());
+    assert_eq!(rendered.format, RenderFormat::Dot);
+    let lines = rendered.text.lines().collect::<Vec<_>>();
+    assert_eq!(lines[0], "digraph lifecore {");
+    assert_eq!(
+        lines[1],
+        format!("  label=\"{} boundary 8\";", described.database)
+    );
+    assert_eq!(lines.last(), Some(&"}"));
+    // Nodes in append order, the superseded root gray; then revision links,
+    // both ends present; then the edges, the historical one gray.
+    let expected = [
+        format!(
+            "  n1 [label=\"A\\n@1 Task\", id=\"n1\", {}, color=gray];",
+            href(1)
+        ),
+        format!("  n2 [label=\"B\\n@2 Task\", id=\"n2\", {}];", href(2)),
+        format!("  n4 [label=\"A2\\n@4 Task\", id=\"n4\", {}];", href(4)),
+        format!("  n5 [label=\"A3\\n@5 Task\", id=\"n5\", {}];", href(5)),
+        "  n1 -> n4 [label=\"revision\", style=dashed, color=blue];".into(),
+        "  n1 -> n5 [label=\"revision\", style=dashed, color=blue];".into(),
+        format!(
+            "  n1 -> n2 [label=\"@3 DependsOn\", id=\"e3\", {}, style=solid, color=gray];",
+            href(3)
+        ),
+        format!(
+            "  n4 -> n2 [label=\"@6 DependsOn\", id=\"e6\", {}, style=solid];",
+            href(6)
+        ),
+        format!(
+            "  n2 -> n5 [label=\"@7 DependsOn\", id=\"e7\", {}, style=solid];",
+            href(7)
+        ),
+    ];
+    assert_eq!(lines[2..lines.len() - 1], expected, "{}", rendered.text);
+    // Without the root in the result there is no revision link, and no edge
+    // leaves the result.
+    let revisions = render_dot(
+        &service,
+        vec![Seed::Ids {
+            ids: vec![ids[4], ids[5]],
+        }],
+        None,
+    );
+    let lines = revisions.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 5, "{revisions}");
+    assert!(lines[2].starts_with("  n4 [") && lines[3].starts_with("  n5 ["));
+    assert!(!revisions.contains("revision") && !revisions.contains(" -> "));
+    // `as_of` bounds the picture and its label.
+    let early = render_dot(&service, vec![Seed::Ids { ids: vec![ids[1]] }], Some(2));
+    assert!(early.contains("boundary 2\""), "{early}");
+    assert!(early.contains(&format!(
+        "  n1 [label=\"A\\n@1 Task\", id=\"n1\", {}];",
+        href(1)
+    )));
+    assert!(matches!(
+        service.render_view(ViewRenderRequest {
+            seeds: vec![Seed::Ids { ids: vec![ids[4]] }],
+            expand: vec![],
+            edges: EdgeFilter::default(),
+            as_of: Some(2),
+            format: RenderFormat::Dot,
+        }),
+        Err(AppError::EntryNotFound { .. })
+    ));
+    // Labels follow the client's row label: `name`, then the first text
+    // field, else the type and position; long text is cut at 60 characters,
+    // and DOT metacharacters are escaped.
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&[]).unwrap();
+    let long = "x".repeat(70);
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "memo", "kind": "node", "ty_name": "Type", "payload": {"name": "Memo"}},
+            {"name": "fields", "kind": "node", "ty_name": "Memo",
+                "payload": {"zeta": "z", "beta": "b", "title": "  ", "alpha": {"kind": "integer", "value": "1"}}},
+            {"name": "bare", "kind": "node", "ty_name": "Memo",
+                "payload": {"n": {"kind": "integer", "value": "1"}}},
+            {"name": "quoted", "kind": "node", "ty_name": "",
+                "payload": {"title": "Say \"hi\"\\\n\tnow"}},
+            {"name": "long", "kind": "node", "ty_name": "Memo", "payload": {"title": long}},
+        ]))))
+        .unwrap();
+    let ids = applied
+        .report
+        .operations
+        .iter()
+        .map(|operation| operation.entry)
+        .collect::<Vec<_>>();
+    let text = render_dot(&service, vec![Seed::Ids { ids }], None);
+    let labels = text
+        .lines()
+        .filter_map(|line| {
+            let start = line.find("[label=")? + "[label=".len();
+            let end = line.find(", id=")?;
+            Some(&line[start..end])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [
+            "\"Memo\\n@0 Type\"".to_string(),
+            "\"b\\n@1 Memo\"".into(),
+            "\"Memo @2\\n@2 Memo\"".into(),
+            "\"Say \\\"hi\\\"\\\\\\n\\tnow\\n@3 \"".into(),
+            format!("\"{}\u{2026}\\n@4 Memo\"", "x".repeat(59)),
+        ],
+        "{text}"
+    );
+    // Through RPC: the format is required and spelled in lowercase.
+    let call = |params: Value| {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "views.render", "params": params})
+            .to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    let response = call(json!({"seeds": [], "format": "dot"}));
+    assert_eq!(response["result"]["format"], "dot", "{response}");
+    assert!(
+        response["result"]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("digraph lifecore {\n")
+    );
+    for params in [
+        json!({"seeds": []}),
+        json!({"seeds": [], "format": "DOT"}),
+        json!({"seeds": [], "format": "png"}),
+        json!({"seeds": [], "format": null}),
+        json!({"seeds": [], "format": "dot", "as_of": 1}),
+    ] {
+        let response = call(params.clone());
+        assert_eq!(response["error"]["code"], -32602, "{params} {response}");
+    }
+    assert_eq!(
+        call(json!({"seeds": [], "format": "dot", "as_of": "9"}))["error"]["code"],
+        4002
+    );
+}
+
+// Graphviz is an external tool, so the SVG path runs only where `dot` is
+// installed; elsewhere the test notes that and returns.
+fn graphviz_installed() -> bool {
+    let installed = Command::new("dot")
+        .arg("-V")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !installed {
+        eprintln!("note: Graphviz `dot` is not installed; skipping the SVG render check");
+    }
+    installed
+}
+
+#[test]
+fn render_svg_runs_graphviz_with_clickable_identities() {
+    // A program that does not exist is unavailable, whatever the input.
+    let missing = render::graphviz("lifecore-no-such-graphviz", "digraph {}").unwrap_err();
+    assert!(
+        matches!(&missing, AppError::GraphvizUnavailable { .. }),
+        "{missing}"
+    );
+    assert_eq!(missing.to_object().code, 4004);
+    assert_eq!(
+        missing.to_object().data.unwrap()["kind"],
+        "graphviz_unavailable"
+    );
+    if !graphviz_installed() {
+        return;
+    }
+    let scratch = Scratch::new();
+    let rendered = around_b(&scratch, RenderFormat::Svg);
+    let service = scratch.service();
+    let a2 = service
+        .list_entries(EntryListRequest::default())
+        .unwrap()
+        .entries
+        .iter()
+        .map(|record| record.entry.id())
+        .find(|id| id.position() == 4)
+        .unwrap();
+    assert_eq!(rendered.format, RenderFormat::Svg);
+    assert!(rendered.text.contains("<svg"), "{}", rendered.text);
+    for id in ["n1", "n2", "n4", "n5", "e3", "e6", "e7"] {
+        assert!(rendered.text.contains(&format!("id=\"{id}\"")), "{id}");
+    }
+    assert!(!rendered.text.contains("id=\"n0\""));
+    assert!(
+        rendered
+            .text
+            .contains(&format!("href=\"#inspect/{}/4\"", a2.origin())),
+        "{}",
+        rendered.text
+    );
+    // A DOT syntax error is a failure that quotes Graphviz's own complaint.
+    let failed = render::graphviz("dot", "digraph {").unwrap_err();
+    let AppError::GraphvizFailed { message } = &failed else {
+        panic!("expected a Graphviz failure, got {failed}")
+    };
+    assert!(message.contains("exited with"), "{message}");
+    assert!(message.contains("stderr:"), "{message}");
+    assert_eq!(failed.to_object().code, 4005);
+    assert_eq!(
+        failed.to_object().data.unwrap(),
+        json!({"kind": "graphviz_failed", "message": message})
+    );
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "views.render",
+        "params": {"seeds": [], "format": "svg"}})
+    .to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    assert_eq!(response["result"]["format"], "svg", "{response}");
+    assert!(
+        response["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("</svg>")
+    );
 }

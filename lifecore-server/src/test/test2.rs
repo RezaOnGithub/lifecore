@@ -19,7 +19,7 @@ use lifecore::{
 use lifecore_app::{
     AppError, Service,
     rpc::{self, Method},
-    service::{ApplyResult, Published},
+    service::{ApplyResult, DismissalList, Published},
     storage::{DEFAULT_STATE_FILE, StatePath},
 };
 use lifecore_dag_check::DagCheckFactory;
@@ -1239,7 +1239,7 @@ fn task_declaration() -> Value {
 }
 
 // Every application error kind; the recorded fixtures must match it exactly.
-const ERROR_KINDS: [&str; 22] = [
+const ERROR_KINDS: [&str; 25] = [
     "state_path_empty",
     "working_directory",
     "directory_missing",
@@ -1259,6 +1259,9 @@ const ERROR_KINDS: [&str; 22] = [
     "analyzer_failure",
     "entry_not_found",
     "beyond_boundary",
+    "cannot_dismiss_inconsistency",
+    "graphviz_unavailable",
+    "graphviz_failed",
     "invalid_params",
     "backend_failure",
     "internal",
@@ -1287,6 +1290,9 @@ fn listed(error: &AppError) {
     | AppError::Analyzer(_)
     | AppError::EntryNotFound { .. }
     | AppError::BeyondBoundary { .. }
+    | AppError::CannotDismissInconsistency { .. }
+    | AppError::GraphvizUnavailable { .. }
+    | AppError::GraphvizFailed { .. }
     | AppError::InvalidParams { .. }
     | AppError::Backend { .. }
     | AppError::Internal { .. } => {}
@@ -1455,6 +1461,66 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
             ("asOfRequest", "asOfResponse", around_review),
         ],
     ));
+    // Only DOT is recorded: SVG needs Graphviz on the recording machine, and
+    // its text varies with the installed version.
+    let rendered = recorder.call(
+        "render",
+        "views.render",
+        json!({
+            "seeds": [{"kind": "ids", "ids": [report_id]}],
+            "expand": [{"direction": "incoming", "currentness": "all"}],
+            "edges": {"currentness": "all"},
+            "format": "dot",
+        }),
+    );
+    modules.push(method_module(
+        "views.render",
+        vec![("request", "response", rendered)],
+    ));
+
+    // The report has no `notes`, so TypeCheck warns about it at every prefix
+    // from its append, and the suite also suggests.
+    let analysis = recorder.call(
+        "analysis",
+        "analysis.run",
+        json!({"evaluation_time": EVALUATION_TIME}),
+    );
+    let analysis_as_of = recorder.call("analysis_as_of", "analysis.run", json!({"as_of": "2"}));
+    modules.push(method_module(
+        "analysis.run",
+        vec![
+            ("request", "response", analysis),
+            ("asOfRequest", "asOfResponse", analysis_as_of),
+        ],
+    ));
+    // The TypeCheck warning's complete key, raw, for the dismissal calls.
+    let warning_key = recorder.raw_result("analysis.run", json!({}))["analysis"]["observations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|observation| {
+            observation["key"]["kind"] == "warning"
+                && observation["key"]["analyzer"]["name"] == TypeCheckFactory::name()
+        })
+        .expect("the report task warns")["key"]
+        .clone();
+    let dismissed = recorder.call(
+        "dismiss",
+        "findings.dismiss",
+        json!({"key": warning_key, "reason": "false_positive", "note": "Notes come with the draft."}),
+    );
+    let dismissal_list: DismissalList =
+        serde_json::from_value(dismissed.1["result"].clone()).unwrap();
+    modules.push(method_module(
+        "findings.dismiss",
+        vec![("request", "response", dismissed)],
+    ));
+    let restored = recorder.call("restore", "findings.restore", json!({"key": warning_key}));
+    assert_eq!(restored.1["result"]["restored"], true, "{}", restored.1);
+    modules.push(method_module(
+        "findings.restore",
+        vec![("request", "response", restored)],
+    ));
 
     let plan = recorder.raw_result("plan_id.mint", json!({}))["plan_id"].clone();
     let accepted = recorder.call(
@@ -1543,13 +1609,23 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         Method::ALL.iter().map(|m| m.name().to_string()).collect()
     );
     modules.push(index_module());
-    modules.push(application_errors(&mut recorder, scratch, applied));
+    modules.push(application_errors(
+        &mut recorder,
+        scratch,
+        applied,
+        dismissal_list,
+    ));
     modules.push(protocol_errors(&mut recorder));
     modules.push(http_rejections(scratch, &mut recorder.normalizer).await);
     modules
 }
 
-fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: ApplyResult) -> Module {
+fn application_errors(
+    recorder: &mut Recorder,
+    scratch: &Scratch,
+    applied: ApplyResult,
+    dismissed: DismissalList,
+) -> Module {
     let mut samples: Vec<Value> = vec![];
     let call = |recorder: &mut Recorder, method: &str, params: Value| {
         let response = recorder.raw(&call_text("call", method, params).to_string());
@@ -1637,6 +1713,14 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         "analyzers.add",
         json!({"name": Scripted::Panicking.name()}),
     ));
+    samples.push(call(
+        recorder,
+        "findings.dismiss",
+        json!({"key": {"database": Uuid::nil(),
+            "analyzer": {"name": TypeCheckFactory::name(), "version": "0.1.0", "configuration": "{}"},
+            "kind": "inconsistency", "analyzer_certificate": "{\"UnknownType\":{\"subject\":{\"origin\":\"00000000-0000-0000-0000-000000000000\",\"position\":\"3\"},\"ty_name\":\"Undeclared\"}}"},
+            "reason": "acknowledged"}),
+    ));
     {
         let lock = hold_writer_lock(&scratch.state());
         let quick = service(scratch.state()).with_busy_retry(Duration::ZERO);
@@ -1697,6 +1781,16 @@ fn application_errors(recorder: &mut Recorder, scratch: &Scratch, applied: Apply
         AppError::PublicationUncertain {
             message: "Input/output error (os error 5)".into(),
             outcome: Box::new(Published::Applied(applied)),
+        },
+        AppError::PublicationUncertain {
+            message: "Input/output error (os error 5)".into(),
+            outcome: Box::new(Published::Dismissed(dismissed)),
+        },
+        AppError::GraphvizUnavailable {
+            message: "No such file or directory (os error 2)".into(),
+        },
+        AppError::GraphvizFailed {
+            message: "dot exited with exit status: 1; stderr: Error: <stdin>: syntax error in line 1 near 'x'".into(),
         },
         AppError::Internal {
             message: "the result could not be serialized".into(),

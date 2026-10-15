@@ -192,12 +192,16 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | `entries.inspect` | `id`, optional `as_of` | tagged by `kind`: a node with its `type` resolution, its `lineage` (the whole revision tree, root first) and its incident `edges` of any currentness (each with `direction` and the `other` endpoint); or an edge with `from` and `to` |
 | `types.list` | optional `as_of` | `view` and `types`: one summary per name the view knows, sorted by name, with its `resolution` (`builtin`, `declared` with the structured schema, `missing`, `ambiguous`, `malformed`) and node counts by currentness |
 | `views.query` | `seeds` (exact node `ids`, or a node selection), ordered `expand` steps (`hops`, `direction`, `ty_names`, `currentness`), an `edges` filter, optional `as_of` | `view`, `nodes` with their `provenance` (`seed`, or `reached` at a hop over an edge from a node), and the matching `edges` among them |
+| `views.render` | the `views.query` parameters and `format` (`dot`/`svg`) | `format` and `text`: the queried subgraph as DOT (`digraph lifecore`, labeled with the database and boundary; nodes `n<position>` with the row label, `@position`, and type, superseded ones gray; dashed blue `revision` links only between result nodes; edges labeled `@position <ty_name>`, historical ones gray; every node and edge has `id` and an `href` of `#inspect/<origin>/<position>`), or that DOT rendered by Graphviz's `dot -Tsvg`, run synchronously with a 10 s deadline and a 16 MiB output cap |
 | `plan_id.mint` | none | `plan_id` |
 | `proposal.check` | `proposal`, evaluation inputs | `accepted` and `report`: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |
 | `proposal.apply` | `proposal`, evaluation inputs | new `graph_revision` and the report with actual entry IDs |
 | `proposal.decode` | raw `text`, `format` (`json`/`toml`) | canonical `Proposal` |
 | `proposal.encode` | `proposal`, `format` | `text` |
 | `analyzers.add` | `name`, `configuration` (default `{}`), evaluation inputs | new `graph_revision`, `suite`, and the report |
+| `analysis.run` | optional `as_of`, evaluation inputs | `analysis`: the selected prefix replayed with fresh analyzers under the stored ordered suite, which history does not version ([section 4](#4-database-selection-and-concurrency)); `dismissals`: the stored records (`key`, `reason`, `note`) of the same snapshot read, which the analysis never applies ([section 6](#6-analysis-lifetime-and-dismissal-persistence)) |
+| `findings.dismiss` | `key` (complete finding key), `reason` (`acknowledged`, `false_positive`, `no_longer_relevant`), optional `note` | `dismissals`: every stored record after the edit; an existing record of the key is updated in place |
+| `findings.restore` | `key` | `dismissals` after the edit and `restored`: whether a record of the key existed |
 
 Read methods take an optional `as_of`, a decimal position: they answer from
 the prefix `[0, as_of)`, whose boundary the result's `view` names, and default
@@ -236,6 +240,9 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
 | 4001 | `entry_not_found` | The identity is not present in the selected view. |
 | 4002 | `beyond_boundary` | `as_of` exceeds the visible end; `data` carries `requested` and `visible` as decimal strings. |
+| 4003 | `cannot_dismiss_inconsistency` | `findings.dismiss` named an inconsistency key, emitted or not; `data.key` is that key. Nothing is stored. |
+| 4004 | `graphviz_unavailable` | `views.render` with `format: "svg"` could not start the `dot` program; `data.message` is the operating system's text. |
+| 4005 | `graphviz_failed` | `dot` started but exceeded the deadline, exited unsuccessfully, or produced invalid UTF-8 or more than the output cap; `data.message` includes its stderr. |
 | 5001 | `backend_failure` | The host task running the call ended without a response, for example by panicking. A write it was making may or may not have been published; inspect the stored state. Never a rollback. |
 
 Invalid parameters (`-32602`, `invalid_params`) and internal errors (`-32603`,
@@ -523,6 +530,9 @@ Persist dismissal keys, reasons, and notes in the snapshot independently of
 outputs. They survive restart and absent current emission; a later observation
 with the same complete key is still dismissed. Apply dismissals when presenting
 a result, not as part of analysis-cache identity or transaction acceptance.
+`findings.dismiss` and `findings.restore` make these edits under writer
+exclusion and publish them without rotating the graph revision
+([section 4](#4-database-selection-and-concurrency)).
 Persistent analysis archives are backlogged.
 
 An exported suggestion names its complete finding key, and apply verifies it by

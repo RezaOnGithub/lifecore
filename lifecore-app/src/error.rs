@@ -2,7 +2,7 @@ use crate::{
     proposal::{DecodeError, ProposalLocation},
     service::{ProposalReport, Published},
 };
-use lifecore::{EntryId, LifeCoreError};
+use lifecore::{EntryId, LifeCoreError, analysis::FindingKey};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -62,6 +62,14 @@ pub enum AppError {
     EntryNotFound { id: EntryId },
     #[error("the boundary {requested} is past the visible end {visible}")]
     BeyondBoundary { requested: usize, visible: usize },
+    // Boxed like every other large payload, so `Result<_, AppError>` stays small.
+    #[error("inconsistencies cannot be dismissed")]
+    CannotDismissInconsistency { key: Box<FindingKey> },
+    // The `dot` program could not be started at all; `message` is the OS text.
+    #[error("Graphviz is not available: {message}")]
+    GraphvizUnavailable { message: String },
+    #[error("Graphviz failed: {message}")]
+    GraphvizFailed { message: String },
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
     // Raised by a host, not the service: the task running a call ended
@@ -108,6 +116,9 @@ impl AppError {
         Self::Analyzer(_) => "analyzer_failure",
         Self::EntryNotFound { .. } => "entry_not_found",
         Self::BeyondBoundary { .. } => "beyond_boundary",
+        Self::CannotDismissInconsistency { .. } => "cannot_dismiss_inconsistency",
+        Self::GraphvizUnavailable { .. } => "graphviz_unavailable",
+        Self::GraphvizFailed { .. } => "graphviz_failed",
         Self::InvalidParams { .. } => "invalid_params",
         Self::Backend { .. } => "backend_failure",
         Self::Internal { .. } => "internal",
@@ -137,6 +148,9 @@ impl AppError {
         Self::Analyzer(_) => 3001,
         Self::EntryNotFound { .. } => 4001,
         Self::BeyondBoundary { .. } => 4002,
+        Self::CannotDismissInconsistency { .. } => 4003,
+        Self::GraphvizUnavailable { .. } => 4004,
+        Self::GraphvizFailed { .. } => 4005,
         Self::Backend { .. } => 5001,
         }
     }
@@ -168,6 +182,10 @@ impl AppError {
         // Positions are decimal strings on the wire, like every boundary.
         Self::BeyondBoundary { requested, visible } => {
             json!({ "requested": requested.to_string(), "visible": visible.to_string() })
+        }
+        Self::CannotDismissInconsistency { key } => json!({ "key": key }),
+        Self::GraphvizUnavailable { message } | Self::GraphvizFailed { message } => {
+            json!({ "message": message })
         }
         _ => json!({}),
         }
