@@ -70,7 +70,7 @@ export const response = {
                 "position": "1"
               },
               "kind": "warning",
-              "message": "Field [Field(\"notes\")]: MissingEncouraged",
+              "message": "encouraged field notes is missing",
               "sticky": false,
               "subjects": [
                 {

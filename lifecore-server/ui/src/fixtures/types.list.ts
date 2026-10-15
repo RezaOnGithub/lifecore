@@ -296,7 +296,7 @@ export const unresolvedResponse = {
             "position": "2"
           },
           "kind": "malformed",
-          "message": "invalid schema at [Field(\"fields\")]: WrongShape { expected: Record, actual: Text }"
+          "message": "invalid schema at fields: should be record, found text"
         }
       },
       {

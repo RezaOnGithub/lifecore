@@ -436,7 +436,7 @@ export const application = {
                         "position": "1"
                       },
                       "kind": "warning",
-                      "message": "Field [Field(\"notes\")]: MissingEncouraged",
+                      "message": "encouraged field notes is missing",
                       "sticky": false,
                       "subjects": [
                         {
@@ -782,7 +782,7 @@ export const application = {
                       "position": "1"
                     },
                     "kind": "warning",
-                    "message": "Field [Field(\"notes\")]: MissingEncouraged",
+                    "message": "encouraged field notes is missing",
                     "sticky": false,
                     "subjects": [
                       {
@@ -828,7 +828,7 @@ export const application = {
                       "position": "6"
                     },
                     "kind": "inconsistency",
-                    "message": "Type \"Undeclared\" is not declared in this view",
+                    "message": "type \"Undeclared\" is not declared in this view",
                     "sticky": false,
                     "subjects": [
                       {

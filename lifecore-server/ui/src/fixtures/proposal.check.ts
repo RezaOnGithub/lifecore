@@ -131,7 +131,7 @@ export const response = {
                 "position": "1"
               },
               "kind": "warning",
-              "message": "Field [Field(\"notes\")]: MissingEncouraged",
+              "message": "encouraged field notes is missing",
               "sticky": false,
               "subjects": [
                 {
@@ -657,7 +657,7 @@ export const rejectedResponse = {
                 "position": "1"
               },
               "kind": "warning",
-              "message": "Field [Field(\"notes\")]: MissingEncouraged",
+              "message": "encouraged field notes is missing",
               "sticky": false,
               "subjects": [
                 {
@@ -703,7 +703,7 @@ export const rejectedResponse = {
                 "position": "6"
               },
               "kind": "inconsistency",
-              "message": "Type \"Undeclared\" is not declared in this view",
+              "message": "type \"Undeclared\" is not declared in this view",
               "sticky": false,
               "subjects": [
                 {

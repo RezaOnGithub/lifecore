@@ -8,7 +8,7 @@ use crate::{
     },
     typing::{
         FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaError, SchemaErrorKind, Type,
-        TypeDefinition, ValueType,
+        TypeDefinition, ValueType, kind_word, path_text,
     },
 };
 use std::{
@@ -705,6 +705,111 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
             SchemaError { path, kind }
         );
     }
+}
+
+#[test]
+fn schema_errors_name_the_path_and_the_problem_in_words() {
+    use PathPart::{Field, Index};
+    let field = |name: &str| Field(name.into());
+    assert_eq!(path_text(&[]), "");
+    assert_eq!(
+        path_text(&[field("details"), field("owner")]),
+        "details.owner"
+    );
+    assert_eq!(path_text(&[field("tags"), Index(1)]), "tags[1]");
+    assert_eq!(path_text(&[Index(0), field("_x-1")]), "[0]._x-1");
+    // Names outside the identifier grammar are quoted.
+    assert_eq!(
+        path_text(&[field("due date"), field("a.b"), field("1a"), field("")]),
+        r#""due date"."a.b"."1a"."""#
+    );
+    let declared = |field: &str, declaration: Payload| {
+        let body = Body::from([
+            ("name".into(), "T".into()),
+            (
+                "fields".into(),
+                Payload::Record(Body::from([(field.into(), declaration)])),
+            ),
+        ]);
+        Type::from_body(&body).unwrap_err().to_string()
+    };
+    assert_eq!(
+        declared("title", words(&["optional", "txt"], None)),
+        r#"invalid schema at fields.title[1]: unknown shape word "txt""#
+    );
+    assert_eq!(
+        declared("due date", words(&["sometimes", "text"], None)),
+        r#"invalid schema at fields."due date"[0]: unknown presence word "sometimes""#
+    );
+    assert_eq!(
+        declared("a", "text".into()),
+        "invalid schema at fields.a: should be list, found text"
+    );
+    assert_eq!(
+        declared("a", words(&[], None)),
+        "invalid schema at fields.a[0]: missing presence word"
+    );
+    assert_eq!(
+        declared("a", words(&["optional", "list"], None)),
+        "invalid schema at fields.a[2]: missing shape word"
+    );
+    assert_eq!(
+        declared("a", words(&["optional", "record"], None)),
+        r#"invalid schema at fields.a[2]: missing field declarations after "record""#
+    );
+    assert_eq!(
+        declared("a", words(&["optional", "text", "text"], None)),
+        "invalid schema at fields.a[2]: unexpected words after the shape"
+    );
+    assert_eq!(
+        declared(
+            "a",
+            words(
+                &["optional", "list", "record"],
+                Some(Body::from([(
+                    "b".into(),
+                    words(&["optional", "txt"], None)
+                )])),
+            ),
+        ),
+        r#"invalid schema at fields.a[3].b[1]: unknown shape word "txt""#
+    );
+    let mut deep = vec!["optional"];
+    deep.extend(std::iter::repeat_n("list", 65));
+    deep.push("text");
+    assert_eq!(
+        declared("a", words(&deep, None)),
+        "invalid schema at fields.a[65]: shape nested more than 64 levels deep"
+    );
+    let error = |body: Body| Type::from_body(&body).unwrap_err().to_string();
+    assert_eq!(
+        error(Body::new()),
+        "invalid schema at name: field is missing"
+    );
+    assert_eq!(
+        error(Body::from([("name".into(), 1.into())])),
+        "invalid schema at name: should be text, found integer"
+    );
+    assert_eq!(
+        error(Body::from([
+            ("name".into(), "T".into()),
+            ("colour".into(), "red".into()),
+        ])),
+        "invalid schema at colour: unknown field"
+    );
+    assert_eq!(
+        error(Body::from([
+            ("name".into(), "T".into()),
+            ("successors".into(), words(&["A", "B", "A"], None)),
+        ])),
+        r#"invalid schema at successors[2]: duplicate permission "A""#
+    );
+    let rootless = SchemaError {
+        path: vec![],
+        kind: SchemaErrorKind::UnknownField,
+    };
+    assert_eq!(rootless.to_string(), "invalid schema: unknown field");
+    assert_eq!(kind_word(PayloadKind::Timestamp), "timestamp");
 }
 
 #[test]

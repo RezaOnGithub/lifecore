@@ -4,7 +4,10 @@ use lifecore::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, Diagnostic, EvaluationInputs,
         InnerMessageType, Message, MessageKind, MessageType, TypedAnalyzer,
     },
-    typing::{FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition},
+    typing::{
+        FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition, kind_word,
+        path_text,
+    },
 };
 use semver::Version;
 use serde::Serialize;
@@ -78,34 +81,52 @@ impl TypeCheckMessage {
         | Self::BadSuccessor { subject, .. } => *subject,
         }
     }
+    // Presentation only: the certificate, not this text, identifies a finding,
+    // and the text names no boundary so re-emissions merge.
     fn description(&self) -> String {
         match self {
         Self::MalformedDeclaration { error, .. } => error.to_string(),
         Self::ReservedTypeName { .. } => {
-            "Type is a fixed built-in metatype and cannot be declared".into()
+            format!(
+                "the name {:?} is reserved for the built-in metatype",
+                Type::TYPE_NAME
+            )
         }
         Self::DuplicateType { name, .. } => {
-            format!("More than one active declaration names {name:?}")
+            format!("more than one active declaration names {name:?}")
         }
-        Self::MissingType { name, .. } => format!("Type {name:?} is not declared in this view"),
+        Self::MissingType { name, .. } => format!("type {name:?} is not declared in this view"),
         Self::UnknownSuccessorType { name, .. } => {
-            format!("Permitted successor type {name:?} is not declared")
+            format!("permitted successor type {name:?} is not declared")
         }
-        Self::Field { issue, .. } => format!("Field {:?}: {:?}", issue.path, issue.kind),
+        Self::Field { issue, .. } => {
+            let path = path_text(&issue.path);
+            match &issue.kind {
+            FieldIssueKind::MissingMandatory => format!("mandatory field {path} is missing"),
+            FieldIssueKind::MissingEncouraged => format!("encouraged field {path} is missing"),
+            FieldIssueKind::Deprecated => format!("deprecated field {path} is present"),
+            FieldIssueKind::UnexpectedField => format!("field {path} is not declared"),
+            FieldIssueKind::TypeMismatch { expected, actual } => format!(
+                "field {path} should be {}, found {}",
+                kind_word(*expected),
+                kind_word(*actual)
+            ),
+            }
+        }
         Self::BadEdgeEndpoint {
             edge_type,
             node_type,
             outgoing,
             ..
         } => format!(
-            "Type {node_type:?} does not permit {} edge {edge_type:?}",
+            "type {node_type:?} does not permit {} edge {edge_type:?}",
             if *outgoing { "outgoing" } else { "incoming" }
         ),
         Self::BadSuccessor {
             parent_type,
             child_type,
             ..
-        } => format!("Type {parent_type:?} does not permit successor {child_type:?}"),
+        } => format!("type {parent_type:?} does not permit successor {child_type:?}"),
         }
     }
 }

@@ -1,6 +1,9 @@
 use crate::{Body, EntryId, Payload, PayloadKind, View};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FieldStatus {
@@ -60,7 +63,6 @@ pub struct FieldIssue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, thiserror::Error)]
-#[error("invalid schema at {path:?}: {kind:?}")]
 pub struct SchemaError {
     pub path: Vec<PathPart>,
     pub kind: SchemaErrorKind,
@@ -82,6 +84,80 @@ pub enum SchemaErrorKind {
     TrailingElements,
     TooDeep,
     DuplicatePermission(String),
+}
+
+// A payload path as messages write it: `email`, `details.owner`, `tags[1]`.
+// A field name outside the identifier grammar is quoted, so a dot, bracket, or
+// space inside a name cannot be read as structure.
+pub fn path_text(path: &[PathPart]) -> String {
+    let mut text = String::new();
+    for part in path {
+        match part {
+        PathPart::Field(name) => {
+            if !text.is_empty() {
+                text.push('.');
+            }
+            let mut chars = name.chars();
+            let plain = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            if plain {
+                text.push_str(name);
+            } else {
+                text.push_str(&format!("{name:?}"));
+            }
+        }
+        PathPart::Index(index) => text.push_str(&format!("[{index}]")),
+        }
+    }
+    text
+}
+
+// The declaration word of a payload kind, as in "should be integer, found text".
+pub fn kind_word(kind: PayloadKind) -> &'static str {
+    match kind {
+    PayloadKind::Text => "text",
+    PayloadKind::Integer => "integer",
+    PayloadKind::Boolean => "boolean",
+    PayloadKind::Timestamp => "timestamp",
+    PayloadKind::List => "list",
+    PayloadKind::Record => "record",
+    }
+}
+
+impl fmt::Display for SchemaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.path.is_empty() {
+            f.write_str("invalid schema: ")?;
+        } else {
+            write!(f, "invalid schema at {}: ", path_text(&self.path))?;
+        }
+        match &self.kind {
+        SchemaErrorKind::MissingField => f.write_str("field is missing"),
+        SchemaErrorKind::UnknownField => f.write_str("unknown field"),
+        SchemaErrorKind::WrongShape { expected, actual } => write!(
+            f,
+            "should be {}, found {}",
+            kind_word(*expected),
+            kind_word(*actual)
+        ),
+        SchemaErrorKind::MissingPresence => f.write_str("missing presence word"),
+        SchemaErrorKind::UnknownPresence(word) => write!(f, "unknown presence word {word:?}"),
+        SchemaErrorKind::MissingShape => f.write_str("missing shape word"),
+        SchemaErrorKind::UnknownShape(word) => write!(f, "unknown shape word {word:?}"),
+        SchemaErrorKind::MissingRecordFields => {
+            f.write_str("missing field declarations after \"record\"")
+        }
+        SchemaErrorKind::TrailingElements => f.write_str("unexpected words after the shape"),
+        SchemaErrorKind::TooDeep => {
+            write!(f, "shape nested more than {MAX_SHAPE_DEPTH} levels deep")
+        }
+        SchemaErrorKind::DuplicatePermission(name) => {
+            write!(f, "duplicate permission {name:?}")
+        }
+        }
+    }
 }
 
 impl SchemaError {

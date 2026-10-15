@@ -1446,3 +1446,90 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
         assert!(assert_replay_matches_all_children(graph) > 0);
     }
 }
+
+#[test]
+fn messages_name_the_field_path_and_the_issue_in_words() {
+    use FieldIssueKind::*;
+    use PathPart::{Field as F, Index};
+    let mut graph = LifeCoreList::default();
+    let subject = append(&mut graph, &[node("A", Body::new(), None)])[0];
+    let message = |finding: TypeCheckMessage| {
+        TypeCheck::default()
+            .convert_message(finding)
+            .diagnostic
+            .message
+    };
+    let field = |path: Vec<PathPart>, kind| {
+        message(TypeCheckMessage::Field {
+            subject,
+            issue: lifecore::typing::FieldIssue { path, kind },
+        })
+    };
+    let email = || vec![F("email".into())];
+    assert_eq!(
+        field(email(), MissingMandatory),
+        "mandatory field email is missing"
+    );
+    assert_eq!(
+        field(email(), MissingEncouraged),
+        "encouraged field email is missing"
+    );
+    assert_eq!(
+        field(email(), Deprecated),
+        "deprecated field email is present"
+    );
+    assert_eq!(
+        field(email(), UnexpectedField),
+        "field email is not declared"
+    );
+    assert_eq!(
+        field(
+            vec![F("priority".into())],
+            TypeMismatch {
+                expected: PayloadKind::Integer,
+                actual: PayloadKind::Text,
+            }
+        ),
+        "field priority should be integer, found text"
+    );
+    assert_eq!(
+        field(
+            vec![F("details".into()), F("owner".into())],
+            MissingMandatory
+        ),
+        "mandatory field details.owner is missing"
+    );
+    assert_eq!(
+        field(
+            vec![F("tags".into()), Index(1)],
+            TypeMismatch {
+                expected: PayloadKind::Text,
+                actual: PayloadKind::Integer,
+            }
+        ),
+        "field tags[1] should be text, found integer"
+    );
+    assert_eq!(
+        message(TypeCheckMessage::MalformedDeclaration {
+            subject,
+            error: SchemaError {
+                path: vec![F("fields".into()), F("title".into()), Index(1)],
+                kind: SchemaErrorKind::UnknownShape("txt".into()),
+            },
+        }),
+        r#"invalid schema at fields.title[1]: unknown shape word "txt""#
+    );
+    assert_eq!(
+        message(TypeCheckMessage::BadEdgeEndpoint {
+            subject,
+            edge_type: "PartOf".into(),
+            node_type: "Task".into(),
+            outgoing: true,
+        }),
+        r#"type "Task" does not permit outgoing edge "PartOf""#
+    );
+    assert_eq!(
+        message(TypeCheckMessage::ReservedTypeName { subject }),
+        r#"the name "Type" is reserved for the built-in metatype"#
+    );
+}
