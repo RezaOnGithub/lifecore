@@ -53,7 +53,7 @@ preserve this dependency direction.
 | Command | Responsibility |
 | --- | --- |
 | `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out. This operation is outside RPC. |
-| `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database. `--ui-dir <dir>` serves the client from disk instead ([section 5.1](#51-frontend-build-and-tests)). |
+| `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database, which must already be readable; otherwise print the error object and exit nonzero. Print the client URL as the only line on stdout ([section 3.2](#32-server-access)). `--port <port>` selects the loopback port, default 0 for one the system chooses. `--ui-dir <dir>` serves the client from disk instead ([section 5.1](#51-frontend-build-and-tests)). |
 | `lifecore rpc` | Read one request line from stdin, execute it locally, print one response line, exit. |
 | `lifecore check FILE` | Decode a JSON/TOML proposal and call shared proposal checking. |
 | `lifecore apply FILE` | Decode a JSON/TOML proposal and call shared checked application. |
@@ -126,7 +126,9 @@ envelope and standard protocol-error vocabulary.
 
 `POST /rpc` accepts one request object in its body. HTTP framing permits formatted
 JSON; CLI framing requires one physical line. Both share validation, dispatch,
-result serialization, and stable application-error details. A JSON-RPC ID
+result serialization, and stable application-error details. Every JSON-RPC
+response, success or error, travels with HTTP status 200; only the access
+rejections of [section 3.2](#32-server-access) use HTTP errors. A JSON-RPC ID
 correlates a call; it is distinct from a proposal's `plan_id` and from a receipt.
 
 The initial method families cover database description, entry selection and
@@ -189,8 +191,10 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | `proposal.encode` | `proposal`, `format` | `text` |
 | `analyzers.add` | `name`, `configuration` (default `{}`), evaluation inputs | new `graph_revision`, `suite`, and the report |
 
-Each entry record carries `kind`, exact `id`, `type`, `current`, and either
-`predecessor` (when present) and `payload`, or `from` and `to`.
+Each entry record is the stored entry, in the vocabulary of
+[FILES §2.5](FILES.md#25-entry-shaped-types), with `current` beside its members:
+`kind`, exact `id`, `type`, `current`, and either `predecessor` (when present)
+and `payload`, or `from` and `to`.
 
 List and query results are complete. The prototype applies no result limits or
 paging; they are [backlogged](PLAN.md#other-deferred-work).
@@ -220,14 +224,22 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 2006 | `rejected` | Inconsistencies; `data.report` has the complete report. For `init`, whose base was never published, the report omits `base_revision`. |
 | 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
 | 4001 | `entry_not_found` | The identity is not present in the selected view. |
+| 5001 | `backend_failure` | The host task running the call ended without a response, for example by panicking. A write it was making may or may not have been published; inspect the stored state. Never a rollback. |
+
+Invalid parameters (`-32602`, `invalid_params`) and internal errors (`-32603`,
+`internal`) also carry a `data.kind`; envelope errors (`-32700`, `-32600`,
+`-32601`) carry no `data`.
 
 ### 3.2 Server access
 
-`lifecore serve` listens on the loopback interface only. At each start it
-generates a random launch token of at least 128 bits and prints the client URL
-with the token in the URL fragment, for example
+`lifecore serve` listens on the loopback interface only, on `127.0.0.1` and the
+port of `--port`, or one the system chooses. At each start it generates a
+random launch token of 256 bits from the operating system's CSPRNG, as 64
+lowercase hexadecimal digits, and prints the client URL with the token in the
+URL fragment as the only line on standard output, for example
 `http://127.0.0.1:<port>/#token=<token>`. A browser never sends the fragment to
-the server, so the token stays out of request lines and access logs.
+the server, so the token stays out of request lines and access logs; nothing
+else prints or logs it.
 
 The client reads the token from the fragment, keeps it in session storage,
 removes it from the address bar, and sends it on every `POST /rpc` as
@@ -240,9 +252,36 @@ constant time, or whose `/rpc` call does not declare a JSON content type. The
 content-type requirement each defeat cross-site requests on their own: a form
 post cannot set a JSON content type, and a cross-origin fetch that sets it or
 the custom header forces a CORS preflight that the adapter never approves. Static assets carry no secrets and
-need no token. A restart issues a new token, so open pages must be reopened
-from the newly printed URL. The one-shot CLI `rpc` runs as the local user on
-the selected file and uses none of this.
+need no token, but pass the `Host` and `Origin` checks. A restart issues a new
+token, so open pages must be reopened from the newly printed URL. The one-shot
+CLI `rpc` runs as the local user on the selected file and uses none of this.
+
+The served origin is `http://` followed by the request's own accepted `Host`.
+The checks run in this order, each answering with the HTTP status shown and a
+JSON body `{"kind": ..., "message": ...}`; the body of a `/rpc` call is not read
+before they pass:
+
+| Status | `kind` | Rejected request |
+| --- | --- | --- |
+| 421 | `host` | `Host` is missing, repeated, or neither accepted authority, or an absolute request target names another. |
+| 403 | `origin` | `Origin` is present but not the served origin, including `null`. |
+| 401 | `token` | `/rpc` without exactly one `Authorization: Bearer <token>` (scheme case-insensitive) naming the launch token. Also sends `WWW-Authenticate: Bearer`. |
+| 415 | `content_type` | `/rpc` whose `Content-Type` essence is not `application/json`; parameters such as `charset` are ignored. |
+| 413 | `body` | `/rpc` whose body exceeds 64 MiB or cannot be read. |
+
+Assets and RPC answers are sent with `Cache-Control: no-store`; assets also
+carry a content security policy that loads scripts only from the served origin.
+
+The adapter runs each call on a blocking task as described in
+[section 1](#1-shared-synchronous-application). A client that disconnects does
+not cancel its task: the call runs to completion, its outcome stands, and the
+adapter only notes the disconnection on stderr. The first SIGINT or SIGTERM
+starts an orderly shutdown: the server stops accepting connections, lets every
+running call finish and answer its client if still connected, and then exits;
+a second signal exits at once, which atomic publication makes safe for the
+stored snapshot. A call whose task panics answers `backend_failure` with its
+request ID in builds that unwind; this workspace's dev profile aborts on panic
+instead.
 
 ## 4. Database selection and concurrency
 
@@ -321,10 +360,18 @@ Write the TypeScript definitions of the shared contract by hand in
 `ui/src/contract.ts`. The contract is small, its methods are reshaped by the
 stages, and the types that matter most have hand-written `Serialize`
 implementations that a generator could not follow. Guard it with fixtures: a
-Rust test serializes representative values of every request, result, error,
-and proposal shape into committed JSON files under `ui/src/fixtures/`, and the
-frontend type-check asserts that each fixture satisfies its declared type, so a
-changed Rust shape fails `tsc`. Canonical integer payloads are
+Rust test in `lifecore-server` records representative requests and responses of
+every method, every application error kind, the envelope errors, and every HTTP
+rejection, mostly from real calls through the server's own request path, and
+commits them under `ui/src/fixtures/`. Each fixture is a TypeScript module that
+exports the Rust-serialized JSON value followed by `satisfies` its declared
+type, so the frontend type-check rejects a changed Rust shape: a missing or
+renamed member, a member the contract does not declare, or a wrong tag.
+Imported `.json` files would not do, because `tsc` widens their string literals
+and skips excess-member checks. A generated `index.ts` maps every method to its
+fixture, so a method the contract declares without a fixture, or the reverse,
+also fails `tsc`. Random UUIDs and scratch paths are replaced by stable
+stand-ins, so an unchanged shape rewrites nothing. Canonical integer payloads are
 `{"kind":"integer","value":"9223372036854775807"}`-shaped objects. Keep the decimal
 strings in model state, including inside lists/records, and use `bigint` only
 when arithmetic is needed; serialize back to strings. Known large control
@@ -373,27 +420,35 @@ add libraries only when a stage needs them.
 
 `lifecore-server`'s `build.rs` bundles `ui/src/main.tsx` with the installed
 esbuild into a fixed-name `app.js` in `OUT_DIR` and copies the handwritten
-`ui/index.html` beside it; the server embeds both. It declares
-`rerun-if-changed` for `ui/src`, `ui/index.html`, and `ui/package-lock.json`. It
+`ui/index.html` beside it; the server embeds both. Both steps live in
+`ui/build.mjs`, which `build.rs` runs with `node` and the npm `build` and
+`watch` scripts run for `ui/dist`, so every bundle uses the same options.
+`build.rs` declares `rerun-if-changed` for `ui/src`, `ui/index.html`,
+`ui/package-lock.json`, and the inputs that shape the bundle besides them
+(`ui/package.json`, `ui/build.mjs`, `ui/tsconfig.json`), and
+`rerun-if-env-changed` for `LIFECORE_UI`. It
 never installs packages: when `ui/node_modules` is missing, it fails with an
 instruction to run `npm ci` in `lifecore-server/ui`. Setting `LIFECORE_UI=skip`
 embeds a placeholder page instead, for builds that do not touch the client, such
 as agents and CI running `cargo test --workspace` without Node.
 Type-checking, linting, and tests are separate checks, not part of the build.
 
-For quick iteration, `serve --ui-dir <dir>` serves the client from disk while
-`esbuild --watch` rebuilds it; a browser refresh
-picks up changes, and the launch token survives in session storage.
+For quick iteration, `serve --ui-dir <dir>` serves `index.html` and `app.js`
+from `<dir>`, reading them on every request, while `npm run watch` rebuilds
+them into `ui/dist`; a browser refresh picks up changes, and the launch token
+survives in session storage.
 
 The fixture test writes `ui/src/fixtures/` when Rust tests run, which is after
 `build.rs` has bundled, and fails when the committed copies are stale, so the
-build only reads committed files.
+build only reads committed files. It rewrites only stale files, so an
+unchanged run leaves `ui/src` untouched and does not trigger a rebundle.
 
 Browser tests run in Firefox, the priority for compatibility; other browsers are
-[backlogged](PLAN.md#other-deferred-work). A global setup builds a scratch
-database, starts the built `lifecore serve`, reads the printed URL with its
-launch token from standard output, and opens it, so tests exercise the real
-access flow.
+[backlogged](PLAN.md#other-deferred-work). A global setup builds `lifecore`
+with Cargo, unless `LIFECORE_BIN` names a binary, initializes a scratch
+database through `LIFECORE_STATE_FILE_PATH`, starts `lifecore serve`, reads the
+printed URL with its launch token from standard output, and opens it, so tests
+exercise the real access flow and the embedded client.
 
 ## 6. Analysis lifetime and dismissal persistence
 

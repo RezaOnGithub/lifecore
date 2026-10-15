@@ -1,9 +1,11 @@
 # UI discussion handoff
 
 Status: notes from design discussions, not a contract. Source: Claude Code
-session `e7342e3d-577b-40d7-9314-24cb169aadd2`, 2026-09-28 to 2026-09-30. No
-frontend code exists yet. The backend's first slice (PLAN §4.0–4.1) and the
-accepted checking-cost fixes (PLAN §5) are merged at `b20673d`.
+session `e7342e3d-577b-40d7-9314-24cb169aadd2`, 2026-09-28 to 2026-09-30. The
+backend's first slice (PLAN §4.0–4.1) and the accepted checking-cost fixes
+(PLAN §5) are merged at `b20673d`. The foundation (PLAN §4.2) adds
+`lifecore serve`, the client shell in `lifecore-server/ui`, and the
+hand-written contract in `ui/src/contract.ts`; no feature screens exist yet.
 
 The owning contracts remain [INTERFACES §5](INTERFACES.md#5-react-client)
 for the client, [§5.1](INTERFACES.md#51-frontend-build-and-tests) for its build
@@ -144,9 +146,9 @@ Expected additions:
 | `views.dot` | DOT text for a view. |
 | Analysis and dismissal methods | Planned for the Findings stage ([PLAN §4.3.3](PLAN.md#433-findings)). |
 
-Nothing is frozen. Write client types only after the foundation aligns the
-core JSON names with the proposal vocabulary
-([PLAN §4.2](PLAN.md#42-foundation)).
+Nothing is frozen. The core JSON names now use the proposal vocabulary
+([FILES §2.5](FILES.md#25-entry-shaped-types)); each new method adds its types to
+`contract.ts` and its fixtures together.
 
 ## Backend behavior the client must handle
 
@@ -167,6 +169,8 @@ These follow from the merged backend; the linked documents own the details.
   and offer deliberate replanning; never refresh the token silently.
 - **Uncertain publication.** Error 1008 carries the would-be result in
   `data.outcome`. Say the change may have been applied, then re-read state.
+  Error 5001 `backend_failure`, a call whose server task failed, is uncertain
+  the same way, without an outcome.
 - **Busy writers.** Another writer holding the lock yields a busy error after
   about 10 s of retrying.
 - **Suggestions.** Until PLAN §4.4, a proposal with `acknowledges` fails with
@@ -188,10 +192,11 @@ These follow from the merged backend; the linked documents own the details.
   introduced it, and `focus` is the entry to navigate to.
 - **Identities and numbers.** Key records by `origin` plus `position`;
   positions and integer payloads are decimal strings.
-- **JSON vocabulary is not final.** Entry records use the proposal vocabulary
-  (`kind`, `type`, `payload`), but suggested actions in analysis output still
-  use core names (`{"AddNode": {… "ty_name" …}}`). Write client types only after the PLAN §4.2
-  alignment.
+- **One JSON vocabulary.** Entry records, stored entries, and suggested actions
+  in analysis output all use the proposal vocabulary (`kind`, `type`,
+  `predecessor`, `payload`, `existing`, `added`). A suggested action's `added`
+  is the index of an earlier action, a number, where a proposal's is an
+  operation name ([FILES §2.5](FILES.md#25-entry-shaped-types)).
 - **Type declarations.** They are written by hand as well as by forms: a field
   is a list of presence and shape words
   ([FILES §2.6](FILES.md#26-type-declaration-payloads)), and the schema manager

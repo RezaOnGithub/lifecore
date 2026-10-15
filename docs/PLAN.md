@@ -185,43 +185,43 @@ Goal: a running skeleton on which the UI stages build. `lifecore serve` prints
 its URL; opening it in Firefox shows `database.describe` from a React page built
 by the frontend toolchain. No feature screens yet.
 
-- [ ] Align the core Serde vocabulary with the proposal vocabulary before client
+- [x] Align the core Serde vocabulary with the proposal vocabulary before client
   types are generated. Core types and snapshots still use
   `{"Node":{ty_name,body,parent}}`, `{"AddNode":…}`, and `{"Existing":…}` beside
   the proposal's `kind`, `type`, `payload`, `predecessor`, `existing`, and
   `added`; `EntryRecord` could then become the core entry plus `current`.
-- [ ] Add the `lifecore-server` workspace member (Axum adapter library) and
+- [x] Add the `lifecore-server` workspace member (Axum adapter library) and
   `serve`, serving the embedded client and one HTTP RPC endpoint over the shared
   decoder/dispatcher. Resolve the database at startup. Keep initialization and
   filesystem path selection outside remote methods.
-- [ ] Run each request on a blocking task that calls the synchronous service
+- [x] Run each request on a blocking task that calls the synchronous service
   exactly as a CLI invocation does, reading the current snapshot and keeping no
   state between requests. There is no worker thread, queue, or cache; the file
   lock serializes writers. Do not add async traits or new cross-thread
   requirements to the core for HTTP convenience; the service's factory
   constructor only needs to be `Send + Sync`.
-- [ ] Implement the server access rules of
+- [x] Implement the server access rules of
   [INTERFACES §3.2](INTERFACES.md#32-server-access): loopback binding, a launch
   token printed in the startup URL's fragment, and `Host`, `Origin`, and
   content-type checks before dispatch. Also implement orderly shutdown and
   structured busy/backend errors. A client disconnect does not cancel a running
   task and must not be presented as a transaction rollback.
-- [ ] Set up the frontend project and build of
+- [x] Set up the frontend project and build of
   [INTERFACES §5.1](INTERFACES.md#51-frontend-build-and-tests): the Node project
   in `lifecore-server/ui`, `build.rs` bundling into `OUT_DIR`, embedded assets,
   `LIFECORE_UI=skip` for Node-free builds, a hard error with instructions when
   `node_modules` is missing, and `serve --ui-dir` in every build.
-- [ ] Write the TypeScript contract by hand as described in
+- [x] Write the TypeScript contract by hand as described in
   [INTERFACES §5](INTERFACES.md#5-react-client), and guard it with committed
   fixtures emitted by a Rust test, covering integer envelopes, large control
   integers, and timestamps. Keep integer model values as decimal strings; use
   `bigint` only when arithmetic is needed. Keep certificate strings opaque.
-- [ ] Build the client shell: an RPC client that takes the launch token from the
+- [x] Build the client shell: an RPC client that takes the launch token from the
   URL fragment, keeps it in session storage, and sends it on every call;
   structured error display; and one real call, `database.describe`.
-- [ ] Add a Playwright smoke test in Firefox that starts `serve` on a scratch
+- [x] Add a Playwright smoke test in Firefox that starts `serve` on a scratch
   database, opens the printed URL, and sees the description.
-- [ ] Add the frontend checks to AGENTS.md "Checks", including
+- [x] Add the frontend checks to AGENTS.md "Checks", including
   `LIFECORE_UI=skip` for Rust-only runs.
 
 Exit: `lifecore serve` prints a URL that opens in Firefox and shows the database
@@ -235,7 +235,7 @@ Each stage runs UI → API → UI: sketch the screens against existing methods, 
 or reshape the methods they turn out to need, then finish the screens. RPC
 methods are not frozen. Each API change updates the
 [INTERFACES §3.1](INTERFACES.md#31-provisional-first-slice-methods) method
-table, the fixtures, and the committed generated types together; compatibility
+table, the fixtures, and the hand-written `contract.ts` together; compatibility
 is not a concern, so a later stage may reshape an earlier method. Each stage ends
 with its workflow on real data in the browser, a Playwright test for it in
 Firefox, and its UI decisions moved from [UI-HANDOFF.md](UI-HANDOFF.md) into

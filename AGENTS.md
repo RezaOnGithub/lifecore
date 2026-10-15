@@ -12,10 +12,10 @@ collection and receipt contracts. Read the relevant document before implementing
 that behavior.
 
 Keep the graph/analyzer libraries and the application service synchronous.
-Persistence belongs to the shared application layer; async HTTP and queues belong
-to the Rust server adapter. HTTP, the CLI, and JSON/TOML change files share one
-set of Serde requests, results, errors, and proposals. The frontend is
-React/TypeScript.
+Persistence belongs to the shared application layer; async HTTP belongs to the
+Rust server adapter, which runs each request on a blocking task without a
+queue. HTTP, the CLI, and JSON/TOML change files share one set of Serde
+requests, results, errors, and proposals. The frontend is React/TypeScript.
 
 ## Compatibility
 
@@ -30,14 +30,27 @@ Preserve historical correctness under the chosen model and unrelated user work.
 ## Checks
 
 Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-`lifecore-app`, and `lifecore-cli`. Shared checking and atomic in-memory commits
+`lifecore-app`, `lifecore-cli`, and `lifecore-server` (the Axum adapter behind
+`lifecore serve`; its `build.rs` embeds the React client in
+`lifecore-server/ui`). Shared checking and atomic in-memory commits
 live in `lifecore::transaction`; persistence belongs to the synchronous
 application service `lifecore_app::service::Service`, shared by HTTP and CLI.
-Add package/frontend checks when those components are introduced.
 
 - Tests: `cargo test --workspace` or `cargo test -p <package>`.
 - Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.
 - Lint: `cargo clippy -p <package> --all-targets --no-deps -- -D warnings`.
+- Rust-only runs: building `lifecore-server`, and so `lifecore-cli` and the
+  workspace, bundles the client and fails until `npm ci` has run in
+  `lifecore-server/ui`. Prefix any Cargo command with `LIFECORE_UI=skip` to
+  embed a placeholder page instead, e.g. `LIFECORE_UI=skip cargo test --workspace`.
+- Frontend, in `lifecore-server/ui` after `npm ci`: `npm run typecheck`
+  (`tsc --noEmit`, including the fixtures), `npm run lint` (Biome; `npx biome
+  check --write .` formats), `npm test` (`node --test`), and `npm run e2e`
+  (Playwright in Firefox; it builds `lifecore` with Cargo, and
+  `npx playwright install firefox` fetches the browser once).
+- Fixtures: `cargo test -p lifecore-server` rewrites stale files in
+  `lifecore-server/ui/src/fixtures/` and then fails. Run the type-check, change
+  `contract.ts` with the Rust shape if it fails, and commit both.
 
 Rust targets stable; rustfmt requires nightly. The active workspace passes
 Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
