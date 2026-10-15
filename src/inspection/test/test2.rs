@@ -369,6 +369,23 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
 }
 
 #[test]
+fn dot_quote_escapes_metacharacters_and_blanks_control_characters() {
+    use crate::inspection::dot_quote;
+    assert_eq!(
+        dot_quote("a\"b\\N c\\"),
+        "\"a\\\"b\\\\N c\\\\\"",
+        "quotes and backslashes, a trailing one too"
+    );
+    assert_eq!(dot_quote("one\ntwo\rthree"), "\"one\\ntwo\\rthree\"");
+    assert_eq!(dot_quote("&amp; &#60; &"), "\"&amp;amp; &amp;#60; &amp;\"");
+    assert_eq!(
+        dot_quote("nul\0tab\tvt\u{b}del\u{7f}c1\u{85}end"),
+        "\"nul tab vt del c1 end\""
+    );
+    assert_eq!(dot_quote("Ünïcode \u{2026}"), "\"Ünïcode \u{2026}\"");
+}
+
+#[test]
 fn failed_drafts_and_missing_analyzers_leave_committed_inspection_available() {
     let (graph, ids) = fixture();
     let snapshot = serde_json::to_vec(&graph.view().inspection()).unwrap();

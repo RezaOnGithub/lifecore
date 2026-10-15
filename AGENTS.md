@@ -36,7 +36,9 @@ Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
 live in `lifecore::transaction`; persistence belongs to the synchronous
 application service `lifecore_app::service::Service`, shared by HTTP and CLI.
 
-- Tests: `cargo test --workspace` or `cargo test -p <package>`.
+- Tests: `cargo test --workspace` or `cargo test -p <package>`. Where Graphviz
+  is installed, `LIFECORE_UI=skip cargo test -p lifecore-app -- --include-ignored`
+  also runs the rendering tests that need `dot`.
 - Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.
 - Lint: `cargo clippy -p <package> --all-targets --no-deps -- -D warnings`.
 - Rust-only runs: building `lifecore-server`, and so `lifecore-cli` and the

@@ -351,8 +351,9 @@ export interface Initialized {
 export interface Encoded {
   text: string;
 }
-// A replayed analysis beside the stored dismissal records of the same
-// snapshot read; presentation applies them, the analysis never does.
+// A replayed analysis beside the stored dismissal records, from the same
+// snapshot read, of the findings it emitted; presentation applies them, the
+// analysis never does.
 export interface AnalysisRun {
   analysis: AnalysisOutput;
   dismissals: Dismissal[];
@@ -376,7 +377,8 @@ export type Published =
   | ({ kind: "initialized" } & Initialized)
   | ({ kind: "applied" } & ApplyResult)
   | ({ kind: "analyzer_added" } & AnalyzerAdded)
-  | ({ kind: "dismissed" } & DismissalList);
+  | ({ kind: "dismissed" } & DismissalList)
+  | ({ kind: "restored" } & RestoreResult);
 
 // ---- Requests (INTERFACES §3.1) ----
 

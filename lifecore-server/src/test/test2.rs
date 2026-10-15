@@ -19,7 +19,7 @@ use lifecore::{
 use lifecore_app::{
     AppError, Service,
     rpc::{self, Method},
-    service::{ApplyResult, DismissalList, Published},
+    service::{ApplyResult, DismissalList, Published, RestoreResult},
     storage::{DEFAULT_STATE_FILE, StatePath},
 };
 use lifecore_dag_check::DagCheckFactory;
@@ -1785,6 +1785,13 @@ fn application_errors(
         AppError::PublicationUncertain {
             message: "Input/output error (os error 5)".into(),
             outcome: Box::new(Published::Dismissed(dismissed)),
+        },
+        AppError::PublicationUncertain {
+            message: "Input/output error (os error 5)".into(),
+            outcome: Box::new(Published::Restored(RestoreResult {
+                dismissals: vec![],
+                restored: true,
+            })),
         },
         AppError::GraphvizUnavailable {
             message: "No such file or directory (os error 2)".into(),

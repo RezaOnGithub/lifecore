@@ -295,15 +295,28 @@ fn contains_text(value: &Payload, needle: &str) -> bool {
 }
 
 pub fn dot_quote(text: &str) -> String {
-    // Escape backslashes first, including Graphviz's own label substitutions.
-    format!(
-        "\"{}\"",
-        text.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "\\r")
-            .replace('\t', "\\t")
-    )
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for c in text.chars() {
+        match c {
+        // A doubled backslash also keeps Graphviz's own substitutions, such
+        // as `\N`, literal.
+        '\\' => quoted.push_str("\\\\"),
+        '"' => quoted.push_str("\\\""),
+        '\n' => quoted.push_str("\\n"),
+        '\r' => quoted.push_str("\\r"),
+        // Graphviz decodes HTML entities in labels before anything else, so
+        // payload text spelling one must still read literally.
+        '&' => quoted.push_str("&amp;"),
+        // Graphviz has no escape for these: NUL breaks its parser, `\t`
+        // reads as `t`, and the rest would reach SVG, where XML forbids or
+        // discourages them.
+        c if c.is_control() => quoted.push(' '),
+        c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 #[cfg(test)]

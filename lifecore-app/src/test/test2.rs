@@ -6,17 +6,17 @@ use crate::{
     rpc,
     schema::{self, NodeCounts, TypeResolution},
     service::{
-        AddAnalyzerRequest, AnalysisRunRequest, DismissRequest, EntryGetRequest,
+        AddAnalyzerRequest, AnalysisRunRequest, DismissRequest, DismissalList, EntryGetRequest,
         EntryInspectRequest, EntryListRequest, EntryRecord, NoParams, ProposalRequest, Published,
-        RestoreRequest, TypeListRequest, ViewQueryRequest, ViewRenderRequest,
+        RestoreRequest, RestoreResult, TypeListRequest, ViewQueryRequest, ViewRenderRequest,
     },
     storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
 use lifecore::{
     Body, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp,
     analysis::{
-        AnalysisRunner, AnalyzerCertificate, AnalyzerFactory, Config, EvaluatedView, FindingKey,
-        MessageType,
+        AnalysisRunner, AnalyzerCertificate, AnalyzerFactory, AnalyzerIdentity, Config,
+        EvaluatedView, FindingKey, MessageType,
         presentation::{Dismissal, DismissalReason},
     },
     inspection::{Currentness, Direction},
@@ -31,8 +31,8 @@ use std::{
     fs, io,
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    time::Duration,
+    process::Command,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -1402,7 +1402,7 @@ fn acknowledgments_are_rejected_until_verification_exists() {
     let mut acknowledging = proposal(json!([task("c", "C")]));
     acknowledging.acknowledges = Some(lifecore::analysis::FindingKey {
         database: described.database,
-        analyzer: lifecore::analysis::AnalyzerIdentity {
+        analyzer: AnalyzerIdentity {
             name: "Type_Check".into(),
             version: "0.1.0".parse().unwrap(),
             configuration: "{}".into(),
@@ -3293,11 +3293,10 @@ fn dismissals_persist_without_rotating_the_revision_and_refuse_inconsistencies()
         service.describe(NoParams {}).unwrap().graph_revision,
         revision
     );
-    assert_eq!(
-        run(&scratch.service(), None).dismissals,
-        restored.dismissals
-    );
-    // Writers queue behind the lock like every mutation.
+    // The remaining record's key is never emitted, so a run returns none.
+    assert_eq!(run(&scratch.service(), None).dismissals, []);
+    // Writers queue behind the lock like every mutation, but an inconsistency
+    // is refused before the lock is consulted.
     let holder = storage::lock(&scratch.state(), Duration::ZERO).unwrap();
     let quick = scratch.service().with_busy_retry(SHORT_RETRY);
     assert!(matches!(
@@ -3313,6 +3312,14 @@ fn dismissals_persist_without_rotating_the_revision_and_refuse_inconsistencies()
             key: unseen.clone()
         }),
         Err(AppError::Busy { .. })
+    ));
+    assert!(matches!(
+        quick.dismiss_finding(DismissRequest {
+            key: inconsistency.clone(),
+            reason: DismissalReason::Acknowledged,
+            note: None,
+        }),
+        Err(AppError::CannotDismissInconsistency { .. })
     ));
     drop(holder);
     assert_eq!(scratch.bytes(), stored);
@@ -3365,7 +3372,7 @@ fn dismissals_persist_without_rotating_the_revision_and_refuse_inconsistencies()
         -32602
     );
     // An uncertain publication carries the stored records, tagged for the
-    // client like every other outcome.
+    // client like every other outcome, a restore with its `restored`.
     let failing = scratch.service().with_sync_directory(failed_sync);
     let error = failing
         .restore_finding(RestoreRequest { key: key.clone() })
@@ -3375,56 +3382,382 @@ fn dismissals_persist_without_rotating_the_revision_and_refuse_inconsistencies()
     };
     assert_eq!(
         **outcome,
-        Published::Dismissed(crate::service::DismissalList { dismissals: vec![] })
+        Published::Restored(RestoreResult {
+            dismissals: vec![],
+            restored: true,
+        })
     );
     assert_eq!(
         serde_json::to_value(outcome).unwrap(),
-        json!({"kind": "dismissed", "dismissals": []})
+        json!({"kind": "restored", "dismissals": [], "restored": true})
     );
     assert_eq!(run(&scratch.service(), None).dismissals, []);
+    let error = failing
+        .dismiss_finding(DismissRequest {
+            key: key.clone(),
+            reason: DismissalReason::Acknowledged,
+            note: Some("uncertain".into()),
+        })
+        .unwrap_err();
+    let AppError::PublicationUncertain { outcome, .. } = &error else {
+        panic!("expected an uncertain publication, got {error}")
+    };
+    let record = Dismissal {
+        key: key.clone(),
+        reason: DismissalReason::Acknowledged,
+        note: Some("uncertain".into()),
+    };
+    assert_eq!(
+        **outcome,
+        Published::Dismissed(DismissalList {
+            dismissals: vec![record.clone()],
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(outcome).unwrap(),
+        json!({"kind": "dismissed", "dismissals": [record]})
+    );
+    assert_eq!(error.to_object().code, 1008);
+    // The new state is visible anyway.
+    assert_eq!(run(&scratch.service(), None).dismissals, [record]);
 }
 
-// The DOT lines of the `split` subgraph one hop around B over every edge.
-fn around_b(scratch: &Scratch, format: RenderFormat) -> crate::render::Rendered {
-    let ids = split(scratch);
-    scratch
-        .service()
-        .render_view(ViewRenderRequest {
-            seeds: vec![Seed::Ids { ids: vec![ids[2]] }],
-            expand: vec![Expansion {
-                hops: NonZeroUsize::MIN,
-                direction: Direction::Both,
-                ty_names: None,
-                currentness: Currentness::All,
-            }],
-            edges: EdgeFilter {
-                ty_names: None,
-                currentness: Currentness::All,
-            },
-            as_of: None,
-            format,
-        })
+// The analysis `as_of` selects, never a later one, decides which records a
+// run returns: the warning about C is first emitted at boundary 5.
+#[test]
+fn analysis_run_returns_only_the_records_of_findings_it_emitted() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    populated(&scratch);
+    let c = warned(&scratch);
+    let warning = run(&service, None)
+        .analysis
+        .observations()
+        .next()
         .unwrap()
+        .clone();
+    assert_eq!(warning.diagnostic.focus, Some(c));
+    assert_eq!(c.position(), 4);
+    let record = Dismissal {
+        key: warning.key.clone(),
+        reason: DismissalReason::Acknowledged,
+        note: Some("later".into()),
+    };
+    service
+        .dismiss_finding(DismissRequest {
+            key: record.key.clone(),
+            reason: record.reason,
+            note: record.note.clone(),
+        })
+        .unwrap();
+    for (as_of, expected) in [
+        (Some(0), vec![]),
+        (Some(4), vec![]),
+        (Some(5), vec![record.clone()]),
+        (None, vec![record.clone()]),
+    ] {
+        let ran = run(&service, as_of);
+        assert_eq!(ran.dismissals, expected, "as_of {as_of:?}");
+        assert_eq!(
+            ran.analysis.observations().count(),
+            expected.len(),
+            "as_of {as_of:?}"
+        );
+    }
+    // A record differing from an emitted key in any part of it is not
+    // returned, even beside the matching record.
+    let near = [
+        FindingKey {
+            analyzer_certificate: AnalyzerCertificate(format!(
+                "{} ",
+                warning.key.analyzer_certificate.0
+            )),
+            ..warning.key.clone()
+        },
+        FindingKey {
+            kind: MessageType::Suggestion,
+            ..warning.key.clone()
+        },
+        FindingKey {
+            analyzer: AnalyzerIdentity {
+                configuration: "{ }".into(),
+                ..warning.key.analyzer.clone()
+            },
+            ..warning.key.clone()
+        },
+    ];
+    for key in &near {
+        service
+            .dismiss_finding(DismissRequest {
+                key: key.clone(),
+                reason: DismissalReason::FalsePositive,
+                note: None,
+            })
+            .unwrap();
+    }
+    let all = service
+        .restore_finding(RestoreRequest {
+            key: near[0].clone(),
+        })
+        .unwrap();
+    assert_eq!(all.dismissals.len(), 3);
+    assert_eq!(
+        run(&service, None).dismissals,
+        std::slice::from_ref(&record)
+    );
+    assert_eq!(run(&service, Some(4)).dismissals, []);
+    // Through RPC, the same boundary decides.
+    let call = |params: Value| {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "analysis.run", "params": params})
+            .to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    assert_eq!(
+        call(json!({"as_of": "4"}))["result"]["dismissals"],
+        json!([])
+    );
+    assert_eq!(
+        call(json!({"as_of": "5"}))["result"]["dismissals"],
+        json!([record])
+    );
+}
+
+// Dismissal edits change only the records: the graph is equal before and
+// after, keys of another database are refused, and an edit that changes
+// nothing publishes nothing.
+#[test]
+fn dismissal_edits_keep_the_graph_and_publish_only_changes() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    populated(&scratch);
+    warned(&scratch);
+    let key = run(&service, None)
+        .analysis
+        .observations()
+        .next()
+        .unwrap()
+        .key
+        .clone();
+    let before = storage::read(&scratch.state()).unwrap();
+    let dismiss = |service: &Service, key: &FindingKey, note: Option<&str>| {
+        service.dismiss_finding(DismissRequest {
+            key: key.clone(),
+            reason: DismissalReason::FalsePositive,
+            note: note.map(Into::into),
+        })
+    };
+    dismiss(&service, &key, Some("why")).unwrap();
+    let after = storage::read(&scratch.state()).unwrap();
+    assert!(after.graph == before.graph);
+    assert_eq!(after.graph_revision, before.graph_revision);
+    assert_ne!(after.dismissals, before.dismissals);
+    // A service whose publication always ends uncertain shows whether an
+    // edit published at all.
+    let failing = scratch.service().with_sync_directory(failed_sync);
+    let stored = scratch.bytes();
+    let same = dismiss(&failing, &key, Some("why")).unwrap();
+    assert_eq!(
+        same.dismissals,
+        after.dismissals.records().cloned().collect::<Vec<_>>()
+    );
+    assert_eq!(scratch.bytes(), stored);
+    assert!(matches!(
+        dismiss(&failing, &key, Some("other")),
+        Err(AppError::PublicationUncertain { .. })
+    ));
+    assert!(matches!(
+        dismiss(&failing, &key, None),
+        Err(AppError::PublicationUncertain { .. })
+    ));
+    let stored = scratch.bytes();
+    assert!(dismiss(&failing, &key, None).is_ok());
+    assert_eq!(scratch.bytes(), stored);
+    // A key of another database is invalid for a dismissal, and restoring
+    // one matches nothing and publishes nothing.
+    let foreign = FindingKey {
+        database: Uuid::new_v4(),
+        ..key.clone()
+    };
+    let error = dismiss(&service, &foreign, None).unwrap_err();
+    assert!(
+        matches!(&error, AppError::InvalidParams { message } if message.contains(&foreign.database.to_string())),
+        "{error}"
+    );
+    assert_eq!(error.to_object().code, -32602);
+    assert_eq!(scratch.bytes(), stored);
+    let restored = failing
+        .restore_finding(RestoreRequest {
+            key: foreign.clone(),
+        })
+        .unwrap();
+    assert!(!restored.restored);
+    assert_eq!(restored.dismissals.len(), 1);
+    assert_eq!(scratch.bytes(), stored);
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "findings.dismiss",
+        "params": {"key": foreign, "reason": "acknowledged"}})
+    .to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    assert_eq!(response["error"]["data"]["kind"], "invalid_params");
+    assert_eq!(scratch.bytes(), stored);
+    assert!(storage::read(&scratch.state()).unwrap().graph == before.graph);
+}
+
+// A dismissal waiting on the lock rereads after acquiring it, so records and
+// a revision published under the held lock all survive its edit.
+#[test]
+fn interleaved_dismissal_edits_keep_each_other_and_the_revision() {
+    let scratch = Scratch::new();
+    populated(&scratch);
+    warned(&scratch);
+    let state = scratch.state();
+    let key = run(&scratch.service(), None)
+        .analysis
+        .observations()
+        .next()
+        .unwrap()
+        .key
+        .clone();
+    let held_key = FindingKey {
+        analyzer_certificate: AnalyzerCertificate("held".into()),
+        ..key.clone()
+    };
+    let lock = storage::lock(&state, Duration::ZERO).unwrap();
+    let waiting = {
+        let state = state.clone();
+        let key = key.clone();
+        std::thread::spawn(move || {
+            service(state)
+                .with_busy_retry(Duration::from_secs(10))
+                .dismiss_finding(DismissRequest {
+                    key,
+                    reason: DismissalReason::Acknowledged,
+                    note: Some("waiting".into()),
+                })
+        })
+    };
+    // Give the writer time to start waiting on the held lock.
+    std::thread::sleep(Duration::from_millis(200));
+    let mut locked = lock.read().unwrap();
+    let snapshot = locked.snapshot_mut();
+    snapshot
+        .dismissals
+        .dismiss(held_key.clone(), DismissalReason::FalsePositive, None)
+        .unwrap();
+    let held = Body::from([
+        ("title".into(), "Held".into()),
+        ("notes".into(), "n".into()),
+    ]);
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(TypeCheckFactory))
+        .unwrap();
+    transaction::prepare(
+        &snapshot.graph,
+        &[Change::Entry(EntryChange::Node(NewNode {
+            ty_name: "Task".into(),
+            payload: held,
+            predecessor: None,
+            intent: None,
+        }))],
+        &mut runner,
+    )
+    .unwrap()
+    .accepted()
+    .unwrap()
+    .commit(&mut snapshot.graph)
+    .unwrap();
+    snapshot.graph_revision = Uuid::new_v4();
+    let held_revision = snapshot.graph_revision;
+    let held_graph = snapshot.graph.clone();
+    assert!(matches!(
+        locked.publish(storage::sync_directory),
+        Ok(Publication::Complete)
+    ));
+    drop(locked);
+    let dismissed = waiting.join().unwrap().unwrap();
+    assert_eq!(
+        dismissed
+            .dismissals
+            .iter()
+            .map(|record| (&record.key, record.note.as_deref()))
+            .collect::<Vec<_>>(),
+        [(&held_key, None), (&key, Some("waiting"))]
+    );
+    let stored = storage::read(&state).unwrap();
+    assert_eq!(stored.graph_revision, held_revision);
+    assert!(stored.graph == held_graph);
+    assert_eq!(
+        stored.dismissals.records().cloned().collect::<Vec<_>>(),
+        dismissed.dismissals
+    );
+}
+
+// The `split` subgraph one hop around `seed` over every edge.
+fn around(
+    service: &Service,
+    seed: EntryId,
+    as_of: Option<usize>,
+    format: RenderFormat,
+) -> Result<crate::render::Rendered, AppError> {
+    service.render_view(ViewRenderRequest {
+        seeds: vec![Seed::Ids { ids: vec![seed] }],
+        expand: vec![Expansion {
+            hops: NonZeroUsize::MIN,
+            direction: Direction::Both,
+            ty_names: None,
+            currentness: Currentness::All,
+        }],
+        edges: EdgeFilter {
+            ty_names: None,
+            currentness: Currentness::All,
+        },
+        as_of,
+        format,
+    })
+}
+
+// The quoted values of `attribute` on each node or edge line that has it.
+fn dot_attributes(text: &str, attribute: &str) -> Vec<String> {
+    let starts = [format!("[{attribute}="), format!(" {attribute}=")];
+    text.lines()
+        .filter_map(|line| {
+            let (at, start) = starts
+                .iter()
+                .find_map(|start| Some((line.find(start.as_str())?, start)))?;
+            let value = &line[at + start.len()..];
+            // Every value here is quoted and followed by another attribute.
+            Some(value[..value.find("\", ")? + 1].to_string())
+        })
+        .collect()
 }
 
 #[test]
 fn render_draws_only_the_queried_subgraph_as_dot() {
     let scratch = Scratch::new();
-    let rendered = around_b(&scratch, RenderFormat::Dot);
+    let ids = split(&scratch);
     let service = scratch.service();
+    let rendered = around(&service, ids[2], None, RenderFormat::Dot).unwrap();
     let described = service.describe(NoParams {}).unwrap();
-    let ids = service
-        .list_entries(EntryListRequest {
-            currentness: Currentness::All,
-            ..Default::default()
-        })
-        .unwrap()
-        .entries
-        .iter()
-        .map(|record| record.entry.id())
-        .collect::<Vec<_>>();
     // Each apply mints its own origin, so an href names the entry's own.
     let href = |position: usize| format!("href=\"#inspect/{}/{position}\"", ids[position].origin());
+    let gray = |stale: bool| if stale { ", color=gray" } else { "" };
+    let node = |position: usize, title: &str, stale: bool| {
+        let label = format!("\"{title}\\n@{position} Task\"");
+        format!(
+            "  n{position} [label={label}, tooltip={label}, id=\"n{position}\", {}{}];",
+            href(position),
+            gray(stale)
+        )
+    };
+    let edge = |from: usize, to: usize, position: usize, stale: bool| {
+        let label = format!("\"@{position} DependsOn\"");
+        format!(
+            "  n{from} -> n{to} [label={label}, tooltip={label}, labeltooltip={label}, id=\"e{position}\", {}, style=solid{}];",
+            href(position),
+            gray(stale)
+        )
+    };
     assert_eq!(rendered.format, RenderFormat::Dot);
     let lines = rendered.text.lines().collect::<Vec<_>>();
     assert_eq!(lines[0], "digraph lifecore {");
@@ -3436,29 +3769,38 @@ fn render_draws_only_the_queried_subgraph_as_dot() {
     // Nodes in append order, the superseded root gray; then revision links,
     // both ends present; then the edges, the historical one gray.
     let expected = [
-        format!(
-            "  n1 [label=\"A\\n@1 Task\", id=\"n1\", {}, color=gray];",
-            href(1)
-        ),
-        format!("  n2 [label=\"B\\n@2 Task\", id=\"n2\", {}];", href(2)),
-        format!("  n4 [label=\"A2\\n@4 Task\", id=\"n4\", {}];", href(4)),
-        format!("  n5 [label=\"A3\\n@5 Task\", id=\"n5\", {}];", href(5)),
+        node(1, "A", true),
+        node(2, "B", false),
+        node(4, "A2", false),
+        node(5, "A3", false),
         "  n1 -> n4 [label=\"revision\", style=dashed, color=blue];".into(),
         "  n1 -> n5 [label=\"revision\", style=dashed, color=blue];".into(),
-        format!(
-            "  n1 -> n2 [label=\"@3 DependsOn\", id=\"e3\", {}, style=solid, color=gray];",
-            href(3)
-        ),
-        format!(
-            "  n4 -> n2 [label=\"@6 DependsOn\", id=\"e6\", {}, style=solid];",
-            href(6)
-        ),
-        format!(
-            "  n2 -> n5 [label=\"@7 DependsOn\", id=\"e7\", {}, style=solid];",
-            href(7)
-        ),
+        edge(1, 2, 3, true),
+        edge(4, 2, 6, false),
+        edge(2, 5, 7, false),
     ];
     assert_eq!(lines[2..lines.len() - 1], expected, "{}", rendered.text);
+    // Staleness is that of the selected boundary: A and its edge to B are
+    // current until A2 revises A at position 4.
+    for (as_of, stale) in [(4, false), (5, true)] {
+        let early = around(&service, ids[2], Some(as_of), RenderFormat::Dot)
+            .unwrap()
+            .text;
+        let lines = early.lines().collect::<Vec<_>>();
+        assert_eq!(
+            lines[1],
+            format!("  label=\"{} boundary {as_of}\";", described.database)
+        );
+        assert_eq!(
+            lines[2..lines.len() - 1],
+            [
+                node(1, "A", stale),
+                node(2, "B", false),
+                edge(1, 2, 3, stale)
+            ],
+            "{early}"
+        );
+    }
     // Without the root in the result there is no revision link, and no edge
     // leaves the result.
     let revisions = render_dot(
@@ -3475,10 +3817,7 @@ fn render_draws_only_the_queried_subgraph_as_dot() {
     // `as_of` bounds the picture and its label.
     let early = render_dot(&service, vec![Seed::Ids { ids: vec![ids[1]] }], Some(2));
     assert!(early.contains("boundary 2\""), "{early}");
-    assert!(early.contains(&format!(
-        "  n1 [label=\"A\\n@1 Task\", id=\"n1\", {}];",
-        href(1)
-    )));
+    assert!(early.contains(&node(1, "A", false)), "{early}");
     assert!(matches!(
         service.render_view(ViewRenderRequest {
             seeds: vec![Seed::Ids { ids: vec![ids[4]] }],
@@ -3489,51 +3828,6 @@ fn render_draws_only_the_queried_subgraph_as_dot() {
         }),
         Err(AppError::EntryNotFound { .. })
     ));
-    // Labels follow the client's row label: `name`, then the first text
-    // field, else the type and position; long text is cut at 60 characters,
-    // and DOT metacharacters are escaped.
-    let scratch = Scratch::new();
-    let service = scratch.service();
-    service.init(&[]).unwrap();
-    let long = "x".repeat(70);
-    let applied = service
-        .apply(request(proposal(json!([
-            {"name": "memo", "kind": "node", "ty_name": "Type", "payload": {"name": "Memo"}},
-            {"name": "fields", "kind": "node", "ty_name": "Memo",
-                "payload": {"zeta": "z", "beta": "b", "title": "  ", "alpha": {"kind": "integer", "value": "1"}}},
-            {"name": "bare", "kind": "node", "ty_name": "Memo",
-                "payload": {"n": {"kind": "integer", "value": "1"}}},
-            {"name": "quoted", "kind": "node", "ty_name": "",
-                "payload": {"title": "Say \"hi\"\\\n\tnow"}},
-            {"name": "long", "kind": "node", "ty_name": "Memo", "payload": {"title": long}},
-        ]))))
-        .unwrap();
-    let ids = applied
-        .report
-        .operations
-        .iter()
-        .map(|operation| operation.entry)
-        .collect::<Vec<_>>();
-    let text = render_dot(&service, vec![Seed::Ids { ids }], None);
-    let labels = text
-        .lines()
-        .filter_map(|line| {
-            let start = line.find("[label=")? + "[label=".len();
-            let end = line.find(", id=")?;
-            Some(&line[start..end])
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        labels,
-        [
-            "\"Memo\\n@0 Type\"".to_string(),
-            "\"b\\n@1 Memo\"".into(),
-            "\"Memo @2\\n@2 Memo\"".into(),
-            "\"Say \\\"hi\\\"\\\\\\n\\tnow\\n@3 \"".into(),
-            format!("\"{}\u{2026}\\n@4 Memo\"", "x".repeat(59)),
-        ],
-        "{text}"
-    );
     // Through RPC: the format is required and spelled in lowercase.
     let call = |params: Value| {
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": "views.render", "params": params})
@@ -3564,27 +3858,86 @@ fn render_draws_only_the_queried_subgraph_as_dot() {
     );
 }
 
-// Graphviz is an external tool, so the SVG path runs only where `dot` is
-// installed; elsewhere the test notes that and returns.
-fn graphviz_installed() -> bool {
-    let installed = Command::new("dot")
-        .arg("-V")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if !installed {
-        eprintln!("note: Graphviz `dot` is not installed; skipping the SVG render check");
-    }
-    installed
+#[test]
+fn render_labels_read_like_table_rows_with_the_full_text_as_tooltip() {
+    // Labels follow the client's row label: `title`, then `name`, then the
+    // first text field, else the type and position, on one line and cut at
+    // 60 characters; the tooltip has the uncut text. DOT metacharacters are
+    // escaped, control characters blanked, and the empty type name reads
+    // "(unnamed)", on edges too.
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&[]).unwrap();
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "memo", "kind": "node", "ty_name": "Type", "payload": {"name": "Memo"}},
+            {"name": "fields", "kind": "node", "ty_name": "Memo",
+                "payload": {"zeta": "z", "beta": "b", "title": "  ", "alpha": {"kind": "integer", "value": "1"}}},
+            {"name": "bare", "kind": "node", "ty_name": "Memo",
+                "payload": {"n": {"kind": "integer", "value": "1"}}},
+            {"name": "quoted", "kind": "node", "ty_name": "",
+                "payload": {"title": "Say \"hi\"\\\n\tnow"}},
+            {"name": "long", "kind": "node", "ty_name": "Memo", "payload": {"title": "x".repeat(70)}},
+            {"name": "sixty", "kind": "node", "ty_name": "Memo", "payload": {"title": "y".repeat(60)}},
+            {"name": "controls", "kind": "node", "ty_name": "Memo",
+                "payload": {"title": "nul\u{0}tab\tcr\r\nlf\n\n&amp;"}},
+            {"name": "slashes", "kind": "node", "ty_name": "Memo",
+                "payload": {"title": "\\N \\G and a trailing \\"}},
+            {"name": "unnamed", "kind": "edge", "ty_name": "",
+                "from": {"added": "fields"}, "to": {"added": "bare"}},
+        ]))))
+        .unwrap();
+    let ids = applied
+        .report
+        .operations
+        .iter()
+        .map(|operation| operation.entry)
+        .filter(|id| id.position() != 8)
+        .collect::<Vec<_>>();
+    let text = render_dot(&service, vec![Seed::Ids { ids }], None);
+    let x59 = "x".repeat(59);
+    let x70 = "x".repeat(70);
+    let y60 = "y".repeat(60);
+    assert_eq!(
+        dot_attributes(&text, "label"),
+        [
+            r#""Memo\n@0 Type""#.to_string(),
+            r#""b\n@1 Memo""#.into(),
+            r#""Memo @2\n@2 Memo""#.into(),
+            r#""Say \"hi\"\\  now\n@3 (unnamed)""#.into(),
+            format!("\"{x59}\u{2026}\\n@4 Memo\""),
+            format!("\"{y60}\\n@5 Memo\""),
+            r#""nul tab cr lf &amp;amp;\n@6 Memo""#.into(),
+            r#""\\N \\G and a trailing \\\n@7 Memo""#.into(),
+            r#""@8 (unnamed)""#.into(),
+        ],
+        "{text}"
+    );
+    assert_eq!(
+        dot_attributes(&text, "tooltip"),
+        [
+            r#""Memo\n@0 Type""#.to_string(),
+            r#""b\n@1 Memo""#.into(),
+            r#""Memo @2\n@2 Memo""#.into(),
+            r#""Say \"hi\"\\\\  now\n@3 (unnamed)""#.into(),
+            format!("\"{x70}\\n@4 Memo\""),
+            format!("\"{y60}\\n@5 Memo\""),
+            r#""nul tab cr lf &amp;amp;\n@6 Memo""#.into(),
+            r#""\\\\N \\\\G and a trailing \\\\\n@7 Memo""#.into(),
+            r#""@8 (unnamed)""#.into(),
+        ],
+        "{text}"
+    );
+    assert_eq!(dot_attributes(&text, "labeltooltip"), [r#""@8 (unnamed)""#]);
+    assert!(!text.chars().any(|c| c.is_control() && c != '\n'));
 }
 
 #[test]
-fn render_svg_runs_graphviz_with_clickable_identities() {
-    // A program that does not exist is unavailable, whatever the input.
-    let missing = render::graphviz("lifecore-no-such-graphviz", "digraph {}").unwrap_err();
+fn graphviz_that_cannot_start_is_unavailable() {
+    let missing =
+        render::graphviz(Command::new("lifecore-no-such-graphviz"), "digraph {}").unwrap_err();
     assert!(
-        matches!(&missing, AppError::GraphvizUnavailable { .. }),
+        matches!(&missing, AppError::GraphvizUnavailable { message } if message.contains("os error")),
         "{missing}"
     );
     assert_eq!(missing.to_object().code, 4004);
@@ -3592,35 +3945,260 @@ fn render_svg_runs_graphviz_with_clickable_identities() {
         missing.to_object().data.unwrap()["kind"],
         "graphviz_unavailable"
     );
-    if !graphviz_installed() {
-        return;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new();
+        let file = scratch.0.join("dot");
+        fs::write(&file, "not executable").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        // The search path is this directory alone, since the search would
+        // go on past a file it may not execute.
+        let mut command = Command::new("dot");
+        command.env("PATH", &scratch.0);
+        let refused = render::graphviz(command, "digraph {}").unwrap_err();
+        assert!(
+            matches!(&refused, AppError::GraphvizUnavailable { message }
+                if *message == io::Error::from(io::ErrorKind::PermissionDenied).to_string()
+                    || message.contains("os error 13")),
+            "{refused}"
+        );
+        assert_eq!(refused.to_object().code, 4004);
     }
+}
+
+// Graphviz stand-ins are shell scripts, so these checks need `/bin/sh` but
+// not Graphviz. Each script gets its own directory, which comes first on the
+// stand-in's own search path; the test process's environment is untouched.
+#[cfg(unix)]
+struct StandIn {
+    path: std::ffi::OsString,
+    // Where a script records the process ID of a descendant it leaves
+    // behind, which is stopped on drop.
+    descendant: PathBuf,
+}
+
+#[cfg(unix)]
+impl StandIn {
+    fn new(scratch: &Scratch, name: &str, script: &str) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        if !Path::new("/bin/sh").exists() {
+            eprintln!("note: /bin/sh is missing; skipping a Graphviz stand-in check");
+            return None;
+        }
+        let dir = scratch.0.join(name);
+        fs::create_dir(&dir).unwrap();
+        let descendant = dir.join("descendant");
+        let file = dir.join("dot");
+        let script = script.replace("$DESCENDANT", &format!("'{}'", descendant.display()));
+        fs::write(&file, format!("#!/bin/sh\n{script}")).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let path =
+            std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&path))).unwrap();
+        Some(Self { path, descendant })
+    }
+
+    fn run(&self, dot: &str) -> Result<String, AppError> {
+        // A test forking while another wrote its script can briefly hold the
+        // script open for writing in that child, and executing it then fails
+        // with ETXTBSY, so such a start is retried.
+        for _ in 0..50 {
+            let mut command = Command::new("dot");
+            command.env("PATH", &self.path);
+            match render::graphviz(command, dot) {
+            Err(AppError::GraphvizUnavailable { message }) if message.contains("os error 26") => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            result => return result,
+            }
+        }
+        panic!("the stand-in stayed busy")
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StandIn {
+    fn drop(&mut self) {
+        if let Ok(pid) = fs::read_to_string(&self.descendant) {
+            Command::new("kill").arg(pid.trim()).status().ok();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn graphviz_failure(result: Result<String, AppError>) -> String {
+    match result {
+    Err(error @ AppError::GraphvizFailed { .. }) => {
+        assert_eq!(error.to_object().code, 4005);
+        let AppError::GraphvizFailed { message } = error else {
+            unreachable!()
+        };
+        message
+    }
+    other => panic!("expected a Graphviz failure, got {other:?}"),
+    }
+}
+
+// The program and every pipe are abandoned at the deadline, even with a
+// descendant still holding them all and never reading its input.
+#[cfg(unix)]
+#[test]
+fn graphviz_is_killed_at_the_deadline_even_when_its_pipes_stay_open() {
     let scratch = Scratch::new();
-    let rendered = around_b(&scratch, RenderFormat::Svg);
-    let service = scratch.service();
-    let a2 = service
-        .list_entries(EntryListRequest::default())
-        .unwrap()
-        .entries
-        .iter()
-        .map(|record| record.entry.id())
-        .find(|id| id.position() == 4)
-        .unwrap();
-    assert_eq!(rendered.format, RenderFormat::Svg);
-    assert!(rendered.text.contains("<svg"), "{}", rendered.text);
-    for id in ["n1", "n2", "n4", "n5", "e3", "e6", "e7"] {
-        assert!(rendered.text.contains(&format!("id=\"{id}\"")), "{id}");
-    }
-    assert!(!rendered.text.contains("id=\"n0\""));
+    // A background job's stdin is otherwise /dev/null, hence fd 3.
+    let Some(dot) = StandIn::new(
+        &scratch,
+        "hang",
+        "exec 3<&0\nsleep 100 <&3 &\necho $! > $DESCENDANT\nexec sleep 100\n",
+    ) else {
+        return;
+    };
+    // More input than a pipe buffers, so the writer blocks for good.
+    let input = format!("digraph {{}}\n{}", " ".repeat(1 << 20));
+    let started = Instant::now();
+    let message = graphviz_failure(dot.run(&input));
+    let elapsed = started.elapsed();
+    assert!(message.contains("did not finish within 10 s"), "{message}");
+    assert!(elapsed >= Duration::from_secs(10), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(11_500), "{elapsed:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn graphviz_stand_ins_report_output_exit_and_pipe_failures() {
+    let scratch = Scratch::new();
+    let stand_in = |name: &str, script: &str| StandIn::new(&scratch, name, script);
+    let Some(ok) = stand_in("ok", "cat > /dev/null\nprintf '<svg/>'\n") else {
+        return;
+    };
+    assert_eq!(ok.run("digraph {}\n").unwrap(), "<svg/>");
+    // Output past the cap kills the program at once, long before the
+    // deadline.
+    let flood = stand_in(
+        "flood",
+        "cat > /dev/null\nexec yes aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    )
+    .unwrap();
+    let started = Instant::now();
+    let message = graphviz_failure(flood.run("digraph {}\n"));
+    assert!(message.contains("more than 16 MiB of SVG"), "{message}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // A failed exit quotes stderr.
+    let exit = stand_in("exit", "cat > /dev/null\necho 'bad graph' >&2\nexit 3\n").unwrap();
+    let message = graphviz_failure(exit.run("digraph {}\n"));
+    assert!(message.contains("exited with"), "{message}");
+    assert!(message.ends_with("; stderr: bad graph"), "{message}");
+    // A successful exit whose output a descendant keeps open is incomplete
+    // after the grace period.
+    let held = stand_in(
+        "held",
+        "cat > /dev/null\nprintf '<svg/>'\nsleep 100 &\necho $! > $DESCENDANT\n",
+    )
+    .unwrap();
+    let started = Instant::now();
+    let message = graphviz_failure(held.run("digraph {}\n"));
     assert!(
-        rendered
-            .text
-            .contains(&format!("href=\"#inspect/{}/4\"", a2.origin())),
-        "{}",
-        rendered.text
+        message.contains("did not end within 500 ms of its exit"),
+        "{message}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // So is a successful exit that left input unread.
+    let unread = stand_in("unread", "printf '<svg/>'\n").unwrap();
+    let message = graphviz_failure(unread.run(&" ".repeat(1 << 20)));
+    assert!(
+        message.contains("did not read all of its input"),
+        "{message}"
+    );
+}
+
+// Decodes the XML escapes Graphviz writes.
+fn xml_text(escaped: &str) -> String {
+    let mut text = String::new();
+    let mut rest = escaped;
+    while let Some(at) = rest.find('&') {
+        text.push_str(&rest[..at]);
+        let end = at + rest[at..].find(';').unwrap();
+        text.push(match &rest[at + 1..end] {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        numeric => char::from_u32(numeric.strip_prefix('#').unwrap().parse().unwrap()).unwrap(),
+        });
+        rest = &rest[end + 1..];
+    }
+    text.push_str(rest);
+    text
+}
+
+// The tooltips and the text lines, decoded, of the SVG group of one node or
+// edge, which ends where the next one starts.
+fn svg_element(svg: &str, id: &str) -> (Vec<String>, Vec<String>) {
+    let start = svg
+        .find(&format!("<g id=\"{id}\" class="))
+        .unwrap_or_else(|| panic!("no {id} in {svg}"));
+    let body = &svg[start + svg[start..].find('>').unwrap() + 1..];
+    let end = [" class=\"node\">", " class=\"edge\">", "</svg>"]
+        .iter()
+        .filter_map(|marker| body.find(marker))
+        .min()
+        .unwrap();
+    let group = &body[..end];
+    let tooltips = group
+        .match_indices("xlink:title=\"")
+        .map(|(at, marker)| {
+            let value = &group[at + marker.len()..];
+            xml_text(&value[..value.find('"').unwrap()])
+        })
+        .collect();
+    let lines = group
+        .match_indices("<text ")
+        .map(|(at, _)| {
+            let value = &group[at..];
+            let open = value.find('>').unwrap() + 1;
+            xml_text(&value[open..value.find("</text>").unwrap()])
+        })
+        .collect();
+    (tooltips, lines)
+}
+
+#[test]
+#[ignore = "requires Graphviz dot"]
+fn render_svg_runs_graphviz_with_clickable_identities() {
+    let scratch = Scratch::new();
+    let ids = split(&scratch);
+    let service = scratch.service();
+    let rendered = around(&service, ids[2], None, RenderFormat::Svg).unwrap();
+    assert_eq!(rendered.format, RenderFormat::Svg);
+    let svg = &rendered.text;
+    assert!(svg.contains("<svg"), "{svg}");
+    for id in ["n1", "n2", "n4", "n5", "e3", "e6", "e7"] {
+        assert!(svg.contains(&format!("id=\"{id}\"")), "{id}");
+    }
+    assert!(!svg.contains("id=\"n0\""));
+    assert!(
+        svg.contains(&format!("href=\"#inspect/{}/4\"", ids[4].origin())),
+        "{svg}"
+    );
+    // Tooltips are the plain labels, not their DOT escapes.
+    assert_eq!(
+        svg_element(svg, "n4"),
+        (
+            vec!["A2\n@4 Task".into()],
+            vec!["A2".into(), "@4 Task".into()]
+        )
+    );
+    assert_eq!(
+        svg_element(svg, "e6"),
+        (
+            vec!["@6 DependsOn".into(), "@6 DependsOn".into()],
+            vec!["@6 DependsOn".into()]
+        )
     );
     // A DOT syntax error is a failure that quotes Graphviz's own complaint.
-    let failed = render::graphviz("dot", "digraph {").unwrap_err();
+    let failed = render::graphviz(Command::new("dot"), "digraph {").unwrap_err();
     let AppError::GraphvizFailed { message } = &failed else {
         panic!("expected a Graphviz failure, got {failed}")
     };
@@ -3641,5 +4219,94 @@ fn render_svg_runs_graphviz_with_clickable_identities() {
             .as_str()
             .unwrap()
             .contains("</svg>")
+    );
+}
+
+// Payload text reads literally in the picture and its tooltips, whatever
+// DOT, Graphviz, or XML would make of it.
+#[test]
+#[ignore = "requires Graphviz dot"]
+fn rendered_svg_shows_payload_text_literally() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&[]).unwrap();
+    let long = format!("{} \\N end", "z".repeat(60));
+    // Each title and how it reads: control characters are blanked and line
+    // breaks joined.
+    let titles = [
+        ("nul\u{0}tab\tline\nbreak\r\nend", "nul tab line break end"),
+        (
+            "Say \"hi\" to \\N, \\G, \\E, \\T, \\H and \\L",
+            "Say \"hi\" to \\N, \\G, \\E, \\T, \\H and \\L",
+        ),
+        ("ends with \\", "ends with \\"),
+        (
+            "</text><script>alert(1)</script>",
+            "</text><script>alert(1)</script>",
+        ),
+        ("&amp; &#60; & &x; '", "&amp; &#60; & &x; '"),
+        (long.as_str(), long.as_str()),
+    ];
+    let mut entries = titles
+        .iter()
+        .enumerate()
+        .map(|(n, (title, _))| {
+            json!({"name": format!("t{n}"), "kind": "node", "ty_name": "Memo",
+                "payload": {"title": title}})
+        })
+        .collect::<Vec<_>>();
+    entries.push(json!({"name": "unnamed", "kind": "node", "ty_name": "",
+        "payload": {"title": "of no type"}}));
+    entries.push(
+        json!({"name": "link", "kind": "edge", "ty_name": "Links\\E\"&amp;",
+        "from": {"added": "t0"}, "to": {"added": "t1"}}),
+    );
+    let applied = service
+        .apply(request(proposal(Value::Array(entries))))
+        .unwrap();
+    let ids = applied
+        .report
+        .operations
+        .iter()
+        .map(|operation| operation.entry)
+        .collect::<Vec<_>>();
+    let svg = service
+        .render_view(ViewRenderRequest {
+            seeds: vec![Seed::Ids {
+                ids: ids[..ids.len() - 1].to_vec(),
+            }],
+            expand: vec![],
+            edges: EdgeFilter::default(),
+            as_of: None,
+            format: RenderFormat::Svg,
+        })
+        .unwrap()
+        .text;
+    assert!(!svg.contains("<script"), "{svg}");
+    assert!(!svg.chars().any(|c| c.is_control() && c != '\n'), "{svg}");
+    for (position, (_, shown)) in titles.iter().enumerate() {
+        let identity = format!("@{position} Memo");
+        let label = if shown.chars().count() > 60 {
+            format!("{}\u{2026}", shown.chars().take(59).collect::<String>())
+        } else {
+            shown.to_string()
+        };
+        assert_eq!(
+            svg_element(&svg, &format!("n{position}")),
+            (vec![format!("{shown}\n{identity}")], vec![label, identity]),
+            "{svg}"
+        );
+    }
+    assert_eq!(
+        svg_element(&svg, "n6"),
+        (
+            vec!["of no type\n@6 (unnamed)".into()],
+            vec!["of no type".into(), "@6 (unnamed)".into()]
+        )
+    );
+    let edge = "@7 Links\\E\"&amp;".to_string();
+    assert_eq!(
+        svg_element(&svg, "e7"),
+        (vec![edge.clone(), edge.clone()], vec![edge])
     );
 }

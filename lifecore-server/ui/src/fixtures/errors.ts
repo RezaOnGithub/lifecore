@@ -706,6 +706,22 @@ export const application = {
       },
       "id": "publication_uncertain",
       "jsonrpc": "2.0"
+    },
+    {
+      "error": {
+        "code": 1008,
+        "data": {
+          "kind": "publication_uncertain",
+          "outcome": {
+            "dismissals": [],
+            "kind": "restored",
+            "restored": true
+          }
+        },
+        "message": "the new state was published, but synchronization failed, so it may or may not persist: Input/output error (os error 5)"
+      },
+      "id": "publication_uncertain",
+      "jsonrpc": "2.0"
     }
   ],
   "rejected": [

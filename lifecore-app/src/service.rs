@@ -11,14 +11,14 @@ use lifecore::{
     View, ViewError, ViewId,
     analysis::{
         AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, FindingKey,
-        SuiteConfig,
+        MessageType, SuiteConfig,
         presentation::{CannotDismissInconsistency, Dismissal, DismissalReason},
     },
     inspection::{Currentness, EdgeSelection, NodeSelection},
     transaction::{self, Change, Checked},
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 use uuid::Uuid;
 
 // Called once per operation, so each request gets fresh analyzer instances
@@ -253,8 +253,9 @@ pub struct AnalyzerAdded {
     pub report: ProposalReport,
 }
 
-// A replayed analysis beside the stored dismissal records of the same
-// snapshot read; presentation applies them, the analysis never does.
+// A replayed analysis beside the stored dismissal records, from the same
+// snapshot read, of the findings it emitted; presentation applies them, the
+// analysis never does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisRun {
     pub analysis: AnalysisOutput,
@@ -275,8 +276,8 @@ pub struct RestoreResult {
 
 // The result a mutation would have returned. An uncertain publication
 // carries it, since the new state may already be visible. Tagged by `kind`,
-// because an apply result and an added analyzer differ only by `suite`. Both
-// dismissal edits carry the stored records after the edit.
+// because an apply result and an added analyzer differ only by `suite`, and
+// a dismissal and a restore only by `restored`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Published {
@@ -284,6 +285,7 @@ pub enum Published {
     Applied(ApplyResult),
     AnalyzerAdded(AnalyzerAdded),
     Dismissed(DismissalList),
+    Restored(RestoreResult),
 }
 
 impl From<Initialized> for Published {
@@ -312,9 +314,7 @@ impl From<DismissalList> for Published {
 
 impl From<RestoreResult> for Published {
     fn from(result: RestoreResult) -> Self {
-        Self::Dismissed(DismissalList {
-            dismissals: result.dismissals,
-        })
+        Self::Restored(result)
     }
 }
 
@@ -728,33 +728,65 @@ impl Service {
             .runner(inputs)?
             .run_view(view, snapshot.graph.analysis_suite())
             .map_err(AppError::Analyzer)?;
+        // A record of a key first emitted past the boundary would reveal that
+        // later history, so only records whose complete key this output
+        // emitted are returned.
+        let emitted = analysis
+            .observations()
+            .map(|observation| &observation.key)
+            .collect::<HashSet<_>>();
+        let dismissals = snapshot
+            .dismissals
+            .records()
+            .filter(|record| emitted.contains(&record.key))
+            .cloned()
+            .collect();
         Ok(AnalysisRun {
             analysis,
-            dismissals: dismissals(&snapshot),
+            dismissals,
         })
     }
 
     // Dismissal edits reread under writer exclusion and publish with the
     // graph untouched, so the revision stays (INTERFACES 4).
     pub fn dismiss_finding(&self, request: DismissRequest) -> Result<DismissalList, AppError> {
+        if request.key.kind == MessageType::Inconsistency {
+            return Err(AppError::CannotDismissInconsistency {
+                key: Box::new(request.key),
+            });
+        }
         storage::require_existing(&self.state)?;
         let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
-        locked
-            .snapshot_mut()
-            .dismissals
+        let selected = database(&locked.snapshot().graph);
+        if request.key.database != selected {
+            return Err(AppError::InvalidParams {
+                message: format!(
+                    "the key names database {}, but the selected database is {selected}",
+                    request.key.database
+                ),
+            });
+        }
+        let records = &mut locked.snapshot_mut().dismissals;
+        // Rewriting a record with its own reason and note publishes nothing.
+        let changed = records
+            .get(&request.key)
+            .is_none_or(|record| (record.reason, &record.note) != (request.reason, &request.note));
+        records
             .dismiss(request.key.clone(), request.reason, request.note)
             .map_err(
                 |CannotDismissInconsistency| AppError::CannotDismissInconsistency {
                     key: Box::new(request.key),
                 },
             )?;
-        let publication = self.publish(&locked, true)?;
+        let publication = self.publish(&locked, changed)?;
         let list = DismissalList {
             dismissals: dismissals(locked.snapshot()),
         };
         settle(publication, list)
     }
 
+    // Dismissal refuses keys of other databases, so restoring one matches no
+    // record and is a no-op like any other unmatched key.
     pub fn restore_finding(&self, request: RestoreRequest) -> Result<RestoreResult, AppError> {
         storage::require_existing(&self.state)?;
         let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;

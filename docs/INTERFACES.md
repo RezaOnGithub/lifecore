@@ -192,16 +192,16 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | `entries.inspect` | `id`, optional `as_of` | tagged by `kind`: a node with its `type` resolution, its `lineage` (the whole revision tree, root first) and its incident `edges` of any currentness (each with `direction` and the `other` endpoint); or an edge with `from` and `to` |
 | `types.list` | optional `as_of` | `view` and `types`: one summary per name the view knows, sorted by name, with its `resolution` (`builtin`, `declared` with the structured schema, `missing`, `ambiguous`, `malformed`) and node counts by currentness |
 | `views.query` | `seeds` (exact node `ids`, or a node selection), ordered `expand` steps (`hops`, `direction`, `ty_names`, `currentness`), an `edges` filter, optional `as_of` | `view`, `nodes` with their `provenance` (`seed`, or `reached` at a hop over an edge from a node), and the matching `edges` among them |
-| `views.render` | the `views.query` parameters and `format` (`dot`/`svg`) | `format` and `text`: the queried subgraph as DOT (`digraph lifecore`, labeled with the database and boundary; nodes `n<position>` with the row label, `@position`, and type, superseded ones gray; dashed blue `revision` links only between result nodes; edges labeled `@position <ty_name>`, historical ones gray; every node and edge has `id` and an `href` of `#inspect/<origin>/<position>`), or that DOT rendered by Graphviz's `dot -Tsvg`, run synchronously with a 10 s deadline and a 16 MiB output cap |
+| `views.render` | the `views.query` parameters and `format` (`dot`/`svg`) | `format` and `text`: the queried subgraph as DOT (`digraph lifecore`, labeled with the database and boundary; nodes `n<position>` with the row label on one line and cut at 60 characters, `@position`, and type, superseded ones gray; dashed blue `revision` links only between result nodes; edges labeled `@position <ty_name>`, historical ones gray; the empty type name reads `(unnamed)`; every node and edge has `id`, an `href` of `#inspect/<origin>/<position>`, and the uncut label as `tooltip`; payload text reads literally, with control characters shown as spaces), or that DOT rendered by Graphviz's `dot -Tsvg`, run synchronously with a 10 s deadline and a 16 MiB output cap |
 | `plan_id.mint` | none | `plan_id` |
 | `proposal.check` | `proposal`, evaluation inputs | `accepted` and `report`: `database`, `base_revision`, `base` view, `operations` (name to provisional entry), complete `analysis` |
 | `proposal.apply` | `proposal`, evaluation inputs | new `graph_revision` and the report with actual entry IDs |
 | `proposal.decode` | raw `text`, `format` (`json`/`toml`) | canonical `Proposal` |
 | `proposal.encode` | `proposal`, `format` | `text` |
 | `analyzers.add` | `name`, `configuration` (default `{}`), evaluation inputs | new `graph_revision`, `suite`, and the report |
-| `analysis.run` | optional `as_of`, evaluation inputs | `analysis`: the selected prefix replayed with fresh analyzers under the stored ordered suite, which history does not version ([section 4](#4-database-selection-and-concurrency)); `dismissals`: the stored records (`key`, `reason`, `note`) of the same snapshot read, which the analysis never applies ([section 6](#6-analysis-lifetime-and-dismissal-persistence)) |
-| `findings.dismiss` | `key` (complete finding key), `reason` (`acknowledged`, `false_positive`, `no_longer_relevant`), optional `note` | `dismissals`: every stored record after the edit; an existing record of the key is updated in place |
-| `findings.restore` | `key` | `dismissals` after the edit and `restored`: whether a record of the key existed |
+| `analysis.run` | optional `as_of`, evaluation inputs | `analysis`: the selected prefix replayed with fresh analyzers under the stored ordered suite, which history does not version ([section 4](#4-database-selection-and-concurrency)); `dismissals`: the stored records (`key`, `reason`, `note`), from the same snapshot read, whose complete key equals that of a returned observation, so no record reveals a finding first emitted past the boundary; the analysis never applies them ([section 6](#6-analysis-lifetime-and-dismissal-persistence)) |
+| `findings.dismiss` | `key` (complete finding key of the selected database, else `invalid_params`), `reason` (`acknowledged`, `false_positive`, `no_longer_relevant`), optional `note` | `dismissals`: every stored record after the edit; an existing record of the key is updated in place, and one with the same reason and note publishes nothing |
+| `findings.restore` | `key` | `dismissals` after the edit and `restored`: whether a record of the key existed; nothing is published otherwise |
 
 Read methods take an optional `as_of`, a decimal position: they answer from
 the prefix `[0, as_of)`, whose boundary the result's `view` names, and default
@@ -230,7 +230,7 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 1005 | `lock_failed` | The lock file cannot be opened or locked. |
 | 1006 | `busy` | Another writer held the lock throughout the retry. |
 | 1007 | `publication_failed` | Failure before replacement; stored state unchanged. |
-| 1008 | `publication_uncertain` | Synchronization failed after replacement; `data.outcome` is the result the call would have returned, such as the new `graph_revision` and report, tagged by `kind` (`initialized`, `applied`, or `analyzer_added`), so the caller can inspect the stored state. |
+| 1008 | `publication_uncertain` | Synchronization failed after replacement; `data.outcome` is the result the call would have returned, such as the new `graph_revision` and report, tagged by `kind` (`initialized`, `applied`, `analyzer_added`, `dismissed`, or `restored`), so the caller can inspect the stored state. |
 | 2001 | `malformed_proposal` | Decoding failed; `data.decode` has `format` and `message`, plus `path`, `line`, and `column` where known. A JSON `message` is serde_json's own text, which names a position; for a `proposal` parameter that position counts from the start of the member. |
 | 2002 | `invalid_proposal` | Names, references, intent, or structure; `data.location` names the entry and field where known. |
 | 2003 | `acknowledgment_unsupported` | `acknowledges` is present but not yet verified (plan section 4.4). |
@@ -240,9 +240,9 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 3001 | `analyzer_failure` | Missing analyzer, invalid configuration, or execution failure. |
 | 4001 | `entry_not_found` | The identity is not present in the selected view. |
 | 4002 | `beyond_boundary` | `as_of` exceeds the visible end; `data` carries `requested` and `visible` as decimal strings. |
-| 4003 | `cannot_dismiss_inconsistency` | `findings.dismiss` named an inconsistency key, emitted or not; `data.key` is that key. Nothing is stored. |
-| 4004 | `graphviz_unavailable` | `views.render` with `format: "svg"` could not start the `dot` program; `data.message` is the operating system's text. |
-| 4005 | `graphviz_failed` | `dot` started but exceeded the deadline, exited unsuccessfully, or produced invalid UTF-8 or more than the output cap; `data.message` includes its stderr. |
+| 4003 | `cannot_dismiss_inconsistency` | `findings.dismiss` named an inconsistency key, emitted or not; `data.key` is that key. Refused before the writer lock; nothing is stored. |
+| 4004 | `graphviz_unavailable` | `views.render` with `format: "svg"` could not start the `dot` program, whether missing, not executable, or refused for another reason; `data.message` is the operating system's text. |
+| 4005 | `graphviz_failed` | `dot` started but exceeded the deadline or the output cap (it is killed at once), exited unsuccessfully, left its input unread or its output open 500 ms after exiting, or produced invalid UTF-8, or a pipe failed; `data.message` includes its stderr where read. |
 | 5001 | `backend_failure` | The host task running the call ended without a response, for example by panicking. A write it was making may or may not have been published; inspect the stored state. Never a rollback. |
 
 Invalid parameters (`-32602`, `invalid_params`) and internal errors (`-32603`,
