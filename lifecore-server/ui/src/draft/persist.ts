@@ -5,6 +5,7 @@ import type {
   ProposalReference,
   Published,
 } from "../contract.ts";
+import { isRecord } from "../model/guards.ts";
 import {
   type DraftState,
   type InFlight,
@@ -29,10 +30,6 @@ export interface Stored {
 }
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isId(value: unknown): value is EntryId {
   return (

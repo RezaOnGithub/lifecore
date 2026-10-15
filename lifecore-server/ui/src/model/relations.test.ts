@@ -3,10 +3,16 @@ import { test } from "node:test";
 import type { EdgeEntry, NodeEntry } from "../contract.ts";
 import { entryKey } from "./labels.ts";
 import {
+  countByType,
+  countWords,
+  directionAt,
+  edgeWords,
   groupByRelation,
+  plural,
   relationCells,
   relationKey,
   relationLabel,
+  typeTags,
 } from "./relations.ts";
 
 const id = (position: string) => ({ origin: "o", position });
@@ -95,4 +101,57 @@ test("cells list each row's neighbours per relation in edge order", () => {
   assert.deepEqual(cell("2", "← Blocks"), [["2", "16"]]);
   assert.equal(cell("1", "→ DependsOn"), undefined);
   assert.equal(cells.has("o:4"), false);
+});
+
+test("neighbours count by type, most first, in words and as tags", () => {
+  const counts = countByType([
+    node("1", "Note"),
+    node("2"),
+    node("3"),
+    node("4", "Address"),
+    node("5"),
+    node("6", "Story"),
+  ]);
+  assert.deepEqual(counts, [
+    { ty_name: "Task", count: 3 },
+    { ty_name: "Address", count: 1 },
+    { ty_name: "Note", count: 1 },
+    { ty_name: "Story", count: 1 },
+  ]);
+  assert.equal(countWords(counts), "3 Tasks, 1 Address, 1 Note, 1 Story");
+  assert.equal(
+    countWords([
+      { ty_name: "Address", count: 2 },
+      { ty_name: "Story", count: 4 },
+    ]),
+    "2 Addresses, 4 Stories",
+  );
+  assert.equal(plural("Day", 2), "Days");
+  assert.equal(typeTags([{ ty_name: "Task", count: 460 }]), "Task");
+  assert.equal(typeTags(counts.slice(0, 2)), "3 Task, 1 Address");
+  assert.equal(typeTags([{ ty_name: "", count: 1 }]), "(unnamed)");
+});
+
+test("one arrow notation, read from the node in context", () => {
+  const within = edge("9", "Within", "1", "2");
+  assert.equal(directionAt(within, id("1")), "outgoing");
+  assert.equal(directionAt(within, id("2")), "incoming");
+  assert.equal(
+    relationLabel({
+      ty_name: "Within",
+      direction: directionAt(within, id("1")),
+    }),
+    "→ Within",
+  );
+  assert.equal(
+    relationLabel({
+      ty_name: "Within",
+      direction: directionAt(within, id("2")),
+    }),
+    "← Within",
+  );
+  assert.equal(
+    edgeWords("Wash dishes", "Within", "Kitchen"),
+    "Wash dishes —Within→ Kitchen",
+  );
 });

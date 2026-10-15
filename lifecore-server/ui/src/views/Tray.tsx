@@ -1,9 +1,10 @@
 import { useState } from "react";
-import type { DecimalString } from "../contract.ts";
+import type { DecimalString, Observation } from "../contract.ts";
 import { useData } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import {
   type Attached,
+  type Attachment,
   attachFindings,
   countFindings,
 } from "../draft/findings.ts";
@@ -13,42 +14,83 @@ import { EARLIER, FindingList, judged } from "./Findings.tsx";
 import { OperationRows, rowsOf } from "./OperationRow.tsx";
 import { statusWord, TrayHeader } from "./TrayHeader.tsx";
 
-// Findings the committed base already had: often many, and not this
-// draft's doing, so one line with their counts until expanded.
+// Findings first emitted in the committed history: often many, and not
+// this draft's doing. Inconsistencies are never folded (SPEC §8.3), so they
+// are listed, those the base no longer emits included; the advisories still
+// at the base fold into one line with their counts until expanded, and
+// those no longer emitted there are only counted.
 function HistoryFindings({
-  findings,
+  attachment,
+  observations,
   names,
   current,
 }: {
-  findings: readonly Attached[];
+  attachment: Attachment;
+  observations: readonly Observation[];
   names: readonly string[];
   current: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  if (findings.length === 0) {
-    return (
-      <>
-        <h4>already in history</h4>
-        <p className="muted">none</p>
-      </>
+  const inconsistent = (attached: Attached) =>
+    attached.observation.diagnostic.kind === "inconsistency";
+  const inconsistencies = [...attachment.history, ...attachment.ended]
+    .filter(inconsistent)
+    .sort(
+      (a, b) =>
+        observations.indexOf(a.observation) -
+        observations.indexOf(b.observation),
     );
-  }
+  const advisories = attachment.history.filter((a) => !inconsistent(a));
+  const { endedAdvisories } = attachment;
   return (
     <>
-      <h4>
-        <button
-          type="button"
-          className="link disclosure"
-          aria-expanded={open}
-          data-testid="history-findings"
-          onClick={() => setOpen(!open)}
-        >
-          already in history: {kindWords(countFindings(findings))}{" "}
-          {open ? "▾" : "▸"}
-        </button>
-      </h4>
-      {open && (
-        <FindingList findings={findings} names={names} current={current} />
+      {inconsistencies.length > 0 && (
+        <>
+          <h4 data-testid="history-inconsistencies">
+            already in history: {kindWords(countFindings(inconsistencies))}
+          </h4>
+          <FindingList
+            findings={inconsistencies}
+            names={names}
+            current={current}
+          />
+        </>
+      )}
+      {advisories.length > 0 ? (
+        <>
+          <h4>
+            <button
+              type="button"
+              className="link disclosure"
+              aria-expanded={open}
+              data-testid="history-findings"
+              onClick={() => setOpen(!open)}
+            >
+              already in history: {kindWords(countFindings(advisories))}{" "}
+              {open ? "▾" : "▸"}
+            </button>
+          </h4>
+          {open && (
+            <FindingList
+              findings={advisories}
+              names={names}
+              current={current}
+            />
+          )}
+        </>
+      ) : (
+        inconsistencies.length === 0 && (
+          <>
+            <h4>already in history</h4>
+            <p className="muted">none</p>
+          </>
+        )
+      )}
+      {endedAdvisories > 0 && (
+        <p className="muted" data-testid="history-ended">
+          {endedAdvisories} more advisor{endedAdvisories === 1 ? "y" : "ies"}{" "}
+          from history no longer emitted at the base, not listed
+        </p>
       )}
     </>
   );
@@ -94,15 +136,11 @@ function ReportSummary() {
         </>
       )}
       <HistoryFindings
-        findings={attachment.history}
+        attachment={attachment}
+        observations={outcome.report.analysis.observations}
         names={judgment.names}
         current={judgment.current}
       />
-      {attachment.settled > 0 && (
-        <p className="muted">
-          {attachment.settled} more resolved before the base, not listed
-        </p>
-      )}
       <h4>initialization</h4>
       {list(attachment.initialization)}
       <button type="button" className="link" onClick={bumpRefresh}>
@@ -124,23 +162,47 @@ export function Tray({
   head: DecimalString | null;
 }) {
   const { state } = useDraft();
-  const [collapsed, setCollapsed] = useState(false);
   const { entries } = state.proposal;
+  // An empty draft with nothing to report leaves the room to the screens:
+  // the tray folds to a strip until an operation arrives or the user opens
+  // it. The user's choice holds until the draft becomes empty or stops
+  // being so.
+  const idle =
+    entries.length === 0 &&
+    state.outcome === null &&
+    state.applied === null &&
+    state.uncertain === null &&
+    state.problem === null &&
+    state.stale === null &&
+    state.picking === null &&
+    state.pending === null &&
+    state.notices.length === 0;
+  const [choice, setChoice] = useState<boolean | null>(null);
+  const [wasIdle, setWasIdle] = useState(idle);
+  if (wasIdle !== idle) {
+    setWasIdle(idle);
+    setChoice(null);
+  }
+  const collapsed = choice ?? idle;
   if (collapsed) {
     return (
       <aside className="tray collapsed" aria-label="Draft" data-testid="tray">
         <button
           type="button"
-          onClick={() => setCollapsed(false)}
+          className="tray-strip"
+          onClick={() => setChoice(false)}
           aria-label="expand the draft tray"
           title="expand the draft tray"
         >
-          ▸
+          <span aria-hidden="true">◂</span>
+          <span className="strip">
+            Draft:{" "}
+            <span data-testid="draft-count">
+              {entries.length} operation{entries.length === 1 ? "" : "s"}
+            </span>
+            {!idle && `, ${statusWord(state)}`}
+          </span>
         </button>
-        <span className="strip">
-          Draft: {entries.length} operation{entries.length === 1 ? "" : "s"},{" "}
-          {statusWord(state)}
-        </span>
       </aside>
     );
   }
@@ -153,7 +215,7 @@ export function Tray({
     screen.kind === "operation" ? screen.name : (state.selected ?? null);
   return (
     <aside className="tray" aria-label="Draft" data-testid="tray">
-      <TrayHeader screen={screen} onCollapse={() => setCollapsed(true)} />
+      <TrayHeader screen={screen} onCollapse={() => setChoice(true)} />
       <div className="tray-body">
         {entries.length === 0 ? (
           <p className="muted">

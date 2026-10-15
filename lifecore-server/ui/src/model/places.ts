@@ -1,4 +1,5 @@
 import type { EntryId, EntryKind } from "../contract.ts";
+import { isRecord } from "./guards.ts";
 import { sameId } from "./labels.ts";
 import { type ExploreForm, readEntryId, readForm } from "./query.ts";
 
@@ -66,6 +67,12 @@ export function visit(places: Places, place: Place): Places {
   };
 }
 
+// Whether a kept place lies past the as-of boundary, null for the whole
+// history, where a read would not find it; the sidebar dims it.
+export function beyondBoundary(place: Place, asOf: string | null): boolean {
+  return asOf !== null && BigInt(place.id.position) >= BigInt(asOf);
+}
+
 export function isPinned(places: Places, id: EntryId): boolean {
   return places.pinned.some((pinned) => sameId(pinned.id, id));
 }
@@ -105,10 +112,6 @@ export function removeView(places: Places, name: string): Places {
     ...places,
     views: places.views.filter((saved) => saved.name !== name),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readPlace(value: unknown): Place | null {

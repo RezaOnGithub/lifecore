@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from "react";
 import type {
   AnalyzerIdentity,
+  DecimalString,
   DismissalReason,
   EntryChange,
   EntryId,
@@ -8,23 +9,27 @@ import type {
   Observation,
   Reference,
 } from "../contract.ts";
+import { useData } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, NodeLink, OperationLink } from "../links.tsx";
 import {
+  addBlocker,
+  type FindingCluster,
   type FindingGroup,
-  rangeText,
+  keyText,
+  lead,
+  rangeWords,
+  type Selection,
   shownSubjects,
   unconfirmed,
 } from "../model/findings.ts";
-import { entryKey, sameId, typeName } from "../model/labels.ts";
+import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
 import { formatBody } from "../model/payload.ts";
-import {
-  type AnalysisRuns,
-  type Ran,
-  useAnalysisRuns,
-} from "./analysisRuns.ts";
+import type { AnalysisRuns, Bulk, Ran } from "./analysisRuns.ts";
+import { ConfirmButton } from "./ConfirmButton.tsx";
+import { useAnalysisRuns } from "./useAnalysisRuns.ts";
 
 export function AnalyzerName({
   analyzer,
@@ -44,38 +49,108 @@ export function AnalyzerName({
   );
 }
 
+// The prefix boundaries an observation was emitted at, worded alike
+// everywhere against the boundary of its report (`rangeWords`). A range that
+// ended before it carries `ended`, the place's own words for "not emitted
+// there", or, for a sticky advisory, the historical label (SPEC §8.3).
+function ObservedRange({
+  observation,
+  boundary,
+  ended,
+}: {
+  observation: Observation;
+  boundary: DecimalString;
+  ended: ReactNode;
+}) {
+  const { evaluated_view } = observation;
+  const words = rangeWords(evaluated_view, boundary);
+  const title =
+    evaluated_view.kind === "initialization"
+      ? "emitted at the suite's initialization"
+      : words.ended
+        ? `emitted at the prefix boundaries ${evaluated_view.first.end_exclusive} to ${evaluated_view.last.end_exclusive}, not at ${boundary}; that alone does not mean it was resolved`
+        : `emitted at every prefix boundary from ${evaluated_view.first.end_exclusive} to ${boundary}`;
+  return (
+    <span className="muted range" title={title} data-testid="range">
+      {words.text}
+      {words.ended && (
+        <>
+          {" "}
+          {unconfirmed(observation, boundary) ? (
+            <span className="badge unconfirmed">
+              historical; applicability unconfirmed
+            </span>
+          ) : (
+            ended
+          )}
+        </>
+      )}
+    </span>
+  );
+}
+
 // One observation as the backend worded it: kind, message, analyzer, its
 // range, then the focus and, when they say more, the subjects as chips.
 // Targets are entries on the Findings screen and may be draft operations in
-// the tray, so `chip` renders them and `same` compares them.
+// the tray, so `chip` renders them and `same` compares them. Inside a
+// cluster, `brief` is the cluster's message: kind and analyzer are the
+// cluster's, and the message shows only where it differs.
 export function FindingRow<T>({
   observation,
-  range,
+  boundary,
+  ended,
   focus,
   subjects,
   same,
   chip,
+  hideFocus = false,
+  brief,
+  dim = false,
   children,
 }: {
   observation: Observation;
-  range: ReactNode;
+  boundary: DecimalString;
+  ended: ReactNode;
   focus: T | null;
   subjects: readonly T[];
   same: (a: T, b: T) => boolean;
   chip: (target: T) => ReactNode;
+  hideFocus?: boolean;
+  brief?: string | undefined;
+  dim?: boolean;
   children?: ReactNode;
 }) {
   const { diagnostic, key } = observation;
   const listed = shownSubjects(focus, subjects, same);
+  const focusChip = focus !== null && !hideFocus;
   return (
-    <li className={`finding ${diagnostic.kind}`}>
-      <span className={`badge kind-${diagnostic.kind}`}>{diagnostic.kind}</span>{" "}
-      {diagnostic.message}{" "}
-      <AnalyzerName analyzer={key.analyzer} sticky={diagnostic.sticky} />{" "}
-      {range}
-      {(focus !== null || listed.length > 0) && (
+    <li className={`finding ${diagnostic.kind}${dim ? " ended" : ""}`}>
+      {brief === undefined && (
+        <>
+          <span className={`badge kind-${diagnostic.kind}`}>
+            {diagnostic.kind}
+          </span>{" "}
+        </>
+      )}
+      {brief !== diagnostic.message && <>{diagnostic.message} </>}
+      {brief === undefined ? (
+        <>
+          <AnalyzerName
+            analyzer={key.analyzer}
+            sticky={diagnostic.sticky}
+          />{" "}
+        </>
+      ) : (
+        diagnostic.sticky && <span className="muted">sticky </span>
+      )}
+      <ObservedRange
+        observation={observation}
+        boundary={boundary}
+        ended={ended}
+      />
+      {(focusChip || listed.length > 0) && (
         <ul className="chips">
-          {focus !== null && <li>focus {chip(focus)}</li>}
+          {focus !== null && focusChip && <li>focus {chip(focus)}</li>}
           {listed.map((subject, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: subjects may repeat
             <li key={i}>{chip(subject)}</li>
@@ -99,30 +174,19 @@ export function EntryChip({
   return node === undefined ? <IdLink id={id} /> : <NodeLink node={node} />;
 }
 
-function ObservedRange({
-  observation,
-  ran,
-}: {
-  observation: Observation;
-  ran: Ran;
-}) {
-  return (
-    <span
-      className="muted"
-      title="the first and last prefix boundary it was emitted at"
-    >
-      {rangeText(observation.evaluated_view)}
-      {unconfirmed(observation, ran.run.analysis) && (
-        <>
-          {" "}
-          <span className="badge unconfirmed">
-            historical; applicability unconfirmed
-          </span>
-        </>
-      )}
-    </span>
-  );
+// What the text filter reads of an entry: its row label, else its position.
+export function labelOf(nodes: Map<string, NodeRecord>) {
+  return (id: EntryId): string => {
+    const node = nodes.get(entryKey(id));
+    return node === undefined ? `@${id.position}` : rowLabel(node);
+  };
 }
+
+const ENDED = (
+  <span className="ended" data-testid="ended">
+    (ended)
+  </span>
+);
 
 const REASONS: { value: DismissalReason; words: string }[] = [
   { value: "acknowledged", words: "acknowledged" },
@@ -137,30 +201,33 @@ function reasonWords(reason: DismissalReason): string {
 export const UNDISMISSABLE =
   "Inconsistencies cannot be dismissed: they stay visible in every report and block every change until the history no longer emits them.";
 
-function DismissForm({
-  group,
-  store,
-  onDone,
+export const MAY_BE_STORED =
+  "A dismissal edit may have been stored; Run again to see the stored records.";
+
+// A reason and an optional note, kept as typed.
+function ReasonForm({
+  reason: initialReason = "acknowledged",
+  note: initialNote = "",
+  submit,
+  busy,
+  onSubmit,
+  onCancel,
 }: {
-  group: FindingGroup;
-  store: AnalysisRuns;
-  onDone: () => void;
+  reason?: DismissalReason | undefined;
+  note?: string;
+  submit: string;
+  busy: boolean;
+  onSubmit: (reason: DismissalReason, note: string) => void;
+  onCancel: () => void;
 }) {
-  const [reason, setReason] = useState<DismissalReason>(
-    group.dismissal?.reason ?? "acknowledged",
-  );
-  const [note, setNote] = useState(group.dismissal?.note ?? "");
-  const busy = store.editing() !== null;
+  const [reason, setReason] = useState<DismissalReason>(initialReason);
+  const [note, setNote] = useState(initialNote);
   return (
     <form
       className="row dismiss-form"
       onSubmit={(event) => {
         event.preventDefault();
-        void store.dismiss(group.key, reason, note.trim()).then((stored) => {
-          if (stored) {
-            onDone();
-          }
-        });
+        onSubmit(reason, note);
       }}
     >
       <label>
@@ -186,22 +253,46 @@ function DismissForm({
         />
       </label>
       <button type="submit" disabled={busy}>
-        {group.dismissal === null ? "Dismiss" : "Save"}
+        {submit}
       </button>
-      <button type="button" onClick={onDone}>
+      <button type="button" onClick={onCancel}>
         Cancel
       </button>
     </form>
   );
 }
 
+// A failed edit of one key: one known to precede publication changed
+// nothing; any other may have stored it, which the banner above says too.
+function EditFailureView({
+  store,
+  group,
+}: {
+  store: AnalysisRuns;
+  group: FindingGroup;
+}) {
+  const failure = store.editFailure(group.key);
+  if (failure === null || failure.kind === "written") {
+    return null;
+  }
+  return (
+    <div className="edit-failure" data-testid="edit-failure">
+      {failure.kind === "uncertain" && (
+        <p className="muted edit-failure-note">
+          This edit may have been stored.
+        </p>
+      )}
+      <FailureView failure={failure.failure} compact />
+    </div>
+  );
+}
+
 // Dismissal is display state only (SPEC §8.3): it hides an advisory from
 // reports and never changes what blocks a change.
-function DismissalBar({ group }: { group: FindingGroup }) {
+function DismissalBar({ group, ran }: { group: FindingGroup; ran: Ran }) {
   const store = useAnalysisRuns();
   const [editing, setEditing] = useState(false);
-  const busy = store.editing() !== null;
-  const failure = store.editFailure(group.key);
+  const busy = store.busy();
   if (group.key.kind === "inconsistency") {
     return (
       // A disabled button shows no tooltip in every browser, so its
@@ -224,9 +315,20 @@ function DismissalBar({ group }: { group: FindingGroup }) {
               dismissed: {reasonWords(dismissal.reason)}
             </span>
             {dismissal.note !== null && (
-              <q className="dismissal-note">{dismissal.note}</q>
+              <q className="dismissal-note" data-testid="dismissal-note">
+                {dismissal.note}
+              </q>
             )}
           </>
+        )}
+        {store.written(ran, group.key) && (
+          <span
+            className="badge unconfirmed"
+            data-testid="written"
+            title="the server published this edit but could not confirm it is durable"
+          >
+            written; durability unconfirmed
+          </span>
         )}
         {!editing && (
           <button
@@ -249,13 +351,22 @@ function DismissalBar({ group }: { group: FindingGroup }) {
         {store.editing() === group.id && <span className="muted">saving…</span>}
       </div>
       {editing && (
-        <DismissForm
-          group={group}
-          store={store}
-          onDone={() => setEditing(false)}
+        <ReasonForm
+          reason={dismissal?.reason}
+          note={dismissal?.note ?? ""}
+          submit={dismissal === null ? "Dismiss" : "Save"}
+          busy={busy}
+          onSubmit={(reason, note) =>
+            void store.dismiss(group.key, reason, note).then((result) => {
+              if (result === "stored" || result === "written") {
+                setEditing(false);
+              }
+            })
+          }
+          onCancel={() => setEditing(false)}
         />
       )}
-      {failure !== null && <FailureView failure={failure} compact />}
+      <EditFailureView store={store} group={group} />
     </>
   );
 }
@@ -276,19 +387,43 @@ function ActionReference({
 
 // A suggestion's operations, read-only, and a way to start a draft from
 // them. Added operations are ordinary ones: the proposal does not
-// acknowledge the finding (PLAN §4.4).
+// acknowledge the finding (PLAN §4.4). The draft applies to the current
+// history, so only actions judged at the boundary of a whole-history run of
+// this reload can be added; a second addition asks first.
 function SuggestedActions({
+  observation,
   actions,
-  nodes,
+  ran,
 }: {
+  observation: Observation;
   actions: EntryChange[];
-  nodes: Map<string, NodeRecord>;
+  ran: Ran;
 }) {
   const { state, actions: draft } = useDraft();
-  const [added, setAdded] = useState<string[] | null>(null);
+  const { refresh } = useData();
+  const store = useAnalysisRuns();
+  const { nodes } = ran;
   if (actions.length === 0) {
     return <p className="muted">no suggested operations</p>;
   }
+  const id = `${keyText(observation.key)}${JSON.stringify(observation.evaluated_view)}`;
+  const added = store.added(id);
+  const blocker = addBlocker(observation, ran.run.analysis, {
+    whole: ran.params.as_of === undefined,
+    current: ran.refresh === refresh,
+  });
+  const locked = frozen(state);
+  const title =
+    blocker ??
+    (locked
+      ? "an apply is in flight"
+      : "appends these operations to the draft, without acknowledging the finding");
+  const add = () => {
+    const names = draft.addSuggested(actions);
+    if (names.length > 0) {
+      store.setAdded(id, names);
+    }
+  };
   return (
     <div className="suggested">
       <ol className="suggested-actions" data-testid="suggested-actions">
@@ -322,23 +457,28 @@ function SuggestedActions({
           </li>
         ))}
       </ol>
-      <div className="row">
-        <button
-          type="button"
-          disabled={frozen(state)}
-          title="appends these operations to the draft, without acknowledging the finding"
-          onClick={() => {
-            const names = draft.addSuggested(actions);
-            if (names.length > 0) {
-              setAdded(names);
-            }
-          }}
-        >
-          Add to draft
-        </button>
+      <div className="row" title={blocker ?? undefined}>
+        {added === null ? (
+          <button
+            type="button"
+            disabled={locked || blocker !== null}
+            title={title}
+            onClick={add}
+          >
+            Add to draft
+          </button>
+        ) : (
+          <ConfirmButton
+            confirm="Add them again?"
+            disabled={locked || blocker !== null}
+            title={title}
+            onConfirm={add}
+          >
+            added ({added.length} operation{added.length === 1 ? "" : "s"})
+          </ConfirmButton>
+        )}
         {added !== null && (
           <span className="muted">
-            added{" "}
             {added.map((name) => (
               <span key={name}>
                 <OperationLink name={name} />{" "}
@@ -352,10 +492,25 @@ function SuggestedActions({
 }
 
 // One finding of a stored-database run: its selected observations, the
-// ranges it was also observed at, a suggestion's operations, and its
-// dismissal.
-export function GroupRow({ group, ran }: { group: FindingGroup; ran: Ran }) {
+// ranges it was also emitted at, a suggestion's operations, and its
+// dismissal. History mode dims nonsticky advisories that the boundary no
+// longer emits; inconsistencies are never dimmed. `about` is the inspected
+// entry, whose own focus chip would only repeat it.
+export function GroupRow({
+  group,
+  ran,
+  selection = "current",
+  about,
+  brief,
+}: {
+  group: FindingGroup;
+  ran: Ran;
+  selection?: Selection;
+  about?: EntryId;
+  brief?: string;
+}) {
   const { nodes } = ran;
+  const boundary = ran.run.analysis.view.end_exclusive;
   const others = group.observations.filter((o) => !group.selected.includes(o));
   const chip = (id: EntryId) => <EntryChip id={id} nodes={nodes} />;
   return (
@@ -364,33 +519,216 @@ export function GroupRow({ group, ran }: { group: FindingGroup; ran: Ran }) {
       data-testid="finding-group"
     >
       <ul className="findings">
-        {group.selected.map((observation, index) => (
-          <FindingRow
-            // biome-ignore lint/suspicious/noArrayIndexKey: one group's observations are fixed per run
-            key={index}
-            observation={observation}
-            range={<ObservedRange observation={observation} ran={ran} />}
-            focus={observation.diagnostic.focus}
-            subjects={observation.diagnostic.subjects}
-            same={sameId}
-            chip={chip}
-          >
-            {observation.diagnostic.kind === "suggestion" && (
-              <SuggestedActions
-                actions={observation.diagnostic.actions}
-                nodes={nodes}
-              />
-            )}
-          </FindingRow>
-        ))}
+        {group.selected.map((observation, index) => {
+          const { diagnostic } = observation;
+          const ended = rangeWords(observation.evaluated_view, boundary).ended;
+          return (
+            <FindingRow
+              // biome-ignore lint/suspicious/noArrayIndexKey: one group's observations are fixed per run
+              key={index}
+              observation={observation}
+              boundary={boundary}
+              ended={ENDED}
+              focus={diagnostic.focus}
+              subjects={diagnostic.subjects}
+              same={sameId}
+              chip={chip}
+              hideFocus={
+                about !== undefined &&
+                diagnostic.focus !== null &&
+                sameId(diagnostic.focus, about)
+              }
+              brief={brief}
+              dim={
+                selection === "history" &&
+                diagnostic.kind !== "inconsistency" &&
+                !diagnostic.sticky &&
+                ended
+              }
+            >
+              {diagnostic.kind === "suggestion" && (
+                <SuggestedActions
+                  observation={observation}
+                  actions={diagnostic.actions}
+                  ran={ran}
+                />
+              )}
+            </FindingRow>
+          );
+        })}
       </ul>
       {others.length > 0 && (
         <p className="muted also">
-          also observed at{" "}
-          {others.map((o) => rangeText(o.evaluated_view)).join(", ")}
+          also emitted:{" "}
+          {others
+            .map((o) => rangeWords(o.evaluated_view, boundary).text)
+            .join(", ")}
         </p>
       )}
-      <DismissalBar group={group} />
+      <DismissalBar group={group} ran={ran} />
+    </li>
+  );
+}
+
+// The last "Dismiss all", kept above the list since its keys leave their
+// cluster as they are dismissed. Failures are told by the rows of their
+// keys, so a click on them expands the cluster.
+export function BulkProgress({
+  bulk,
+  store,
+  onShow,
+}: {
+  bulk: Bulk;
+  store: AnalysisRuns;
+  onShow: () => void;
+}) {
+  return (
+    <div className="row bulk" data-testid="bulk-progress">
+      <span>
+        Dismiss all “{bulk.label}”: {bulk.stored} of {bulk.total}{" "}
+        {bulk.running ? "dismissed so far…" : "dismissed"}
+      </span>
+      {bulk.failed > 0 && (
+        <button type="button" className="link" onClick={onShow}>
+          {bulk.failed} failed
+        </button>
+      )}
+      {bulk.stopped !== null && (
+        <span className="muted">ended early: {bulk.stopped}</span>
+      )}
+      {bulk.running ? (
+        <button
+          type="button"
+          disabled={bulk.stopping}
+          onClick={() => store.stopBulk()}
+        >
+          {bulk.stopping ? "stopping…" : "Stop"}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="link"
+          aria-label="close"
+          onClick={() => store.clearBulk()}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Findings that read alike, on one line: the message, the analyzer when the
+// suite has several, how many keys, and the first foci; expanded, one row
+// per key, each dismissed on its own. "Dismiss all" takes one reason and
+// note for every undismissed key and sends one edit per key, in turn.
+export function ClusterRow({
+  cluster,
+  ran,
+  selection,
+  analyzers,
+  expanded,
+  onExpand,
+}: {
+  cluster: FindingCluster;
+  ran: Ran;
+  selection: Selection;
+  analyzers: number;
+  expanded: boolean;
+  onExpand: (expanded: boolean) => void;
+}) {
+  const store = useAnalysisRuns();
+  const [dismissing, setDismissing] = useState(false);
+  const { groups, kind } = cluster;
+  const shown = groups.slice(0, 3);
+  const undismissed = groups
+    .filter((group) => group.dismissal === null)
+    .map((group) => group.key);
+  return (
+    <li
+      className={`finding-cluster ${kind}${undismissed.length === 0 ? " dismissed" : ""}`}
+      data-testid="finding-cluster"
+    >
+      <div className="row cluster-head">
+        <button
+          type="button"
+          className="link disclosure"
+          aria-expanded={expanded}
+          aria-label={expanded ? "collapse" : "expand"}
+          onClick={() => onExpand(!expanded)}
+        >
+          {expanded ? "▾" : "▸"}
+        </button>
+        <span className={`badge kind-${kind}`}>{kind}</span>
+        <span>{cluster.message}</span>
+        {analyzers > 1 && <AnalyzerName analyzer={cluster.analyzer} />}
+        <span className="badge count" data-testid="cluster-count">
+          ×{groups.length}
+        </span>
+        <ul className="cluster-chips">
+          {shown.map((group) => {
+            const { focus } = lead(group).diagnostic;
+            return (
+              focus !== null && (
+                <li key={group.id}>
+                  <EntryChip id={focus} nodes={ran.nodes} />
+                </li>
+              )
+            );
+          })}
+          {groups.length > shown.length && (
+            <li>
+              <button
+                type="button"
+                className="link"
+                onClick={() => onExpand(true)}
+              >
+                +{groups.length - shown.length} more
+              </button>
+            </li>
+          )}
+        </ul>
+        {kind !== "inconsistency" && undismissed.length > 0 && !dismissing && (
+          <span className="cluster-actions">
+            <button
+              type="button"
+              disabled={store.busy()}
+              onClick={() => setDismissing(true)}
+            >
+              Dismiss all {undismissed.length}…
+            </button>
+          </span>
+        )}
+      </div>
+      {dismissing && (
+        <ReasonForm
+          submit={`Dismiss ${undismissed.length}`}
+          busy={store.busy()}
+          onSubmit={(reason, note) => {
+            setDismissing(false);
+            void store.dismissAll(
+              { id: cluster.id, label: cluster.message },
+              undismissed,
+              reason,
+              note,
+            );
+          }}
+          onCancel={() => setDismissing(false)}
+        />
+      )}
+      {expanded && (
+        <ul className="finding-groups">
+          {groups.map((group) => (
+            <GroupRow
+              key={group.id}
+              group={group}
+              ran={ran}
+              selection={selection}
+              brief={cluster.message}
+            />
+          ))}
+        </ul>
+      )}
     </li>
   );
 }

@@ -87,12 +87,21 @@ export function buildThread(
     (order.get(a) ?? 0) - (order.get(b) ?? 0);
   const rows: ThreadRow[] = [];
   const firstParent = new Map<string, string | null>();
-  const visit = (
+  // An explicit stack and one set of the nodes on the current path, which
+  // a node joins when entered and leaves when its children are done: a long
+  // chain neither overflows the call stack nor copies its path per node.
+  const path = new Set<string>();
+  const stack: {
+    key: string;
+    depth: number;
+    children: string[];
+    next: number;
+  }[] = [];
+  const enter = (
     key: string,
     depth: number,
     parent: string | null,
     via: string[],
-    path: ReadonlySet<string>,
   ) => {
     if (path.has(key)) {
       rows.push({ kind: "cycle", key, depth, via });
@@ -105,24 +114,40 @@ export function buildThread(
     }
     firstParent.set(key, parent);
     rows.push({ kind: "node", key, depth, via });
-    const next = new Set(path);
-    next.add(key);
-    const byChild = children.get(key) ?? new Map<string, Set<string>>();
-    for (const child of [...byChild.keys()].sort(byAppend)) {
-      visit(child, depth + 1, key, [...(byChild.get(child) ?? [])], next);
+    path.add(key);
+    const byChild = children.get(key);
+    stack.push({
+      key,
+      depth,
+      children: byChild === undefined ? [] : [...byChild.keys()].sort(byAppend),
+      next: 0,
+    });
+  };
+  const walk = (root: string) => {
+    enter(root, 0, null, []);
+    for (let frame = stack.at(-1); frame !== undefined; frame = stack.at(-1)) {
+      const child = frame.children[frame.next];
+      if (child === undefined) {
+        stack.pop();
+        path.delete(frame.key);
+        continue;
+      }
+      frame.next += 1;
+      const types = children.get(frame.key)?.get(child) ?? [];
+      enter(child, frame.depth + 1, frame.key, [...types]);
     }
   };
   const keys = nodes.map((node) => entryKey(node.id));
   for (const key of keys) {
     if (!hasParent.has(key)) {
-      visit(key, 0, null, [], new Set());
+      walk(key);
     }
   }
   // A component where every node has a parent is a cycle without a root; it
   // starts at its first node in append order so it is still shown.
   for (const key of keys) {
     if (!firstParent.has(key)) {
-      visit(key, 0, null, [], new Set());
+      walk(key);
     }
   }
   const counts = new Map<string, number>();

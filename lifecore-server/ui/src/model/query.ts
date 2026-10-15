@@ -7,6 +7,7 @@ import type {
   Seed,
   ViewQueryParams,
 } from "../contract.ts";
+import { isRecord } from "./guards.ts";
 import { sameId } from "./labels.ts";
 
 // The Explore form. Edge type names are kept as the typed text and split when
@@ -49,76 +50,104 @@ export const emptyForm: ExploreForm = {
   edges: { ty_names: "", currentness: "current" },
 };
 
-// The Explore screen's state: the form, and the query last run with a counter
-// so that running an unchanged form sends the request again.
+// The Explore screen's state: the form as edited, and the form of the query
+// on show with a counter, so that running an unchanged form sends the
+// request again.
 export interface ExploreState {
   form: ExploreForm;
-  submitted: { params: ViewQueryParams; run: number } | null;
+  ran: { form: ExploreForm; run: number } | null;
 }
 
 export type ExploreAction =
   | { kind: "change"; form: ExploreForm }
   | { kind: "run" }
-  // "Explore from here" and "+ seed": the node joins the seeds and the
-  // query runs.
+  // "+ seed": the node joins the seeds of the form and the query runs.
   | { kind: "seed"; id: EntryId }
-  // "focus": the node becomes the only seed, the node selection included,
-  // and the query runs with the same expansion.
+  // "focus": the node becomes the only seed, the node selection off, and
+  // the query runs with the same expansion.
   | { kind: "focus"; id: EntryId }
   // A saved view: its form replaces this one and runs.
   | { kind: "load"; form: ExploreForm };
 
-export const initialExplore: ExploreState = {
-  form: emptyForm,
-  submitted: null,
-};
+// What an action does to the Back history: a new query is a new step, and
+// the step it leaves shows its own query again; a change of the form, or a
+// rerun of the query on show, stays on the step; a form without a seed
+// runs nothing.
+export type ExploreStep =
+  | { kind: "none" }
+  | { kind: "replace"; state: ExploreState }
+  | { kind: "push"; leaving: ExploreState; state: ExploreState };
 
-export function exploreReducer(
+function sameQuery(a: ExploreForm, b: ExploreForm): boolean {
+  return JSON.stringify(toParams(a)) === JSON.stringify(toParams(b));
+}
+
+function runForm(state: ExploreState, form: ExploreForm): ExploreStep {
+  if (toParams(form) === null) {
+    return { kind: "none" };
+  }
+  const { ran } = state;
+  if (ran !== null && sameQuery(ran.form, form)) {
+    return {
+      kind: "replace",
+      state: { form, ran: { form, run: ran.run + 1 } },
+    };
+  }
+  return {
+    kind: "push",
+    leaving: { form: ran?.form ?? state.form, ran },
+    state: { form, ran: { form, run: 0 } },
+  };
+}
+
+export function exploreStep(
   state: ExploreState,
   action: ExploreAction,
-): ExploreState {
+): ExploreStep {
   switch (action.kind) {
     case "change":
-      return { ...state, form: action.form };
+      return { kind: "replace", state: { ...state, form: action.form } };
     case "run":
-      return run(state);
+      return runForm(state, state.form);
     case "seed":
-      return run({ ...state, form: addSeed(state.form, action.id) });
+      return runForm(state, addSeed(state.form, action.id));
     case "focus":
-      return run({
-        ...state,
-        form: {
-          ...state.form,
-          ids: [action.id],
-          nodes: { ...state.form.nodes, enabled: false },
-        },
+      return runForm(state, {
+        ...state.form,
+        ids: [action.id],
+        nodes: { ...state.form.nodes, enabled: false },
       });
     case "load":
-      return run({ ...state, form: action.form });
+      return runForm(state, action.form);
   }
 }
 
-// A form without a seed has nothing to run and leaves the last result alone.
-function run(state: ExploreState): ExploreState {
-  const params = toParams(state.form);
-  if (params === null) {
-    return state;
-  }
+// "Explore from here": the node alone, one hop both ways over current
+// edges, as a new query rather than an addition to the one on show.
+export function fromHere(id: EntryId): ExploreForm {
+  return { ...emptyForm, ids: [id] };
+}
+
+// The node's neighbours over one edge type in one direction, as a hub cell
+// offers them: one step from the node, following and showing edges of
+// `currentness`.
+export function neighboursForm(
+  id: EntryId,
+  ty_name: string,
+  direction: "outgoing" | "incoming",
+  currentness: Currentness,
+): ExploreForm {
   return {
-    ...state,
-    submitted: { params, run: (state.submitted?.run ?? 0) + 1 },
+    ...emptyForm,
+    ids: [id],
+    expand: [{ hops: 1, direction, ty_names: ty_name, currentness }],
+    edges: { ty_names: "", currentness },
   };
 }
 
 // Whether the form would send a different query than the one on show.
 export function formChanged(state: ExploreState): boolean {
-  if (state.submitted === null) {
-    return false;
-  }
-  return (
-    JSON.stringify(toParams(state.form)) !==
-    JSON.stringify(state.submitted.params)
-  );
+  return state.ran !== null && !sameQuery(state.form, state.ran.form);
 }
 
 export function addSeed(form: ExploreForm, id: EntryId): ExploreForm {
@@ -184,10 +213,6 @@ export function toParams(form: ExploreForm): ViewQueryParams | null {
 const CURRENTNESS: readonly Currentness[] = ["current", "historical", "all"];
 const DIRECTIONS: readonly Direction[] = ["both", "outgoing", "incoming"];
 const POSITION = /^(0|[1-9][0-9]*)$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isCurrentness(value: unknown): value is Currentness {
   return CURRENTNESS.includes(value as Currentness);
@@ -267,9 +292,22 @@ export function readForm(value: unknown): ExploreForm | null {
   };
 }
 
+// A seed as the user knows it: `label @position`, or the position alone
+// when no label is known.
+export function seedName(
+  id: EntryId,
+  label: (id: EntryId) => string | undefined,
+): string {
+  const known = label(id);
+  return known === undefined ? `@${id.position}` : `${known} @${id.position}`;
+}
+
 // One line for a folded form: its seeds, then its steps.
-export function querySummary(form: ExploreForm): string {
-  const seeds = form.ids.map((id) => `@${id.position}`);
+export function querySummary(
+  form: ExploreForm,
+  label: (id: EntryId) => string | undefined = () => undefined,
+): string {
+  const seeds = form.ids.map((id) => seedName(id, label));
   if (form.nodes.enabled) {
     const text = form.nodes.text.trim();
     seeds.push(

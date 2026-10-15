@@ -15,6 +15,13 @@ export const response = {
   "result": {
     "database": "00000000-0000-4000-8000-000000000001",
     "graph_revision": "00000000-0000-4000-8000-000000000016",
+    "registered": [
+      "DAG_Check",
+      "Fixture_Failing",
+      "Fixture_Panicking",
+      "Fixture_Suggestions",
+      "Type_Check"
+    ],
     "suite": [
       {
         "configuration": "{}",

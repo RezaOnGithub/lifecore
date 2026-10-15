@@ -590,10 +590,17 @@ fn init_supports_both_suites_and_never_clobbers() {
     assert_eq!(described.database, initialized.database);
     assert_eq!(described.graph_revision, initialized.graph_revision);
     assert_eq!(described.view.end_exclusive, 0);
+    let registered = [DagCheckFactory::name(), TypeCheckFactory::name()];
+    assert_eq!(described.registered, registered);
 
     let bare = Scratch::new();
     let initialized = bare.service().init(&[]).unwrap();
     assert!(initialized.suite.0.is_empty());
+    // The host's factories, not the stored suite, name the registered ones.
+    assert_eq!(
+        bare.service().describe(NoParams {}).unwrap().registered,
+        registered
+    );
     assert!(matches!(
         bare.service().init(&[Config {
             name: "Missing".into(),

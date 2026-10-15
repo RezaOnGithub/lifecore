@@ -1,6 +1,6 @@
-import type { EdgeEntry, NodeEntry } from "../contract.ts";
+import type { EdgeEntry, EntryId, NodeEntry } from "../contract.ts";
 import { compareStrings } from "./columns.ts";
-import { entryKey, typeName } from "./labels.ts";
+import { entryKey, sameId, typeName } from "./labels.ts";
 
 // One kind of relationship seen from a node: an edge type, and whether the
 // node is the edge's `from` (outgoing) or its `to` (incoming).
@@ -13,10 +13,75 @@ export function relationKey(relation: Relation): string {
   return `${relation.direction}:${relation.ty_name}`;
 }
 
-// `→ PartOf` for outgoing, `← PartOf` for incoming.
+// The one arrow notation, direction relative to the node in context:
+// `→ PartOf` for an edge from it, `← PartOf` for an edge to it.
 export function relationLabel(relation: Relation): string {
   const arrow = relation.direction === "outgoing" ? "→" : "←";
   return `${arrow} ${typeName(relation.ty_name)}`;
+}
+
+// How the node `at` meets an edge: from it (outgoing) or to it (incoming).
+export function directionAt(
+  edge: Pick<EdgeEntry, "from">,
+  at: EntryId,
+): Relation["direction"] {
+  return sameId(edge.from, at) ? "outgoing" : "incoming";
+}
+
+// An edge read between labels: `Kitchen —Within→ Wash dishes`.
+export function edgeWords(from: string, ty_name: string, to: string): string {
+  return `${from} —${typeName(ty_name)}→ ${to}`;
+}
+
+export interface TypeCount {
+  ty_name: string;
+  count: number;
+}
+
+// Neighbours counted by their type, most first, then by name.
+export function countByType(
+  nodes: Iterable<Pick<NodeEntry, "ty_name">>,
+): TypeCount[] {
+  const counts = new Map<string, number>();
+  for (const { ty_name } of nodes) {
+    counts.set(ty_name, (counts.get(ty_name) ?? 0) + 1);
+  }
+  return [...counts]
+    .map(([ty_name, count]) => ({ ty_name, count }))
+    .sort((a, b) => b.count - a.count || compareStrings(a.ty_name, b.ty_name));
+}
+
+// An English plural good enough for type names: Tasks, Addresses, Stories.
+export function plural(name: string, count: number): string {
+  if (count === 1) {
+    return name;
+  }
+  if (/(s|x|z|ch|sh)$/.test(name)) {
+    return `${name}es`;
+  }
+  if (/[^aeiou]y$/.test(name)) {
+    return `${name.slice(0, -1)}ies`;
+  }
+  return `${name}s`;
+}
+
+// `460 Tasks` or `455 Tasks, 5 Notes`, as a relationship cell opens.
+export function countWords(counts: readonly TypeCount[]): string {
+  return counts
+    .map(({ ty_name, count }) => `${count} ${plural(typeName(ty_name), count)}`)
+    .join(", ");
+}
+
+// The types after an outline group's count: `Task` when there is one,
+// else `455 Task, 5 Note`, so the head reads `← PartOf 460 · Task`.
+export function typeTags(counts: readonly TypeCount[]): string {
+  const [only] = counts;
+  if (counts.length === 1 && only !== undefined) {
+    return typeName(only.ty_name);
+  }
+  return counts
+    .map(({ ty_name, count }) => `${count} ${typeName(ty_name)}`)
+    .join(", ");
 }
 
 // Outgoing before incoming, then by type name, so a node's relationships

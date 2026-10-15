@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   Currentness,
   NodeRecord,
@@ -6,12 +6,24 @@ import type {
   TypeSummary,
   ViewQueryParams,
 } from "../contract.ts";
-import { latest, schemaOf, useAsOf, useCall, useTypes } from "../data.tsx";
+import {
+  latest,
+  schemaOf,
+  useAsOf,
+  useCall,
+  useLabels,
+  useTypes,
+} from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
-import { IdLink, useOpen } from "../links.tsx";
+import { IdLink, useEdit, useOpen } from "../links.tsx";
 import { entryKey, typeName } from "../model/labels.ts";
+import {
+  defaultTableScreenView,
+  type TableScreenView,
+  type TableView,
+} from "../navigation.ts";
 import { EntryTable } from "../views/EntryTable.tsx";
 import { relationColumns } from "../views/Relationships.tsx";
 import { CurrentnessSelect, ResolutionBadge } from "../views/widgets.tsx";
@@ -75,21 +87,41 @@ function ResolutionNote({
   }
 }
 
-export function TableScreen({ ty_name }: { ty_name: string }) {
+export function TableScreen({
+  ty_name,
+  view,
+}: {
+  ty_name: string;
+  view: TableScreenView;
+}) {
   const asOf = useAsOf();
   const types = useTypes();
+  const book = useLabels();
   const { state, actions } = useDraft();
   const open = useOpen();
-  const [currentness, setCurrentness] = useState<Currentness>("current");
-  const [text, setText] = useState("");
-  const [applied, setApplied] = useState("");
-  // The filter goes to the backend; a short pause keeps typing from sending a
-  // request per keystroke.
+  const edit = useEdit();
+  const setView = useCallback(
+    (update: (view: TableScreenView) => TableScreenView) =>
+      edit((screen) =>
+        screen.kind === "table"
+          ? { ...screen, view: update(screen.view ?? defaultTableScreenView) }
+          : screen,
+      ),
+    [edit],
+  );
+  const onTable = useCallback(
+    (update: (view: TableView) => TableView) =>
+      setView((current) => ({ ...current, table: update(current.table) })),
+    [setView],
+  );
+  const { currentness, text, relationships } = view;
+  // The filter goes to the backend; a short pause keeps typing from sending
+  // a request per keystroke. A step returned to applies its text at once.
+  const [applied, setApplied] = useState(text.trim());
   useEffect(() => {
     const timer = setTimeout(() => setApplied(text.trim()), 300);
     return () => clearTimeout(timer);
   }, [text]);
-  const [relationships, setRelationships] = useState(true);
   const seed: Seed = { kind: "nodes", ty_name, currentness };
   if (applied !== "") {
     seed.text = applied;
@@ -109,18 +141,27 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
   // A reload keeps the last rows, and the sort, on screen until the new ones
   // arrive.
   const result = latest(load);
-  const rows: NodeRecord[] = [];
-  const nodes = new Map<string, NodeRecord>();
-  for (const { node, provenance } of result?.nodes ?? []) {
-    nodes.set(entryKey(node.id), node);
-    if (provenance.kind === "seed") {
-      rows.push(node);
+  const { rows, nodes } = useMemo(() => {
+    const rows: NodeRecord[] = [];
+    const nodes = new Map<string, NodeRecord>();
+    for (const { node, provenance } of result?.nodes ?? []) {
+      nodes.set(entryKey(node.id), node);
+      if (provenance.kind === "seed") {
+        rows.push(node);
+      }
     }
-  }
-  const columns =
-    result !== null && relationships
-      ? relationColumns(rows, result.edges, nodes)
-      : [];
+    return { rows, nodes };
+  }, [result]);
+  useEffect(() => {
+    book.noteNodes(nodes.values());
+  }, [book, nodes]);
+  const columns = useMemo(
+    () =>
+      result !== null && relationships
+        ? relationColumns(rows, result.edges, nodes, followed)
+        : [],
+    [result, relationships, rows, nodes, followed],
+  );
   return (
     <section data-testid="table">
       <h2>
@@ -144,14 +185,19 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
         <CurrentnessSelect
           id="table-currentness"
           value={currentness}
-          onChange={setCurrentness}
+          onChange={(currentness) =>
+            setView((current) => ({ ...current, currentness }))
+          }
         />
         <label>
           containing{" "}
           <input
             type="search"
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              const text = event.target.value;
+              setView((current) => ({ ...current, text }));
+            }}
             placeholder="any text"
           />
         </label>
@@ -159,7 +205,10 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
           <input
             type="checkbox"
             checked={relationships}
-            onChange={(event) => setRelationships(event.target.checked)}
+            onChange={(event) => {
+              const relationships = event.target.checked;
+              setView((current) => ({ ...current, relationships }));
+            }}
           />{" "}
           relationships
         </label>
@@ -184,6 +233,9 @@ export function TableScreen({ ty_name }: { ty_name: string }) {
           schema={schemaOf(types, ty_name)}
           ty_name={ty_name}
           extra={columns}
+          showCurrent={currentness !== "current"}
+          view={view.table}
+          onView={onTable}
         />
       )}
     </section>

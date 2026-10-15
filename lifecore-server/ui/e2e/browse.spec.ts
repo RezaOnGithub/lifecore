@@ -164,13 +164,15 @@ test("the sidebar lists Task with its node counts and opens its table", async ()
   await expect(main().getByRole("heading", { name: "Task" })).toBeVisible();
   const rows = table().locator("table.entries tbody tr");
   await expect(rows).toHaveCount(3);
-  // Declared columns follow status order, alphabetical within a status.
+  // Declared columns follow status order, alphabetical within a status,
+  // after the relationships; `title` labels every row, so it has no column
+  // of its own, and only current rows need no currentness column.
   const headers = table().locator("table.entries thead th");
   await expect(headers).toContainText([
     "label",
     "@position",
-    "current",
-    "title",
+    "→ DependsOn",
+    "← DependsOn",
     "notes",
     "details",
     "done",
@@ -179,6 +181,8 @@ test("the sidebar lists Task with its node counts and opens its table", async ()
     "status",
     "tags",
   ]);
+  await expect(headers).not.toContainText(["current"]);
+  await expect(headers).not.toContainText(["title"]);
   // By the label cell: a neighbour's relationship cell names the row too.
   const done = rows.filter({
     has: page.locator("td.label-cell", { hasText: "Write the report" }),
@@ -288,7 +292,7 @@ test("Explore from here seeds and runs a one-hop query grouped by type", async (
     "Review the report",
   );
   await expect(rows.nth(0).locator("td.via-cell")).toHaveText(
-    "1 from Write the report ←DependsOn—",
+    "1 via → DependsOn from Write the report",
   );
   await expect(rows.nth(1).locator("td.label-cell")).toHaveText(
     "Write the report",

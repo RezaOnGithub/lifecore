@@ -102,25 +102,13 @@ export function OperationStatus({ name }: { name: string }) {
   );
 }
 
-function Range({ attached }: { attached: Attached }) {
-  const { range } = attached;
-  if (range === null) {
-    return <span className="muted">suite initialization</span>;
-  }
-  return (
-    <span
-      className="muted"
-      title="boundaries of the first and last prefix it was emitted at"
-    >
-      {range.first === range.last
-        ? `prefix ${range.first}`
-        : `prefixes ${range.first}–${range.last}`}
-      {attached.resolvedLater && (
-        <span className="badge resolved"> resolved later in this draft</span>
-      )}
-    </span>
-  );
-}
+// What a range that ended before the candidate's head says: only that the
+// head does not emit it (SPEC §8.3).
+const NOT_AT_HEAD = (
+  <span className="badge not-emitted" data-testid="not-at-head">
+    not emitted at the candidate's head
+  </span>
+);
 
 function sameTarget(a: Target, b: Target): boolean {
   if (a.kind === "operation") {
@@ -154,7 +142,8 @@ export function FindingList({
             // biome-ignore lint/suspicious/noArrayIndexKey: list is rebuilt per report
             key={index}
             observation={attached.observation}
-            range={<Range attached={attached} />}
+            boundary={attached.boundary}
+            ended={NOT_AT_HEAD}
             focus={attached.focus}
             subjects={attached.subjects}
             same={sameTarget}

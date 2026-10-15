@@ -303,6 +303,8 @@ export interface Description {
   graph_revision: Uuid;
   view: ViewId;
   suite: AnalyzerConfig[];
+  // The analyzer names this host can add, sorted.
+  registered: string[];
 }
 export interface EntryList {
   database: Uuid;

@@ -1,22 +1,35 @@
-import type { AnalysisRunParams, MessageType } from "../contract.ts";
+import type {
+  AnalysisRunParams,
+  DecimalString,
+  MessageType,
+} from "../contract.ts";
 import { useData } from "../data.tsx";
 import { evaluationParams } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink } from "../links.tsx";
 import {
   categoryCounts,
+  clusterGroups,
   type FindingFilter,
+  filterText,
   groupFindings,
 } from "../model/findings.ts";
 import {
   type AnalysisRuns,
   type Ran,
   runKey,
+  type ScreenMemo,
   shownRun,
-  useAnalysisRuns,
 } from "../views/analysisRuns.ts";
-import { GroupRow } from "../views/FindingRow.tsx";
+import {
+  BulkProgress,
+  ClusterRow,
+  GroupRow,
+  labelOf,
+  MAY_BE_STORED,
+} from "../views/FindingRow.tsx";
 import { EvaluationChoice } from "../views/TrayHeader.tsx";
+import { useAnalysisRuns } from "../views/useAnalysisRuns.ts";
 
 // The evaluation context every displayed analysis names (INTERFACES §5).
 function Context({ ran }: { ran: Ran }) {
@@ -79,12 +92,13 @@ const CATEGORIES: { kind: MessageType; words: string }[] = [
 function Filters({
   ran,
   store,
-  filter,
+  memo,
 }: {
   ran: Ran;
   store: AnalysisRuns;
-  filter: FindingFilter;
+  memo: ScreenMemo;
 }) {
+  const { filter, text } = memo;
   const counts = categoryCounts(
     ran.run.analysis,
     store.dismissals(ran),
@@ -155,6 +169,16 @@ function Filters({
         />{" "}
         show dismissed
       </label>
+      <span className="filter-gap" />
+      <input
+        type="search"
+        aria-label="filter by message or focus"
+        placeholder="message or focus"
+        title="advisories whose message or focus label contains this; inconsistencies are always shown"
+        size={24}
+        value={text}
+        onChange={(event) => store.setScreen({ text: event.target.value })}
+      />
     </div>
   );
 }
@@ -162,35 +186,87 @@ function Filters({
 function Report({
   ran,
   store,
-  filter,
+  memo,
 }: {
   ran: Ran;
   store: AnalysisRuns;
-  filter: FindingFilter;
+  memo: ScreenMemo;
 }) {
-  const groups = groupFindings(ran.run.analysis, store.dismissals(ran), filter);
+  const { filter, text, expanded } = memo;
+  const groups = filterText(
+    groupFindings(ran.run.analysis, store.dismissals(ran), filter),
+    text,
+    labelOf(ran.nodes),
+  );
+  const clusters = clusterGroups(groups);
+  const analyzers = ran.run.analysis.implementations.length;
+  const bulk = store.bulk();
+  const expand = (id: string, open: boolean) =>
+    store.setScreen({
+      expanded: open
+        ? [...expanded.filter((other) => other !== id), id]
+        : expanded.filter((other) => other !== id),
+    });
   return (
     <>
       <Context ran={ran} />
       {ran.labels !== null && (
         <p className="muted">
-          Entries are shown by position: their labels could not be read.
+          Some entries are shown by position: their labels could not be read.
         </p>
       )}
-      <Filters ran={ran} store={store} filter={filter} />
-      {groups.length === 0 ? (
+      <Filters ran={ran} store={store} memo={memo} />
+      {bulk !== null && (
+        <BulkProgress
+          bulk={bulk}
+          store={store}
+          onShow={() => expand(bulk.cluster, true)}
+        />
+      )}
+      {clusters.length === 0 ? (
         <p className="muted" data-testid="no-findings">
           No findings on show.
         </p>
       ) : (
         <ul className="finding-groups" data-testid="finding-groups">
-          {groups.map((group) => (
-            <GroupRow key={group.id} group={group} ran={ran} />
-          ))}
+          {clusters.map((cluster) => {
+            const [only] = cluster.groups;
+            return cluster.groups.length === 1 && only !== undefined ? (
+              <GroupRow
+                key={only.id}
+                group={only}
+                ran={ran}
+                selection={filter.selection}
+              />
+            ) : (
+              <ClusterRow
+                key={cluster.id}
+                cluster={cluster}
+                ran={ran}
+                selection={filter.selection}
+                analyzers={analyzers}
+                expanded={expanded.includes(cluster.id)}
+                onExpand={(open) => expand(cluster.id, open)}
+              />
+            );
+          })}
         </ul>
       )}
     </>
   );
+}
+
+// Whether the top bar now selects another view than the run's. A
+// whole-history run of [0, N) is the view as of N; a run as of N is not
+// known to be the whole history.
+function moved(
+  ran: Ran,
+  last: { asOf: DecimalString | null },
+  asOf: DecimalString | null,
+): boolean {
+  return asOf === null
+    ? last.asOf !== null
+    : asOf !== ran.run.analysis.view.end_exclusive;
 }
 
 // Findings of the stored database: the stored suite replayed over the
@@ -200,7 +276,8 @@ function Report({
 export function FindingsScreen() {
   const store = useAnalysisRuns();
   const { asOf, refresh } = useData();
-  const { evaluation, filter, last } = store.screen();
+  const memo = store.screen();
+  const { evaluation, last } = memo;
   const state = last === null ? undefined : store.get(last.key);
   const ran = shownRun(state);
   const running = state?.status === "running";
@@ -209,9 +286,9 @@ export function FindingsScreen() {
       ...(asOf === null ? {} : { as_of: asOf }),
       ...evaluationParams(evaluation),
     };
-    const key = runKey(params, refresh);
-    store.setScreen({ last: { key, asOf, refresh } });
-    store.run(key, params, true);
+    // Pinned before it starts, so no other run evicts it.
+    store.setScreen({ last: { key: runKey(params, refresh), asOf, refresh } });
+    store.run(params, refresh, true);
   };
   return (
     <section aria-label="Findings" data-testid="findings-screen">
@@ -242,13 +319,15 @@ export function FindingsScreen() {
       {state === undefined && (
         <p className="muted">
           Run replays the stored suite of analyzers over every prefix of the
-          selected history; on a large database it takes a while.
+          selected history; on a large database it takes a while. A run answers
+          for the stored state as this page last read it: after a write by
+          another client, Refresh and Run again.
         </p>
       )}
       {state?.status === "failed" && <FailureView failure={state.failure} />}
       {ran !== null && last !== null && (
         <>
-          {last.asOf !== asOf ? (
+          {moved(ran, last, asOf) ? (
             <p className="banner asof" data-testid="findings-moved">
               This run is of [0, {ran.run.analysis.view.end_exclusive}), and the
               top bar now selects{" "}
@@ -257,13 +336,18 @@ export function FindingsScreen() {
             </p>
           ) : (
             last.refresh !== refresh && (
-              <p className="muted">
+              <p className="banner asof" data-testid="findings-reloaded">
                 The screens were reloaded since this run: Run again for the
                 stored state as it is now.
               </p>
             )
           )}
-          <Report ran={ran} store={store} filter={filter} />
+          {store.uncertain(ran) && (
+            <p className="banner uncertain" data-testid="dismissal-uncertain">
+              {MAY_BE_STORED}
+            </p>
+          )}
+          <Report ran={ran} store={store} memo={memo} />
         </>
       )}
     </section>

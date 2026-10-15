@@ -3,15 +3,45 @@ import type { AnalysisRunParams, EntryId } from "../contract.ts";
 import { useData } from "../data.tsx";
 import { FailureView } from "../failure.tsx";
 import { useOpen } from "../links.tsx";
-import { aboutEntry, defaultFilter, groupFindings } from "../model/findings.ts";
-import { runKey, shownRun, useAnalysisRuns } from "./analysisRuns.ts";
-import { GroupRow } from "./FindingRow.tsx";
+import {
+  aboutEntry,
+  defaultFilter,
+  type FindingGroup,
+  groupFindings,
+} from "../model/findings.ts";
+import { type Ran, runKey, shownRun } from "./analysisRuns.ts";
+import { AnalyzerName, GroupRow, MAY_BE_STORED } from "./FindingRow.tsx";
+import { useAnalysisRuns } from "./useAnalysisRuns.ts";
+
+// How long a changed boundary or reload waits before the open section runs
+// for it, so a key passed over on the way is never run.
+const SETTLE_MS = 300;
+
+function Analyzers({ ran }: { ran: Ran }) {
+  const { implementations } = ran.run.analysis;
+  if (implementations.length === 0) {
+    return <span className="muted">no analyzers configured</span>;
+  }
+  return (
+    <span className="muted" data-testid="entry-analyzers">
+      by{" "}
+      {implementations.map((analyzer, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the suite may repeat an analyzer
+        <span key={index}>
+          {index > 0 && ", "}
+          <AnalyzerName analyzer={analyzer} />
+        </span>
+      ))}
+    </span>
+  );
+}
 
 // The inspector's findings about one entry: the current report of a run
 // over the inspected view, without an evaluation time, narrowed to findings
 // whose focus or subjects name the entry. Collapsed until asked for, since
 // a run replays the whole history; then one run serves every inspection
-// until the boundary changes or the screens reload.
+// until the boundary changes or the screens reload, and a collapsed
+// section counts from it without running.
 export function EntryFindings({ id }: { id: EntryId }) {
   const store = useAnalysisRuns();
   const open = useOpen();
@@ -21,15 +51,36 @@ export function EntryFindings({ id }: { id: EntryId }) {
   const params: AnalysisRunParams = asOf === null ? {} : { as_of: asOf };
   const key = runKey(params, refresh);
   useEffect(() => {
-    if (expanded) {
-      store.run(key, JSON.parse(key).params as AnalysisRunParams);
+    if (!expanded) {
+      return;
     }
+    const wanted = JSON.parse(key) as {
+      params: AnalysisRunParams;
+      refresh: number;
+    };
+    const timer = setTimeout(
+      () => store.run(wanted.params, wanted.refresh),
+      SETTLE_MS,
+    );
+    return () => clearTimeout(timer);
   }, [store, expanded, key]);
   const state = store.get(key);
   const ran = shownRun(state);
+  const all: FindingGroup[] | null =
+    ran === null
+      ? null
+      : aboutEntry(
+          groupFindings(ran.run.analysis, store.dismissals(ran), {
+            ...defaultFilter,
+            dismissed: true,
+          }),
+          id,
+        );
+  const hidden = all?.filter((group) => group.dismissal !== null).length ?? 0;
+  const count = all === null ? null : all.length - hidden;
   let body = null;
   if (expanded) {
-    if (ran === null) {
+    if (ran === null || all === null) {
       body =
         state?.status === "failed" ? (
           <FailureView failure={state.failure} compact />
@@ -38,14 +89,6 @@ export function EntryFindings({ id }: { id: EntryId }) {
         );
     } else {
       const analysis = ran.run.analysis;
-      const all = aboutEntry(
-        groupFindings(analysis, store.dismissals(ran), {
-          ...defaultFilter,
-          dismissed: true,
-        }),
-        id,
-      );
-      const hidden = all.filter((group) => group.dismissal !== null).length;
       const groups = dismissed
         ? all
         : all.filter((group) => group.dismissal === null);
@@ -59,6 +102,7 @@ export function EntryFindings({ id }: { id: EntryId }) {
                 ? "absent"
                 : analysis.inputs.evaluation_time}
             </span>
+            <Analyzers ran={ran} />
             {hidden > 0 && (
               <label>
                 <input
@@ -72,7 +116,7 @@ export function EntryFindings({ id }: { id: EntryId }) {
             <button
               type="button"
               disabled={state?.status === "running"}
-              onClick={() => store.run(key, params, true)}
+              onClick={() => store.run(params, refresh, true)}
             >
               Run again
             </button>
@@ -90,6 +134,11 @@ export function EntryFindings({ id }: { id: EntryId }) {
           {state?.status === "failed" && (
             <FailureView failure={state.failure} compact />
           )}
+          {store.uncertain(ran) && (
+            <p className="banner uncertain" data-testid="dismissal-uncertain">
+              {MAY_BE_STORED}
+            </p>
+          )}
           {groups.length === 0 ? (
             <p className="muted" data-testid="no-entry-findings">
               No current findings about this entry
@@ -98,7 +147,7 @@ export function EntryFindings({ id }: { id: EntryId }) {
           ) : (
             <ul className="finding-groups">
               {groups.map((group) => (
-                <GroupRow key={group.id} group={group} ran={ran} />
+                <GroupRow key={group.id} group={group} ran={ran} about={id} />
               ))}
             </ul>
           )}
@@ -113,10 +162,26 @@ export function EntryFindings({ id }: { id: EntryId }) {
           type="button"
           className="link disclosure"
           aria-expanded={expanded}
-          onClick={() => store.setEntryOpen(!expanded)}
+          onClick={() => {
+            if (!expanded) {
+              // A click runs at once; only later changes of key wait.
+              store.run(params, refresh);
+            }
+            store.setEntryOpen(!expanded);
+          }}
         >
           Findings about this entry {expanded ? "▾" : "▸"}
-        </button>
+        </button>{" "}
+        {count !== null && (
+          <span
+            className="muted"
+            data-testid="entry-findings-count"
+            title={`from the run over [0, ${ran?.run.analysis.view.end_exclusive})`}
+          >
+            {count} current
+            {hidden > 0 && `, ${hidden} dismissed`}
+          </span>
+        )}
       </h3>
       {body}
     </section>

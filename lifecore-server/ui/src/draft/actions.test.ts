@@ -511,6 +511,7 @@ test("looking for the entries of an uncertain apply only reads", async () => {
         graph_revision: revision,
         view: { database: "db", end_exclusive: "2", head: null },
         suite: [],
+        registered: [],
       }),
       "entries.list": () => ({
         database: "db",

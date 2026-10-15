@@ -137,6 +137,10 @@ export function sortedBy<T>(
   descending: boolean,
 ): T[] {
   const sign = descending ? -1 : 1;
-  // Array.prototype.sort is stable, so equal cells keep append order.
-  return [...rows].sort((a, b) => sign * compareCells(cell(a), cell(b)));
+  // Each cell is read once, not once per comparison; Array.prototype.sort
+  // is stable, so equal cells keep append order.
+  return rows
+    .map((row) => ({ row, value: cell(row) }))
+    .sort((a, b) => sign * compareCells(a.value, b.value))
+    .map(({ row }) => row);
 }

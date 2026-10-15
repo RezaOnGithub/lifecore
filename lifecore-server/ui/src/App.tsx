@@ -1,69 +1,153 @@
 import {
   type FormEvent,
+  memo,
+  type RefObject,
   useCallback,
+  useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
-import type {
-  DecimalString,
-  Description,
-  EntryId,
-  TypeList,
-} from "./contract.ts";
+import type { DecimalString, Description, EntryId } from "./contract.ts";
 import {
   DataContext,
+  LabelBook,
+  LabelsContext,
   type Load,
   latest,
   PlacesProvider,
+  ResultCache,
   TypesContext,
   useAsOf,
   useCall,
-  useData,
+  useLabels,
   usePlaces,
 } from "./data.tsx";
 import { DraftProvider } from "./draft/context.tsx";
 import { FailureView } from "./failure.tsx";
-import { NavigationContext, ReplaceContext, useOpen } from "./links.tsx";
-import { entryKey, LABEL_LIMIT, sameId, typeName } from "./model/labels.ts";
-import { truncate } from "./model/payload.ts";
-import type { Place } from "./model/places.ts";
 import {
-  type ExploreAction,
-  exploreReducer,
-  initialExplore,
+  type Edit,
+  EditContext,
+  ExploreContext,
+  NavigationContext,
+  type Open,
+  ReplaceContext,
+  useOpen,
+} from "./links.tsx";
+import { sameId, typeName } from "./model/labels.ts";
+import { truncate } from "./model/payload.ts";
+import {
+  type ExploreForm,
+  exploreStep,
+  fromHere,
+  seedName,
 } from "./model/query.ts";
 import {
+  defaultInspectorView,
+  defaultTableScreenView,
+  exploreScreen,
   initialNavigation,
   type Navigation,
   type NavigationAction,
   navigate,
   type Screen,
+  type Step,
+  sameScreen,
 } from "./navigation.ts";
 import type { RpcClient } from "./rpc.ts";
 import { DatabaseScreen } from "./screens/Database.tsx";
-import { ExploreScreen } from "./screens/Explore.tsx";
+import { applyExploreStep, ExploreScreen } from "./screens/Explore.tsx";
 import { FindingsScreen } from "./screens/Findings.tsx";
 import { InspectorScreen } from "./screens/Inspector.tsx";
 import { OperationScreen } from "./screens/Operation.tsx";
 import { TableScreen } from "./screens/Table.tsx";
 import { ImportView } from "./views/Import.tsx";
+import { Sidebar } from "./views/Sidebar.tsx";
 import { Tray } from "./views/Tray.tsx";
-import { ResolutionBadge } from "./views/widgets.tsx";
 
 export function App({ client }: { client: RpcClient }) {
   const [asOf, setAsOf] = useState<DecimalString | null>(null);
   const [refresh, setRefresh] = useState(0);
   const bumpRefresh = useCallback(() => setRefresh((count) => count + 1), []);
+  const [cache] = useState(() => new ResultCache());
+  const [labels] = useState(() => new LabelBook());
   const source = useMemo(
-    () => ({ client, asOf, refresh, bumpRefresh }),
-    [client, asOf, refresh, bumpRefresh],
+    () => ({ client, asOf, refresh, bumpRefresh, cache }),
+    [client, asOf, refresh, bumpRefresh, cache],
   );
   return (
     <DataContext value={source}>
-      <Shell asOf={asOf} onAsOf={setAsOf} onRefresh={bumpRefresh} />
+      <LabelsContext value={labels}>
+        <Shell asOf={asOf} onAsOf={setAsOf} onRefresh={bumpRefresh} />
+      </LabelsContext>
     </DataContext>
   );
+}
+
+// The tray and the sidebar render again only when another screen is
+// current, not when the current one changes what it remembers.
+const StableTray = memo(Tray);
+
+function useStableScreen(screen: Screen): Screen {
+  const kept = useRef(screen);
+  if (!sameScreen(kept.current, screen)) {
+    kept.current = screen;
+  }
+  return kept.current;
+}
+
+// The main pane's scroll offset follows the steps: a step returned to by
+// Back scrolls to where it was left, a new one starts at the top. When the
+// content is not tall enough yet, as while a step's data loads, the offset
+// waits for it until the user scrolls.
+function useStepScroll(
+  main: RefObject<HTMLElement | null>,
+  content: RefObject<HTMLElement | null>,
+  step: Step,
+) {
+  const pending = useRef<number | null>(null);
+  const apply = useCallback(() => {
+    const box = main.current;
+    const target = pending.current;
+    if (box === null || target === null) {
+      return;
+    }
+    box.scrollTop = target;
+    if (box.scrollHeight - box.clientHeight >= target) {
+      pending.current = null;
+    }
+  }, [main]);
+  // Keyed by the step, not only its offset: two steps left at the top
+  // still differ.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
+  useLayoutEffect(() => {
+    pending.current = step.scroll;
+    apply();
+  }, [step.id, step.scroll, apply]);
+  useEffect(() => {
+    const box = main.current;
+    const inner = content.current;
+    if (box === null || inner === null) {
+      return;
+    }
+    const observer = new ResizeObserver(apply);
+    observer.observe(inner);
+    const cancel = () => {
+      pending.current = null;
+    };
+    for (const kind of ["wheel", "pointerdown", "keydown", "touchstart"]) {
+      box.addEventListener(kind, cancel, { passive: true });
+    }
+    return () => {
+      observer.disconnect();
+      for (const kind of ["wheel", "pointerdown", "keydown", "touchstart"]) {
+        box.removeEventListener(kind, cancel);
+      }
+    };
+  }, [main, content, apply]);
 }
 
 function Shell({
@@ -76,22 +160,73 @@ function Shell({
   onRefresh: () => void;
 }) {
   const [nav, dispatch] = useReducer(navigate, initialNavigation);
-  const [explore, dispatchExplore] = useReducer(exploreReducer, initialExplore);
-  const open = useCallback(
-    (screen: Screen) => dispatch({ kind: "open", screen }),
-    [],
-  );
+  const latestNav = useRef(nav);
+  latestNav.current = nav;
+  const main = useRef<HTMLElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const open = useCallback<Open>((screen, options) => {
+    const scroll = main.current?.scrollTop ?? 0;
+    const leaving = options?.leaving;
+    dispatch(
+      leaving === undefined
+        ? { kind: "open", screen, scroll }
+        : { kind: "open", screen, scroll, leaving },
+    );
+  }, []);
   const replace = useCallback(
     (screen: Screen) => dispatch({ kind: "replace", screen }),
     [],
   );
+  const step = nav.current;
+  const screen = step.screen;
+  const edit = useCallback<Edit>(
+    (change) => dispatch({ kind: "edit", step: step.id, edit: change }),
+    [step.id],
+  );
+  // Explore stays mounted, so its edits go to whichever step is current
+  // when it is an Explore step; the function never changes, so a hidden
+  // Explore does not render again when the current step does.
+  const editExplore = useCallback<Edit>((change) => {
+    const current = latestNav.current.current;
+    if (current.screen.kind === "explore") {
+      dispatch({ kind: "edit", step: current.id, edit: change });
+    }
+  }, []);
+  // A query shown from outside Explore, or on it from the sidebar, goes
+  // through the same steps as Explore's own Run.
+  const explore = useCallback(
+    (form: ExploreForm) => {
+      const { current, explore: last } = latestNav.current;
+      const shown = current.screen;
+      if (shown.kind === "explore") {
+        applyExploreStep(
+          exploreStep(shown, { kind: "load", form }),
+          shown.view,
+          open,
+          editExplore,
+        );
+      } else {
+        // The last step's display choices carry over, but a drawing is of
+        // one query and made on request, so a new query from elsewhere
+        // shows as a table rather than as a stale drawing.
+        const { display } = last.view;
+        open(
+          exploreScreen(form, {
+            ...last.view,
+            display: display === "graph" ? "table" : display,
+          }),
+        );
+      }
+    },
+    [open, editExplore],
+  );
+  const exploreFrom = useCallback(
+    (id: EntryId) => explore(fromHere(id)),
+    [explore],
+  );
+  useStepScroll(main, content, step);
   const description = useCall("database.describe", {});
   const types = useCall("types.list", useAsOf());
-  const exploreFrom = (id: EntryId) => {
-    dispatchExplore({ kind: "seed", id });
-    open({ kind: "explore" });
-  };
-  const screen = nav.current;
   // The draft is per database: the provider mounts once the id is known and
   // remounts, restoring that database's draft, only when another database
   // answers. A failed or reloading description keeps the last id, so an
@@ -102,81 +237,94 @@ function Shell({
     setDatabase(described.database);
   }
   const head = described?.view.end_exclusive ?? null;
-  const tray = <Tray screen={screen} head={head} />;
-  // Explore stays mounted, hidden under other screens, so its results
-  // survive a detour through the inspector and Back. The operation screen
-  // is not keyed by name: a rename must not remount the editor under the
-  // user's cursor.
+  const stable = useStableScreen(screen);
+  const tray = <StableTray screen={stable} head={head} />;
+  // Explore stays mounted, hidden under other screens and showing the last
+  // Explore step, so its results survive a detour through the inspector
+  // and Back. Other screens mount per step, so each starts from what its
+  // step remembers. The operation screen is not keyed by step: a rename
+  // must not remount the editor under the user's cursor.
+  const shownExplore = screen.kind === "explore" ? screen : nav.explore;
   return (
     <NavigationContext value={open}>
       <ReplaceContext value={replace}>
-        <TypesContext value={latest(types)?.types ?? null}>
-          <DraftProvider key={database ?? "unknown"} database={database}>
-            <PlacesProvider key={database ?? "unknown"} database={database}>
-              <div className="app">
-                <TopBar
-                  description={description}
-                  nav={nav}
-                  dispatch={dispatch}
-                  asOf={asOf}
-                  onAsOf={onAsOf}
-                  onRefresh={onRefresh}
-                />
-                {description.status === "failed" ? (
-                  <>
-                    <main className="full">
-                      <FailureView failure={description.failure} />
-                    </main>
-                    {tray}
-                  </>
-                ) : (
-                  <>
-                    <Sidebar
-                      types={types}
-                      screen={screen}
-                      dispatchExplore={dispatchExplore}
-                    />
-                    <main>
-                      {screen.kind === "database" &&
-                        (description.status === "ready" ? (
-                          <DatabaseScreen description={description.result} />
-                        ) : (
-                          <p className="muted">
-                            Loading the database description…
-                          </p>
-                        ))}
-                      {screen.kind === "table" && (
-                        <TableScreen
-                          key={screen.ty_name}
-                          ty_name={screen.ty_name}
-                        />
-                      )}
-                      {screen.kind === "inspector" && (
-                        <InspectorScreen
-                          key={entryKey(screen.id)}
-                          id={screen.id}
-                          onExplore={exploreFrom}
-                        />
-                      )}
-                      {screen.kind === "operation" && (
-                        <OperationScreen name={screen.name} />
-                      )}
-                      {screen.kind === "import" && <ImportView />}
-                      {screen.kind === "findings" && <FindingsScreen />}
-                      <div hidden={screen.kind !== "explore"}>
-                        <ExploreScreen
-                          state={explore}
-                          dispatch={dispatchExplore}
-                        />
-                      </div>
-                    </main>
-                    {tray}
-                  </>
-                )}
-              </div>
-            </PlacesProvider>
-          </DraftProvider>
-        </TypesContext>
+        <ExploreContext value={explore}>
+          <TypesContext value={latest(types)?.types ?? null}>
+            <DraftProvider key={database ?? "unknown"} database={database}>
+              <PlacesProvider key={database ?? "unknown"} database={database}>
+                <div className="app">
+                  <TopBar
+                    description={description}
+                    nav={nav}
+                    dispatch={dispatch}
+                    asOf={asOf}
+                    onAsOf={onAsOf}
+                    onRefresh={onRefresh}
+                  />
+                  <Trail nav={nav} dispatch={dispatch} />
+                  {description.status === "failed" ? (
+                    <>
+                      <main className="full">
+                        <FailureView failure={description.failure} />
+                      </main>
+                      {tray}
+                    </>
+                  ) : (
+                    <>
+                      <Sidebar
+                        types={types}
+                        screen={stable}
+                        explore={nav.explore}
+                      />
+                      <main ref={main}>
+                        <div ref={content}>
+                          <EditContext value={edit}>
+                            {screen.kind === "database" &&
+                              (description.status === "ready" ? (
+                                <DatabaseScreen
+                                  description={description.result}
+                                />
+                              ) : (
+                                <p className="muted">
+                                  Loading the database description…
+                                </p>
+                              ))}
+                            {screen.kind === "table" && (
+                              <TableScreen
+                                key={step.id}
+                                ty_name={screen.ty_name}
+                                view={screen.view ?? defaultTableScreenView}
+                              />
+                            )}
+                            {screen.kind === "inspector" && (
+                              <InspectorScreen
+                                key={step.id}
+                                id={screen.id}
+                                view={screen.view ?? defaultInspectorView}
+                                onExplore={exploreFrom}
+                              />
+                            )}
+                            {screen.kind === "operation" && (
+                              <OperationScreen name={screen.name} />
+                            )}
+                            {screen.kind === "import" && <ImportView />}
+                            {screen.kind === "findings" && <FindingsScreen />}
+                          </EditContext>
+                          <div hidden={screen.kind !== "explore"}>
+                            <EditContext value={editExplore}>
+                              <ExploreScreen screen={shownExplore} />
+                            </EditContext>
+                          </div>
+                        </div>
+                      </main>
+                      {tray}
+                    </>
+                  )}
+                </div>
+              </PlacesProvider>
+            </DraftProvider>
+          </TypesContext>
+        </ExploreContext>
       </ReplaceContext>
     </NavigationContext>
   );
@@ -199,6 +347,7 @@ function TopBar({
   onAsOf: (asOf: DecimalString | null) => void;
   onRefresh: () => void;
 }) {
+  const open = useOpen();
   const [draft, setDraft] = useState("");
   const valid = BOUNDARY.test(draft);
   const visible =
@@ -223,9 +372,7 @@ function TopBar({
             type="button"
             className="link"
             title={`database ${description.result.database}`}
-            onClick={() =>
-              dispatch({ kind: "open", screen: { kind: "database" } })
-            }
+            onClick={() => open({ kind: "database" })}
           >
             <code className="db-id" data-testid="database">
               {description.result.database}
@@ -292,188 +439,89 @@ function TopBar({
   );
 }
 
-// The list on show is the last one loaded: a reload only adds a hint, so the
-// entries, and the active one, stay where they are.
-function Sidebar({
-  types,
-  screen,
-  dispatchExplore,
-}: {
-  types: Load<TypeList>;
-  screen: Screen;
-  dispatchExplore: (action: ExploreAction) => void;
-}) {
-  const open = useOpen();
-  const list = latest(types);
-  const { places, unpin, removeView } = usePlaces();
-  const view = (kind: "explore" | "findings", label: string) => (
-    <li className={screen.kind === kind ? "active" : undefined}>
-      <button type="button" className="link" onClick={() => open({ kind })}>
-        {label}
-      </button>
-    </li>
-  );
-  return (
-    <nav className="side" aria-label="Types">
-      <h2>
-        Types{" "}
-        {types.status === "loading" && list !== null && (
-          <span className="hint">reloading…</span>
-        )}
-      </h2>
-      {types.status === "loading" && list === null && (
-        <p className="muted">loading…</p>
-      )}
-      {types.status === "failed" && (
-        <FailureView failure={types.failure} compact />
-      )}
-      {list !== null && (
-        <ul className="types" data-testid="types">
-          {list.types.map((type) => (
-            <li
-              key={type.name}
-              className={
-                screen.kind === "table" && screen.ty_name === type.name
-                  ? "active"
-                  : undefined
-              }
-            >
-              <button
-                type="button"
-                className="link"
-                onClick={() => open({ kind: "table", ty_name: type.name })}
-              >
-                {typeName(type.name)}
-              </button>{" "}
-              <span className="counts" title="current / historical nodes">
-                {type.nodes.current}/{type.nodes.historical}
-              </span>{" "}
-              <ResolutionBadge resolution={type.resolution} />
-            </li>
-          ))}
-        </ul>
-      )}
-      <h2>Views</h2>
-      <ul className="types">
-        {view("explore", "Explore")}
-        {view("findings", "Findings")}
-      </ul>
-      <h2>Pinned</h2>
-      <PlaceList
-        places={places.pinned}
-        screen={screen}
-        testId="pinned"
-        empty="☆ in the inspector pins an entry here"
-        onRemove={(place) => unpin(place.id)}
-      />
-      <h2>Saved views</h2>
-      {places.views.length === 0 ? (
-        <p className="muted side-hint">Save view in Explore keeps a query</p>
-      ) : (
-        <ul className="types places" data-testid="saved-views">
-          {places.views.map((saved) => (
-            <li key={saved.name}>
-              <button
-                type="button"
-                className="link place-label"
-                title={`open and run "${saved.name}"`}
-                onClick={() => {
-                  dispatchExplore({ kind: "load", form: saved.form });
-                  open({ kind: "explore" });
-                }}
-              >
-                {saved.name}
-              </button>
-              <button
-                type="button"
-                className="link remove"
-                aria-label={`remove view ${saved.name}`}
-                onClick={() => removeView(saved.name)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <h2>Recent</h2>
-      <PlaceList
-        places={places.recent}
-        screen={screen}
-        testId="recent"
-        empty="inspected entries appear here"
-      />
-    </nav>
-  );
+// Steps the trail shows before folding older ones into "…".
+const TRAIL = 6;
+const TRAIL_LABEL = 28;
+
+// A step as the trail names it: the type of a table, the label of an entry
+// as last seen, the seeds of a query.
+function stepName(
+  screen: Screen,
+  label: (id: EntryId) => string | undefined,
+): string {
+  switch (screen.kind) {
+    case "database":
+      return "Database";
+    case "table":
+      return `${typeName(screen.ty_name)} table`;
+    case "inspector":
+      return label(screen.id) ?? `@${screen.id.position}`;
+    case "explore": {
+      const ids = screen.ran?.form.ids ?? [];
+      const [first] = ids;
+      if (first === undefined) {
+        return screen.ran === null ? "Explore" : "Explore: node selection";
+      }
+      return `Explore ${seedName(first, label)}${
+        ids.length > 1 ? ` +${ids.length - 1}` : ""
+      }`;
+    }
+    case "findings":
+      return "Findings";
+    case "operation":
+      return `+${screen.name}`;
+    case "import":
+      return "Import";
+  }
 }
 
-// Entries kept by the sidebar, under the label and type they had when last
-// inspected. Under an as-of boundary, those past it are dimmed: they would
-// not be found.
-function PlaceList({
-  places,
-  screen,
-  testId,
-  empty,
-  onRemove,
+// The Back stack as a trail under the top bar: the last steps by name, the
+// current one last; a click goes back to that step, dropping the ones after
+// it.
+function Trail({
+  nav,
+  dispatch,
 }: {
-  places: readonly Place[];
-  screen: Screen;
-  testId: string;
-  empty: string;
-  onRemove?: (place: Place) => void;
+  nav: Navigation;
+  dispatch: (action: NavigationAction) => void;
 }) {
-  const open = useOpen();
-  const { asOf } = useData();
-  if (places.length === 0) {
-    return <p className="muted side-hint">{empty}</p>;
-  }
+  const book = useLabels();
+  // Labels are noted as screens read entries; the trail follows the notes.
+  useSyncExternalStore(book.subscribe, book.version);
+  const { places } = usePlaces();
+  const label = (id: EntryId) =>
+    book.get(id) ??
+    [...places.recent, ...places.pinned].find((place) => sameId(place.id, id))
+      ?.label;
+  const { history } = nav;
+  const first = Math.max(0, history.length - TRAIL);
   return (
-    <ul className="types places" data-testid={testId}>
-      {places.map((place) => {
-        const beyond =
-          asOf !== null && BigInt(place.id.position) >= BigInt(asOf);
-        const active =
-          screen.kind === "inspector" && sameId(screen.id, place.id);
+    <ol className="trail" aria-label="Back trail" data-testid="trail">
+      {first > 0 && (
+        <li className="muted" title={`${first} earlier steps`}>
+          …
+        </li>
+      )}
+      {history.slice(first).map((step, offset) => {
+        const name = stepName(step.screen, label);
         return (
-          <li
-            key={entryKey(place.id)}
-            className={
-              [active && "active", beyond && "beyond"]
-                .filter(Boolean)
-                .join(" ") || undefined
-            }
-          >
+          <li key={step.id}>
             <button
               type="button"
-              className="link place-label"
-              title={`${place.label}\n@${place.id.position} ${
-                place.kind === "edge" ? "edge " : ""
-              }${typeName(place.ty_name)}${
-                beyond ? "\npast the as-of boundary" : ""
-              }`}
-              onClick={() => open({ kind: "inspector", id: place.id })}
+              className="link"
+              title={`back to ${name}`}
+              onClick={() => dispatch({ kind: "back", to: first + offset })}
             >
-              {truncate(place.label, LABEL_LIMIT)}
+              {truncate(name, TRAIL_LABEL)}
             </button>
-            <span className="place-type">
-              {place.kind === "edge"
-                ? `@${place.id.position}`
-                : typeName(place.ty_name)}
-            </span>
-            {onRemove && (
-              <button
-                type="button"
-                className="link remove"
-                aria-label={`unpin ${place.label}`}
-                onClick={() => onRemove(place)}
-              >
-                ×
-              </button>
-            )}
           </li>
         );
       })}
-    </ul>
+      <li aria-current="page">
+        <strong>
+          {truncate(stepName(nav.current.screen, label), TRAIL_LABEL)}
+        </strong>
+      </li>
+    </ol>
   );
 }

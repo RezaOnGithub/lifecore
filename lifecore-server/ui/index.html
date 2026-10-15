@@ -287,7 +287,7 @@
       .thread li.cycle {
         color: #666;
       }
-      .thread li.hl {
+      .thread li[data-hover] {
         background: #fff7c2;
       }
       .stripe-mark {
@@ -357,14 +357,66 @@
         margin: 0;
       }
       /* navigation */
-      /* Relationship cells wrap, unlike payload cells, so that a few
-         neighbour labels fit side by side. */
-      /* Rows stay one line, so a long table scans; it scrolls sideways
-         instead. An expanded neighbour list wraps. */
+      /* A row for the Back trail under the top bar. */
+      .app {
+        grid-template-rows: auto auto minmax(0, 1fr);
+      }
+      .trail {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0 0.3rem;
+        list-style: none;
+        margin: 0;
+        padding: 0.15rem 0.75rem;
+        border-bottom: 1px solid #e0e0e0;
+        background: #fafafa;
+        font-size: 0.85rem;
+      }
+      .trail li + li::before {
+        content: "›";
+        color: #999;
+        margin-right: 0.3rem;
+      }
+      /* Each Back step's screen fills the pane; the inspector puts its
+         relationships beside the payload once the pane is wide. */
+      main {
+        container-type: inline-size;
+      }
+      .inspector-body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        column-gap: 1.5rem;
+      }
+      @container (min-width: 72rem) {
+        .inspector-body {
+          grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+          align-items: start;
+        }
+      }
+      /* Label, via, and relationship cells stay on one line, like payload
+         cells, so a long table scans; neighbour labels are cut short to
+         keep the row narrow. An expanded neighbour list wraps. */
       td.label-cell,
       td.rel-cell,
       td.via-cell {
         white-space: nowrap;
+      }
+      .cell-count {
+        color: #555;
+        font-size: 0.8rem;
+      }
+      .more-rows {
+        margin: 0.4rem 0;
+      }
+      .rel-types {
+        color: #777;
+        font-size: 0.8rem;
+      }
+      input.rel-filter {
+        font-size: 0.8rem;
+        width: 12rem;
       }
       .neighbour-item {
         white-space: nowrap;
@@ -526,6 +578,22 @@
       }
       .graph-svg svg {
         display: block;
+      }
+      /* A node's link covers its whole shape, not only its outline and
+         text: Graphviz leaves shapes unfilled. Edge paths keep their
+         stroke, or the area a curve encloses would catch node clicks. */
+      .graph-svg g.seed :is(ellipse, polygon, path) {
+        stroke-width: 3;
+      }
+      .graph-svg a {
+        cursor: pointer;
+      }
+      .graph-svg g.node a :is(ellipse, polygon, path) {
+        pointer-events: all;
+      }
+      .graph-size.large,
+      .stale-note {
+        color: #8a5a00;
       }
       pre.dot {
         max-height: 30vh;
@@ -697,9 +765,24 @@
       }
       aside.tray.collapsed {
         width: auto;
-        padding: 0.5rem 0.3rem;
+        padding: 0;
+        align-items: stretch;
+      }
+      /* The whole strip opens the tray. */
+      button.tray-strip {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
         align-items: center;
         gap: 0.5rem;
+        padding: 0.5rem 0.3rem;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font: inherit;
+      }
+      button.tray-strip:hover {
+        background: #eef2f8;
       }
       aside.tray.collapsed .strip {
         writing-mode: vertical-rl;
@@ -843,10 +926,6 @@
       .badge.check-ok {
         border-color: #2a7;
         background: #e6f7ee;
-      }
-      .badge.resolved {
-        border-color: #2a7;
-        font-style: italic;
       }
       .ref-issue button.link {
         color: #a60;
@@ -1049,6 +1128,99 @@
         margin: 0.2rem 0 0.1rem 1.2rem;
         padding: 0;
         font-size: 0.85rem;
+      }
+      /* Not emitted at the boundary says nothing about resolution: gray,
+         never green. */
+      .badge.not-emitted {
+        border-color: #888;
+        font-style: italic;
+      }
+      .range .ended {
+        font-style: italic;
+      }
+      li.finding.ended {
+        opacity: 0.6;
+      }
+      .finding-cluster {
+        padding: 0.15rem 0.5rem;
+        border-bottom: 1px solid #e4e4e4;
+        border-left: 3px solid #ccc;
+        font-size: 0.9rem;
+      }
+      .finding-cluster.inconsistency {
+        border-left-color: #b00020;
+      }
+      .finding-cluster.warning {
+        border-left-color: #c80;
+      }
+      .finding-cluster.suggestion {
+        border-left-color: #27a;
+      }
+      .finding-cluster.dismissed {
+        background: #f8f8f8;
+        color: #555;
+      }
+      .cluster-chips {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 0 0.4rem;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-size: 0.8rem;
+      }
+      .cluster-head .cluster-actions {
+        margin-left: auto;
+        font-size: 0.85rem;
+      }
+      .badge.count {
+        border-color: #999;
+      }
+      .finding-cluster > .finding-groups {
+        margin: 0.2rem 0 0.2rem 1rem;
+      }
+      .finding-cluster .dismiss-form,
+      .row.bulk {
+        font-size: 0.85rem;
+      }
+      .edit-failure-note {
+        margin: 0.1rem 0;
+        font-size: 0.85rem;
+      }
+      /* analyzers */
+      /* A configuration string is identity, so its spaces and line breaks
+         show as stored. */
+      code.verbatim {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      table.suite {
+        margin: 0.3rem 0 0.6rem;
+      }
+      table.suite td:first-child {
+        text-align: right;
+      }
+      .badge.unregistered {
+        margin-left: 0.4rem;
+        border-color: #b00020;
+      }
+      .add-analyzer {
+        margin: 0.6rem 0;
+        max-width: 60rem;
+      }
+      .add-title {
+        margin: 0.2rem 0;
+      }
+      .add-form input.configuration {
+        font-family: monospace;
+      }
+      .banner.confirm-add {
+        border-color: #c80;
+        background: #fffaf0;
+      }
+      .suite-list {
+        margin: 0.3rem 0 0.3rem 1.4rem;
+        padding: 0;
       }
     </style>
   </head>

@@ -51,3 +51,15 @@ export function rowLabel(
   }
   return String(node.payload[field]);
 }
+
+// The field that labels every row, if one does: its column would only
+// repeat the label.
+export function commonLabelField(
+  rows: readonly Pick<NodeEntry, "payload">[],
+): string | null {
+  const [first, ...rest] = rows;
+  const field = first === undefined ? null : labelField(first);
+  return field !== null && rest.every((row) => labelField(row) === field)
+    ? field
+    : null;
+}

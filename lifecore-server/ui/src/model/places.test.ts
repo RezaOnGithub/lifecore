@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  beyondBoundary,
   emptyPlaces,
   isPinned,
   loadPlaces,
@@ -105,5 +106,21 @@ test("places are stored per database and malformed items are dropped", () => {
       views: [{ name: "broken", form: {} }],
     }),
     { recent: [place("1")], pinned: [], views: [] },
+  );
+});
+
+test("under an as-of boundary, places at or past it are dimmed", () => {
+  assert.equal(beyondBoundary(place("9"), null), false);
+  assert.equal(beyondBoundary(place("9"), "10"), false);
+  assert.equal(beyondBoundary(place("10"), "10"), true);
+  // Positions compare as integers, not as text, beyond 2^53 too.
+  assert.equal(beyondBoundary(place("100"), "99"), true);
+  assert.equal(
+    beyondBoundary(place("9007199254740993"), "9007199254740993"),
+    true,
+  );
+  assert.equal(
+    beyondBoundary(place("9007199254740992"), "9007199254740993"),
+    false,
   );
 });

@@ -186,7 +186,7 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| `database.describe` | none | `database`, `graph_revision`, current `view`, ordered `suite` |
+| `database.describe` | none | `database`, `graph_revision`, current `view`, ordered `suite`, and `registered`: the sorted names of the analyzer factories this host registers, the only names `analyzers.add` can append |
 | `entries.list` | optional `kind` (`node`/`edge`), `ty_name`, `currentness` (`current` default, `historical`, `all`), `text` (node text search), `as_of` | `database`, `graph_revision`, `view`, `entries` in append order |
 | `entries.get` | `id` (exact `EntryId`), optional `as_of` | `view` and `entry` |
 | `entries.inspect` | `id`, optional `as_of` | tagged by `kind`: a node with its `type` resolution, its `lineage` (the whole revision tree, root first) and its incident `edges` of any currentness (each with `direction` and the `other` endpoint); or an edge with `from` and `to` |
@@ -478,76 +478,110 @@ them; none is a server contract.
   else the alphabetically first top-level text field, else
   `<ty_name> @<position>`. Blank text does not count; an empty type name reads
   "(unnamed)". `@position` is shown beside a field label. Labels are cut at 60
-  characters on screen with the full text as a tooltip.
+  characters on screen, 30 in relationship cells and seed chips, with the
+  full text as a tooltip.
 - `@position` is an entry's on-screen identity; the origin UUID is never shown.
 - As-of is one global client state set in the top bar, sent as `as_of` with
   every read, and not part of Back history. `database.describe` is read
   history-wide, so the Database screen counts the whole history, while the top
   bar shows `view [0, as_of) of N entries` and tables and the inspector show
   the `view` their own response names.
-- Navigation is in memory: Back pops a stack, reopening the current screen is
-  not a step, and Explore stays mounted under the other screens, so its form
-  and results, or its failure, survive a detour.
-- Table columns: label, `@position`, current, then the declared fields by
-  status (mandatory, encouraged, optional, deprecated) and name, then
-  undeclared fields present in the rows, marked. The `Type` table shows a
-  declaration summary instead of field columns. Cells render on one line
-  (`[a, b]`, `{owner: me}`, `true`), cut at 80 characters with the full text as
-  a tooltip. Integers sort by value, timestamps by instant at full precision,
-  everything else as text, absent cells last.
+- Navigation is in memory: Back pops a stack of steps, reopening the current
+  screen is not a step, and a trail under the top bar names the last six
+  steps (older ones fold into "…"), a click going back to that step. A step
+  remembers its screen's view, updated as the user changes it: a table's
+  currentness, text, relationship toggle, sort, open cells, and rows shown;
+  the inspector's expanded outline rows, toggled groups, historical toggles,
+  filters, and raw JSON; Explore's form, query, and display choices. Leaving
+  a step records the main pane's scroll offset, restored on return once the
+  content is tall enough unless the user scrolls first. The last result of
+  each call is cached (40 calls), so a screen returned to renders at once
+  and reads again, with "reloading…" until the answer; an answer naming the
+  same view of the same database keeps the cached object. Explore stays
+  mounted under the other screens, showing the last Explore step, so its
+  results, drawings, or failure survive a detour.
+- Table columns: label, `@position`, current (only when the rows mix
+  currentness), Explore's via, the relationship columns, then the declared
+  fields by status (mandatory, encouraged, optional, deprecated) and name,
+  then undeclared fields present in the rows, marked. The field that labels
+  every row has no column of its own. The `Type` table shows a declaration
+  summary instead of field columns. A table renders 500 rows, then "show
+  next 500" and "show all" with the count of the rest. Cells render on one
+  line (`[a, b]`, `{owner: me}`, `true`), cut at 80 characters with the full
+  text as a tooltip. Integers sort by value, timestamps by instant at full
+  precision, everything else as text, absent cells last.
 - Relationship columns: a type table reads its rows with `views.query`, the
   rows as node seeds and one hop both ways over edges of the rows'
   currentness (`all` for historical or all rows), and keeps only the seeds.
-  After the payload columns, each edge type and direction among the rows'
-  incident edges gets a column, outgoing first and then by name, headed
-  `→ PartOf` or `← DependsOn`, listing the neighbours' labels, three then
-  "+N more" in place, and sorting by the first. A checkbox, on by default,
-  hides them. Explore's tables show the same columns over the result's
-  edges, in place of a count of them. Label, via, and relationship cells stay on one line; a wide table
-  scrolls sideways.
+  Each edge type and direction among the rows' incident edges gets a
+  column, outgoing first and then by name, headed `→ PartOf` or
+  `← DependsOn`, listing the neighbours' labels, sorting by the first.
+  Beyond three, the cell starts with the count by type (`460 Tasks:`) and
+  shows three labels, then "+N more" in place up to 20, or above 20
+  "+N in Explore", a query of the row over that type and direction. A
+  checkbox, on by default, hides them. Explore's tables show the same
+  columns over the result's edges. Label, via, and relationship cells stay
+  on one line; a wide table scrolls sideways.
 - Currentness words: a node is current or superseded, an edge current or
   historical; lists default to current, with historical and all on request.
 - Text filters are server-side (`text` of node seeds), debounced by 300 ms.
 - Explore is bounded by the client, not the server, to 3 expansion steps of up
-  to 3 hops each. "Explore from here" in the inspector adds the node as a seed
-  and runs the query; a form that no longer matches the query on show says so
-  until Run. Each result row offers "focus", which makes the node the only
-  seed (the node selection off, the steps kept), and "+ seed"; both run.
-  The form folds to a one-line summary. "Via" reads `from <label> —PartOf→`
-  when the traversed edge goes from that node to the row's and
-  `from <label> ←PartOf—` otherwise, the arrow linking to the edge.
+  to 3 hops each. Each query run is a Back step, from Run, a row's "focus"
+  (the node the only seed, the node selection off, the steps kept) or
+  "+ seed", a saved view, a hub cell, or "Explore from here", which makes
+  the node the only seed with the default form (one step of 1 hop both ways
+  over current edges of any type); the step left shows its own query again.
+  Editing the form, or a rerun of the query on show, stays on the step; a
+  form that no longer matches the query on show says so until Run. A new
+  query from outside Explore keeps the last step's display, except that a
+  graph shows as a table. Seed chips and the folded one-line summary name
+  seeds as `label @position`. Arrows read from the node in context:
+  `→ PartOf` for an edge from it, `← PartOf` for one to it, in columns, the
+  outline, thread prefixes, and "via": `via → PartOf from <label>`, the arrow
+  linking to the edge.
 - Thread display: one edge type, or all of them, and one direction at a
   time; with outgoing, the edge's `from` is the parent. All edge types is the
   default when the result has several, each child row then prefixed with the
-  types joining it to its parent (`PartOf →`, `PartOf ←` for incoming). The
-  default direction is the one leaving fewer roots, outgoing on a tie. A
-  node's first occurrence is expanded, later ones collapse to "also under";
-  a revisit on the current path is cut as a cycle. Nodes that occur more
-  than once get one of 8 stripe colors, then a numeric suffix. Row actions
-  show on hover.
-- Graph display: Render calls `views.render` with the query on show, never
-  on its own; the SVG is inserted as served, its `#inspect/` links open the
-  inspector, and it scrolls in a frame up to 70% of the window high, zoomed
-  by a CSS transform (fit, 100%, ±25% steps keeping the middle in place). A
-  new drawing starts fitted but at least at 60%, centered on the first seed
-  it shows. DOT fetches the text only while its toggle is on. A drawing
-  survives a change of display and says so when the query or a reload has
-  moved on.
-- Inspector relationships: an outline of groups by edge type and direction,
-  ordered as the relationship columns, with counts, collapsed above 20
-  edges. A neighbour's ▸ reads that node with `entries.inspect` at the same
-  as-of and nests its groups, to any depth; a node already on the path from
-  the inspected one is marked "(on this path)" and not expandable.
-  Historical edges wait behind a per-group toggle, except under a superseded
-  node, all of whose edges are historical.
+  types joining it to its parent, read from the child (`← PartOf` under an
+  outgoing thread, `→ PartOf` under an incoming one). The default direction
+  is the one leaving fewer roots, outgoing on a tie. A node's first
+  occurrence is expanded, later ones collapse to "also under"; a revisit on
+  the current path is cut as a cycle. Nodes that occur more
+  than once get one of 8 stripe colors, then a numeric suffix, and hovering
+  one highlights them all. Row actions show on hover.
+- Graph display: Render calls `views.render` with the query on show at the
+  boundary of its result (`as_of` of its `view`), never on its own, beside
+  the result's node and edge counts, warning above 200 nodes; the drawing
+  names its view. The SVG is inserted as served, seed nodes outlined thick,
+  and a click anywhere in a node's shape or on an edge's link opens the
+  inspector. It scrolls in a frame up to 70% of the window high, zoomed by
+  a CSS transform (fit, down to 1% with a note below 5%, 100%, ±25% steps
+  keeping the middle in place); its natural size comes from the SVG's own
+  `width` and `height` or `viewBox`. A new drawing starts fitted but at
+  least at 60%, centered on the first seed it shows, once its frame is
+  visible. DOT fetches the text only while its toggle is on. The last
+  drawing of each of 6 queries is kept with its zoom and scroll, so Back to
+  a drawn query shows it; another query shows the latest drawing marked as
+  drawn for another query or view.
+- Inspector relationships come right after the header, beside the payload
+  and lineage once the pane is 72rem wide: an outline of groups by edge
+  type and direction, ordered as the relationship columns, with counts and
+  the neighbours' types (`← PartOf 460 · Task`), collapsed and filterable by
+  label above 20 edges. A neighbour's ▸ reads that node with
+  `entries.inspect` at the inspected view's boundary and nests its groups,
+  to any depth; a node already on the path from the inspected one is marked
+  "(on this path)" and not expandable. Historical edges wait behind a
+  per-group toggle, except under a superseded node, all of whose edges are
+  historical.
 - Places: per database in `localStorage` under `lifecore.places.<database>`,
   Pinned entries (☆/★ in the inspector header), Saved views (the Explore form
   under a name; a name in use is replaced; opening one restores the form and
   runs it), and Recent (the last 15 inspected entries, most recent first,
   without repeats), listed in the sidebar below Views. Entries keep the
-  label and type of their last inspection, which refreshes them; under an
-  as-of boundary, those past it are dimmed. Malformed stored items are
-  dropped one by one.
+  label and type of their last inspection, which refreshes them, an edge
+  read as `from —Type→ to`; under an as-of boundary, those past it are
+  dimmed. Another tab's change arrives through the `storage` event.
+  Malformed stored items are dropped one by one.
 - The inspector of a `Type` node shows the parsed schema (the server's parse
   for a current declaration, else a client-side reading) and then the full
   payload table, so `name` and fields outside the grammar stay visible.
@@ -602,42 +636,81 @@ them; none is a server contract.
   evaluation it will use, the evaluation choice, the draft-wide buttons, and
   every banner, above a scrolling list of one-line operations with their
   provisional position `@<base + index>`. A revision's kept edges collapse
-  into one line under it.
+  into one line under it. While the draft is empty and nothing reports, the
+  tray folds to a strip until an operation arrives or the strip is clicked;
+  a fold or unfold by the user holds until the draft empties or fills.
 - A finding belongs to the operation whose entry is the newest in the first
   prefix it was emitted at, matched by position against the report's
   operations and kept by operation index, so renames keep it; findings from a
-  check of other content are dimmed. Each shows its prefix range, and
-  "resolved later in this draft" when its last prefix ends before the
-  candidate's head. "Already in history" lists base findings still emitted at
-  the base boundary, folded into one line with counts per kind until
-  expanded; initialization findings are suite-level. Provisional subjects
-  link to their operations.
+  check of other content are dimmed. Each shows its range against the
+  candidate's head, with "not emitted at the candidate's head" when it ended
+  before; nothing reads as resolved. "Already in history" covers findings
+  first emitted in the committed base: its inconsistencies are always listed,
+  those the base no longer emits included; the advisories still emitted at
+  the base fold into one line with counts per kind until expanded, and those
+  no longer emitted there are only counted. Initialization findings are
+  suite-level. Provisional subjects link to their operations.
 - One finding row everywhere: kind, message, analyzer name and version (the
   configuration string as a tooltip), range, the focus, and the subjects
-  only when they name more than the focus.
+  only when they name more than the focus. Ranges read against the
+  boundary of their report: `since N` when they run up to it, `N–M` or
+  `at N` when they ended before it, marked "(ended)" on the Findings screen,
+  and `initialization`; a sticky advisory that ended before it is labeled
+  "historical; applicability unconfirmed" instead.
 - The Findings screen runs `analysis.run` only on Run, with its own
   evaluation choice (none by default, now, or explicit) and the top bar's
-  as-of. The last run stays on show, with its view, evaluation time, and
-  analyzers with versions and configuration strings, and says so when the
-  as-of selection or a reload has moved on. Groups mirror core
-  `AnalysisOutput::groups` ([SPEC §8.3](SPEC.md#83-presentation-and-dismissal)):
-  complete keys compared member by member, first-emission order, current or
-  history selection, category and "show dismissed" filters for advisories
-  only, and counts per category before those filters. Ranges read
-  `boundary N`, `boundaries N–M`, or `initialization`; a sticky one that
-  ended before the boundary is labeled "historical; applicability
-  unconfirmed". Nodes are labeled from `entries.list` at the run's boundary.
-- Dismiss takes a reason and an optional note; an inconsistency shows it
-  disabled, with the reason. Edits go one at a time, and the records their
-  answer lists replace the run's without a new run. Suggestions list their
-  actions read-only; "Add to draft" appends them as ordinary operations with
-  default names, `added: n` becoming the name of the n-th, and never sets
-  `acknowledges`.
-- The inspector's "Findings about this entry" is collapsed until opened and
-  then stays open across inspections. One run without an evaluation time
-  per as-of selection and reload serves every inspection, and a Findings
-  run with the same parameters is reused; it lists the current findings
-  whose focus or subjects name the entry.
+  as-of. The last run stays on show, never evicted from the page's few
+  cached runs, with its view, evaluation time, and analyzers with versions
+  and configuration strings, and says so when the top bar selects another
+  view (a whole-history run of `[0, N)` is the view as of N) or a reload
+  has moved on. Runs are keyed by their parameters and the client's refresh
+  counter, so a write by another client shows only after Refresh and Run.
+  Groups mirror core `AnalysisOutput::groups`
+  ([SPEC §8.3](SPEC.md#83-presentation-and-dismissal)): complete keys
+  compared member by member, first-emission order, current or history
+  selection, and category, "show dismissed", and text (message or focus
+  label) filters for advisories only, with counts per category before the
+  filters. Groups with one analyzer identity, kind, and message share a
+  line showing the message, the analyzer when the suite has several, the
+  count, the first three foci and "+N more", which expands to a row per
+  key. History mode dims nonsticky advisories that ended before the
+  boundary; inconsistencies are never dimmed, folded, or filtered out.
+  Labels are read at the run's boundary for the entries findings name only:
+  `entries.get` each below 20, else one `views.query` of `ids` seeds,
+  dropping an id it refuses as not a node up to three times before
+  `entries.list` of all nodes.
+- Dismiss takes a reason and an optional note, sent as typed; an
+  inconsistency shows it disabled, with the reason. "Dismiss all N" on a
+  cluster takes them once and dismisses its undismissed keys one edit at a
+  time with progress and Stop; a key's failure stays on its row. Edits go
+  one at a time, and the records their answer lists replace the run's
+  without a new run. A failed edit is classified like an apply: one known to
+  precede publication (`busy`, `lock_failed`, `publication_failed`,
+  `database_missing`, `database_unreadable`, `invalid_params`,
+  `cannot_dismiss_inconsistency`, envelope errors, and structured HTTP
+  rejections) is shown and changes nothing; `publication_uncertain` with a
+  `dismissed` or `restored` outcome adopts its records and labels the row
+  "written; durability unconfirmed"; any other failure, a lost answer
+  included, puts a banner over the Findings screen and the inspector
+  section ("a dismissal edit may have been stored; Run again to see the
+  stored records") until an edit answers or a run requested after it
+  shows; a "Dismiss all" ends there. Nothing is retried.
+- Suggestions list their actions read-only. "Add to draft" appends them as
+  ordinary operations with default names, `added: n` becoming the name of
+  the n-th earlier action (any other index is left unset), and never sets
+  `acknowledges`. It is enabled only for an observation emitted at the
+  boundary of a whole-history run of the current reload, since the draft
+  applies to the current history, and otherwise says why; afterwards it
+  reads "added (N operations)" and asks before adding them again.
+- The inspector's "Findings about this entry", above the relationships of a
+  node and below an edge, is collapsed until opened and then stays open
+  across inspections; collapsed, it counts from a run already held for its
+  parameters. One run without an evaluation time per as-of selection and
+  reload serves every inspection, and a Findings run with the same
+  parameters is reused; while open, a changed boundary or reload waits
+  300 ms before running. It names the analyzers that ran and lists the
+  current findings whose focus or subjects name the entry, without a focus
+  chip that names it again.
 - Revise and Branch copy the node's payload; only a current node can be
   revised. Reconnection lists the predecessor's current edges, read without
   `as_of`, by direction and type, collapsed beyond 10. Revise keeps all of
@@ -656,6 +729,21 @@ them; none is a server contract.
   picked. Connect starts an edge from the inspected node and picks its `to`.
   The client neither sends nor exports a draft with an endpoint or
   predecessor still unpicked.
+- Analyzers: the Database screen lists the suite with each configuration
+  string verbatim and appends only names from `registered`, with a
+  configuration (default `{}`) sent as typed and its own evaluation choice.
+  "Add…" asks first, naming the analyzer, the configuration, its position in
+  the suite as last read, the whole-history replay that any inconsistency
+  rejects, that nothing removes it, and that plan IDs go stale, so a
+  non-empty draft will need Replan; the confirmed request is sent once.
+  Success shows the new suite and finding counts and reloads every screen;
+  `rejected` lists its inconsistencies in the shared finding row and counts
+  the rest; `analyzer_failure` names the failing analyzer and boundary when
+  given; `busy` offers Try again. Failures are classified like an apply: any
+  not known to precede publication, a lost answer included, says the
+  analyzer may have been added and keeps Add off until Refresh re-reads the
+  suite, which then says whether it holds one more copy of the analyzer.
+  The form and the last outcome survive a detour.
 
 ## 6. Analysis lifetime and dismissal persistence
 

@@ -1,11 +1,16 @@
 import {
   type MouseEvent,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import type { RenderFormat, ViewQueryParams } from "../contract.ts";
+import type {
+  DecimalString,
+  RenderFormat,
+  ViewQueryParams,
+} from "../contract.ts";
 import { useData } from "../data.tsx";
 import { FailureView } from "../failure.tsx";
 import { useOpen } from "../links.tsx";
@@ -18,41 +23,63 @@ type Rendering =
   | { status: "ready"; text: string }
   | { status: "failed"; failure: unknown };
 
-// One render: the query it was made for, keyed with the refresh counter so a
-// reload marks it as possibly stale, and each format as requested.
+// Where a drawing was last looked at, so it reopens there.
+interface Place {
+  zoom: number;
+  left: number;
+  top: number;
+}
+
+// One render: the query it was made for, its view pinned by `as_of`, and
+// each format as requested.
 interface Rendered {
   key: string;
   params: ViewQueryParams;
+  view: DecimalString;
   svg: Rendering;
   dot: Rendering;
 }
 
 const XLINK = "http://www.w3.org/1999/xlink";
+// Drawings kept for Back: each query's last one.
+const KEPT = 6;
+// Above this many nodes, Render warns that Graphviz may take long.
+export const LARGE_DRAWING = 200;
 
-// The submitted Explore query drawn by the server's Graphviz. Nothing is
+// The shown Explore query drawn by the server's Graphviz, at the view of the
+// result on show (`params` carries its boundary as `as_of`). Nothing is
 // requested until Render is pressed: a large result can take seconds, and
-// the DOT text is fetched only while its toggle is on.
+// the DOT text is fetched only while its toggle is on. The last drawing of
+// each query is kept, so Back to a drawn query shows its drawing.
 export function GraphView({
   params,
-  focus,
+  seeds,
+  nodes,
+  edges,
 }: {
   params: ViewQueryParams | null;
-  focus: readonly string[];
+  seeds: readonly string[];
+  nodes: number;
+  edges: number;
 }) {
-  const { client, refresh } = useData();
-  const key = params === null ? null : JSON.stringify({ params, refresh });
-  const [rendered, setRendered] = useState<Rendered | null>(null);
+  const { client } = useData();
+  const key = params === null ? null : JSON.stringify(params);
+  const [drawings, setDrawings] = useState<Rendered[]>([]);
   const [showDot, setShowDot] = useState(false);
+  // Where each kept drawing was last looked at; not state, since nothing
+  // renders from it until a drawing is shown again.
+  const places = useRef(new Map<string, Place>());
+  const rendered =
+    drawings.find((drawing) => drawing.key === key) ?? drawings[0] ?? null;
   // An answer lands only on the render it was requested for.
-  const request = (
-    target: { key: string; params: ViewQueryParams },
-    format: RenderFormat,
-  ) => {
+  const request = (target: Rendered, format: RenderFormat) => {
     const settle = (rendering: Rendering) =>
-      setRendered((current) =>
-        current?.key === target.key
-          ? { ...current, [format]: rendering }
-          : current,
+      setDrawings((current) =>
+        current.map((drawing) =>
+          drawing === target || drawing.key === target.key
+            ? { ...drawing, [format]: rendering }
+            : drawing,
+        ),
       );
     client.call("views.render", { ...target.params, format }).then(
       (result) => settle({ status: "ready", text: result.text }),
@@ -63,12 +90,25 @@ export function GraphView({
     if (params === null || key === null) {
       return;
     }
-    const target = { key, params };
-    setRendered({
-      ...target,
+    const target: Rendered = {
+      key,
+      params,
+      view: params.as_of ?? "",
       svg: { status: "loading" },
       dot: showDot ? { status: "loading" } : { status: "idle" },
-    });
+    };
+    // A new drawing of a query starts afresh; a dropped one forgets its
+    // place.
+    const kept = [
+      target,
+      ...drawings.filter((drawing) => drawing.key !== key),
+    ].slice(0, KEPT);
+    for (const known of [...places.current.keys()]) {
+      if (known === key || !kept.some((drawing) => drawing.key === known)) {
+        places.current.delete(known);
+      }
+    }
+    setDrawings(kept);
     request(target, "svg");
     if (showDot) {
       request(target, "dot");
@@ -77,13 +117,21 @@ export function GraphView({
   const toggleDot = (on: boolean) => {
     setShowDot(on);
     if (on && rendered !== null && rendered.dot.status === "idle") {
-      setRendered({ ...rendered, dot: { status: "loading" } });
-      request(rendered, "dot");
+      const target = rendered;
+      setDrawings((current) =>
+        current.map((drawing) =>
+          drawing.key === target.key
+            ? { ...drawing, dot: { status: "loading" } }
+            : drawing,
+        ),
+      );
+      request(target, "dot");
     }
   };
   const loading =
     rendered !== null &&
     (rendered.svg.status === "loading" || rendered.dot.status === "loading");
+  const large = nodes > LARGE_DRAWING;
   return (
     <section data-testid="graph">
       <div className="row">
@@ -94,6 +142,14 @@ export function GraphView({
         >
           Render
         </button>
+        <span
+          className={large ? "graph-size large" : "graph-size muted"}
+          data-testid="graph-size"
+        >
+          {nodes} node{nodes === 1 ? "" : "s"}, {edges} edge
+          {edges === 1 ? "" : "s"}
+          {large && "; large drawing, Graphviz may take long"}
+        </span>
         <label>
           <input
             type="checkbox"
@@ -108,15 +164,26 @@ export function GraphView({
           </span>
         )}
         {loading && <span className="muted">rendering…</span>}
+        {rendered !== null && (
+          <span className="muted" data-testid="graph-view">
+            drawn at view [0, {rendered.view})
+          </span>
+        )}
         {rendered !== null && rendered.key !== key && (
-          <span className="muted" data-testid="graph-stale">
-            drawn for an earlier query or reload; Render to update
+          <span className="stale-note" data-testid="graph-stale">
+            drawn for another query or view; Render to update
           </span>
         )}
       </div>
       {rendered !== null && showDot && <DotText rendering={rendered.dot} />}
       {rendered !== null && (
-        <SvgResult rendering={rendered.svg} focus={focus} />
+        <SvgResult
+          key={rendered.key}
+          rendering={rendered.svg}
+          seeds={rendered.key === key ? seeds : []}
+          place={places.current.get(rendered.key) ?? null}
+          onPlace={(place) => places.current.set(rendered.key, place)}
+        />
       )}
     </section>
   );
@@ -159,10 +226,12 @@ function DotText({ rendering }: { rendering: Rendering }) {
 
 function SvgResult({
   rendering,
-  focus,
+  ...canvas
 }: {
   rendering: Rendering;
-  focus: readonly string[];
+  seeds: readonly string[];
+  place: Place | null;
+  onPlace: (place: Place) => void;
 }) {
   switch (rendering.status) {
     case "idle":
@@ -171,16 +240,18 @@ function SvgResult({
     case "failed":
       return <RenderFailure failure={rendering.failure} />;
     case "ready":
-      return <SvgCanvas svg={rendering.text} focus={focus} />;
+      return <SvgCanvas svg={rendering.text} {...canvas} />;
   }
 }
 
-const MIN_ZOOM = 0.05;
+const MIN_ZOOM = 0.01;
 const MAX_ZOOM = 4;
 const STEP = 1.25;
 // A new drawing starts fitted, but never so small that its labels cannot be
 // read; the frame scrolls instead.
 const READABLE = 0.6;
+// Below this, a fitted drawing is a shape without legible labels.
+const LEGIBLE = 0.05;
 // The frame's maximum height as a fraction of the window, as in index.html.
 const FRAME_HEIGHT = 0.7;
 
@@ -188,23 +259,97 @@ function clampZoom(zoom: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 }
 
+interface Size {
+  w: number;
+  h: number;
+}
+
+const SVG_TAG = /<svg\b[^>]*>/;
+
+// A length of the SVG's own size attributes in CSS pixels: Graphviz writes
+// points, and a point is 4/3 of a pixel.
+function cssLength(value: string | undefined): number | null {
+  const match = value === undefined ? null : /^([\d.]+)(pt|px)?$/.exec(value);
+  if (match === null || match[1] === undefined) {
+    return null;
+  }
+  const number = Number(match[1]);
+  return match[2] === "pt" ? (number * 4) / 3 : number;
+}
+
+// The drawing's natural size, read from its markup rather than from layout,
+// which a hidden frame does not have: `width` and `height`, else the
+// `viewBox`.
+export function naturalSize(svg: string): Size | null {
+  const tag = SVG_TAG.exec(svg)?.[0] ?? "";
+  const attribute = (name: string) =>
+    new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  const w = cssLength(attribute("width"));
+  const h = cssLength(attribute("height"));
+  if (w !== null && h !== null && w > 0 && h > 0) {
+    return { w, h };
+  }
+  const box = attribute("viewBox")
+    ?.trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  const [, , bw, bh] = box ?? [];
+  return bw !== undefined && bh !== undefined && bw > 0 && bh > 0
+    ? { w: bw, h: bh }
+    : null;
+}
+
 interface Point {
   x: number;
   y: number;
 }
 
+// The zoom that shows the whole drawing in the frame's width and the most
+// height the frame grows to, FRAME_HEIGHT of the window: the frame grows
+// with the drawing, so its own height says nothing yet.
+function fit(box: HTMLElement, size: Size): number {
+  return clampZoom(
+    Math.min(
+      1,
+      box.clientWidth / size.w,
+      (window.innerHeight * FRAME_HEIGHT) / size.h,
+    ),
+  );
+}
+
 // The SVG scrolls inside a frame and zooms with a CSS transform. The sizer
 // takes the scaled size, since a transform does not change layout and the
 // frame would otherwise scroll over the unscaled box. A new drawing is
-// centered on the first seed it shows (`focus` holds seed positions; the
-// server names node elements `n<position>`), and zooming keeps the point at
-// the middle of the frame in place.
-function SvgCanvas({ svg, focus }: { svg: string; focus: readonly string[] }) {
+// fitted and centered on the first seed it shows (`seeds` holds seed
+// positions; the server names node elements `n<position>`) once the frame
+// is laid out; a drawing seen before reopens at its zoom and scroll.
+// Zooming keeps the point at the middle of the frame in place.
+function SvgCanvas({
+  svg,
+  seeds,
+  place,
+  onPlace,
+}: {
+  svg: string;
+  seeds: readonly string[];
+  place: Place | null;
+  onPlace: (place: Place) => void;
+}) {
   const open = useOpen();
   const frame = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
-  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
-  const [zoom, setZoom] = useState(1);
+  const natural = useMemo(() => naturalSize(svg), [svg]);
+  const [zoom, setZoom] = useState(place?.zoom ?? 1);
+  const [tooLarge, setTooLarge] = useState(false);
+  // Whether the drawing has been fitted, or reopened where it was; a
+  // hidden frame has no width to fit to, so this waits until it has one.
+  const placed = useRef(false);
+  // Where the drawing was last looked at: the place it reopens at, then
+  // every scroll and zoom since.
+  const here = useRef(place);
+  // What the frame's observer reads: the values of the latest render.
+  const latest = useRef({ zoom, seeds, natural, onPlace });
+  latest.current = { zoom, seeds, natural, onPlace };
   // The unscaled point to bring to the middle of the frame once the zoom
   // has been applied, and a counter that applies it even when the zoom
   // stays the same.
@@ -216,21 +361,6 @@ function SvgCanvas({ svg, focus }: { svg: string; focus: readonly string[] }) {
     () => ({ __html: svg.slice(Math.max(0, svg.indexOf("<svg"))) }),
     [svg],
   );
-  // The frame grows with the drawing up to FRAME_HEIGHT of the window, so
-  // fitting measures against that height rather than the frame's own.
-  const fit = (size: { w: number; h: number }) => {
-    const box = frame.current;
-    if (box === null || size.w === 0 || size.h === 0) {
-      return 1;
-    }
-    return clampZoom(
-      Math.min(
-        1,
-        box.clientWidth / size.w,
-        (window.innerHeight * FRAME_HEIGHT) / size.h,
-      ),
-    );
-  };
   const zoomTo = (next: number) => {
     const box = frame.current;
     if (box !== null) {
@@ -242,40 +372,86 @@ function SvgCanvas({ svg, focus }: { svg: string; focus: readonly string[] }) {
     }
     setZoom(clampZoom(next));
   };
-  // A new drawing is measured as laid out, which a transform does not
-  // change; the seed's place is read on screen and unscaled by the
-  // transform still applied from the previous drawing.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: measured once per drawing
+  // The seeds are marked once the markup is in the document, and again
+  // whenever it is replaced.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   useLayoutEffect(() => {
     const element = inner.current;
     if (element === null) {
       return;
     }
-    const size = { w: element.offsetWidth, h: element.offsetHeight };
-    const box = element.getBoundingClientRect();
-    const applied = size.w === 0 ? 1 : box.width / size.w;
-    center.current = null;
-    for (const position of focus) {
-      const node = element.querySelector(`#n${position}`);
-      if (node !== null) {
-        const rect = node.getBoundingClientRect();
-        center.current = {
-          x: (rect.left + rect.width / 2 - box.left) / applied,
-          y: (rect.top + rect.height / 2 - box.top) / applied,
-        };
-        break;
-      }
+    for (const node of element.querySelectorAll("g.seed")) {
+      node.classList.remove("seed");
     }
-    setNatural(size);
-    setZoom(Math.max(fit(size), READABLE));
-    setMoves((count) => count + 1);
-  }, [markup]);
+    for (const position of seeds) {
+      element.querySelector(`g#n${position}`)?.classList.add("seed");
+    }
+  }, [markup, seeds]);
+  // The first look at a laid-out frame: a drawing seen before scrolls back
+  // to where it was; a new one is fitted, at least READABLE, and centered on
+  // its first seed, read on screen and unscaled by the zoom applied.
+  useLayoutEffect(() => {
+    const box = frame.current;
+    const element = inner.current;
+    if (box === null || element === null) {
+      return;
+    }
+    const settle = () => {
+      const { zoom, seeds, natural } = latest.current;
+      const place = here.current;
+      if (placed.current || box.clientWidth === 0) {
+        return;
+      }
+      placed.current = true;
+      if (place !== null) {
+        box.scrollLeft = place.left;
+        box.scrollTop = place.top;
+        return;
+      }
+      if (natural === null) {
+        return;
+      }
+      const bounds = element.getBoundingClientRect();
+      center.current = null;
+      for (const position of seeds) {
+        const node = element.querySelector(`g#n${position}`);
+        if (node !== null) {
+          const rect = node.getBoundingClientRect();
+          center.current = {
+            x: (rect.left + rect.width / 2 - bounds.left) / zoom,
+            y: (rect.top + rect.height / 2 - bounds.top) / zoom,
+          };
+          break;
+        }
+      }
+      const fitted = fit(box, natural);
+      setTooLarge(fitted < LEGIBLE);
+      setZoom(Math.max(fitted, READABLE));
+      setMoves((count) => count + 1);
+    };
+    settle();
+    // Shown again after being hidden, which loses the scroll: back to where
+    // it was, or fitted now if it never was.
+    let visible = box.clientWidth > 0;
+    const observer = new ResizeObserver(() => {
+      const now = box.clientWidth > 0;
+      if (now && !visible) {
+        const place = here.current;
+        if (placed.current && place !== null) {
+          box.scrollLeft = place.left;
+          box.scrollTop = place.top;
+        }
+        settle();
+      }
+      visible = now;
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs after each move is laid out
   useLayoutEffect(() => {
     const target = center.current;
     const box = frame.current;
-    // On mount this effect runs right after the measuring one, before its
-    // zoom and size are laid out; the move it asks for comes next.
     if (moves === 0 || target === null || box === null) {
       return;
     }
@@ -283,6 +459,21 @@ function SvgCanvas({ svg, focus }: { svg: string; focus: readonly string[] }) {
     box.scrollLeft = target.x * zoom - box.clientWidth / 2;
     box.scrollTop = target.y * zoom - box.clientHeight / 2;
   }, [moves]);
+  // Where the drawing is looked at, kept for its next showing; a hidden
+  // frame has nothing worth keeping.
+  const remember = () => {
+    const box = frame.current;
+    if (box !== null && box.clientWidth > 0 && placed.current) {
+      here.current = {
+        zoom: latest.current.zoom,
+        left: box.scrollLeft,
+        top: box.scrollTop,
+      };
+      latest.current.onPlace(here.current);
+    }
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a zoom is part of the place
+  useEffect(remember, [zoom, moves]);
   const onClick = (event: MouseEvent<HTMLDivElement>) => {
     const anchor = (event.target as Element).closest("a");
     if (anchor === null) {
@@ -302,7 +493,14 @@ function SvgCanvas({ svg, focus }: { svg: string; focus: readonly string[] }) {
         <button
           type="button"
           disabled={natural === null}
-          onClick={() => natural && zoomTo(fit(natural))}
+          onClick={() => {
+            const box = frame.current;
+            if (natural !== null && box !== null && box.clientWidth > 0) {
+              const fitted = fit(box, natural);
+              setTooLarge(fitted < LEGIBLE);
+              zoomTo(fitted);
+            }
+          }}
         >
           fit
         </button>
@@ -324,13 +522,25 @@ function SvgCanvas({ svg, focus }: { svg: string; focus: readonly string[] }) {
           +
         </button>
         <span className="muted" data-testid="zoom">
-          {Math.round(zoom * 100)}%
+          {zoom < 0.1 ? (zoom * 100).toFixed(1) : Math.round(zoom * 100)}%
         </span>
-        <span className="muted">click a node or edge to inspect it</span>
+        {tooLarge && (
+          <span className="muted">
+            too large to fit legibly; use 100% and scroll
+          </span>
+        )}
+        <span className="muted">
+          click a node or edge to inspect it; seeds are outlined thick
+        </span>
       </div>
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: the SVG's links are the targets; this only routes their clicks */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: as above */}
-      <div className="graph-frame" ref={frame} onClick={onClick}>
+      <div
+        className="graph-frame"
+        ref={frame}
+        onClick={onClick}
+        onScroll={remember}
+      >
         <div
           className="graph-sizer"
           style={

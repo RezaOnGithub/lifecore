@@ -180,6 +180,86 @@ test("every edge type nests children and names the types joining them", () => {
   );
 });
 
+test("a cycle through several edge types is cut when all types are read", () => {
+  // 1 part of 2, 2 depends on 3, 3 about 1: one cycle only across types.
+  const nodes = ["1", "2", "3", "4"].map(node);
+  const edges = [
+    edge("10", "1", "2", "PartOf"),
+    edge("11", "2", "3", "DependsOn"),
+    edge("12", "3", "1", "About"),
+    edge("13", "4", "1", "PartOf"),
+  ];
+  const thread = buildThread(nodes, edges, {
+    ty_name: null,
+    direction: "outgoing",
+  });
+  assert.deepEqual(
+    thread.rows.map((row) => [row.kind, row.key, row.depth, row.via]),
+    [
+      ["node", "o:4", 0, []],
+      ["node", "o:1", 1, ["PartOf"]],
+      ["node", "o:2", 2, ["PartOf"]],
+      ["node", "o:3", 3, ["DependsOn"]],
+      ["cycle", "o:1", 4, ["About"]],
+    ],
+  );
+  // Any one type alone has no cycle.
+  for (const ty_name of ["PartOf", "DependsOn", "About"]) {
+    const one = buildThread(nodes, edges, { ty_name, direction: "outgoing" });
+    assert.equal(
+      one.rows.some((row) => row.kind === "cycle"),
+      false,
+      ty_name,
+    );
+  }
+});
+
+test("a long chain nests without recursion, and siblings leave the path", () => {
+  const length = 5000;
+  const positions = Array.from({ length }, (_, index) => String(index));
+  const nodes = positions.map(node);
+  const edges = positions
+    .slice(1)
+    .map((position, index) =>
+      edge(String(length + index), String(index), position),
+    );
+  const thread = buildThread(nodes, edges, {
+    ty_name: "DependsOn",
+    direction: "outgoing",
+  });
+  assert.equal(thread.rows.length, length);
+  assert.equal(thread.rows.at(-1)?.depth, length - 1);
+  assert.equal(
+    thread.rows.every((row) => row.kind === "node"),
+    true,
+  );
+  assert.equal(preferredDirection(nodes, edges, "DependsOn"), "outgoing");
+  // 1 → 2 and 1 → 3 → 2: the second visit of 2 is a repeat, not a cycle,
+  // because 2 left the path when its first visit was done.
+  const diamond = buildThread(
+    ["1", "2", "3"].map(node),
+    [edge("10", "1", "2"), edge("11", "1", "3"), edge("12", "3", "2")],
+    { ty_name: "DependsOn", direction: "outgoing" },
+  );
+  assert.deepEqual(rows(diamond), [
+    ["node", "o:1", 0],
+    ["node", "o:2", 1],
+    ["node", "o:3", 1],
+    ["repeat", "o:2", 2, "o:1"],
+  ]);
+});
+
+test("a self-edge, which core refuses, would only read as a cycle", () => {
+  const thread = buildThread(["1"].map(node), [edge("10", "1", "1")], {
+    ty_name: null,
+    direction: "outgoing",
+  });
+  assert.deepEqual(rows(thread), [
+    ["node", "o:1", 0],
+    ["cycle", "o:1", 1],
+  ]);
+});
+
 test("the preferred direction leaves fewer roots, outgoing on a tie", () => {
   // Three tasks part of one project: read to → from, the project is the
   // only root.

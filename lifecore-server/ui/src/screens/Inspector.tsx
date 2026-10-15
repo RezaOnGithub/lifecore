@@ -1,16 +1,22 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import type {
   EdgeRecord,
   EntryId,
   EntryInspection,
-  EntryRecord,
   NodeRecord,
   TypeResolution,
   TypeSchema,
   TypeSummary,
   ViewId,
 } from "../contract.ts";
-import { latest, useAsOf, useCall, usePlaces, useTypes } from "../data.tsx";
+import {
+  latest,
+  useAsOf,
+  useCall,
+  useLabels,
+  usePlaces,
+  useTypes,
+} from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
@@ -21,31 +27,44 @@ import {
   OperationLink,
   Position,
   TypeLink,
+  useEdit,
   useOpen,
 } from "../links.tsx";
 import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
 import { lineageRows } from "../model/lineage.ts";
+import type { OutlineView } from "../model/outline.ts";
 import { isPinned, type Place } from "../model/places.ts";
+import { edgeWords } from "../model/relations.ts";
 import { parseDeclaration } from "../model/schema.ts";
+import { defaultInspectorView, type InspectorView } from "../navigation.ts";
 import { EntryFindings } from "../views/EntryFindings.tsx";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
 import { RelationshipOutline } from "../views/Relationships.tsx";
 import { ResolutionBadge } from "../views/widgets.tsx";
 
 // What the sidebar keeps of an inspected entry: a node by its row label, an
-// edge by its type name.
-function placeOf(entry: EntryRecord): Place {
+// edge read between its endpoints' labels, `Kitchen —Within→ Wash dishes`.
+function placeOf(inspection: EntryInspection): Place {
+  const { entry } = inspection;
   return {
     id: entry.id,
     kind: entry.kind,
-    label: entry.kind === "node" ? rowLabel(entry) : typeName(entry.ty_name),
+    label:
+      inspection.kind === "node"
+        ? rowLabel(inspection.entry)
+        : edgeWords(
+            rowLabel(inspection.from),
+            inspection.entry.ty_name,
+            rowLabel(inspection.to),
+          ),
     ty_name: entry.ty_name,
   };
 }
 
 // ☆ pins the entry to the sidebar, ★ unpins it.
-function PinButton({ entry }: { entry: EntryRecord }) {
+function PinButton({ inspection }: { inspection: EntryInspection }) {
   const { places, togglePin } = usePlaces();
+  const { entry } = inspection;
   const pinned = isPinned(places, entry.id);
   return (
     <button
@@ -54,7 +73,7 @@ function PinButton({ entry }: { entry: EntryRecord }) {
       aria-pressed={pinned}
       aria-label={pinned ? "unpin" : "pin"}
       title={pinned ? "unpin from the sidebar" : "pin to the sidebar"}
-      onClick={() => togglePin(placeOf(entry))}
+      onClick={() => togglePin(placeOf(inspection))}
     >
       {pinned ? "★" : "☆"}
     </button>
@@ -63,25 +82,45 @@ function PinButton({ entry }: { entry: EntryRecord }) {
 
 export function InspectorScreen({
   id,
+  view,
   onExplore,
 }: {
   id: EntryId;
+  view: InspectorView;
   onExplore: (id: EntryId) => void;
 }) {
   const asOf = useAsOf();
   const { visit } = usePlaces();
+  const book = useLabels();
+  const edit = useEdit();
+  const setView = useCallback(
+    (update: (view: InspectorView) => InspectorView) =>
+      edit((screen) =>
+        screen.kind === "inspector"
+          ? { ...screen, view: update(screen.view ?? defaultInspectorView) }
+          : screen,
+      ),
+    [edit],
+  );
   const load = useCall("entries.inspect", { ...asOf, id });
   // The screen is keyed by the entry, so a previous result is this entry
   // under another boundary; it stays until the reload answers.
   const result = latest(load);
   // Each answer records the visit, refreshing the label kept for it.
-  const place = load.status === "ready" ? placeOf(load.result.entry) : null;
+  const place = load.status === "ready" ? placeOf(load.result) : null;
   const placeKey = place === null ? null : JSON.stringify(place);
   useEffect(() => {
     if (placeKey !== null) {
-      visit(JSON.parse(placeKey) as Place);
+      const place = JSON.parse(placeKey) as Place;
+      visit(place);
+      book.note(place.id, place.label);
     }
-  }, [placeKey, visit]);
+  }, [placeKey, visit, book]);
+  useEffect(() => {
+    if (result?.kind === "node") {
+      book.noteNodes(result.edges.map(({ other }) => other));
+    }
+  }, [result, book]);
   if (load.status === "failed") {
     return <FailureView failure={load.failure} />;
   }
@@ -92,7 +131,12 @@ export function InspectorScreen({
     <>
       {load.status === "loading" && <p className="muted">reloading…</p>}
       {result.kind === "node" ? (
-        <NodeInspection inspection={result} onExplore={onExplore} />
+        <NodeInspection
+          inspection={result}
+          view={view}
+          setView={setView}
+          onExplore={onExplore}
+        />
       ) : (
         <EdgeInspection inspection={result} />
       )}
@@ -183,14 +227,22 @@ function PickBanner({ id }: { id: EntryId | null }) {
 
 function NodeInspection({
   inspection,
+  view: { raw, outline },
+  setView,
   onExplore,
 }: {
   inspection: Extract<EntryInspection, { kind: "node" }>;
+  view: InspectorView;
+  setView: (update: (view: InspectorView) => InspectorView) => void;
   onExplore: (id: EntryId) => void;
 }) {
   const { entry, type, lineage, edges, view } = inspection;
   const historical = edges.filter(({ edge }) => !edge.current).length;
-  const [raw, setRaw] = useState(false);
+  const setOutline = useCallback(
+    (update: (outline: OutlineView) => OutlineView) =>
+      setView((current) => ({ ...current, outline: update(current.outline) })),
+    [setView],
+  );
   const types = useTypes();
   const { state, actions } = useDraft();
   const open = useOpen();
@@ -210,7 +262,8 @@ function NodeInspection({
     <article data-testid="inspector">
       <PickBanner id={entry.id} />
       <h2>
-        <PinButton entry={entry} /> {rowLabel(entry)} <Position id={entry.id} />
+        <PinButton inspection={inspection} /> {rowLabel(entry)}{" "}
+        <Position id={entry.id} />
       </h2>
       <div className="row">
         <TypeLink name={entry.ty_name} />
@@ -261,85 +314,102 @@ function NodeInspection({
           Connect
         </button>
       </div>
-      <section>
-        <h3>
-          Payload{" "}
-          <label className="muted">
-            <input
-              type="checkbox"
-              checked={raw}
-              onChange={(event) => setRaw(event.target.checked)}
-            />{" "}
-            raw JSON
-          </label>
-        </h3>
-        {raw ? (
-          <RawJson value={entry.payload} />
-        ) : (
-          <>
-            {declaration !== null && (
+      {/* Relationships first, where a wide window puts them beside the
+          payload and lineage; the findings about the entry stay just above
+          them. */}
+      <div className="inspector-body">
+        <div className="inspector-relations">
+          <EntryFindings id={entry.id} />
+          <section>
+            <h3>
+              Relationships{" "}
+              <span className="muted">
+                {edges.length} edge{edges.length === 1 ? "" : "s"}
+                {historical > 0 && `, ${historical} historical`}
+              </span>
+            </h3>
+            <RelationshipOutline
+              owner={entry}
+              edges={edges}
+              view={outline}
+              setView={setOutline}
+              asOf={view.end_exclusive}
+            />
+          </section>
+        </div>
+        <div className="inspector-data">
+          <section>
+            <h3>
+              Payload{" "}
+              <label className="muted">
+                <input
+                  type="checkbox"
+                  checked={raw}
+                  onChange={(event) => {
+                    const raw = event.target.checked;
+                    setView((current) => ({ ...current, raw }));
+                  }}
+                />{" "}
+                raw JSON
+              </label>
+            </h3>
+            {raw ? (
+              <RawJson value={entry.payload} />
+            ) : (
               <>
-                <h4>declares</h4>
-                <SchemaView schema={declaration} />
-                <h4>payload</h4>
+                {declaration !== null && (
+                  <>
+                    <h4>declares</h4>
+                    <SchemaView schema={declaration} />
+                    <h4>payload</h4>
+                  </>
+                )}
+                <PayloadTable
+                  payload={entry.payload}
+                  schema={type.kind === "declared" ? type.schema : null}
+                />
               </>
             )}
-            <PayloadTable
-              payload={entry.payload}
-              schema={type.kind === "declared" ? type.schema : null}
-            />
-          </>
-        )}
-      </section>
-      <section>
-        <h3>
-          Lineage{" "}
-          <span className="muted">
-            {lineage.length} revision{lineage.length === 1 ? "" : "s"}
-          </span>
-        </h3>
-        <ol className="lineage" data-testid="lineage">
-          {lineageRows(lineage).map(({ node, depth }) => {
-            const inspected = sameId(node.id, entry.id);
-            return (
-              <li
-                key={entryKey(node.id)}
-                className={[node.current && "current", inspected && "inspected"]
-                  .filter(Boolean)
-                  .join(" ")}
-                style={{ paddingLeft: `${depth * 1.5 + 0.5}rem` }}
-                data-depth={depth}
-              >
-                {inspected ? (
-                  <>
-                    <strong>{rowLabel(node)}</strong> <Position id={node.id} />
-                  </>
-                ) : (
-                  <NodeLink node={node} />
-                )}{" "}
-                <CurrentBadge current={node.current} kind="node" />
-                {inspected && <span className="muted"> (this)</span>}
-              </li>
-            );
-          })}
-        </ol>
-      </section>
-      <section>
-        <h3>
-          Relationships{" "}
-          <span className="muted">
-            {edges.length} edge{edges.length === 1 ? "" : "s"}
-            {historical > 0 && `, ${historical} historical`}
-          </span>
-        </h3>
-        <RelationshipOutline
-          owner={entry}
-          edges={edges}
-          path={[entryKey(entry.id)]}
-          testId="relationships"
-        />
-      </section>
-      <EntryFindings id={entry.id} />
+          </section>
+          <section>
+            <h3>
+              Lineage{" "}
+              <span className="muted">
+                {lineage.length} revision{lineage.length === 1 ? "" : "s"}
+              </span>
+            </h3>
+            <ol className="lineage" data-testid="lineage">
+              {lineageRows(lineage).map(({ node, depth }) => {
+                const inspected = sameId(node.id, entry.id);
+                return (
+                  <li
+                    key={entryKey(node.id)}
+                    className={[
+                      node.current && "current",
+                      inspected && "inspected",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    style={{ paddingLeft: `${depth * 1.5 + 0.5}rem` }}
+                    data-depth={depth}
+                  >
+                    {inspected ? (
+                      <>
+                        <strong>{rowLabel(node)}</strong>{" "}
+                        <Position id={node.id} />
+                      </>
+                    ) : (
+                      <NodeLink node={node} />
+                    )}{" "}
+                    <CurrentBadge current={node.current} kind="node" />
+                    {inspected && <span className="muted"> (this)</span>}
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        </div>
+      </div>
     </article>
   );
 }
@@ -373,7 +443,7 @@ function EdgeInspection({
     <article data-testid="inspector">
       <PickBanner id={null} />
       <h2>
-        <PinButton entry={entry} /> {typeName(entry.ty_name)}{" "}
+        <PinButton inspection={inspection} /> {typeName(entry.ty_name)}{" "}
         <Position id={entry.id} />
       </h2>
       <div className="row">
@@ -401,6 +471,7 @@ function EdgeInspection({
           </tr>
         </tbody>
       </table>
+      <EntryFindings id={entry.id} />
     </article>
   );
 }

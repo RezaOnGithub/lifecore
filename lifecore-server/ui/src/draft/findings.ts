@@ -20,19 +20,24 @@ export interface Attached {
   // The boundaries of the first and last prefix it was emitted at; null for
   // a suite-level initialization finding.
   range: { first: DecimalString; last: DecimalString } | null;
-  // Last emitted before the candidate's head, so a later operation of the
-  // draft resolved it.
-  resolvedLater: boolean;
+  // The candidate's head, the boundary its range is read against.
+  boundary: DecimalString;
+  // Last emitted before the candidate's head. Not emitted is all it says:
+  // nothing infers that the draft resolved it (SPEC §8.3).
+  notAtHead: boolean;
 }
 
 export interface Attachment {
   // Keyed by the index of the operation in the checked proposal, whose
   // entry sits at `base + index`; `Outcome.names` names it in the draft.
   operations: Map<number, Attached[]>;
-  // Held in the committed base and still at its boundary.
+  // First emitted in the committed history and still at the base boundary.
   history: Attached[];
-  // Held in the committed history but resolved before the base; not listed.
-  settled: number;
+  // First emitted in the committed history and no longer at the base
+  // boundary: the inconsistencies are listed, since they never fold away,
+  // and the advisories only counted.
+  ended: Attached[];
+  endedAdvisories: number;
   initialization: Attached[];
   unplaced: Attached[];
 }
@@ -71,7 +76,8 @@ export function attachFindings(report: ProposalReport): Attachment {
   const attachment: Attachment = {
     operations: new Map(),
     history: [],
-    settled: 0,
+    ended: [],
+    endedAdvisories: 0,
     initialization: [],
     unplaced: [],
   };
@@ -86,7 +92,8 @@ export function attachFindings(report: ProposalReport): Attachment {
       attachment.initialization.push({
         ...common,
         range: null,
-        resolvedLater: false,
+        boundary: report.analysis.view.end_exclusive,
+        notAtHead: false,
       });
       continue;
     }
@@ -98,14 +105,17 @@ export function attachFindings(report: ProposalReport): Attachment {
         first: evaluated_view.first.end_exclusive,
         last: evaluated_view.last.end_exclusive,
       },
-      resolvedLater: last >= base && last < head,
+      boundary: report.analysis.view.end_exclusive,
+      notAtHead: last < head,
     };
     const newest = first - 1n;
     if (newest < base) {
       if (last >= base) {
         attachment.history.push(attached);
+      } else if (diagnostic.kind === "inconsistency") {
+        attachment.ended.push(attached);
       } else {
-        attachment.settled += 1;
+        attachment.endedAdvisories += 1;
       }
       continue;
     }

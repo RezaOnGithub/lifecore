@@ -1,28 +1,59 @@
-import { useState } from "react";
+import { createContext, type ReactNode, useContext, useMemo } from "react";
 import type {
+  Currentness,
+  DecimalString,
   EdgeRecord,
   EntryId,
   IncidentEdge,
   NodeRecord,
 } from "../contract.ts";
-import { latest, useAsOf, useCall } from "../data.tsx";
+import { latest, useCall } from "../data.tsx";
 import { FailureView } from "../failure.tsx";
-import { CurrentBadge, IdLink, NodeLink, useOpen } from "../links.tsx";
-import { entryKey, LABEL_LIMIT, rowLabel, typeName } from "../model/labels.ts";
-import { truncate } from "../model/payload.ts";
 import {
+  CurrentBadge,
+  IdLink,
+  NodeLink,
+  useExplore,
+  useOpen,
+} from "../links.tsx";
+import { entryKey, rowLabel, typeName } from "../model/labels.ts";
+import {
+  COLLAPSE_ABOVE,
+  groupId,
+  groupState,
+  type OutlineView,
+  onPath,
+  rowPath,
+  setExpanded,
+  setFilter,
+  setGroupOpen,
+  setHistorical,
+} from "../model/outline.ts";
+import { truncate } from "../model/payload.ts";
+import { neighboursForm } from "../model/query.ts";
+import {
+  countByType,
+  countWords,
   groupByRelation,
   type Neighbour,
+  type Relation,
   type RelationGroup,
   relationCells,
   relationKey,
   relationLabel,
+  typeTags,
 } from "../model/relations.ts";
 import type { ExtraColumn } from "./EntryTable.tsx";
 
+// Neighbour labels in a cell are cut shorter than elsewhere, so a row with
+// several relationship columns still fits beside its label.
+export const NEIGHBOUR_LIMIT = 30;
+// A cell lists this many neighbours before "+N more".
+const CELL_FIRST = 3;
+
 // A neighbour's label linking to its inspector, compact enough for a table
-// cell: the position, type, and currentness are in the tooltip, and a
-// superseded node or a historical edge is styled.
+// cell: the full label, position, type, and currentness are in the
+// tooltip, and a superseded node or a historical edge is styled.
 function NeighbourLink({ node, edge }: { node: NodeRecord; edge: EdgeRecord }) {
   const open = useOpen();
   const label = rowLabel(node);
@@ -45,25 +76,41 @@ function NeighbourLink({ node, edge }: { node: NodeRecord; edge: EdgeRecord }) {
       title={`${label}\n${notes.join(", ")}`}
       onClick={() => open({ kind: "inspector", id: node.id })}
     >
-      {truncate(label, LABEL_LIMIT)}
+      {truncate(label, NEIGHBOUR_LIMIT)}
     </button>
   );
 }
 
-// The neighbours in one relationship cell: the first `limit`, then "+N more"
-// expanding in place.
+// The neighbours in one relationship cell. Beyond three, the count by type
+// comes first and the rest wait: up to COLLAPSE_ABOVE expand in place,
+// more open in Explore as the row's neighbours over this relation.
 export function NeighbourList({
+  owner,
+  relation,
+  currentness,
   neighbours,
-  limit = 3,
+  open,
+  setOpen,
 }: {
+  owner: EntryId;
+  relation: Relation;
+  currentness: Currentness;
   neighbours: readonly Neighbour<NodeRecord, EdgeRecord>[];
-  limit?: number;
+  open: boolean;
+  setOpen: (open: boolean) => void;
 }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? neighbours : neighbours.slice(0, limit);
+  const explore = useExplore();
+  const hub = neighbours.length > COLLAPSE_ABOVE;
+  const all = open && !hub;
+  const shown = all ? neighbours : neighbours.slice(0, CELL_FIRST);
   const more = neighbours.length - shown.length;
   return (
     <span className={all ? "neighbours all" : "neighbours"}>
+      {neighbours.length > CELL_FIRST && (
+        <span className="cell-count" data-testid="cell-count">
+          {countWords(countByType(neighbours.map(({ node }) => node)))}:{" "}
+        </span>
+      )}
       {/* The comma stays with its label, so a wrapped list never starts a
           line with one. */}
       {shown.map(({ node, edge }, index) => (
@@ -75,25 +122,49 @@ export function NeighbourList({
           {index < shown.length - 1 && " "}
         </span>
       ))}
-      {more > 0 && (
+      {more > 0 && !hub && (
         <>
           {" "}
           <button
             type="button"
             className="link more"
-            onClick={() => setAll(true)}
+            onClick={() => setOpen(true)}
           >
             +{more} more
           </button>
         </>
       )}
-      {all && neighbours.length > limit && (
+      {more > 0 && hub && (
         <>
           {" "}
           <button
             type="button"
             className="link more"
-            onClick={() => setAll(false)}
+            title={`open the ${neighbours.length} neighbours over ${relationLabel(
+              relation,
+            )} in Explore`}
+            onClick={() =>
+              explore(
+                neighboursForm(
+                  owner,
+                  relation.ty_name,
+                  relation.direction,
+                  currentness,
+                ),
+              )
+            }
+          >
+            +{more} in Explore
+          </button>
+        </>
+      )}
+      {all && neighbours.length > CELL_FIRST && (
+        <>
+          {" "}
+          <button
+            type="button"
+            className="link more"
+            onClick={() => setOpen(false)}
           >
             less
           </button>
@@ -105,10 +176,12 @@ export function NeighbourList({
 
 // A column per relation the rows have over `edges`, headed `→ PartOf` or
 // `← DependsOn`, listing each row's neighbours; sorted by the first one.
+// `currentness` is that of the edges, for a hub's query in Explore.
 export function relationColumns<R extends NodeRecord>(
   rows: readonly R[],
   edges: readonly EdgeRecord[],
   nodes: ReadonlyMap<string, NodeRecord>,
+  currentness: Currentness,
 ): ExtraColumn<R>[] {
   const { relations, cells } = relationCells(rows, edges, nodes);
   return relations.map((relation) => {
@@ -128,7 +201,16 @@ export function relationColumns<R extends NodeRecord>(
           {relationLabel(relation)}
         </span>
       ),
-      cell: (row) => <NeighbourList neighbours={neighbours(row)} />,
+      cell: (row, open, setOpen) => (
+        <NeighbourList
+          owner={row.id}
+          relation={relation}
+          currentness={currentness}
+          neighbours={neighbours(row)}
+          open={open}
+          setOpen={setOpen}
+        />
+      ),
       sortValue: (row) => {
         const first = neighbours(row)[0];
         return first === undefined ? undefined : rowLabel(first.node);
@@ -138,29 +220,80 @@ export function relationColumns<R extends NodeRecord>(
   });
 }
 
-// Groups with more edges than this start collapsed.
-export const COLLAPSE_ABOVE = 20;
+// The outline's state, its setter, and the boundary every expansion reads
+// at: the inspected view's, so the whole outline is one view.
+interface OutlineControl {
+  view: OutlineView;
+  setView: (update: (view: OutlineView) => OutlineView) => void;
+  asOf: DecimalString;
+}
+
+const OutlineContext = createContext<OutlineControl | null>(null);
+
+function useOutline(): OutlineControl {
+  const control = useContext(OutlineContext);
+  if (control === null) {
+    throw new Error("the relationship outline needs its RelationshipOutline");
+  }
+  return control;
+}
 
 // The relationships of one node as an outline: a group per edge type and
 // direction, and under each neighbour, on request, that neighbour's own
-// groups. `path` holds the keys of the nodes from the inspected one down to
-// `owner`; a neighbour on it is marked and not expanded again, so the
-// outline never loops.
+// groups, read at `asOf`.
 export function RelationshipOutline({
   owner,
   edges,
+  view,
+  setView,
+  asOf,
+}: {
+  owner: NodeRecord;
+  edges: readonly IncidentEdge[];
+  view: OutlineView;
+  setView: (update: (view: OutlineView) => OutlineView) => void;
+  asOf: DecimalString;
+}) {
+  const control = useMemo(
+    () => ({ view, setView, asOf }),
+    [view, setView, asOf],
+  );
+  return (
+    <OutlineContext value={control}>
+      <OutlineGroups
+        owner={owner}
+        edges={edges}
+        path=""
+        nodes={[entryKey(owner.id)]}
+        testId="relationships"
+      />
+    </OutlineContext>
+  );
+}
+
+// `path` names the row whose groups these are; `nodes` holds the keys of
+// the nodes from the inspected one down to `owner`.
+function OutlineGroups({
+  owner,
+  edges,
   path,
+  nodes,
   testId,
 }: {
   owner: NodeRecord;
   edges: readonly IncidentEdge[];
-  path: readonly string[];
+  path: string;
+  nodes: readonly string[];
   testId?: string;
 }) {
-  const groups = groupByRelation(edges, ({ edge, direction }) => ({
-    ty_name: edge.ty_name,
-    direction,
-  }));
+  const groups = useMemo(
+    () =>
+      groupByRelation(edges, ({ edge, direction }) => ({
+        ty_name: edge.ty_name,
+        direction,
+      })),
+    [edges],
+  );
   if (groups.length === 0) {
     return (
       <p className="muted outline-empty" data-testid={testId}>
@@ -173,32 +306,45 @@ export function RelationshipOutline({
       {groups.map((group) => (
         <OutlineGroup
           key={relationKey(group.relation)}
+          owner={owner}
           group={group}
-          // Every edge of a superseded node is historical, so hiding them
-          // would leave nothing; a current node's history waits for a click.
-          historical={!owner.current}
           path={path}
+          nodes={nodes}
         />
       ))}
     </ul>
   );
 }
 
+const neighbourLabel = ({ other }: IncidentEdge) => rowLabel(other);
+
 function OutlineGroup({
+  owner,
   group,
-  historical: historicalByDefault,
   path,
+  nodes,
 }: {
+  owner: NodeRecord;
   group: RelationGroup<IncidentEdge>;
-  historical: boolean;
-  path: readonly string[];
+  path: string;
+  nodes: readonly string[];
 }) {
-  const current = group.items.filter(({ edge }) => edge.current);
-  const historical = group.items.length - current.length;
-  const [withHistorical, setWithHistorical] = useState(historicalByDefault);
-  const shown = withHistorical ? group.items : current;
-  const [open, setOpen] = useState(shown.length <= COLLAPSE_ABOVE);
+  const { view, setView } = useOutline();
+  const id = groupId(path, group.relation);
+  const state = groupState(view, id, owner, group.items, neighbourLabel);
   const label = relationLabel(group.relation);
+  const listed = state.withHistorical
+    ? group.items
+    : group.items.filter(({ edge }) => edge.current);
+  const tags = typeTags(countByType(listed.map(({ other }) => other)));
+  const toggleHistorical = () =>
+    setView((current) => {
+      const next = setHistorical(current, id, !state.withHistorical, owner);
+      const total = state.withHistorical
+        ? group.items.length - state.historical
+        : group.items.length;
+      return setGroupOpen(next, id, true, total <= COLLAPSE_ABOVE);
+    });
   return (
     <li
       className="rel-group"
@@ -209,37 +355,66 @@ function OutlineGroup({
         <button
           type="button"
           className="rel-toggle"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
+          aria-expanded={state.open}
+          onClick={() =>
+            setView((current) =>
+              setGroupOpen(
+                current,
+                id,
+                !state.open,
+                state.total <= COLLAPSE_ABOVE,
+              ),
+            )
+          }
         >
-          <span className="twisty">{open ? "▾" : "▸"}</span>
+          <span className="twisty">{state.open ? "▾" : "▸"}</span>
           <span className="rel-name">{label}</span>{" "}
           <span className="counts" data-testid="relation-count">
-            {shown.length}
+            {state.total}
           </span>
+          {tags !== "" && (
+            <span className="rel-types" data-testid="relation-types">
+              · {tags}
+            </span>
+          )}
         </button>
-        {historical > 0 && (
+        {state.historical > 0 && (
           <button
             type="button"
             className="link small"
-            onClick={() => {
-              setWithHistorical(!withHistorical);
-              setOpen(true);
-            }}
+            onClick={toggleHistorical}
           >
-            {withHistorical
-              ? `hide historical (${historical})`
-              : `show historical (${historical})`}
+            {state.withHistorical
+              ? `hide historical (${state.historical})`
+              : `show historical (${state.historical})`}
           </button>
         )}
+        {state.open && state.filterable && (
+          <input
+            type="search"
+            className="rel-filter"
+            aria-label={`filter ${label}`}
+            placeholder="filter by label"
+            value={state.filter}
+            onChange={(event) =>
+              setView((current) => setFilter(current, id, event.target.value))
+            }
+          />
+        )}
+        {state.open && state.filter !== "" && (
+          <span className="muted small">
+            {state.shown.length} of {state.total}
+          </span>
+        )}
       </div>
-      {open && shown.length > 0 && (
+      {state.open && state.shown.length > 0 && (
         <ul className="rel-items">
-          {shown.map((incident) => (
+          {state.shown.map((incident) => (
             <NeighbourRow
               key={entryKey(incident.edge.id)}
               incident={incident}
               path={path}
+              nodes={nodes}
             />
           ))}
         </ul>
@@ -250,15 +425,18 @@ function OutlineGroup({
 
 function NeighbourRow({
   incident,
-  path,
+  path: parent,
+  nodes,
 }: {
   incident: IncidentEdge;
-  path: readonly string[];
+  path: string;
+  nodes: readonly string[];
 }) {
+  const { view, setView } = useOutline();
   const { edge, other } = incident;
-  const key = entryKey(other.id);
-  const onPath = path.includes(key);
-  const [expanded, setExpanded] = useState(false);
+  const path = rowPath(parent, edge.id);
+  const marked = onPath(nodes, other.id);
+  const expanded = !marked && view.expanded.includes(path);
   const label = rowLabel(other);
   return (
     <li
@@ -266,7 +444,7 @@ function NeighbourRow({
       data-testid="neighbour"
     >
       <div className="rel-row">
-        {onPath ? (
+        {marked ? (
           <span className="twisty" />
         ) : (
           <button
@@ -275,7 +453,9 @@ function NeighbourRow({
             aria-expanded={expanded}
             aria-label={`${expanded ? "collapse" : "expand"} ${label}`}
             title={`${expanded ? "hide" : "show"} the relationships of ${label}`}
-            onClick={() => setExpanded(!expanded)}
+            onClick={() =>
+              setView((current) => setExpanded(current, path, !expanded))
+            }
           >
             {expanded ? "▾" : "▸"}
           </button>
@@ -283,7 +463,7 @@ function NeighbourRow({
         <NodeLink node={other} />
         <span className="ty">{typeName(other.ty_name)}</span>
         {!other.current && <CurrentBadge current={false} kind="node" />}
-        {onPath && <span className="muted on-path">(on this path)</span>}
+        {marked && <span className="muted on-path">(on this path)</span>}
         <span className="edge-ref">
           edge <IdLink id={edge.id} />
           {!edge.current && (
@@ -294,22 +474,30 @@ function NeighbourRow({
           )}
         </span>
       </div>
-      {expanded && <NeighbourOutline id={other.id} path={[...path, key]} />}
+      {expanded && (
+        <NeighbourOutline
+          id={other.id}
+          path={path}
+          nodes={[...nodes, entryKey(other.id)]}
+        />
+      )}
     </li>
   );
 }
 
-// A neighbour's own relationships, read when first expanded, under the
-// global as-of boundary like every other read.
+// A neighbour's own relationships, read when first expanded at the
+// inspected view's boundary.
 function NeighbourOutline({
   id,
   path,
+  nodes,
 }: {
   id: EntryId;
-  path: readonly string[];
-}) {
-  const asOf = useAsOf();
-  const load = useCall("entries.inspect", { ...asOf, id });
+  path: string;
+  nodes: readonly string[];
+}): ReactNode {
+  const { asOf } = useOutline();
+  const load = useCall("entries.inspect", { as_of: asOf, id });
   const result = latest(load);
   if (load.status === "failed") {
     return <FailureView failure={load.failure} compact />;
@@ -321,10 +509,11 @@ function NeighbourOutline({
     return null;
   }
   return (
-    <RelationshipOutline
+    <OutlineGroups
       owner={result.entry}
       edges={result.edges}
       path={path}
+      nodes={nodes}
     />
   );
 }

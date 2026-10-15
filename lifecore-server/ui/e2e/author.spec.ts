@@ -391,6 +391,8 @@ test("a lost apply answer leaves the draft uncertain until the user decides", as
 
 test("an imported bare integer is a decimal string and an undeclared type blocks Apply", async () => {
   await fresh();
+  // An empty draft folds the tray to a strip; opening it offers Import.
+  await tray().getByRole("button", { name: "expand the draft tray" }).click();
   await trayButton("Import").click();
   const importer = page.getByTestId("import");
   await importer.getByLabel("format").selectOption("toml");

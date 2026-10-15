@@ -2,9 +2,12 @@ import { createContext, useContext } from "react";
 import type { EntryId, NodeEntry } from "./contract.ts";
 import { LABEL_LIMIT, labelField, rowLabel, typeName } from "./model/labels.ts";
 import { truncate } from "./model/payload.ts";
+import type { ExploreForm } from "./model/query.ts";
 import type { Screen } from "./navigation.ts";
 
-export type Open = (screen: Screen) => void;
+// Opens a screen as a new Back step. `leaving` replaces the screen being
+// left first, as when a run leaves the previous query as it was run.
+export type Open = (screen: Screen, options?: { leaving?: Screen }) => void;
 
 export const NavigationContext = createContext<Open>(() => {
   throw new Error("NavigationContext has no provider");
@@ -16,12 +19,34 @@ export function useOpen(): Open {
 
 // Swaps the current screen without a Back step, as when the operation under
 // the editor is renamed.
-export const ReplaceContext = createContext<Open>(() => {
+export const ReplaceContext = createContext<(screen: Screen) => void>(() => {
   throw new Error("ReplaceContext has no provider");
 });
 
-export function useReplace(): Open {
+export function useReplace(): (screen: Screen) => void {
   return useContext(ReplaceContext);
+}
+
+// Changes what the step a screen is shown for remembers: its view state.
+// Bound to that step, so it does nothing once the step is left; a screen
+// shown while another is current, like the hidden Explore, changes nothing.
+export type Edit = (edit: (screen: Screen) => Screen) => void;
+
+export const EditContext = createContext<Edit>(() => {});
+
+export function useEdit(): Edit {
+  return useContext(EditContext);
+}
+
+// Shows a form's query in Explore as a new Back step, with the display
+// choices of the last Explore step; on Explore itself, a query already on
+// show is run again instead.
+export const ExploreContext = createContext<(form: ExploreForm) => void>(() => {
+  throw new Error("ExploreContext has no provider");
+});
+
+export function useExplore(): (form: ExploreForm) => void {
+  return useContext(ExploreContext);
 }
 
 export function Position({ id }: { id: EntryId }) {

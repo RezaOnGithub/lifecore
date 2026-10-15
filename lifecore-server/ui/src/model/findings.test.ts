@@ -11,13 +11,16 @@ import type {
 } from "../contract.ts";
 import {
   aboutEntry,
+  addBlocker,
   categoryCounts,
+  clusterGroups,
   defaultFilter,
   type FindingFilter,
+  filterText,
   groupFindings,
   keyText,
   kindWords,
-  rangeText,
+  rangeWords,
   shownSubjects,
   unconfirmed,
 } from "./findings.ts";
@@ -36,10 +39,14 @@ const prefixes = (first: string, last = first): EvaluatedView => ({
 });
 const initialization: EvaluatedView = { kind: "initialization" };
 
-function key(kind: MessageType, certificate: string): FindingKey {
+function key(
+  kind: MessageType,
+  certificate: string,
+  analyzer = "A",
+): FindingKey {
   return {
     database: "db",
-    analyzer: { name: "A", version: "1", configuration: "{}" },
+    analyzer: { name: analyzer, version: "1", configuration: "{}" },
     kind,
     analyzer_certificate: certificate,
   };
@@ -54,16 +61,18 @@ function observation(
     subjects = [],
     focus = null,
     message = certificate,
+    analyzer = "A",
   }: {
     sticky?: boolean;
     subjects?: EntryId[];
     focus?: EntryId | null;
     message?: string;
+    analyzer?: string;
   } = {},
 ): Observation {
   const diagnostic = { subjects, focus, message, sticky };
   return {
-    key: key(kind, certificate),
+    key: key(kind, certificate, analyzer),
     evaluated_view,
     diagnostic:
       kind === "suggestion"
@@ -96,7 +105,7 @@ const shown = (
   groupFindings(analysis, dismissals, { ...defaultFilter, ...filter }).map(
     (group) => [
       group.key.analyzer_certificate,
-      group.selected.map((o) => rangeText(o.evaluated_view)),
+      group.selected.map((o) => rangeWords(o.evaluated_view, "9").text),
     ],
   );
 
@@ -114,21 +123,21 @@ const mixed = output([
 test("current shows initialization, the boundary, and sticky advisories", () => {
   assert.deepEqual(shown(mixed, []), [
     ["init", ["initialization"]],
-    ["held", ["boundaries 3–9"]],
-    ["again", ["boundaries 7–9"]],
-    ["sticky", ["boundary 4"]],
-    ["past", ["boundaries 5–6"]],
+    ["held", ["since 3"]],
+    ["again", ["since 7"]],
+    ["sticky", ["at 4"]],
+    ["past", ["5–6"]],
   ]);
 });
 
 test("history shows every observation in first-emission order", () => {
   assert.deepEqual(shown(mixed, [], { selection: "history" }), [
     ["init", ["initialization"]],
-    ["held", ["boundaries 3–9"]],
-    ["resolved", ["boundaries 2–5"]],
-    ["again", ["boundaries 2–4", "boundaries 7–9"]],
-    ["sticky", ["boundary 4"]],
-    ["past", ["boundaries 5–6"]],
+    ["held", ["since 3"]],
+    ["resolved", ["2–5"]],
+    ["again", ["2–4", "since 7"]],
+    ["sticky", ["at 4"]],
+    ["past", ["5–6"]],
   ]);
 });
 
@@ -143,10 +152,13 @@ test("a group keeps all its observations beside the selected ones", () => {
 test("a sticky advisory that ended before the boundary is unconfirmed", () => {
   const [sticky, held] = [mixed.observations[5], mixed.observations[1]];
   assert.ok(sticky && held);
-  assert.equal(unconfirmed(sticky, mixed), true);
-  assert.equal(unconfirmed(held, mixed), false);
+  assert.equal(unconfirmed(sticky, "9"), true);
+  assert.equal(unconfirmed(held, "9"), false);
   const atEnd = observation("warning", "s", prefixes("9"), { sticky: true });
-  assert.equal(unconfirmed(atEnd, output([atEnd])), false);
+  assert.equal(unconfirmed(atEnd, "9"), false);
+  assert.equal(unconfirmed(atEnd, "10"), true);
+  const init = observation("warning", "i", initialization, { sticky: true });
+  assert.equal(unconfirmed(init, "9"), false);
 });
 
 test("dismissed advisories are hidden unless asked for, by complete key", () => {
@@ -196,6 +208,14 @@ test("a record that differs in any key member does not match", () => {
         analyzer: { ...record.key.analyzer, version: "2" },
       },
     },
+    {
+      ...record,
+      key: {
+        ...record.key,
+        analyzer: { ...record.key.analyzer, name: "B" },
+      },
+    },
+    { ...record, key: { ...record.key, kind: "suggestion" } },
     { ...record, key: { ...record.key, analyzer_certificate: "held " } },
   ];
   for (const other of others) {
@@ -296,5 +316,115 @@ test("kind words name only the kinds present", () => {
   assert.equal(
     kindWords({ inconsistency: 0, warning: 0, suggestion: 0 }),
     "none",
+  );
+});
+
+test("ranges read against the boundary, and ended says only not emitted there", () => {
+  assert.deepEqual(rangeWords(initialization, "9"), {
+    text: "initialization",
+    ended: false,
+  });
+  assert.deepEqual(rangeWords(prefixes("3", "9"), "9"), {
+    text: "since 3",
+    ended: false,
+  });
+  assert.deepEqual(rangeWords(prefixes("9"), "9"), {
+    text: "since 9",
+    ended: false,
+  });
+  assert.deepEqual(rangeWords(prefixes("3", "8"), "9"), {
+    text: "3–8",
+    ended: true,
+  });
+  assert.deepEqual(rangeWords(prefixes("4"), "9"), {
+    text: "at 4",
+    ended: true,
+  });
+  // The same range against a later boundary, as when history grew.
+  assert.deepEqual(rangeWords(prefixes("3", "9"), "10"), {
+    text: "3–9",
+    ended: true,
+  });
+});
+
+test("clusters gather one analyzer's findings of one kind and message", () => {
+  const analysis = output([
+    observation("warning", "a", prefixes("9"), {
+      message: "m",
+      focus: id("1"),
+    }),
+    observation("warning", "b", prefixes("9"), { message: "n" }),
+    observation("warning", "c", prefixes("9"), {
+      message: "m",
+      focus: id("2"),
+    }),
+    // Same message, another analyzer or kind: other clusters.
+    observation("warning", "d", prefixes("9"), { message: "m", analyzer: "B" }),
+    observation("suggestion", "e", prefixes("9"), { message: "m" }),
+    // A key whose wording changed: clustered by its newest selected one.
+    observation("warning", "f", prefixes("2", "4"), { message: "old" }),
+    observation("warning", "f", prefixes("6", "9"), { message: "m" }),
+  ]);
+  const groups = groupFindings(analysis, [], {
+    ...defaultFilter,
+    selection: "history",
+  });
+  assert.deepEqual(
+    clusterGroups(groups).map((cluster) => [
+      cluster.analyzer.name,
+      cluster.kind,
+      cluster.message,
+      cluster.groups.map((group) => group.key.analyzer_certificate),
+    ]),
+    [
+      ["A", "warning", "m", ["a", "c", "f"]],
+      ["A", "warning", "n", ["b"]],
+      ["B", "warning", "m", ["d"]],
+      ["A", "suggestion", "m", ["e"]],
+    ],
+  );
+});
+
+test("the text filter reads messages and focus labels, never hiding inconsistencies", () => {
+  const analysis = output([
+    observation("warning", "a", prefixes("9"), {
+      message: "Field owner missing",
+      focus: id("1"),
+    }),
+    observation("warning", "b", prefixes("9"), {
+      message: "other",
+      focus: id("2"),
+    }),
+    observation("inconsistency", "c", prefixes("5"), { message: "bad" }),
+  ]);
+  const groups = groupFindings(analysis, [], defaultFilter);
+  const label = (entry: EntryId) =>
+    entry.position === "2" ? "Hinge OWNER" : `@${entry.position}`;
+  const kept = (text: string) =>
+    filterText(groups, text, label).map((g) => g.key.analyzer_certificate);
+  assert.deepEqual(kept(""), ["a", "b", "c"]);
+  assert.deepEqual(kept("  "), ["a", "b", "c"]);
+  assert.deepEqual(kept("owner"), ["a", "b", "c"]);
+  assert.deepEqual(kept("MISSING"), ["a", "c"]);
+  assert.deepEqual(kept("hinge"), ["b", "c"]);
+  assert.deepEqual(kept("nothing"), ["c"]);
+});
+
+test("suggested actions can be added only from a whole, fresh run at its boundary", () => {
+  const atEnd = observation("suggestion", "s", prefixes("4", "9"));
+  const earlier = observation("suggestion", "s", prefixes("4", "8"));
+  const init = observation("suggestion", "s", initialization);
+  const analysis = output([atEnd]);
+  const fresh = { whole: true, current: true };
+  assert.equal(addBlocker(atEnd, analysis, fresh), null);
+  assert.match(addBlocker(earlier, analysis, fresh) ?? "", /not emitted/);
+  assert.match(addBlocker(init, analysis, fresh) ?? "", /not emitted/);
+  assert.match(
+    addBlocker(atEnd, analysis, { whole: false, current: true }) ?? "",
+    /\[0, 9\) only/,
+  );
+  assert.match(
+    addBlocker(atEnd, analysis, { whole: true, current: false }) ?? "",
+    /reloaded/,
   );
 });

@@ -317,3 +317,23 @@ test("suggested actions get free default names and named references", () => {
   assert.deepEqual(appendOperations([task], operations).renamed, []);
   assert.deepEqual(suggestedOperations([task], []), []);
 });
+
+test("a suggested reference to its own action or a later one is left unset", () => {
+  const actions: EntryChange[] = [
+    {
+      kind: "node",
+      ty_name: "Task",
+      predecessor: { added: 0 },
+      intent: "revise",
+      payload: {},
+    },
+    { kind: "edge", ty_name: "Of", from: { added: 2 }, to: { added: 0 } },
+    { kind: "edge", ty_name: "Of", from: { added: 2 }, to: { added: -1 } },
+  ];
+  const [own, forward, self] = suggestedOperations([], actions);
+  assert.ok(own?.kind === "node" && own.predecessor !== undefined);
+  assert.ok(isUnset(own.predecessor));
+  assert.ok(forward?.kind === "edge" && isUnset(forward.from));
+  assert.deepEqual(forward.to, { added: "task_1" });
+  assert.ok(self?.kind === "edge" && isUnset(self.from) && isUnset(self.to));
+});

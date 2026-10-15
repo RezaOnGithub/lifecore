@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { NodeEntry } from "../contract.ts";
-import { entryKey, labelField, rowLabel, sameId, typeName } from "./labels.ts";
+import type { Body, NodeEntry } from "../contract.ts";
+import {
+  commonLabelField,
+  entryKey,
+  labelField,
+  rowLabel,
+  sameId,
+  typeName,
+} from "./labels.ts";
 
 function node(payload: NodeEntry["payload"], ty_name = "Task"): NodeEntry {
   return {
@@ -54,4 +61,16 @@ test("entry keys and identity comparison", () => {
   assert.equal(entryKey(id), "o:7");
   assert.ok(sameId(id, { origin: "o", position: "7" }));
   assert.ok(!sameId(id, { origin: "o", position: "8" }));
+});
+
+test("the field labelling every row is found only when all rows share it", () => {
+  const rows = (...payloads: Body[]) =>
+    payloads.map((payload) => ({ payload }));
+  assert.equal(commonLabelField(rows({ title: "a" }, { title: "b" })), "title");
+  assert.equal(
+    commonLabelField(rows({ title: "a" }, { name: "b", title: " " })),
+    null,
+  );
+  assert.equal(commonLabelField(rows({ count: "1" }, {})), null);
+  assert.equal(commonLabelField([]), null);
 });

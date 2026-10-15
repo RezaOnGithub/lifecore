@@ -229,8 +229,9 @@ export function appendOperations(
 
 // A suggestion's actions as operations to append, each with a default name
 // free in `entries` and among the earlier actions. `{added: n}` addresses
-// the n-th action and becomes that operation's name; an index outside the
-// actions, which a valid suggestion never has, is left unset to be picked.
+// an earlier action, the n-th, and becomes that operation's name; any other
+// index, the action's own or a later one included, which a valid suggestion
+// never has, is left unset to be picked.
 export function suggestedOperations(
   entries: readonly ProposalEntry[],
   actions: readonly EntryChange[],
@@ -245,15 +246,18 @@ export function suggestedOperations(
     // A placeholder that only reserves the name.
     combined.push({ name, kind: "node", ty_name: "", payload: {} });
   }
-  const reference = (r: Reference): ProposalReference => {
-    if ("existing" in r) {
-      return { existing: r.existing };
-    }
-    const name = Number.isInteger(r.added) ? names[r.added] : undefined;
-    return name === undefined ? UNSET : { added: name };
-  };
   return actions.map((action, index): ProposalEntry => {
     const name = names[index] as string;
+    const reference = (r: Reference): ProposalReference => {
+      if ("existing" in r) {
+        return { existing: r.existing };
+      }
+      const earlier =
+        Number.isInteger(r.added) && r.added >= 0 && r.added < index
+          ? names[r.added]
+          : undefined;
+      return earlier === undefined ? UNSET : { added: earlier };
+    };
     if (action.kind === "edge") {
       return {
         name,

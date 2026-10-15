@@ -18,7 +18,10 @@ use lifecore::{
     transaction::{self, Change, Checked},
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{BTreeSet, HashSet},
+    time::Duration,
+};
 use uuid::Uuid;
 
 // Called once per operation, so each request gets fresh analyzer instances
@@ -204,6 +207,7 @@ pub struct Description {
     pub graph_revision: Uuid,
     pub view: ViewId,
     pub suite: SuiteConfig,
+    pub registered: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -635,7 +639,20 @@ impl Service {
             graph_revision: snapshot.graph_revision,
             view: snapshot.graph.view().id(),
             suite: snapshot.graph.analysis_suite().clone(),
+            registered: self.registered(),
         })
+    }
+
+    // The analyzer names this host can add or replay, sorted, so a client
+    // never hardcodes them. A suite entry outside it stays readable and fails
+    // only when an analysis needs it.
+    fn registered(&self) -> Vec<String> {
+        (self.factories)()
+            .iter()
+            .map(|factory| factory.analyzer_name().to_owned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub fn list_entries(&self, request: EntryListRequest) -> Result<EntryList, AppError> {

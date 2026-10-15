@@ -1,5 +1,7 @@
 import type {
   AnalysisOutput,
+  AnalyzerIdentity,
+  DecimalString,
   Dismissal,
   EntryId,
   EvaluatedView,
@@ -70,9 +72,12 @@ export function atBoundary(
 // reports, but nothing says it still applies.
 export function unconfirmed(
   observation: Observation,
-  output: AnalysisOutput,
+  boundary: DecimalString,
 ): boolean {
-  return observation.diagnostic.sticky && !atBoundary(observation, output);
+  return (
+    observation.diagnostic.sticky &&
+    rangeWords(observation.evaluated_view, boundary).ended
+  );
 }
 
 export function dismissalIndex(
@@ -179,15 +184,119 @@ export function aboutEntry(
   return about;
 }
 
-// "boundary 7", "boundaries 3–7", or "initialization": the first and last
-// prefix boundaries the observation was emitted at.
-export function rangeText(evaluated: EvaluatedView): string {
+// The prefix boundaries an observation was emitted at, read against the
+// boundary of its report: "since 3" when the range runs up to that boundary,
+// "3–7" or "at 5" when it ended before, and "initialization". A range is
+// contiguous, so "since" leaves nothing out; `ended` says only that it was
+// not emitted at the boundary, never that anything was resolved (SPEC §8.3).
+export function rangeWords(
+  evaluated: EvaluatedView,
+  boundary: DecimalString,
+): { text: string; ended: boolean } {
   if (evaluated.kind === "initialization") {
-    return "initialization";
+    return { text: "initialization", ended: false };
   }
   const first = evaluated.first.end_exclusive;
   const last = evaluated.last.end_exclusive;
-  return first === last ? `boundary ${first}` : `boundaries ${first}–${last}`;
+  if (last === boundary) {
+    return { text: `since ${first}`, ended: false };
+  }
+  return {
+    text: first === last ? `at ${first}` : `${first}–${last}`,
+    ended: true,
+  };
+}
+
+// Why a suggestion's actions cannot go into the draft, which applies to the
+// current history: they must come from a run over the whole history at the
+// current reload, emitted at that run's boundary; null when they can.
+export function addBlocker(
+  observation: Observation,
+  output: AnalysisOutput,
+  run: { whole: boolean; current: boolean },
+): string | null {
+  if (!run.whole) {
+    return `this run is of [0, ${output.view.end_exclusive}) only: run over the whole history to add its actions`;
+  }
+  if (!run.current) {
+    return "the screens were reloaded since this run: Run again to add its actions";
+  }
+  const { evaluated_view } = observation;
+  if (
+    evaluated_view.kind === "initialization" ||
+    evaluated_view.last.end_exclusive !== output.view.end_exclusive
+  ) {
+    return "not emitted at this run's boundary: its actions were judged against an earlier history";
+  }
+  return null;
+}
+
+// The observation a group is shown by where it takes one line: its newest
+// selected one.
+export function lead(group: FindingGroup): Observation {
+  const observation = group.selected[group.selected.length - 1];
+  if (observation === undefined) {
+    throw new Error("a shown group has a selected observation");
+  }
+  return observation;
+}
+
+// Groups that read alike, for display only: one analyzer identity, kind,
+// and message. Dismissal stays per complete key.
+export interface FindingCluster {
+  id: string;
+  kind: MessageType;
+  analyzer: AnalyzerIdentity;
+  message: string;
+  groups: FindingGroup[];
+}
+
+// Clusters in the order of their first group, groups in their own order.
+export function clusterGroups(
+  groups: readonly FindingGroup[],
+): FindingCluster[] {
+  const clusters = new Map<string, FindingCluster>();
+  for (const group of groups) {
+    const { message } = lead(group).diagnostic;
+    const { analyzer, kind } = group.key;
+    const id = JSON.stringify([
+      analyzer.name,
+      analyzer.version,
+      analyzer.configuration,
+      kind,
+      message,
+    ]);
+    const cluster = clusters.get(id);
+    if (cluster === undefined) {
+      clusters.set(id, { id, kind, analyzer, message, groups: [group] });
+    } else {
+      cluster.groups.push(group);
+    }
+  }
+  return [...clusters.values()];
+}
+
+// Advisories whose shown message or focus label contains `text`, ignoring
+// case. Like every advisory filter it never hides an inconsistency.
+export function filterText(
+  groups: readonly FindingGroup[],
+  text: string,
+  label: (id: EntryId) => string,
+): FindingGroup[] {
+  const needle = text.trim().toLowerCase();
+  if (needle === "") {
+    return [...groups];
+  }
+  const has = (words: string) => words.toLowerCase().includes(needle);
+  return groups.filter(
+    (group) =>
+      group.key.kind === "inconsistency" ||
+      group.selected.some(
+        ({ diagnostic }) =>
+          has(diagnostic.message) ||
+          (diagnostic.focus !== null && has(label(diagnostic.focus))),
+      ),
+  );
 }
 
 // Subjects worth listing beside the focus: none when they only repeat it.

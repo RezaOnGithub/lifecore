@@ -1,8 +1,9 @@
 import type { Direction, EntryId, TypeSummary } from "../contract.ts";
 import { useTypes } from "../data.tsx";
-import { IdLink } from "../links.tsx";
+import { Position, useOpen } from "../links.tsx";
 import { compareStrings } from "../model/columns.ts";
 import { entryKey, typeName } from "../model/labels.ts";
+import { truncate } from "../model/payload.ts";
 import {
   defaultExpansion,
   type ExpansionForm,
@@ -11,6 +12,7 @@ import {
   MAX_STEPS,
   removeSeed,
 } from "../model/query.ts";
+import { NEIGHBOUR_LIMIT } from "./Relationships.tsx";
 import { CurrentnessSelect } from "./widgets.tsx";
 
 interface FormProps {
@@ -18,7 +20,32 @@ interface FormProps {
   onChange: (form: ExploreForm) => void;
 }
 
-export function SeedsFieldset({ form, onChange }: FormProps) {
+// A seed chip: the node's label and position, linking to its inspector.
+function SeedChip({ id, label }: { id: EntryId; label: string | undefined }) {
+  const open = useOpen();
+  return (
+    <button
+      type="button"
+      className="link"
+      title={label === undefined ? undefined : `${label} @${id.position}`}
+      onClick={() => open({ kind: "inspector", id })}
+    >
+      {label === undefined ? (
+        <Position id={id} />
+      ) : (
+        <>
+          {truncate(label, NEIGHBOUR_LIMIT)} <Position id={id} />
+        </>
+      )}
+    </button>
+  );
+}
+
+export function SeedsFieldset({
+  form,
+  onChange,
+  label,
+}: FormProps & { label: (id: EntryId) => string | undefined }) {
   const types = useTypes();
   return (
     <fieldset>
@@ -26,7 +53,7 @@ export function SeedsFieldset({ form, onChange }: FormProps) {
       <ul className="chips" data-testid="seeds">
         {form.ids.map((id: EntryId) => (
           <li key={entryKey(id)}>
-            <IdLink id={id} />{" "}
+            <SeedChip id={id} label={label(id)} />{" "}
             <button
               type="button"
               className="link"
@@ -166,6 +193,7 @@ function ExpansionRow({
       <label>
         edge types{" "}
         <input
+          id={`step-${index}-types`}
           list="edge-types"
           value={step.ty_names}
           placeholder="any"

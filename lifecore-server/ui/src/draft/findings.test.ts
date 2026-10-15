@@ -73,11 +73,13 @@ const report: ProposalReport = {
       // First emitted at [0, 7): operation c, pointing back at b and at 1.
       observation("suggestion", prefixes("7"), [id("5"), id("1")], id("6")),
       observation("warning", prefixes("7"), [], null),
-      // Exactly the base boundary: the newest entry 3 is history; resolved
-      // by the draft at [0, 6).
+      // Exactly the base boundary: the newest entry 3 is history; not
+      // emitted from [0, 6) on.
       observation("warning", prefixes("4", "5"), [id("3")], null),
-      // Resolved before the base: not listed.
+      // No longer emitted at the base: the advisory is counted, the
+      // inconsistency listed.
       observation("warning", prefixes("1", "3"), [], null),
+      observation("inconsistency", prefixes("2", "3"), [id("1")], id("1")),
       // Past the plan: cannot be placed.
       observation("warning", prefixes("9"), [], null),
     ],
@@ -89,7 +91,12 @@ test("findings attach by operation index, matched by entry position", () => {
   assert.deepEqual([...attachment.operations.keys()].sort(), [0, 2]);
   assert.equal(attachment.initialization.length, 1);
   assert.equal(attachment.history.length, 2);
-  assert.equal(attachment.settled, 1);
+  assert.equal(attachment.endedAdvisories, 1);
+  assert.equal(attachment.ended.length, 1);
+  assert.equal(
+    attachment.ended[0]?.observation.diagnostic.kind,
+    "inconsistency",
+  );
   assert.equal(attachment.unplaced.length, 1);
   assert.equal(attachment.operations.get(0)?.length, 1);
   assert.equal(attachment.operations.get(1), undefined);
@@ -118,15 +125,18 @@ test("positions decide, not the order of the report's operations", () => {
   assert.equal(gap.unplaced.length, 2);
 });
 
-test("each finding carries its prefix range and whether the draft resolved it", () => {
+test("each finding carries its prefix range and whether the head emits it", () => {
   const attachment = attachFindings(report);
-  const [kept, resolved] = attachment.history;
+  const [kept, ended] = attachment.history;
   assert.deepEqual(kept?.range, { first: "2", last: "7" });
-  assert.equal(kept?.resolvedLater, false);
-  assert.deepEqual(resolved?.range, { first: "4", last: "5" });
-  assert.equal(resolved?.resolvedLater, true);
+  assert.equal(kept?.notAtHead, false);
+  assert.equal(kept?.boundary, "7");
+  assert.deepEqual(ended?.range, { first: "4", last: "5" });
+  assert.equal(ended?.notAtHead, true);
+  assert.equal(attachment.ended[0]?.notAtHead, true);
   assert.equal(attachment.initialization[0]?.range, null);
-  assert.equal(attachment.operations.get(0)?.[0]?.resolvedLater, false);
+  assert.equal(attachment.initialization[0]?.notAtHead, false);
+  assert.equal(attachment.operations.get(0)?.[0]?.notAtHead, false);
 });
 
 test("provisional ids map back to operation indexes, existing ones stay ids", () => {
@@ -162,7 +172,7 @@ test("status words count inconsistencies and warnings, not suggestions", () => {
     "2 inconsistencies, 3 warnings",
   );
   assert.deepEqual(reportCounts(report), {
-    total: { inconsistency: 1, warning: 6, suggestion: 1 },
+    total: { inconsistency: 2, warning: 6, suggestion: 1 },
     introduced: { inconsistency: 1, warning: 1, suggestion: 1 },
   });
   assert.equal(
