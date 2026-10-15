@@ -186,7 +186,7 @@ its URL; opening it in Firefox shows `database.describe` from a React page built
 by the frontend toolchain. No feature screens yet.
 
 - [x] Align the core Serde vocabulary with the proposal vocabulary before client
-  types are generated. Core types and snapshots still use
+  types are written. Core types and snapshots still use
   `{"Node":{ty_name,body,parent}}`, `{"AddNode":…}`, and `{"Existing":…}` beside
   the proposal's `kind`, `type`, `payload`, `predecessor`, `existing`, and
   `added`; `EntryRecord` could then become the core entry plus `current`.
@@ -234,75 +234,72 @@ frontend checks pass.
 
 ### 4.3 Iterative UI stages
 
-Each stage runs UI → API → UI: sketch the screens against existing methods, add
+Each stage ran UI → API → UI: sketch the screens against existing methods, add
 or reshape the methods they turn out to need, then finish the screens. RPC
 methods are not frozen. Each API change updates the
 [INTERFACES §3.1](INTERFACES.md#31-provisional-first-slice-methods) method
 table, the fixtures, and the hand-written `contract.ts` together; compatibility
-is not a concern, so a later stage may reshape an earlier method. Each stage ends
-with its workflow on real data in the browser, a Playwright test for it in
-Firefox, and its UI decisions moved from [UI-HANDOFF.md](UI-HANDOFF.md) into
-[INTERFACES §5](INTERFACES.md#5-react-client). The methods named below are
-expectations, not commitments. Authoring precedes Findings because a check
-preview needs only a flat list of findings; Views comes last because it is the
-largest and least settled stage and the demonstration in section 4.5 does not
-depend on it.
+is not a concern, so a later stage may reshape an earlier method. Each stage
+ends with its workflow on real data in the browser, a Playwright test for it in
+Firefox, and its UI decisions recorded in
+[INTERFACES §5.2](INTERFACES.md#52-client-decisions). The prototype took the
+stages in the order Browse, Authoring, Findings with rendering, then a
+navigation round, each followed by a review round.
 
 #### 4.3.1 Browse
 
-- [ ] Browse by type and currentness in tables; inspect an entry's payload by
+- [x] Browse by type and currentness in tables; inspect an entry's payload by
   its type, its revision lineage, and its relationships with currentness.
-- [ ] Add the methods these screens need; expected: `entries.lineage`,
-  `entries.relationships`, and `types.list`.
-- [ ] Settle how rows are labeled.
-
-Exit: browse a real database, open an entry, and follow its lineage and
-relationships.
+- [x] Add the methods these screens need: `types.list`, `entries.inspect`
+  (which replaced the expected `entries.lineage` and `entries.relationships`),
+  and an `as_of` boundary on every read.
+- [x] Settle how rows are labeled (INTERFACES §5.2).
 
 #### 4.3.2 Authoring
 
-- [ ] Build a draft tray of ordered, named operations with JSON/TOML
+- [x] Build a draft tray of ordered, named operations with JSON/TOML
   import/export, check preview, explicit apply, and actual assigned-ID handling.
   Attach check findings to operations through the report's operation mapping.
   Preserve unsaved drafts on failure. Send raw imported file text to the Rust
   codec so bare large integers are decoded before JavaScript can round them.
   Require deliberate replanning after stale-base rejection.
-- [ ] Build forms from type declarations for payloads and for type declarations
+- [x] Build forms from type declarations for payloads and for type declarations
   themselves, keeping integers as decimal strings and timestamps at full
   precision.
-- [ ] Assist reconnection after revisions and splits by proposing explicit edge
+- [x] Assist reconnection after revisions and splits by proposing explicit edge
   operations for the incident edges the user keeps.
-- [ ] Distinguish rejection, successful publication, and uncertain publication.
-  Never automatically replay a write after transport failure.
-
-Exit: author, check, and apply a revision with reconnected edges; a stale draft
-requires replanning.
+- [x] Distinguish rejection, successful publication, and uncertain publication.
+  Never automatically replay a write after transport failure; an uncertain
+  apply blocks the draft until the user decides whether it was published.
 
 #### 4.3.3 Findings
 
-- [ ] Add analysis and dismissal methods. Return ephemeral analysis outputs with
-  view, inputs, and implementations, and keep dismissal loading independent of
-  analyzer availability. Dismissal list/update/restore rereads under writer
-  exclusion, preserves concurrent records, and rejects inconsistencies as targets.
-- [ ] Present analyzer groups, current/history selection, historical sticky
-  labels, evaluation context, dismissal reasons/notes, and restore. Reuse backend
-  grouping and validation semantics. Show the analyzer suite and add analyzers
-  behind a confirmation that shows any rejection.
+- [x] Add analysis and dismissal methods: `analysis.run`, `findings.dismiss`,
+  and `findings.restore`. Outputs are ephemeral, with view, inputs, and
+  implementations; dismissal loading is independent of analyzer availability;
+  edits reread under writer exclusion, preserve concurrent records, never
+  rotate the graph revision, and reject inconsistencies as targets.
+- [x] Present analyzer groups, current/history selection, historical sticky
+  labels, evaluation context, dismissal reasons/notes, and restore. Reuse
+  backend grouping and validation semantics.
+- [x] Show the analyzer suite and add analyzers behind a confirmation that
+  shows any rejection; `database.describe` lists the analyzer names the host
+  registers.
 
-Exit: run analysis, dismiss and restore an advisory, and add an analyzer.
+#### 4.3.4 Views and navigation
 
-#### 4.3.4 Views
-
-- [ ] Build views as filter pipelines (seed, expand, refine) with an "as of"
-  boundary and comparison between boundaries, shown as tables or threads.
-  Render a view with Graphviz on demand only.
-- [ ] Add the methods these screens need; expected: `views.query`,
-  `views.compare`, and `views.dot`. The HTTP adapter runs `dot -Tsvg` as a
-  subprocess with a timeout.
-- [ ] Settle where saved views live and the thread display's details.
-
-Exit: build a filtered view, switch between table and thread, compare two
-boundaries, and render the view with Graphviz.
+- [x] Build views as filter pipelines (seeds and expansion steps, then an edge
+  filter) with an "as of" boundary, shown as tables, threads, or a Graphviz
+  drawing rendered on demand by `views.render`, which runs `dot -Tsvg` as a
+  subprocess with a deadline.
+- [x] Settle where saved views live (browser storage, per database) and the
+  thread display's details (INTERFACES §5.2).
+- [x] Navigate by relationships: relationship columns in type tables, an
+  expandable relationship outline in the inspector, pinned and recent
+  entries, and Back that restores each screen's state.
+- [ ] Compare two boundaries (`views.compare`, over the core's
+  `ResolutionComparison`).
+- [ ] A refine step that subtracts a selection from a view.
 
 ### 4.4 Suggestions and acknowledgment
 
@@ -454,6 +451,18 @@ workflows.
 - Result limits and paging for list and query methods. The prototype returns
   complete results.
 - Browser tests in Chromium. Firefox is the tested browser for now.
+- Client navigation aids left out of the prototype: hover previews of linked
+  nodes, links from a superseded neighbour to its current successors, and an
+  incremental neighbourhood map with stable positions.
+- A `views.query` option that returns only the edges incident to the seeds,
+  so a type table's relationship columns do not ship the edges among its
+  neighbours, and row virtualization beyond the client's 500-row pages.
+- A schema helper for the introduce/retire migration paths of
+  [SPEC §10.3](SPEC.md#103-gradual-schema-migration), which today are
+  authored as ordinary declaration revisions.
+- A server cache or cheaper snapshot loading: every request reloads the
+  snapshot, which dominates the cost of lazy reads such as the inspector's
+  outline on large databases.
 - Snapshot change detection, e.g. a snapshot revision rotated on every
   publication, including dismissal edits. For a single user, a page refresh
   re-reads everything; revisit if dismissals grow large or a server cache is
