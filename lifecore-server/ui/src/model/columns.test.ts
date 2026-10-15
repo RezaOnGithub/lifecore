@@ -113,3 +113,23 @@ test("sorting is stable and reversible", () => {
     descending: false,
   });
 });
+
+test("absent cells sort last in both directions", () => {
+  const rows = [
+    { n: "a", v: undefined },
+    { n: "b", v: "2" },
+    { n: "c", v: "1" },
+  ];
+  const cell = (row: { v: string | undefined }) =>
+    row.v === undefined
+      ? undefined
+      : ({ kind: "integer", value: row.v } as const);
+  assert.deepEqual(
+    sortedBy(rows, cell, false).map((row) => row.n),
+    ["c", "b", "a"],
+  );
+  assert.deepEqual(
+    sortedBy(rows, cell, true).map((row) => row.n),
+    ["b", "c", "a"],
+  );
+});

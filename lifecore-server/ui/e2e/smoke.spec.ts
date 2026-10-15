@@ -16,7 +16,7 @@ test("the printed URL opens the client and shows the database description", asyn
   await page.goto(url);
   await expect(page.getByRole("heading", { name: "LifeCore" })).toBeVisible();
   await expect(page.getByTestId("database")).toHaveText(database);
-  // browse.spec runs first in the same database, so the count is not 0.
+  // Earlier spec files write to the same database, so the count is not 0.
   await expect(page.getByTestId("entries")).toHaveText(/^\d+$/);
   await expect(page.getByText("Type_Check")).toBeVisible();
   // The token left the address bar but stays in session storage.

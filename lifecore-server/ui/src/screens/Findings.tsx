@@ -319,9 +319,8 @@ export function FindingsScreen() {
       {state === undefined && (
         <p className="muted">
           Run replays the stored suite of analyzers over every prefix of the
-          selected history; on a large database it takes a while. A run answers
-          for the stored state as this page last read it: after a write by
-          another client, Refresh and Run again.
+          selected history; on a large database it takes a while. Each Run reads
+          the stored state afresh, including writes by other clients.
         </p>
       )}
       {state?.status === "failed" && <FailureView failure={state.failure} />}

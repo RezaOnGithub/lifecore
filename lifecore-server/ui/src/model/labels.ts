@@ -25,8 +25,8 @@ function isLabelText(value: unknown): value is string {
 }
 
 // The payload field a row is labeled by (INTERFACES §5.2): `title` when text,
-// else `name` when text, else the alphabetically first top-level text field;
-// null when the row has none.
+// else `name` when text, else the top-level text field whose name sorts first
+// by UTF-16 code units; null when the row has none.
 export function labelField(node: Pick<NodeEntry, "payload">): string | null {
   const { payload } = node;
   for (const preferred of ["title", "name"]) {

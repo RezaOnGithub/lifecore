@@ -141,6 +141,11 @@ export function sortedBy<T>(
   // is stable, so equal cells keep append order.
   return rows
     .map((row) => ({ row, value: cell(row) }))
-    .sort((a, b) => sign * compareCells(a.value, b.value))
+    .sort((a, b) =>
+      // Absent cells stay last whichever way the column sorts.
+      a.value === undefined || b.value === undefined
+        ? compareCells(a.value, b.value)
+        : sign * compareCells(a.value, b.value),
+    )
     .map(({ row }) => row);
 }
