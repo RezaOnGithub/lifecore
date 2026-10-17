@@ -1,5 +1,4 @@
 import {
-  type FormEvent,
   memo,
   type RefObject,
   useCallback,
@@ -9,23 +8,18 @@ import {
   useReducer,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
-import type { DecimalString, Description, EntryId } from "./contract.ts";
+import type { DecimalString, EntryId } from "./contract.ts";
 import {
   DataContext,
   LabelBook,
   LabelsContext,
-  type Load,
   latest,
   PlacesProvider,
   ResultCache,
   TypesContext,
   useAsOf,
   useCall,
-  useData,
-  useLabels,
-  usePlaces,
 } from "./data.tsx";
 import { DraftProvider } from "./draft/context.tsx";
 import { FailureView } from "./failure.tsx";
@@ -36,24 +30,14 @@ import {
   NavigationContext,
   type Open,
   ReplaceContext,
-  useOpen,
 } from "./links.tsx";
-import { pastBoundary, sameId, typeName, viewWords } from "./model/labels.ts";
-import { truncate } from "./model/payload.ts";
-import {
-  type ExploreForm,
-  exploreStep,
-  fromHere,
-  seedName,
-} from "./model/query.ts";
+import { type ExploreForm, exploreStep, fromHere } from "./model/query.ts";
 import {
   applyExploreStep,
   defaultInspectorView,
   defaultTableScreenView,
   exploreScreen,
   initialNavigation,
-  type Navigation,
-  type NavigationAction,
   navigate,
   type Screen,
   type Step,
@@ -68,6 +52,8 @@ import { OperationScreen } from "./screens/Operation.tsx";
 import { TableScreen } from "./screens/Table.tsx";
 import { ImportView } from "./views/Import.tsx";
 import { Sidebar } from "./views/Sidebar.tsx";
+import { TopBar } from "./views/TopBar.tsx";
+import { Trail } from "./views/Trail.tsx";
 import { Tray } from "./views/Tray.tsx";
 
 export function App({ client }: { client: RpcClient }) {
@@ -379,217 +365,5 @@ function Shell({
         </ExploreContext>
       </ReplaceContext>
     </NavigationContext>
-  );
-}
-
-const BOUNDARY = /^(0|[1-9][0-9]*)$/;
-
-function TopBar({
-  description,
-  nav,
-  dispatch,
-  asOf,
-  onAsOf,
-  onRefresh,
-}: {
-  description: Load<Description>;
-  nav: Navigation;
-  dispatch: (action: NavigationAction) => void;
-  asOf: DecimalString | null;
-  onAsOf: (asOf: DecimalString | null) => void;
-  onRefresh: () => void;
-}) {
-  const open = useOpen();
-  const [draft, setDraft] = useState(asOf ?? "");
-  // A boundary set elsewhere, such as the inspector's "As of here", or
-  // cleared for another database, shows in the field.
-  const [shown, setShown] = useState(asOf);
-  if (shown !== asOf) {
-    setShown(asOf);
-    setDraft(asOf ?? "");
-  }
-  const valid = BOUNDARY.test(draft);
-  const visible =
-    description.status === "ready"
-      ? description.result.view.end_exclusive
-      : null;
-  // The server refuses a boundary past the end as well; checking here only
-  // spares a request that is bound to fail.
-  const beyond = valid && visible !== null && BigInt(draft) > BigInt(visible);
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (valid && !beyond) {
-      onAsOf(draft);
-    }
-  };
-  return (
-    <header className="top">
-      <h1>LifeCore</h1>
-      {description.status === "ready" && (
-        <>
-          <button
-            type="button"
-            className="link"
-            title={`database ${description.result.database}`}
-            onClick={() => open({ kind: "database" })}
-          >
-            <code className="db-id" data-testid="database">
-              {description.result.database}
-            </code>
-          </button>
-          {asOf === null ? (
-            <span title="the whole history">
-              entries{" "}
-              <strong data-testid="entries">
-                {description.result.view.end_exclusive}
-              </strong>
-            </span>
-          ) : (
-            <span
-              className="badge asof"
-              data-testid="as-of"
-              title={`Every screen shows ${viewWords(asOf)}; "current" shows the whole history again.`}
-            >
-              showing the first {asOf} of{" "}
-              <strong data-testid="entries">
-                {description.result.view.end_exclusive}
-              </strong>{" "}
-              entries, view [0, {asOf})
-            </span>
-          )}
-        </>
-      )}
-      <form className="row" onSubmit={submit}>
-        <label title="Show the database as it was after this many entries were appended. The inspector's “As of here” sets it at an entry.">
-          as of{" "}
-          <input
-            name="boundary"
-            inputMode="numeric"
-            size={8}
-            placeholder="entry count"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value.trim())}
-          />
-        </label>
-        <button type="submit" disabled={!valid || beyond}>
-          Set
-        </button>
-        {beyond && (
-          <span className="muted">at most {visible}, the whole history</span>
-        )}
-        {asOf !== null && (
-          <button
-            type="button"
-            title="show the whole history again"
-            onClick={() => onAsOf(null)}
-          >
-            current
-          </button>
-        )}
-      </form>
-      <span className="spacer" />
-      <button
-        type="button"
-        disabled={nav.history.length === 0}
-        onClick={() => dispatch({ kind: "back" })}
-      >
-        ← Back
-      </button>
-      <button type="button" onClick={onRefresh}>
-        Refresh
-      </button>
-    </header>
-  );
-}
-
-// Steps the trail shows before folding older ones into "…".
-const TRAIL = 6;
-const TRAIL_LABEL = 28;
-
-// A step as the trail names it: the type of a table, the label of an entry
-// as last seen, the seeds of a query.
-function stepName(
-  screen: Screen,
-  label: (id: EntryId) => string | undefined,
-): string {
-  switch (screen.kind) {
-    case "database":
-      return "Database";
-    case "table":
-      return `${typeName(screen.ty_name)} table`;
-    case "inspector":
-      return label(screen.id) ?? `@${screen.id.position}`;
-    case "explore": {
-      const ids = screen.ran?.form.ids ?? [];
-      const [first] = ids;
-      if (first === undefined) {
-        return screen.ran === null ? "Explore" : "Explore: node selection";
-      }
-      return `Explore ${seedName(first, label)}${
-        ids.length > 1 ? ` +${ids.length - 1}` : ""
-      }`;
-    }
-    case "findings":
-      return "Findings";
-    case "operation":
-      return `+${screen.name}`;
-    case "import":
-      return "Import";
-  }
-}
-
-// The Back stack as a trail under the top bar: the last steps by name, the
-// current one last; a click goes back to that step, dropping the ones after
-// it.
-function Trail({
-  nav,
-  dispatch,
-}: {
-  nav: Navigation;
-  dispatch: (action: NavigationAction) => void;
-}) {
-  const book = useLabels();
-  const { asOf } = useData();
-  // Labels are noted as screens read entries; the trail follows the notes.
-  useSyncExternalStore(book.subscribe, book.version);
-  const { places } = usePlaces();
-  // Past the boundary, a step names its entry by position alone.
-  const label = (id: EntryId) =>
-    pastBoundary(id, asOf)
-      ? undefined
-      : (book.get(id, asOf) ??
-        [...places.recent, ...places.pinned].find((place) =>
-          sameId(place.id, id),
-        )?.label);
-  const { history } = nav;
-  const first = Math.max(0, history.length - TRAIL);
-  return (
-    <ol className="trail" aria-label="Back trail" data-testid="trail">
-      {first > 0 && (
-        <li className="muted" title={`${first} earlier steps`}>
-          …
-        </li>
-      )}
-      {history.slice(first).map((step, offset) => {
-        const name = stepName(step.screen, label);
-        return (
-          <li key={step.id}>
-            <button
-              type="button"
-              className="link"
-              title={`back to ${name}`}
-              onClick={() => dispatch({ kind: "back", to: first + offset })}
-            >
-              {truncate(name, TRAIL_LABEL)}
-            </button>
-          </li>
-        );
-      })}
-      <li aria-current="page">
-        <strong>
-          {truncate(stepName(nav.current.screen, label), TRAIL_LABEL)}
-        </strong>
-      </li>
-    </ol>
   );
 }
