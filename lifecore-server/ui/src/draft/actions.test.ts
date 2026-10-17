@@ -424,7 +424,7 @@ test("a late edge answer for a removed revision lands nowhere, even under the sa
   );
   assert.match(
     h.state().notices.at(-1)?.text ?? "",
-    /arrived after task_1 was removed or changed/,
+    /arrived after task_1 was removed; no edge was kept/,
   );
 });
 
@@ -468,6 +468,84 @@ test("picking a predecessor for a revise keeps its edges, without duplicates", a
   h.actions.resolvePick(n.id);
   await settle();
   assert.equal(h.count("entries.inspect"), 2);
+});
+
+test("a revision renamed before its edges answer keeps them under its new name", async () => {
+  const n = node("1");
+  const inspections: ((value: Result<"entries.inspect">) => void)[] = [];
+  const h = harness(
+    answers({
+      ...minted,
+      "entries.inspect": () =>
+        new Promise((resolve) => {
+          inspections.push(resolve);
+        }),
+    }),
+  );
+  assert.equal(h.actions.revise(n, "revise"), "task_1");
+  await settle();
+  const revision = h.state().proposal.entries[0];
+  assert.ok(revision !== undefined);
+  h.dispatch({
+    kind: "replace",
+    name: "task_1",
+    entry: { ...revision, name: "agenda" },
+  });
+  inspections[0]?.(inspection(n, [node("2")]));
+  await settle();
+  assert.deepEqual(
+    h.state().proposal.entries.map((e) => e.name),
+    ["agenda", "agenda_keep_40"],
+  );
+  assert.equal(h.state().kept.agenda_keep_40?.revision, "agenda");
+  assert.deepEqual(h.state().notices, []);
+  assert.deepEqual(h.state().reads, {});
+  // A failed read is forgotten too.
+  h.actions.revise(node("3"), "revise");
+  await settle();
+  assert.equal(Object.keys(h.state().reads).length, 1);
+  inspections[1]?.({
+    ...inspection(node("3"), []),
+    kind: "edge",
+  } as unknown as Result<"entries.inspect">);
+  await settle();
+  assert.deepEqual(h.state().reads, {});
+});
+
+test("a check during a plan ID mint waits for that mint, then sends", async () => {
+  let mint: (value: Result<"plan_id.mint">) => void = () => {};
+  let encoded: (value: Result<"proposal.encode">) => void = () => {};
+  const h = harness(
+    answers({
+      "plan_id.mint": () =>
+        new Promise((resolve) => {
+          mint = resolve;
+        }),
+      "proposal.encode": () =>
+        new Promise((resolve) => {
+          encoded = resolve;
+        }),
+      "proposal.check": () => ({ accepted: true, report: report() }),
+    }),
+  );
+  // The first operation arrives during an export, so its mint starts
+  // without taking `pending`, and the export ends before the mint does.
+  const exporting = h.actions.encode("json");
+  h.actions.addNode("Task");
+  assert.equal(h.state().pending, "encode");
+  encoded({ text: "{}" });
+  await exporting;
+  assert.equal(h.state().pending, null);
+  const checking = h.actions.check();
+  await settle();
+  assert.equal(h.count("proposal.check"), 0);
+  mint({ plan_id: "lc1:late" });
+  await checking;
+  assert.equal(h.count("plan_id.mint"), 1);
+  assert.deepEqual(h.calls.find((c) => c.method === "proposal.check")?.params, {
+    proposal: { plan_id: "lc1:late", entries: h.state().proposal.entries },
+  });
+  assert.equal(h.state().outcome?.accepted, true);
 });
 
 test("export refuses an unset endpoint locally and keeps the banners", async () => {

@@ -26,8 +26,14 @@ function problemFor(problem: Problem | null, name: string): string | null {
 
 // The operation's header and findings, then its editor, then for a revision
 // of an existing node the reconnection assistant. Nothing here edits while
-// an apply is in flight.
-export function OperationScreen({ name }: { name: string }) {
+// an apply is in flight. Remove leaves through `onBack`, to the step before.
+export function OperationScreen({
+  name,
+  onBack,
+}: {
+  name: string;
+  onBack: () => void;
+}) {
   const { state, dispatch, actions } = useDraft();
   const types = useTypes();
   const open = useOpen();
@@ -163,7 +169,7 @@ export function OperationScreen({ name }: { name: string }) {
             confirm={`Remove ${name}?`}
             onConfirm={() => {
               dispatch({ kind: "remove", names: [name] });
-              open({ kind: "database" });
+              onBack();
             }}
           >
             Remove

@@ -10,12 +10,12 @@ import type {
 
 // The authoring flow of Milestone 2: create through the form, check, and
 // apply through the draft tray, revise with reconnection, recover from a
-// stale base on Check and on Apply, and import. Files run in name order, so
-// this one runs before browse.spec in the same database; it declares and
-// uses its own `Job` type and never touches `Task`, whose counts
-// browse.spec asserts. Each test starts from an empty draft and opens the
-// screens it needs; analyzer wording is never asserted, only the kind of a
-// finding and where it is attached.
+// stale base on Check and on Apply, share a draft with a second tab, and
+// import. Files run in name order, so this one runs before browse.spec in
+// the same database; it declares and uses its own `Job` type and never
+// touches `Task`, whose counts browse.spec asserts. Each test starts from an
+// empty draft and opens the screens it needs; analyzer wording is never
+// asserted, only the kind of a finding and where it is attached.
 test.describe.configure({ mode: "serial" });
 
 function launched(): { page: string; rpc: string; token: string } {
@@ -118,13 +118,14 @@ test.beforeAll(async ({ browser }) => {
       operation.entry,
     ]),
   );
-  page = await browser.newPage();
+  // A context of its own, so a test can open a second tab beside the page.
+  page = await (await browser.newContext()).newPage();
   await page.goto(launched().page);
   await expect(page.getByRole("heading", { name: "LifeCore" })).toBeVisible();
 });
 
 test.afterAll(async () => {
-  await page?.close();
+  await page?.context().close();
 });
 
 const main = () => page.getByRole("main");
@@ -387,6 +388,135 @@ test("a lost apply answer leaves the draft uncertain until the user decides", as
   await checkAccepted();
   await trayButton("Apply").click();
   await expect(page.getByTestId("applied")).toContainText("job_1 → @");
+});
+
+test("another tab's apply freezes the draft, and that tab closing mid-apply leaves it uncertain", async () => {
+  await fresh();
+  await newJob();
+  await setField("title", "Applied elsewhere");
+  // A second tab of the same browser shares the stored draft and follows
+  // this one's edits.
+  const other = await page.context().newPage();
+  const otherTray = other.getByTestId("tray");
+  const otherButton = (name: string) =>
+    otherTray.getByRole("button", { name, exact: true });
+  // Until its database answers, that tab takes no edit: the draft it would
+  // land in is not yet the stored one.
+  let describe = () => {};
+  const described = new Promise<void>((resolve) => {
+    describe = resolve;
+  });
+  await other.route("**/rpc", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (body.includes('"method":"database.describe"')) {
+      await described;
+    }
+    await route.continue();
+  });
+  await other.goto(launched().page);
+  await otherTray
+    .getByRole("button", { name: "expand the draft tray" })
+    .click();
+  await expect(other.getByTestId("draft-status")).toHaveText(
+    "waiting for the database",
+  );
+  await expect(otherButton("New edge")).toBeDisabled();
+  await expect(otherButton("Import")).toBeDisabled();
+  describe();
+  await expect(otherTray.getByTestId("draft-count")).toHaveText("1 operation");
+  await other.unrouteAll();
+  await newJob();
+  await setField("title", "Also applied elsewhere");
+  await expect(otherTray.getByTestId("draft-count")).toHaveText("2 operations");
+  // The other tab checks and sends an apply that never answers.
+  await other.route("**/rpc", async (route) => {
+    const body = route.request().postData() ?? "";
+    if (!body.includes('"method":"proposal.apply"')) {
+      await route.continue();
+    }
+  });
+  await otherButton("Check").click();
+  await expect(other.getByTestId("draft-status")).toHaveText("accepted");
+  await otherButton("Apply").click();
+  await expect(other.getByTestId("draft-status")).toHaveText("applying…");
+  // This tab is frozen by that apply: nothing here can overwrite its marker.
+  await expect(status()).toHaveText("applying in another tab");
+  await expect(page.getByTestId("applying-elsewhere")).toBeVisible();
+  await expect(trayButton("New edge")).toBeDisabled();
+  await expect(trayButton("Clear")).toBeDisabled();
+  await expect(trayButton("Apply")).toBeDisabled();
+  await expect(main().getByLabel("title", { exact: true })).toBeDisabled();
+  // The other tab goes away before the answer: a reload here finds the
+  // apply of uncertain fate, whether that tab still saw its request fail
+  // (transport) or left only its in-flight marker (interrupted).
+  await other.close();
+  await page.reload();
+  const uncertain = page.getByTestId("uncertain");
+  await expect(uncertain).toContainText(
+    "This draft may already have been applied",
+  );
+  await expect(uncertain).toContainText(/interrupted|transport/);
+  await expect(count()).toHaveText("2 operations");
+  await uncertain.getByRole("button", { name: "Look in the graph" }).click();
+  await expect(uncertain.getByTestId("verdict")).toContainText(
+    "was not applied",
+  );
+  await uncertain
+    .getByRole("button", { name: "Verified not applied: keep editing" })
+    .click();
+  await expect(uncertain).toHaveCount(0);
+});
+
+test("Keep none and Remove ask first, Remove goes Back, and an explicit time is hinted as typed", async () => {
+  await fresh();
+  await openJobs();
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Send invites" })
+    .click();
+  await expect(
+    main().getByRole("heading", { name: "Send invites" }),
+  ).toBeVisible();
+  await main().getByRole("button", { name: "Revise", exact: true }).click();
+  const reconnect = page.getByTestId("reconnect");
+  await expect(reconnect.getByRole("checkbox", { checked: true })).toHaveCount(
+    1,
+  );
+  await expect(count()).toHaveText("2 operations");
+  await reconnect.getByRole("button", { name: "Keep none" }).click();
+  // The first click only asks.
+  await expect(count()).toHaveText("2 operations");
+  await reconnect
+    .getByRole("button", { name: "Remove the kept edge?" })
+    .click();
+  await expect(count()).toHaveText("1 operation");
+  await expect(page.getByTestId("reconnect-count")).toHaveText(
+    "0 of 1 current edge kept",
+  );
+  // The explicit evaluation time names its form until it looks like one.
+  const choice = tray().getByRole("combobox", { name: /^evaluation time/ });
+  const time = tray().getByLabel("evaluation timestamp");
+  const hint = tray().getByTestId("time-hint");
+  await choice.selectOption("at");
+  await expect(hint).toHaveText(
+    "enter an RFC 3339 instant such as 2026-10-15T08:30:00Z",
+  );
+  await expect(trayButton("Check")).toBeDisabled();
+  await time.fill("next tuesday");
+  await expect(hint).toContainText("expected an RFC 3339 instant");
+  await expect(time).toHaveAttribute("aria-invalid", "true");
+  await time.fill("2026-10-15T08:30:00Z");
+  await expect(hint).toHaveCount(0);
+  await expect(time).toHaveAttribute("aria-invalid", "false");
+  await choice.selectOption("none");
+  // Remove leaves for the step before, the inspector Revise was used in.
+  await main().getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(count()).toHaveText("1 operation");
+  await main().getByRole("button", { name: "Remove job_1?" }).click();
+  await expect(
+    main().getByRole("heading", { name: "Send invites" }),
+  ).toBeVisible();
+  await expect(count()).toHaveText("0 operations");
 });
 
 test("an imported bare integer is a decimal string and an undeclared type blocks Apply", async () => {

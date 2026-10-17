@@ -14,6 +14,7 @@ import type {
 import type { PickRole } from "../editors/OperationEditor.tsx";
 import { RpcError } from "../rpc.ts";
 import { type Classified, classify, message } from "./classify.ts";
+import { namesOf } from "./edits.ts";
 import {
   applicable,
   applyParams,
@@ -50,9 +51,9 @@ export type Encoded =
   | { kind: "ok"; text: string }
   | { kind: "failed"; message: string };
 
-function names(request: string): string[] {
-  return (JSON.parse(request) as Proposal).entries.map((entry) => entry.name);
-}
+// Read numbers are unique in the page, so an answer never lands on a read
+// another instance started.
+let lastRead = 0;
 
 // The event-driven side of the draft: every method is called from a handler,
 // reads the state of that moment through `state()`, which must already
@@ -66,7 +67,7 @@ export class DraftActions {
   readonly #dispatch: (action: DraftAction) => void;
   readonly #state: () => DraftState;
   readonly #refresh: () => void;
-  #minting = false;
+  #minting: Promise<void> | null = null;
 
   constructor(
     client: { call: Call },
@@ -160,22 +161,30 @@ export class DraftActions {
   }
 
   // Reads without `as_of`, because the draft applies to the current state.
-  // The answer lands only if the operation still revises the node; the
-  // reducer checks that when it arrives.
+  // The answer goes to the operation under its name at that time, and lands
+  // only if the operation still revises the node; the reducer checks that
+  // when it arrives.
   #keepCurrentEdges(operation: string, predecessor: EntryId) {
+    lastRead += 1;
+    const read = lastRead;
+    this.#dispatch({ kind: "reading", read, operation });
     this.#call("entries.inspect", { id: predecessor }).then(
       (inspection) => {
         if (inspection.kind === "node") {
           this.#dispatch({
             kind: "keep",
+            read,
             operation,
             predecessor,
             intent: "revise",
             edges: reconnectable(inspection.edges),
           });
+        } else {
+          this.#dispatch({ kind: "reading", read, operation: null });
         }
       },
       (failure: unknown) => {
+        this.#dispatch({ kind: "reading", read, operation: null });
         this.#notice(
           `could not read the current edges of @${predecessor.position}: ${message(failure)}`,
         );
@@ -246,41 +255,43 @@ export class DraftActions {
 
   // ---- Calls ----
 
-  // Mints once per missing plan ID; the reducer drops the answer if the
-  // draft was cleared meanwhile. A failure is a notice, so it never hides a
-  // banner about the last check or apply.
+  // Whether the draft has a plan ID, minting one when it lacks it. Mints
+  // once per missing plan ID: a caller arriving during a mint waits for
+  // that one. The reducer drops the answer if the draft was cleared
+  // meanwhile. A failure is a notice, so it never hides a banner about the
+  // last check or apply.
   async ensurePlanId(): Promise<boolean> {
-    const { proposal, pending } = this.#state();
-    if (proposal.plan_id !== undefined || proposal.entries.length === 0) {
-      return proposal.plan_id !== undefined;
+    const { proposal } = this.#state();
+    if (proposal.plan_id === undefined && proposal.entries.length > 0) {
+      this.#minting ??= this.#mint().finally(() => {
+        this.#minting = null;
+      });
+      await this.#minting;
     }
-    if (this.#minting) {
-      return false;
-    }
-    this.#minting = true;
-    if (pending === null) {
+    return this.#state().proposal.plan_id !== undefined;
+  }
+
+  async #mint(): Promise<void> {
+    if (this.#state().pending === null) {
       this.#dispatch({ kind: "pending", pending: "mint" });
     }
     try {
       const { plan_id } = await this.#call("plan_id.mint", {});
       this.#dispatch({ kind: "set_plan_id", plan_id });
-      return true;
     } catch (failure) {
       this.#notice(`could not mint a plan ID: ${message(failure)}`);
-      return false;
     } finally {
-      this.#minting = false;
       if (this.#state().pending === "mint") {
         this.#dispatch({ kind: "pending", pending: null });
       }
     }
   }
 
-  // Not while an apply may have been published: that needs the user's
-  // decision first.
+  // Not while an apply may have been published or is in flight: that needs
+  // the user's decision or the apply's answer first.
   async replan(): Promise<void> {
     const state = this.#state();
-    if (state.pending !== null || state.uncertain !== null) {
+    if (state.pending !== null || state.uncertain !== null || frozen(state)) {
       return;
     }
     this.#dispatch({ kind: "pending", pending: "mint" });
@@ -324,7 +335,7 @@ export class DraftActions {
       });
       this.#dispatch({ kind: "checked", result, request, evaluation });
     } catch (failure) {
-      this.#settle(classify(failure, "check", names(request)), request, {
+      this.#settle(classify(failure, "check", namesOf(request)), request, {
         evaluation,
         flight: null,
       });
@@ -333,7 +344,8 @@ export class DraftActions {
 
   // Applies exactly what the accepted check judged, with the inputs it
   // reported. The draft is frozen until the answer, and the marker saved
-  // first turns a reload in the middle into an uncertain draft.
+  // first turns a reload in the middle into an uncertain draft. Nothing is
+  // sent when the marker could not be saved over another tab's.
   async apply(): Promise<void> {
     const state = this.#state();
     const { outcome } = state;
@@ -349,6 +361,10 @@ export class DraftActions {
       base_end: outcome.report.base.end_exclusive,
     };
     this.#dispatch({ kind: "apply_started", flight });
+    // Another tab's marker was stored first and has been adopted instead.
+    if (this.#state().inFlight !== flight) {
+      return;
+    }
     let result: Result<"proposal.apply">;
     try {
       result = await this.#call("proposal.apply", {
@@ -356,7 +372,7 @@ export class DraftActions {
         ...applyParams(outcome),
       });
     } catch (failure) {
-      this.#settle(classify(failure, "apply", names(request)), request, {
+      this.#settle(classify(failure, "apply", namesOf(request)), request, {
         evaluation,
         flight,
       });

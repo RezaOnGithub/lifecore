@@ -6,8 +6,17 @@ import type {
   ProposalEntry,
   RevisionIntent,
 } from "../contract.ts";
-import type { DraftState, KeptEdge, Notice, Problem } from "./model.ts";
+import {
+  applyingElsewhere,
+  type DraftState,
+  frozen,
+  type KeptEdge,
+  type Notice,
+  type Problem,
+  requestOf,
+} from "./model.ts";
 import { removeOperations, uniqueName, withoutApplied } from "./operations.ts";
+import { type Stored, sameMarker, storedOf } from "./persist.ts";
 import { keptBy, reconnection, stillRevises } from "./reconnect.ts";
 
 // The state transitions the reducer composes.
@@ -17,6 +26,9 @@ export interface Keep {
   predecessor: EntryId;
   intent?: RevisionIntent;
   edges: IncidentEdge[];
+  // The answer to a read of the predecessor's edges started for
+  // `operation`: the edges go to that operation under its current name.
+  read?: number;
 }
 
 // Problems about the content go away with the next edit; the others stay
@@ -82,9 +94,14 @@ export function renamed(
   for (const [name, edge] of Object.entries(state.kept)) {
     kept[follow(name)] = { ...edge, revision: follow(edge.revision) };
   }
+  const reads: Record<number, string> = {};
+  for (const [read, operation] of Object.entries(state.reads)) {
+    reads[Number(read)] = follow(operation);
+  }
   return {
     ...state,
     kept,
+    reads,
     selected: state.selected === null ? null : follow(state.selected),
     picking:
       state.picking === null
@@ -106,11 +123,21 @@ export function withoutKept(
   );
 }
 
+function withoutReads(
+  reads: Record<number, string>,
+  removed: ReadonlySet<string>,
+): Record<number, string> {
+  return Object.fromEntries(
+    Object.entries(reads).filter(([, operation]) => !removed.has(operation)),
+  );
+}
+
 export function emptied(state: DraftState): DraftState {
   return {
     ...state,
     proposal: { entries: [] },
     kept: {},
+    reads: {},
     selected: null,
     picking: null,
     outcome: null,
@@ -136,6 +163,7 @@ export function published(
     ...state,
     proposal: { entries },
     kept: withoutKept(state.kept, removed),
+    reads: withoutReads(state.reads, removed),
     selected:
       state.selected !== null && removed.has(state.selected)
         ? null
@@ -181,6 +209,7 @@ export function removal(
   );
   const next = edited(state, entries, {
     kept: withoutKept(state.kept, gone),
+    reads: withoutReads(state.reads, gone),
     selected:
       state.selected !== null && gone.has(state.selected)
         ? null
@@ -205,11 +234,40 @@ export function removal(
   );
 }
 
+function unkept(state: DraftState, action: Keep, why: string): DraftState {
+  return action.edges.length === 0
+    ? state
+    : withNotice(
+        state,
+        `the current edges of @${action.predecessor.position} ${why}`,
+      );
+}
+
 // Inserts the kept edges for `operation` after it and the kept edges already
 // beside it, so they stay one group in the relationships' order.
 export function keep(state: DraftState, action: Keep): DraftState {
+  let { operation } = action;
+  if (action.read !== undefined) {
+    const { [action.read]: current, ...reads } = state.reads;
+    state = { ...state, reads };
+    if (current === undefined) {
+      return unkept(
+        state,
+        action,
+        `arrived after ${operation} was removed; no edge was kept`,
+      );
+    }
+    operation = current;
+  }
+  if (frozen(state)) {
+    return unkept(
+      state,
+      action,
+      `arrived while applying; open ${operation} to keep them`,
+    );
+  }
   const { entries } = state.proposal;
-  const index = entries.findIndex((e) => e.name === action.operation);
+  const index = entries.findIndex((e) => e.name === operation);
   const entry = entries[index];
   if (
     !stillRevises(entry, action.predecessor) ||
@@ -217,35 +275,97 @@ export function keep(state: DraftState, action: Keep): DraftState {
       entry?.kind === "node" &&
       entry.intent !== action.intent)
   ) {
-    return action.edges.length === 0
-      ? state
-      : withNotice(
-          state,
-          `the current edges of @${action.predecessor.position} arrived after ${action.operation} was removed or changed; no edge was kept`,
-        );
+    return unkept(
+      state,
+      action,
+      `arrived after ${operation} was removed or changed; no edge was kept`,
+    );
   }
   let at = index + 1;
   while (
     entries[at] !== undefined &&
-    state.kept[entries[at]?.name ?? ""]?.revision === action.operation
+    state.kept[entries[at]?.name ?? ""]?.revision === operation
   ) {
     at += 1;
   }
   const next = [...entries];
   const kept = { ...state.kept };
   for (const incident of action.edges) {
-    if (keptBy(next, action.operation, incident) !== null) {
+    if (keptBy(next, operation, incident) !== null) {
       continue;
     }
-    const edge = reconnection(next, action.operation, incident);
+    const edge = reconnection(next, operation, incident);
     const name = uniqueName(next, edge.name);
     next.splice(at, 0, { ...edge, name });
     kept[name] = {
-      revision: action.operation,
+      revision: operation,
       predecessor: action.predecessor,
       edge: incident.edge.id,
     };
     at += 1;
   }
   return next.length === entries.length ? state : edited(state, next, { kept });
+}
+
+// Another tab's record of this draft: the stored parts become that record,
+// and what this tab holds besides follows it where it still applies. A
+// marker in it is the other tab's, so an in-flight one freezes the draft
+// here until that tab records the answer, and a new uncertain one spends
+// this tab's check as it spent that tab's. `refused` says this tab's last
+// change was dropped for it.
+export function adopted(
+  state: DraftState,
+  stored: Stored | null,
+  refused = false,
+): DraftState {
+  const { proposal, kept, uncertain, in_flight } = stored ?? {
+    proposal: { entries: [] },
+    kept: {},
+    uncertain: null,
+    in_flight: null,
+  };
+  const names = new Set(proposal.entries.map((entry) => entry.name));
+  const same =
+    uncertain !== null && sameMarker(uncertain, storedOf(state).uncertain);
+  const changed = requestOf({ ...state, proposal }) !== requestOf(state);
+  const next: DraftState = {
+    ...state,
+    proposal,
+    kept,
+    uncertain:
+      uncertain === null
+        ? null
+        : same
+          ? state.uncertain
+          : { ...uncertain, verdict: null },
+    inFlight: in_flight,
+    // This tab's own apply, if any, is no longer what the record says.
+    pending: state.pending === "apply" ? null : state.pending,
+    outcome:
+      state.outcome !== null && uncertain !== null && !same
+        ? { ...state.outcome, spent: true }
+        : state.outcome,
+    stale: proposal.plan_id === state.proposal.plan_id ? state.stale : null,
+    problem: changed ? survivesEdit(state.problem) : state.problem,
+    selected:
+      state.selected !== null && names.has(state.selected)
+        ? state.selected
+        : null,
+    picking:
+      state.picking !== null && names.has(state.picking.operation)
+        ? state.picking
+        : null,
+  };
+  if (refused) {
+    return withNotice(
+      next,
+      "another tab is applying this draft, or its last apply may have been published: your change was not kept, and the draft now shows that tab's record",
+    );
+  }
+  return applyingElsewhere(state) && in_flight === null && uncertain === null
+    ? withNotice(
+        next,
+        "the apply in another tab ended; that tab shows its outcome, and this draft now holds what it kept",
+      )
+    : next;
 }

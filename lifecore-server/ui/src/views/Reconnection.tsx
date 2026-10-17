@@ -7,6 +7,7 @@ import { FailureView } from "../failure.tsx";
 import { IdLink, NodeLink } from "../links.tsx";
 import { entryKey } from "../model/labels.ts";
 import { type Incident, incidents } from "../model/relations.ts";
+import { ConfirmButton } from "./ConfirmButton.tsx";
 
 type NodeOperation = Extract<ProposalEntry, { kind: "node" }>;
 
@@ -104,10 +105,10 @@ export function Reconnection({
           >
             Keep all
           </button>
-          <button
-            type="button"
+          <ConfirmButton
+            confirm={`Remove ${kept.length === 1 ? "the kept edge" : `all ${kept.length} kept edges`}?`}
             disabled={kept.length === 0}
-            onClick={() =>
+            onConfirm={() =>
               dispatch({
                 kind: "remove",
                 names: kept.flatMap((item) =>
@@ -117,7 +118,7 @@ export function Reconnection({
             }
           >
             Keep none
-          </button>
+          </ConfirmButton>
         </div>
         {open &&
           (items.length === 0 ? (

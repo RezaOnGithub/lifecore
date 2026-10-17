@@ -166,6 +166,55 @@ test("garbage, wrong shapes, and duplicate names are ignored", () => {
   );
 });
 
+test("an uncertain record whose applied outcome lacks a usable report is dropped", () => {
+  const view = { database: "db", end_exclusive: "4", head: null };
+  const report = {
+    database: "db",
+    base_revision: "b",
+    base: view,
+    operations: [{ name: "t", entry: { origin: "o", position: "4" } }],
+    analysis: {
+      view,
+      inputs: { evaluation_time: null },
+      implementations: [],
+      observations: [],
+    },
+  };
+  const uncertain = (outcome: unknown) => ({
+    ...stored(),
+    uncertain: {
+      ...flight,
+      error: "publication_uncertain",
+      message: "m",
+      outcome,
+    },
+  });
+  const load = (value: unknown) =>
+    loadDraft(memory({ [storageKey("db")]: JSON.stringify(value) }), "db");
+  const applied = { kind: "applied", graph_revision: "r2", report };
+  assert.deepEqual(load(uncertain(applied))?.uncertain?.outcome, applied);
+  assert.equal(load(uncertain(null))?.uncertain?.outcome, null);
+  // Another kind is shown by name only.
+  assert.ok(load(uncertain({ kind: "restored", other: 1 })) !== null);
+  for (const outcome of [
+    { kind: "applied" },
+    { kind: "applied", report },
+    { ...applied, report: { ...report, operations: undefined } },
+    { ...applied, report: { ...report, operations: [{ name: "t" }] } },
+    { ...applied, report: { ...report, base: {} } },
+    { ...applied, report: { ...report, analysis: { view } } },
+    { report },
+    "applied",
+  ]) {
+    assert.equal(load(uncertain(outcome)), null, JSON.stringify(outcome));
+  }
+  // The decision that the entries are present reads what was validated.
+  const state = restoredState(load(uncertain(applied)));
+  const decided = draftReducer(state, { kind: "decide", present: true });
+  assert.deepEqual(decided.applied?.operations, report.operations);
+  assert.deepEqual(decided.proposal.entries, []);
+});
+
 test("a throwing store neither loads nor breaks a save", () => {
   const broken = {
     getItem: () => {

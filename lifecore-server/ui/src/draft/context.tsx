@@ -3,21 +3,16 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { useData } from "../data.tsx";
 import { DraftActions } from "./actions.ts";
-import { type DraftState, initialDraft } from "./model.ts";
-import {
-  loadDraft,
-  restoredState,
-  saveDraft,
-  storedChanged,
-  storedOf,
-} from "./persist.ts";
-import { type DraftAction, draftReducer } from "./reducer.ts";
+import { applyingElsewhere, type DraftState } from "./model.ts";
+import { storageKey } from "./persist.ts";
+import type { DraftAction } from "./reducer.ts";
+import { SharedDraft } from "./shared.ts";
 
 export interface Draft {
   state: DraftState;
@@ -36,10 +31,10 @@ export function useDraft(): Draft {
 }
 
 // Holds the draft of one database. Mount it keyed by the database id: the
-// stored draft is read once, on mount, and the stored parts are written on
-// every dispatch that changes them, synchronously, so the marker of an apply
-// is on disk before its request leaves; nothing is stored before the
-// database is known.
+// stored draft is read on mount, the stored parts are written on every
+// dispatch that changes them, and another tab's write is followed through
+// the `storage` event (see `SharedDraft`). Before the database is known the
+// draft is detached: nothing is stored and no edit lands.
 export function DraftProvider({
   database,
   children,
@@ -48,41 +43,45 @@ export function DraftProvider({
   children: ReactNode;
 }) {
   const { client, bumpRefresh } = useData();
-  // The ref is the reducer's state and every dispatch advances it at once,
-  // so an action that dispatches and then reads, such as adding the first
-  // operation and then minting a plan ID, sees its own change; React state
-  // only mirrors it for rendering. Advancing it during render instead would
-  // lag one render behind the handlers.
-  const current = useRef<DraftState | null>(null);
-  const [state, setState] = useState(() => {
-    const initial =
-      database === null
-        ? initialDraft
-        : restoredState(loadDraft(window.localStorage, database));
-    current.current = initial;
-    return initial;
-  });
-  const dispatch = useCallback(
-    (action: DraftAction) => {
-      const previous = current.current ?? initialDraft;
-      const next = draftReducer(previous, action);
-      current.current = next;
-      if (database !== null && storedChanged(previous, next)) {
-        saveDraft(window.localStorage, database, storedOf(next));
-      }
-      setState(next);
-    },
-    [database],
+  // The shared draft is the reducer's state and every dispatch advances it
+  // at once, so an action that dispatches and then reads, such as adding
+  // the first operation and then minting a plan ID, sees its own change;
+  // React state only mirrors it for rendering.
+  const [shared] = useState(
+    () => new SharedDraft(window.localStorage, database),
   );
+  const [state, setState] = useState<DraftState>(shared.state);
+  const dispatch = useCallback(
+    (action: DraftAction) => setState(shared.dispatch(action)),
+    [shared],
+  );
+  useEffect(() => {
+    if (database === null) {
+      return;
+    }
+    const onStorage = (event: StorageEvent) => {
+      // A null key is a `clear()` of the whole storage.
+      if (
+        event.storageArea !== window.localStorage ||
+        (event.key !== null && event.key !== storageKey(database))
+      ) {
+        return;
+      }
+      const before = shared.state;
+      if (shared.sync()) {
+        setState(shared.state);
+        // Another tab's apply ended and may have been published.
+        if (applyingElsewhere(before) && !applyingElsewhere(shared.state)) {
+          bumpRefresh();
+        }
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [shared, database, bumpRefresh]);
   const actions = useMemo(
-    () =>
-      new DraftActions(
-        client,
-        dispatch,
-        () => current.current ?? initialDraft,
-        bumpRefresh,
-      ),
-    [client, dispatch, bumpRefresh],
+    () => new DraftActions(client, dispatch, () => shared.state, bumpRefresh),
+    [client, dispatch, shared, bumpRefresh],
   );
   const value = useMemo(
     () => ({ state, dispatch, actions }),

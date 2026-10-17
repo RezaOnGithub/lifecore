@@ -333,7 +333,10 @@ function Shell({
                               />
                             )}
                             {screen.kind === "operation" && (
-                              <OperationScreen name={screen.name} />
+                              <OperationScreen
+                                name={screen.name}
+                                onBack={() => dispatch({ kind: "back" })}
+                              />
                             )}
                             {screen.kind === "import" && <ImportView />}
                             {screen.kind === "findings" && <FindingsScreen />}

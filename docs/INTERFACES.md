@@ -640,11 +640,23 @@ them; none is a server contract.
 
 - Drafts: one per database in `localStorage` under
   `lifecore.draft.<database>`, held under the last database ID that loaded, so
-  a failed or reloading description neither empties nor remounts it. The
-  proposal, its kept-edge provenance, an uncertain-apply record, and an
-  apply-in-flight marker are saved synchronously on every change; check results
-  and editor state are not, so a restored draft needs a new check. An
-  unreadable stored draft is dropped.
+  a failed or reloading description neither empties nor remounts it. No edit
+  lands before the first description answers. The proposal, its kept-edge
+  provenance, an uncertain-apply record, and an apply-in-flight marker are
+  saved synchronously on every change; check results and editor state are not,
+  so a restored draft needs a new check. An unreadable stored draft is dropped,
+  as is one whose uncertain record holds an applied outcome without its
+  report's operations, base, view, and observations.
+- Tabs of one database share its draft. Each re-reads the stored record on
+  another tab's `storage` event and adopts it, keeping its own selection,
+  pick, and check where they still apply. A tab never saves over a record
+  carrying an in-flight or uncertain marker it did not hold: the change is
+  dropped with a notice and that record adopted, and an Apply whose marker
+  could not be saved sends nothing. Another tab's apply in flight freezes the
+  draft as an own one does until that tab saves the answer; if that tab went
+  away first, a reload restores the draft as uncertain. An adopted uncertain
+  record spends the adopting tab's check too. While its own apply is in
+  flight, a tab writes its record again over one without markers.
 - A plan ID is minted whenever a non-empty draft lacks one: at its first
   operation, before Check if a mint failed, and for operations an Apply left
   behind. Otherwise only an explicit Replan mints one, clearing the check. A
@@ -659,8 +671,9 @@ them; none is a server contract.
 - Removing an operation unsets every reference to it, a predecessor included:
   the node keeps its intent, and Check waits until it is picked again. A
   notice, kept until dismissed, names the affected operations and offers to
-  remove the edges left without an end. Clear and Remove take a second click;
-  a move that puts a reference before its target posts a notice.
+  remove the edges left without an end. Clear, Remove, that offer, and
+  Reconnection's "Keep none" take a second click; Remove then goes Back. A
+  move that puts a reference before its target posts a notice.
 - Picking: an editor's pick leaves a pending role (predecessor, from, or to).
   While it is pending, every node inspector offers "Use as <role>", which sets
   an `existing` reference and returns to the operation; edges cannot be picked.
@@ -678,14 +691,17 @@ them; none is a server contract.
   Its other end is the revision itself for a self-loop, else the latest earlier
   revise successor of the other node in the draft, else that node. An edge
   whose end the draft supersedes, or whose revision no longer revises the node
-  it was kept from, carries a warning. Edges arriving after their operation
-  was removed or changed are not added, nor are edges already kept.
+  it was kept from, carries a warning. Edges that arrive follow their
+  operation through renames; those arriving after it was removed or changed
+  are not added, nor are edges already kept.
 - Check is manual. Apply is enabled only after an accepted, unspent check of
   identical proposal JSON, plan ID included, with the same evaluation choice.
   It sends the evaluation time that check reported, so `now` applies at the
-  instant the check captured; the tray shows which. While an apply is in
-  flight the draft is frozen: no edit, pick, import, or Clear lands. Drafts
-  always apply to the current state; under an as-of boundary the tray says so.
+  instant the check captured; the tray shows which. An explicit evaluation
+  time gets a hint naming the RFC 3339 form while what is typed does not
+  look like it; the server parses it. While an apply is in flight the draft
+  is frozen: no edit, pick, import, or Clear lands. Drafts always apply to
+  the current state; under an as-of boundary the tray says so.
 - A successful Apply removes the operations it carried, matched by name and
   content, turns references to them into the assigned IDs, lists those IDs and
   the report's finding counts until dismissed, and reloads every screen.
@@ -709,8 +725,9 @@ them; none is a server contract.
   when the page went away restores as uncertain. A banner then stays above the
   others, with Apply and Replan off, until the user decides that the entries
   are present (offered when the outcome, or a look at the positions the request
-  would have taken, shows them) or that the draft was verified not applied, or
-  clears the draft. A stale base does not show that an earlier apply was
+  would have taken, shows them), which removes the operations the request
+  carried as a successful Apply does, or that the draft was verified not
+  applied, or clears the draft. A stale base does not show that an earlier apply was
   published: any writer moves the revision.
 - The tray is a column: a fixed header with the status, Check, Apply and the
   evaluation it will use, the evaluation choice, the draft-wide buttons, and

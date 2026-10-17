@@ -163,9 +163,16 @@ export interface Picking {
 export type Pending = "mint" | "check" | "apply" | "encode" | "decode" | null;
 
 export interface DraftState {
+  // True until the provider knows the database: nothing can be stored, and
+  // the first description remounts the provider, so no edit lands.
+  detached: boolean;
   proposal: Proposal;
   // Provenance of the kept edges, by edge operation name.
   kept: Record<string, KeptEdge>;
+  // The operation each read of a predecessor's current edges is for, by read
+  // number, following renames; a removed operation's read is dropped, so its
+  // answer lands nowhere.
+  reads: Record<number, string>;
   selected: string | null;
   picking: Picking | null;
   evaluation: Evaluation;
@@ -173,6 +180,8 @@ export interface DraftState {
   // The plan ID names an earlier graph revision; only Replan clears it.
   stale: { expected: Uuid; actual: Uuid } | null;
   problem: Problem | null;
+  // This tab's apply while `pending` is "apply"; otherwise another tab's,
+  // adopted from storage.
   inFlight: InFlight | null;
   uncertain: Uncertain | null;
   // The last successful Apply, kept until dismissed.
@@ -183,8 +192,10 @@ export interface DraftState {
 }
 
 export const initialDraft: DraftState = {
+  detached: false,
   proposal: { entries: [] },
   kept: {},
+  reads: {},
   selected: null,
   picking: null,
   evaluation: { kind: "none" },
@@ -199,23 +210,41 @@ export const initialDraft: DraftState = {
   nextNotice: 1,
 };
 
+export const detachedDraft: DraftState = { ...initialDraft, detached: true };
+
 // The draft without client state, exactly as it is sent.
 export function proposalOf(state: DraftState): Proposal {
   const { plan_id, entries } = state.proposal;
   return plan_id === undefined ? { entries } : { plan_id, entries };
 }
 
+// Proposals in the state are never changed in place, so the text is
+// computed once per proposal.
+const requests = new WeakMap<Proposal, string>();
+
 export function requestOf(state: DraftState): string {
-  return JSON.stringify(proposalOf(state));
+  const known = requests.get(state.proposal);
+  if (known !== undefined) {
+    return known;
+  }
+  const request = JSON.stringify(proposalOf(state));
+  requests.set(state.proposal, request);
+  return request;
 }
 
-// While an apply is in flight the draft is what was sent: no edit lands.
+// While an apply is in flight, in this tab or another, the draft is what was
+// sent: no edit lands. Nor does one before the database is known.
 export function frozen(state: DraftState): boolean {
-  return state.pending === "apply";
+  return state.detached || state.inFlight !== null || state.pending === "apply";
+}
+
+export function applyingElsewhere(state: DraftState): boolean {
+  return state.inFlight !== null && state.pending !== "apply";
 }
 
 // Apply is enabled only for an unspent accepted check of this very content
-// and evaluation choice, with no apply of uncertain fate outstanding.
+// and evaluation choice, with no apply of uncertain fate outstanding and
+// none in flight in another tab.
 export function applicable(state: DraftState): boolean {
   const { outcome } = state;
   return (
@@ -226,6 +255,7 @@ export function applicable(state: DraftState): boolean {
     state.stale === null &&
     state.uncertain === null &&
     state.pending === null &&
+    !frozen(state) &&
     state.proposal.entries.length > 0 &&
     outcome.request === requestOf(state) &&
     sameEvaluation(outcome.evaluation, state.evaluation)

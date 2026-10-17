@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useData } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import {
   applicable,
+  applyingElsewhere,
   type DraftState,
   type Evaluation,
   frozen,
@@ -10,6 +11,7 @@ import {
   sameEvaluation,
 } from "../draft/model.ts";
 import { OperationLink, useOpen } from "../links.tsx";
+import { timestampHint } from "../model/values.ts";
 import type { Screen } from "../navigation.ts";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 import {
@@ -23,11 +25,17 @@ import { ExportPanel } from "./ExportPanel.tsx";
 
 export function statusWord(state: DraftState): string {
   const { outcome } = state;
+  if (state.detached) {
+    return "waiting for the database";
+  }
   if (state.pending === "check") {
     return "checking…";
   }
   if (state.pending === "apply") {
     return "applying…";
+  }
+  if (applyingElsewhere(state)) {
+    return "applying in another tab";
   }
   if (state.uncertain !== null) {
     return "may be applied";
@@ -50,6 +58,12 @@ export function statusWord(state: DraftState): string {
 // Why Apply is off, or which evaluation inputs it will send.
 function applyNote(state: DraftState): string {
   const { outcome } = state;
+  if (state.detached) {
+    return "edits wait until the database answers";
+  }
+  if (applyingElsewhere(state)) {
+    return "another tab is applying this draft";
+  }
   if (state.uncertain !== null) {
     return "waiting for your decision about the last apply";
   }
@@ -83,6 +97,20 @@ function applyNote(state: DraftState): string {
     : `applies at ${time}, as checked`;
 }
 
+const INSTANT = "an RFC 3339 instant such as 2026-10-15T08:30:00Z";
+
+// The form an explicit time is expected in, said as it is typed. The
+// recognizer is loose and the server parses the time, so the hint never
+// blocks a call.
+function evaluationTimeHint(time: string): string | null {
+  if (time.trim() === "") {
+    return `enter ${INSTANT}`;
+  }
+  return timestampHint(time) === null
+    ? null
+    : `expected ${INSTANT}; the server reports what it cannot read`;
+}
+
 export function EvaluationChoice({
   evaluation,
   disabled,
@@ -92,6 +120,9 @@ export function EvaluationChoice({
   disabled: boolean;
   onChange: (evaluation: Evaluation) => void;
 }) {
+  const hintId = useId();
+  const hint =
+    evaluation.kind === "at" ? evaluationTimeHint(evaluation.time) : null;
   return (
     <div className="row">
       <label>
@@ -118,16 +149,25 @@ export function EvaluationChoice({
         </select>
       </label>
       {evaluation.kind === "at" && (
-        <input
-          aria-label="evaluation timestamp"
-          placeholder="2026-10-15T08:30:00Z"
-          size={28}
-          disabled={disabled}
-          value={evaluation.time}
-          onChange={(event) =>
-            onChange({ kind: "at", time: event.target.value })
-          }
-        />
+        <>
+          <input
+            aria-label="evaluation timestamp"
+            placeholder="2026-10-15T08:30:00Z"
+            size={28}
+            disabled={disabled}
+            value={evaluation.time}
+            aria-invalid={hint !== null && evaluation.time.trim() !== ""}
+            aria-describedby={hint === null ? undefined : hintId}
+            onChange={(event) =>
+              onChange({ kind: "at", time: event.target.value })
+            }
+          />
+          {hint !== null && (
+            <span id={hintId} className="edit-hint" data-testid="time-hint">
+              {hint}
+            </span>
+          )}
+        </>
       )}
     </div>
   );
@@ -171,6 +211,17 @@ export function TrayHeader({
       </h2>
       {state.uncertain !== null && (
         <UncertainBanner uncertain={state.uncertain} />
+      )}
+      {applyingElsewhere(state) && (
+        <p
+          className="banner busy"
+          role="status"
+          data-testid="applying-elsewhere"
+        >
+          Another tab is applying this draft: nothing edits it here until that
+          tab records the answer. If that tab was closed first, reload this
+          page; the draft then comes back as possibly applied.
+        </p>
       )}
       {state.proposal.plan_id !== undefined && (
         <p

@@ -105,7 +105,7 @@ test("adding uniquifies the name, inserts after a named operation, and selects",
   );
 });
 
-test("a rename follows references, kept provenance, and checked names; a clash is refused", () => {
+test("a rename follows references, kept provenance, reads, and checked names; a clash is refused", () => {
   const checked = draftReducer(
     state([task, revision, edge], {
       kept: {
@@ -115,6 +115,7 @@ test("a rename follows references, kept provenance, and checked names; a clash i
           edge: id("2"),
         },
       },
+      reads: { 7: "task_2", 8: "task_1" },
     }),
     {
       kind: "checked",
@@ -124,15 +125,16 @@ test("a rename follows references, kept provenance, and checked names; a clash i
     },
   );
   const renamed = draftReducer(checked, {
-    kind: "rename",
+    kind: "replace",
     name: "task_2",
-    to: "fixed",
+    entry: { ...revision, name: "fixed" },
   });
   assert.deepEqual(names(renamed), ["task_1", "fixed", "dependson_1"]);
   const e = renamed.proposal.entries[2];
   assert.ok(e?.kind === "edge");
   assert.deepEqual(e.from, { added: "fixed" });
   assert.equal(renamed.kept.dependson_1?.revision, "fixed");
+  assert.deepEqual(renamed.reads, { 7: "fixed", 8: "task_1" });
   assert.deepEqual(renamed.outcome?.names, ["task_1", "fixed", "dependson_1"]);
   const clash = draftReducer(state([task, revision]), {
     kind: "replace",
@@ -257,7 +259,7 @@ test("import replace renames duplicates and never keeps the old plan ID", () => 
   assert.match(acknowledging.notices[0]?.text ?? "", /not supported/);
 });
 
-test("nothing edits the draft while an apply is in flight", () => {
+test("nothing edits the draft while an apply is in flight here or in another tab, or before the database is known", () => {
   const flight = {
     plan_id: "p",
     request: requestOf(state([task])),
@@ -269,10 +271,14 @@ test("nothing edits the draft while an apply is in flight", () => {
     flight,
   });
   assert.equal(applying.pending, "apply");
+  // Another tab's marker, adopted from storage, and a draft whose database
+  // has yet to answer.
+  const elsewhere = state([task], { inFlight: flight });
+  const detached = state([task], { detached: true });
   const edits: DraftAction[] = [
     { kind: "add", entry: edge },
     { kind: "replace", name: "task_1", entry: { ...task, payload: {} } },
-    { kind: "rename", name: "task_1", to: "x" },
+    { kind: "replace", name: "task_1", entry: { ...task, name: "x" } },
     { kind: "duplicate", name: "task_1" },
     { kind: "remove", names: ["task_1"] },
     { kind: "clear" },
@@ -280,8 +286,11 @@ test("nothing edits the draft while an apply is in flight", () => {
     { kind: "replan", plan_id: "q" },
     { kind: "pick", picking: { operation: "task_1", role: "predecessor" } },
   ];
-  for (const action of edits) {
-    assert.equal(draftReducer(applying, action), applying, action.kind);
+  for (const frozen of [applying, elsewhere, detached]) {
+    assert.equal(applicable(frozen), false);
+    for (const action of edits) {
+      assert.equal(draftReducer(frozen, action), frozen, action.kind);
+    }
   }
   // A late answer for kept edges is noted, not added.
   const late = draftReducer(applying, {
@@ -292,6 +301,11 @@ test("nothing edits the draft while an apply is in flight", () => {
   });
   assert.equal(late.proposal, applying.proposal);
   assert.match(late.notices[0]?.text ?? "", /arrived while applying/);
+  // A Replan whose mint answered meanwhile ends its wait without landing.
+  const minting = { ...elsewhere, pending: "mint" as const };
+  const replanned = draftReducer(minting, { kind: "replan", plan_id: "q" });
+  assert.equal(replanned.pending, null);
+  assert.equal(replanned.proposal, minting.proposal);
 });
 
 test("applied removes only the operations of the request, by name and content", () => {

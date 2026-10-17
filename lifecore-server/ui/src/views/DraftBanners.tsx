@@ -6,11 +6,13 @@ import { countWords, reportCounts } from "../draft/findings.ts";
 import {
   type Applied,
   applicable,
+  frozen,
   type Problem,
   type Uncertain,
   type Verdict,
 } from "../draft/model.ts";
 import { IdLink, OperationLink } from "../links.tsx";
+import { ConfirmButton } from "./ConfirmButton.tsx";
 
 function AssignedIds({ operations }: { operations: OperationEntry[] }) {
   return (
@@ -90,12 +92,13 @@ export function UncertainBanner({ uncertain }: { uncertain: Uncertain }) {
         {present && (
           <button
             type="button"
+            title="takes the operations this apply carried out of the draft; references to them become the assigned ids"
             onClick={() => {
               dispatch({ kind: "decide", present: true });
               bumpRefresh();
             }}
           >
-            Entries are present: clear the draft
+            Entries are present: remove the applied operations
           </button>
         )}
         <button
@@ -153,7 +156,9 @@ export function StaleBanner({
       <div className="row">
         <button
           type="button"
-          disabled={state.pending !== null || state.uncertain !== null}
+          disabled={
+            state.pending !== null || state.uncertain !== null || frozen(state)
+          }
           onClick={() => void actions.replan()}
         >
           Replan
@@ -283,7 +288,11 @@ export function ProblemBanner({ problem }: { problem: Problem }) {
           <div className="row">
             <button
               type="button"
-              disabled={state.pending !== null || state.uncertain !== null}
+              disabled={
+                state.pending !== null ||
+                state.uncertain !== null ||
+                frozen(state)
+              }
               onClick={() => void actions.replan()}
             >
               Replan
@@ -315,10 +324,10 @@ export function Notices() {
         <li key={notice.id} className="notice" data-testid="notice">
           {notice.text}{" "}
           {notice.offer !== null && (
-            <button
-              type="button"
-              disabled={state.pending === "apply"}
-              onClick={() => {
+            <ConfirmButton
+              confirm={`${notice.offer.label}?`}
+              disabled={frozen(state)}
+              onConfirm={() => {
                 if (notice.offer !== null) {
                   dispatch({ kind: "remove", names: notice.offer.remove });
                 }
@@ -326,7 +335,7 @@ export function Notices() {
               }}
             >
               {notice.offer.label}
-            </button>
+            </ConfirmButton>
           )}{" "}
           <button
             type="button"

@@ -11,6 +11,7 @@ import {
   type InFlight,
   initialDraft,
   type KeptEdge,
+  proposalOf,
   type Uncertain,
 } from "./model.ts";
 
@@ -29,7 +30,7 @@ export interface Stored {
   in_flight: InFlight | null;
 }
 
-type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+export type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function isId(value: unknown): value is EntryId {
   return (
@@ -147,6 +148,39 @@ function readFlight(value: unknown): InFlight | null {
   };
 }
 
+function isView(value: unknown): boolean {
+  return isRecord(value) && typeof value.end_exclusive === "string";
+}
+
+// An applied outcome is what a decision that the entries are present takes
+// out of the draft and reports, so its report needs the parts that reads:
+// the assigned ids, the base, and the analysis's view and observations.
+// Other kinds are shown by name only.
+function isOutcome(value: unknown): value is Published {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    return false;
+  }
+  if (value.kind !== "applied") {
+    return true;
+  }
+  const { report } = value;
+  return (
+    typeof value.graph_revision === "string" &&
+    isRecord(report) &&
+    Array.isArray(report.operations) &&
+    report.operations.every(
+      (operation) =>
+        isRecord(operation) &&
+        typeof operation.name === "string" &&
+        isId(operation.entry),
+    ) &&
+    isView(report.base) &&
+    isRecord(report.analysis) &&
+    isView(report.analysis.view) &&
+    Array.isArray(report.analysis.observations)
+  );
+}
+
 function readUncertain(value: unknown): Stored["uncertain"] {
   const flight = readFlight(value);
   if (
@@ -154,7 +188,7 @@ function readUncertain(value: unknown): Stored["uncertain"] {
     !isRecord(value) ||
     typeof value.error !== "string" ||
     typeof value.message !== "string" ||
-    (value.outcome !== null && !isRecord(value.outcome))
+    (value.outcome !== null && !isOutcome(value.outcome))
   ) {
     return null;
   }
@@ -162,7 +196,7 @@ function readUncertain(value: unknown): Stored["uncertain"] {
     ...flight,
     error: value.error,
     message: value.message,
-    outcome: value.outcome as Published | null,
+    outcome: value.outcome,
   };
 }
 
@@ -187,10 +221,13 @@ export function readStored(value: unknown): Stored | null {
   return { proposal, kept, uncertain, in_flight };
 }
 
+// Built member by member in the order `readStored` builds them, so a record
+// read from another tab and saved again is the same text, and a tab tells
+// another tab's write from its own by the text alone.
 export function storedOf(state: DraftState): Stored {
   const { uncertain } = state;
   return {
-    proposal: state.proposal,
+    proposal: proposalOf(state),
     kept: state.kept,
     uncertain:
       uncertain === null
@@ -247,18 +284,22 @@ export function restoredState(stored: Stored | null): DraftState {
   };
 }
 
-// Null for a missing, unreadable, or malformed draft.
-export function loadDraft(
+// The stored text, null when there is none, undefined when the store
+// refuses to be read.
+export function storedText(
   store: Pick<Store, "getItem">,
   database: string,
-): Stored | null {
-  let text: string | null;
+): string | null | undefined {
   try {
-    text = store.getItem(storageKey(database));
+    return store.getItem(storageKey(database));
   } catch {
-    return null;
+    return undefined;
   }
-  if (text === null) {
+}
+
+// Null for a missing, unreadable, or malformed draft.
+export function parseStored(text: string | null | undefined): Stored | null {
+  if (text === null || text === undefined) {
     return null;
   }
   try {
@@ -268,10 +309,28 @@ export function loadDraft(
   }
 }
 
+export function loadDraft(
+  store: Pick<Store, "getItem">,
+  database: string,
+): Stored | null {
+  return parseStored(storedText(store, database));
+}
+
+export type Saved =
+  // The text the key holds after the write, null for none.
+  | { kind: "written"; text: string | null }
+  // Another tab's marker is stored; `stored` is that tab's record.
+  | { kind: "refused"; text: string; stored: Stored }
+  | { kind: "failed" };
+
 // A draft with nothing to keep leaves nothing behind. Storage failures
-// (quota, private mode) are swallowed: the draft lives on in memory either
-// way.
-export function saveDraft(store: Store, database: string, stored: Stored) {
+// (quota, private mode) are reported, never thrown: the draft lives on in
+// memory either way, and the next save tries again.
+export function saveDraft(
+  store: Store,
+  database: string,
+  stored: Stored,
+): Saved {
   try {
     if (
       stored.proposal.entries.length === 0 &&
@@ -279,10 +338,55 @@ export function saveDraft(store: Store, database: string, stored: Stored) {
       stored.in_flight === null
     ) {
       store.removeItem(storageKey(database));
-    } else {
-      store.setItem(storageKey(database), JSON.stringify(stored));
+      return { kind: "written", text: null };
     }
+    const text = JSON.stringify(stored);
+    store.setItem(storageKey(database), text);
+    return { kind: "written", text };
   } catch {
-    // Nothing to do: the next save will try again.
+    return { kind: "failed" };
   }
+}
+
+// Markers compare by their JSON: both sides are built by `storedOf` or
+// `readStored`, member by member in the same order.
+export function sameMarker(a: object | null, b: object | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Whether `stored` carries an in-flight or uncertain marker that `state`
+// does not hold: another tab's apply, which only that tab's answer or the
+// decision of a user who was shown it may end.
+export function foreignMarker(stored: Stored, state: DraftState): boolean {
+  const own = storedOf(state);
+  return (
+    (stored.in_flight !== null &&
+      !sameMarker(stored.in_flight, own.in_flight)) ||
+    (stored.uncertain !== null && !sameMarker(stored.uncertain, own.uncertain))
+  );
+}
+
+// Saves `next` unless another tab wrote since this one last wrote or read
+// the key (`known`) and left a marker that `previous`, this tab's state
+// before the change, did not hold. Without the check the last writer wins,
+// and a tab could erase the marker of an apply in flight in another, so
+// that closing that tab restores no uncertain record.
+// TODO: two tabs that both write within the storage's cross-tab delay,
+// such as two Apply clicks at once, can still overwrite each other's
+// marker; a Web Lock held around the apply would close that gap.
+export function saveGuarded(
+  store: Store,
+  database: string,
+  known: string | null | undefined,
+  previous: DraftState,
+  next: DraftState,
+): Saved {
+  const text = storedText(store, database);
+  if (typeof text === "string" && text !== known) {
+    const stored = parseStored(text);
+    if (stored !== null && foreignMarker(stored, previous)) {
+      return { kind: "refused", text, stored };
+    }
+  }
+  return saveDraft(store, database, storedOf(next));
 }

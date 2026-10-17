@@ -9,6 +9,7 @@ import type {
   Uuid,
 } from "../contract.ts";
 import {
+  adopted,
   edited,
   emptied,
   type Keep,
@@ -20,17 +21,18 @@ import {
   withEntry,
   withNotice,
 } from "./edits.ts";
-import type {
-  DraftState,
-  Evaluation,
-  InFlight,
-  KeptEdge,
-  Notice,
-  Pending,
-  Picking,
-  Problem,
-  Uncertain,
-  Verdict,
+import {
+  type DraftState,
+  type Evaluation,
+  frozen,
+  type InFlight,
+  type KeptEdge,
+  type Notice,
+  type Pending,
+  type Picking,
+  type Problem,
+  type Uncertain,
+  type Verdict,
 } from "./model.ts";
 import {
   appendOperations,
@@ -38,6 +40,7 @@ import {
   renameReferences,
   uniqueName,
 } from "./operations.ts";
+import type { Stored } from "./persist.ts";
 
 export type DraftAction =
   // Selects the new operation unless `select` is false, as for the kept
@@ -49,8 +52,8 @@ export type DraftAction =
       select?: boolean;
       kept?: KeptEdge;
     }
+  // A changed name renames the operation.
   | { kind: "replace"; name: string; entry: ProposalEntry }
-  | { kind: "rename"; name: string; to: string }
   | { kind: "move"; name: string; by: -1 | 1 }
   | { kind: "duplicate"; name: string }
   | { kind: "remove"; names: string[] }
@@ -59,6 +62,9 @@ export type DraftAction =
   // Kept edges for `operation` while it still revises `predecessor` (and,
   // when given, with `intent`); edges it already keeps are skipped.
   | ({ kind: "keep" } & Keep)
+  // A read of current edges started for `operation`, whose answer is a
+  // `keep` with the same `read`; null forgets a read that failed.
+  | { kind: "reading"; read: number; operation: string | null }
   | { kind: "set_plan_id"; plan_id: PlanId }
   | { kind: "replan"; plan_id: PlanId }
   | { kind: "evaluation"; evaluation: Evaluation }
@@ -89,21 +95,22 @@ export type DraftAction =
   | { kind: "dismiss_notice"; id: number }
   | { kind: "select"; name: string | null }
   | { kind: "pick"; picking: Picking | null }
-  | { kind: "resolve_pick"; id: EntryId };
+  | { kind: "resolve_pick"; id: EntryId }
+  // Another tab's stored record of this draft; `refused` when this tab's
+  // last change was not saved over it.
+  | { kind: "adopt"; stored: Stored | null; refused?: boolean };
 
-// The actions that change the operations; none lands while an apply is in
-// flight, so the draft stays what was sent.
+// The actions that change the operations; none lands while the draft is
+// frozen, so it stays what was sent. Kept edges and Replan say why they
+// did not land.
 const EDITS: ReadonlySet<DraftAction["kind"]> = new Set([
   "add",
   "replace",
-  "rename",
   "move",
   "duplicate",
   "remove",
   "clear",
   "import",
-  "keep",
-  "replan",
   "resolve_pick",
   "decide",
 ]);
@@ -112,19 +119,12 @@ export function draftReducer(
   state: DraftState,
   action: DraftAction,
 ): DraftState {
-  if (state.pending === "apply") {
-    if (action.kind === "keep" && action.edges.length > 0) {
-      return withNotice(
-        state,
-        `the current edges of @${action.predecessor.position} arrived while applying; open ${action.operation} to keep them`,
-      );
-    }
-    if (
-      EDITS.has(action.kind) ||
-      (action.kind === "pick" && action.picking !== null)
-    ) {
-      return state;
-    }
+  if (
+    frozen(state) &&
+    (EDITS.has(action.kind) ||
+      (action.kind === "pick" && action.picking !== null))
+  ) {
+    return state;
   }
   const { entries } = state.proposal;
   switch (action.kind) {
@@ -172,16 +172,6 @@ export function draftReducer(
         renamed(state, action.name, entry.name),
         withEntry(next, index, entry),
       );
-    }
-    case "rename": {
-      const entry = entries.find((e) => e.name === action.name);
-      return entry === undefined
-        ? state
-        : draftReducer(state, {
-            kind: "replace",
-            name: action.name,
-            entry: { ...entry, name: action.to },
-          });
     }
     case "move": {
       const index = entries.findIndex((e) => e.name === action.name);
@@ -255,6 +245,16 @@ export function draftReducer(
     }
     case "keep":
       return keep(state, action);
+    case "reading": {
+      const { [action.read]: _, ...reads } = state.reads;
+      return {
+        ...state,
+        reads:
+          action.operation === null
+            ? reads
+            : { ...reads, [action.read]: action.operation },
+      };
+    }
     case "set_plan_id":
       // A plan ID minted for a draft that was cleared meanwhile is dropped.
       if (entries.length === 0 || state.proposal.plan_id !== undefined) {
@@ -265,8 +265,10 @@ export function draftReducer(
         proposal: { ...state.proposal, plan_id: action.plan_id },
       };
     case "replan":
-      if (state.uncertain !== null) {
-        return { ...state, pending: null };
+      // Dropped while an apply may have been published or is in flight; the
+      // mint it waited for is over either way.
+      if (state.uncertain !== null || frozen(state)) {
+        return state.pending === "mint" ? { ...state, pending: null } : state;
       }
       return {
         ...state,
@@ -435,5 +437,7 @@ export function draftReducer(
         selected: entry.name,
       });
     }
+    case "adopt":
+      return adopted(state, action.stored, action.refused);
   }
 }
