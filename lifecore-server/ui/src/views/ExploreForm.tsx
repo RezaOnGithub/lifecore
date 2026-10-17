@@ -12,7 +12,7 @@ import {
   MAX_STEPS,
   removeSeed,
 } from "../model/query.ts";
-import { NEIGHBOUR_LIMIT } from "./Relationships.tsx";
+import { NEIGHBOUR_LIMIT } from "./RelationColumns.tsx";
 import { CurrentnessSelect } from "./widgets.tsx";
 
 interface FormProps {

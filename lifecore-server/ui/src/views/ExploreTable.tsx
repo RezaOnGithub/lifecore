@@ -12,7 +12,7 @@ import type { ExploreAction, QueriedRow, Shaped } from "../model/query.ts";
 import { directionAt, edgeWords, relationLabel } from "../model/relations.ts";
 import type { TableView } from "../navigation.ts";
 import { EntryTable, type ExtraColumn } from "./EntryTable.tsx";
-import { relationColumns } from "./Relationships.tsx";
+import { relationColumns } from "./RelationColumns.tsx";
 
 // How a node was reached: at a hop, over an edge read from this node
 // (`→ PartOf` when the edge goes from it, `← PartOf` when it comes to it),

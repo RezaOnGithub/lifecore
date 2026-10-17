@@ -27,7 +27,7 @@ import {
   type TableView,
 } from "../navigation.ts";
 import { EntryTable } from "../views/EntryTable.tsx";
-import { relationColumns } from "../views/Relationships.tsx";
+import { relationColumns } from "../views/RelationColumns.tsx";
 import { CurrentnessSelect, ResolutionBadge } from "../views/widgets.tsx";
 
 // Nothing until the type list has loaded: an unknown name is only known to

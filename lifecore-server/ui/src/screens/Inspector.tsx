@@ -49,7 +49,7 @@ import {
 import { defaultInspectorView, type InspectorView } from "../navigation.ts";
 import { EntryFindings } from "../views/EntryFindings.tsx";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
-import { RelationshipOutline } from "../views/Relationships.tsx";
+import { RelationshipOutline } from "../views/RelationshipOutline.tsx";
 import { ResolutionBadge } from "../views/widgets.tsx";
 
 // What the sidebar keeps of an inspected entry: a node by its row label, an
