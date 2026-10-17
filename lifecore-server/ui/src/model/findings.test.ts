@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type {
   AnalysisOutput,
+  AnalysisRun,
   Dismissal,
   EntryId,
   EvaluatedView,
@@ -9,6 +10,7 @@ import type {
   MessageType,
   Observation,
 } from "../contract.ts";
+import * as grouping from "../fixtures/grouping.ts";
 import {
   aboutEntry,
   addBlocker,
@@ -383,6 +385,56 @@ test("clusters gather one analyzer's findings of one kind and message", () => {
       ["A", "suggestion", "m", ["e"]],
     ],
   );
+});
+
+// The core's `AnalysisOutput::groups` of a recorded run under every report
+// option, which the client's grouping and dismissal lookup must reproduce.
+test("grouping and dismissal lookup match the core's for every report option", () => {
+  const run: AnalysisRun = grouping.response.result;
+  const { analysis, dismissals } = run;
+  const indices = (observations: readonly Observation[]) =>
+    observations.map((o) => analysis.observations.indexOf(o));
+  for (const report of grouping.reports) {
+    const { selection, advisories, include_dismissed } = report;
+    const groups = groupFindings(analysis, dismissals, {
+      selection,
+      warning: advisories === "all" || advisories === "warnings",
+      suggestion: advisories === "all" || advisories === "suggestions",
+      dismissed: include_dismissed,
+    });
+    assert.deepEqual(
+      groups.map((group) => ({
+        observations: indices(group.observations),
+        selected: indices(group.selected),
+        dismissal:
+          group.dismissal === null ? null : dismissals.indexOf(group.dismissal),
+      })),
+      report.groups,
+      `${selection}, ${advisories}, dismissed ${include_dismissed}`,
+    );
+  }
+  // What the fixture is there to hold, so that changing it cannot quietly
+  // stop pinning a case: a key observed twice whose current report selects
+  // one observation, an advisory only history selects, records hidden by
+  // default and shown on request, an inconsistency that ended before the
+  // boundary, and keys that read alike.
+  const report = (filter: Partial<FindingFilter>) =>
+    groupFindings(analysis, dismissals, { ...defaultFilter, ...filter });
+  const current = report({});
+  const ended = (o: Observation) =>
+    rangeWords(o.evaluated_view, analysis.view.end_exclusive).ended;
+  assert.ok(
+    current.some((g) => g.observations.length > 1 && g.selected.length === 1),
+  );
+  assert.ok(report({ selection: "history" }).length > current.length);
+  assert.ok(current.every((g) => g.dismissal === null));
+  assert.ok(report({ dismissed: true }).some((g) => g.dismissal !== null));
+  assert.ok(
+    current.some(
+      (g) => g.key.kind === "inconsistency" && g.selected.every(ended),
+    ),
+  );
+  assert.ok(clusterGroups(current).some((c) => c.groups.length > 1));
 });
 
 test("the text filter reads messages and focus labels, never hiding inconsistencies", () => {

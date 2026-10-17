@@ -9,17 +9,18 @@ use axum::{
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
 };
 use lifecore::{
-    LifeCoreError, View,
+    Entry, EntryId, LifeCoreError, View,
     analysis::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, Config, Diagnostic, EvaluationInputs,
-        Message, MessageKind,
+        Message, MessageKind, Observation,
+        presentation::{AdvisoryFilter, Dismissals, ReportOptions, ReportSelection},
     },
     transaction::{EntryChange, NewEdge, NewNode, Reference, RevisionIntent},
 };
 use lifecore_app::{
     AppError, Service,
     rpc::{self, Method},
-    service::{ApplyResult, DismissalList, Published, RestoreResult},
+    service::{AnalysisRun, ApplyResult, DismissalList, Published, RestoreResult},
     storage::{DEFAULT_STATE_FILE, StatePath},
 };
 use lifecore_dag_check::DagCheckFactory;
@@ -1617,6 +1618,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
     ));
     modules.push(protocol_errors(&mut recorder));
     modules.push(http_rejections(scratch, &mut recorder.normalizer).await);
+    modules.push(grouping(&mut recorder, scratch));
     modules
 }
 
@@ -1896,6 +1898,259 @@ async fn http_rejections(scratch: &Scratch, normalizer: &mut Normalizer) -> Modu
             "HttpRejectionFixtures".into(),
             normalizer.value(rejections),
         )],
+    )
+}
+
+// The analyzer of the grouping fixture. What it emits at a prefix depends
+// only on the prefix's length and on whether an evaluation time is given, so
+// one replay holds every case that report grouping tells apart.
+#[derive(Clone, Copy)]
+struct Grouping;
+
+impl Grouping {
+    const NAME: &str = "Fixture_Grouping";
+}
+
+fn grouping_message(
+    certificate: &str,
+    focus: Option<EntryId>,
+    message: &str,
+    kind: MessageKind,
+    sticky: bool,
+) -> Message {
+    Message {
+        analyzer_certificate: AnalyzerCertificate(certificate.into()),
+        diagnostic: Diagnostic {
+            subjects: focus.into_iter().collect(),
+            focus,
+            message: message.into(),
+            kind,
+            sticky,
+        },
+    }
+}
+
+impl Analyzer for Grouping {
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
+    }
+    fn initialize(&mut self, _: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(vec![grouping_message(
+            "scope",
+            None,
+            "items are judged by position",
+            MessageKind::Warning,
+            false,
+        )])
+    }
+    fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        let n = view.len();
+        let item = |position: usize| view.at(position).map(Entry::id);
+        let mut messages = vec![];
+        if n == 0 {
+            return Ok(messages);
+        }
+        // Lapses at 3 only: one key, observed over 1–2 and again from 4.
+        if n != 3 {
+            messages.push(grouping_message(
+                "gap",
+                item(0),
+                "the first item has a gap",
+                MessageKind::Warning,
+                false,
+            ));
+        }
+        // One message for three keys, which the client clusters.
+        for position in (1..=3).filter(|&position| position < n) {
+            messages.push(grouping_message(
+                &format!("alike:{position}"),
+                item(position),
+                "the item has no owner",
+                MessageKind::Warning,
+                false,
+            ));
+        }
+        // Judged once, at 3: sticky, so current reports keep it afterwards.
+        if n == 3 {
+            messages.push(grouping_message(
+                "once",
+                item(2),
+                "the item was split",
+                MessageKind::Warning,
+                true,
+            ));
+        }
+        // Nonsticky and ended at 3: only history reports select it.
+        if (2..=3).contains(&n) {
+            messages.push(grouping_message(
+                "ended",
+                item(1),
+                "the items could merge",
+                MessageKind::Suggestion(vec![]),
+                false,
+            ));
+        }
+        // The certificate of the first warning in another category: another key.
+        if n >= 5 {
+            messages.push(grouping_message(
+                "gap",
+                item(0),
+                "the gap could close",
+                MessageKind::Suggestion(vec![]),
+                false,
+            ));
+        }
+        // The stored appends were checked without an evaluation time, so this
+        // inconsistency appears only in a run given one.
+        if n == 2 && inputs.evaluation_time.is_some() {
+            messages.push(grouping_message(
+                "late",
+                item(1),
+                "the item was due",
+                MessageKind::Inconsistency,
+                false,
+            ));
+        }
+        Ok(messages)
+    }
+}
+
+impl AnalyzerFactory for Grouping {
+    fn analyzer_with_config(&mut self, _: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        Ok(Box::new(*self))
+    }
+    fn analyzer_name(&self) -> &'static str {
+        Self::NAME
+    }
+}
+
+// An `analysis.run` of a database whose analyzer emits every case that
+// report grouping tells apart, with dismissal records, beside the core's
+// `AnalysisOutput::groups` under each combination of report options, so the
+// client's mirror of it is pinned. A group names its observations, selected
+// observations, and record by their index in the run's `observations` and
+// `dismissals`.
+fn grouping(recorder: &mut Recorder, scratch: &Scratch) -> Module {
+    let grouped = Service::new(
+        StatePath::new(scratch.0.join("grouping.json")),
+        Box::new(|| vec![Box::new(Grouping) as Box<dyn AnalyzerFactory>]),
+    );
+    grouped.init(&[configured(Grouping::NAME)]).unwrap();
+    let previous = std::mem::replace(&mut recorder.service, grouped);
+    let items = (0..6)
+        .map(|i| {
+            json!({"name": format!("item_{i}"), "kind": "node", "ty_name": "Item",
+                "payload": {"title": format!("Item {i}")}})
+        })
+        .collect::<Vec<_>>();
+    recorder.raw_result("proposal.apply", json!({"proposal": {"entries": items}}));
+    let observed = recorder.raw_result("analysis.run", json!({}));
+    let key = |kind: &str, certificate: &str| {
+        observed["analysis"]["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["key"]["kind"] == kind && o["key"]["analyzer_certificate"] == certificate)
+            .unwrap()["key"]
+            .clone()
+    };
+    // The suggestion's record must not match the warning of its certificate.
+    for (kind, certificate, reason, note) in [
+        (
+            "suggestion",
+            "gap",
+            "no_longer_relevant",
+            Some("Closed by hand."),
+        ),
+        (
+            "warning",
+            "alike:2",
+            "false_positive",
+            Some("Owned elsewhere."),
+        ),
+        ("warning", "once", "acknowledged", None),
+    ] {
+        let mut params = json!({"key": key(kind, certificate), "reason": reason});
+        if let Some(note) = note {
+            params["note"] = note.into();
+        }
+        recorder.raw_result("findings.dismiss", params);
+    }
+    let (request, response) = recorder.call(
+        "grouping",
+        "analysis.run",
+        json!({"evaluation_time": EVALUATION_TIME}),
+    );
+    recorder.service = previous;
+    let run: AnalysisRun = serde_json::from_value(response["result"].clone()).unwrap();
+    let mut dismissals = Dismissals::default();
+    for record in &run.dismissals {
+        dismissals
+            .dismiss(record.key.clone(), record.reason, record.note.clone())
+            .unwrap();
+    }
+    assert_eq!(dismissals.records().count(), 3);
+    // Groups refer to the output's own observations and records, so their
+    // indices are exact.
+    let observations = run.analysis.observations().collect::<Vec<_>>();
+    let index = |observation: &&Observation| {
+        observations
+            .iter()
+            .position(|o| std::ptr::eq(*o, *observation))
+            .unwrap()
+    };
+    let mut reports = vec![];
+    for (selection, selection_name) in [
+        (ReportSelection::Current, "current"),
+        (ReportSelection::History, "history"),
+    ] {
+        for (advisories, advisories_name) in [
+            (AdvisoryFilter::All, "all"),
+            (AdvisoryFilter::Warnings, "warnings"),
+            (AdvisoryFilter::Suggestions, "suggestions"),
+            (AdvisoryFilter::None, "none"),
+        ] {
+            for include_dismissed in [false, true] {
+                let options = ReportOptions {
+                    selection,
+                    advisories,
+                    include_dismissed,
+                };
+                let groups = run
+                    .analysis
+                    .groups(&dismissals, options)
+                    .iter()
+                    .map(|group| {
+                        json!({
+                            "observations": group.observations.iter().map(index).collect::<Vec<_>>(),
+                            "selected": group.selected.iter().map(index).collect::<Vec<_>>(),
+                            "dismissal": group.dismissal.map(|record| {
+                                dismissals.records().position(|r| std::ptr::eq(r, record)).unwrap()
+                            }),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                reports.push(json!({
+                    "selection": selection_name,
+                    "advisories": advisories_name,
+                    "include_dismissed": include_dismissed,
+                    "groups": groups,
+                }));
+            }
+        }
+    }
+    module(
+        "grouping.ts".into(),
+        &["RpcRequest", "RpcSuccess"],
+        vec![
+            ("request", "RpcRequest<\"analysis.run\">".into(), request),
+            ("response", "RpcSuccess<\"analysis.run\">".into(), response),
+            (
+                "reports",
+                "{ selection: \"current\" | \"history\"; advisories: \"all\" | \"warnings\" | \"suggestions\" | \"none\"; include_dismissed: boolean; groups: { observations: number[]; selected: number[]; dismissal: number | null }[] }[]".into(),
+                Value::Array(reports),
+            ),
+        ],
     )
 }
 
