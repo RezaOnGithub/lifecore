@@ -358,7 +358,7 @@ function inspection(of: NodeRecord, others: NodeRecord[]) {
       current: true,
     },
     direction: "outgoing",
-    other,
+    other: other.id,
   }));
   return {
     kind: "node" as const,
@@ -367,6 +367,7 @@ function inspection(of: NodeRecord, others: NodeRecord[]) {
     type: { kind: "missing" as const },
     lineage: [of],
     edges,
+    neighbours: others,
   };
 }
 

@@ -15,6 +15,7 @@ const HEADINGS: Partial<Record<ErrorKind, string>> = {
   analyzer_failure: "An analyzer failed",
   graphviz_unavailable: "Graphviz is not available",
   graphviz_failed: "Graphviz could not draw this view",
+  invalid_seeds: "Query seeds refused",
   invalid_params: "The server did not accept the request",
   backend_failure: "The server failed while answering",
   internal: "Internal server error",
@@ -29,6 +30,13 @@ function sentence(data: ApplicationErrorData): string | null {
       return `Entry @${data.id.position} is not in this view: the view ends before it, or the database holds another entry at that position.`;
     case "beyond_boundary":
       return `The as-of boundary ${data.requested} is past the end of the history, which has ${data.visible} entries.`;
+    case "invalid_seeds":
+      return `A query starts only from nodes of this view: ${data.refused
+        .map(
+          ({ id, reason }) =>
+            `@${id.position} ${reason === "absent" ? "is not in this view" : "is an edge"}`,
+        )
+        .join(", ")}.`;
     default:
       return null;
   }

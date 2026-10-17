@@ -155,19 +155,12 @@ pub struct RestoreRequest {
     pub key: FindingKey,
 }
 
-// The `views.query` parameters plus the output format. They are spelled out
-// rather than flattened, because Serde cannot deny unknown fields through a
-// flattened member.
+// The `views.query` parameters as one member, since Serde cannot deny
+// unknown fields through a flattened one.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ViewRenderRequest {
-    pub seeds: Vec<Seed>,
-    #[serde(default)]
-    pub expand: Vec<Expansion>,
-    #[serde(default)]
-    pub edges: EdgeFilter,
-    #[serde(default, deserialize_with = "boundary")]
-    pub as_of: Option<usize>,
+    pub query: ViewQueryRequest,
     pub format: RenderFormat,
 }
 
@@ -389,17 +382,20 @@ pub struct EntryRecord {
 }
 
 impl EntryRecord {
-    pub(crate) fn new(view: View<'_>, entry: &Entry) -> Self {
+    fn owned(view: View<'_>, entry: Entry) -> Self {
         Self {
-            entry: entry.clone(),
             current: view.is_stale(entry.id()) == Some(false),
+            entry,
         }
     }
+    pub(crate) fn new(view: View<'_>, entry: &Entry) -> Self {
+        Self::owned(view, entry.clone())
+    }
     pub(crate) fn node(view: View<'_>, node: &Node) -> Self {
-        Self::new(view, &Entry::Node(node.clone()))
+        Self::owned(view, Entry::Node(node.clone()))
     }
     pub(crate) fn edge(view: View<'_>, edge: &Edge) -> Self {
-        Self::new(view, &Entry::Edge(edge.clone()))
+        Self::owned(view, Entry::Edge(edge.clone()))
     }
 }
 
@@ -447,6 +443,7 @@ fn verify_plan_id(snapshot: &Snapshot, plan_id: Option<PlanId>) -> Result<(), Ap
     let actual = database(&snapshot.graph);
     if plan_id.database != actual {
         return Err(AppError::ForeignDatabase {
+            named_by: "plan ID",
             expected: plan_id.database,
             actual,
         });
@@ -722,14 +719,7 @@ impl Service {
     }
 
     pub fn render_view(&self, request: ViewRenderRequest) -> Result<Rendered, AppError> {
-        let snapshot = storage::read(&self.state)?;
-        let query = query::query(
-            as_of(&snapshot.graph, request.as_of)?,
-            &request.seeds,
-            &request.expand,
-            &request.edges,
-        )?;
-        render::render(&query, request.format)
+        render::render(&self.query_view(request.query)?, request.format)
     }
 
     // A replay of the selected prefix with fresh analyzers; nothing is
@@ -776,11 +766,10 @@ impl Service {
         let mut locked = storage::lock(&self.state, self.busy_retry)?.read()?;
         let selected = database(&locked.snapshot().graph);
         if request.key.database != selected {
-            return Err(AppError::InvalidParams {
-                message: format!(
-                    "the key names database {}, but the selected database is {selected}",
-                    request.key.database
-                ),
+            return Err(AppError::ForeignDatabase {
+                named_by: "finding key",
+                expected: request.key.database,
+                actual: selected,
             });
         }
         let records = &mut locked.snapshot_mut().dismissals;

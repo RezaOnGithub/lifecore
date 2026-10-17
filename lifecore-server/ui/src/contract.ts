@@ -142,15 +142,17 @@ export interface TypeList {
 // ---- Inspection and queries (SPEC §9) ----
 
 export type Direction = "outgoing" | "incoming" | "both";
-// An edge incident to the inspected node, with its other endpoint.
+// An edge incident to the inspected node, with its other endpoint's id; the
+// inspection's `neighbours` hold that endpoint's record.
 export interface IncidentEdge {
   edge: EdgeRecord;
   direction: "outgoing" | "incoming";
-  other: NodeRecord;
+  other: EntryId;
 }
 // A node with its type, its whole revision tree in append order (root first,
-// itself included), and every incident edge in append order; or an edge with
-// its endpoints.
+// itself included), every incident edge in append order, and each other
+// endpoint of those edges once, in append order; or an edge with its
+// endpoints.
 export type EntryInspection =
   | {
       kind: "node";
@@ -159,6 +161,7 @@ export type EntryInspection =
       type: TypeResolution;
       lineage: NodeRecord[];
       edges: IncidentEdge[];
+      neighbours: NodeRecord[];
     }
   | {
       kind: "edge";
@@ -437,7 +440,8 @@ export interface DismissParams {
 export interface RestoreParams {
   key: FindingKey;
 }
-export interface ViewRenderParams extends ViewQueryParams {
+export interface ViewRenderParams {
+  query: ViewQueryParams;
   format: RenderFormat;
 }
 
@@ -477,6 +481,23 @@ export interface ProposalLocation {
   name: string;
   field?: string;
 }
+// An `ids` seed that names no node of the view: absent from it, or an edge.
+export interface RefusedSeed {
+  id: EntryId;
+  reason: "absent" | "edge";
+}
+// Why `dot` failed after it started. Durations are in milliseconds.
+export type GraphvizFailure =
+  | { kind: "pipe_thread"; message: string }
+  | { kind: "unwaitable"; message: string }
+  | { kind: "deadline"; milliseconds: number }
+  | { kind: "oversized"; bytes: number }
+  | { kind: "exited"; status: string }
+  | { kind: "output_unreadable"; message: string }
+  | { kind: "output_open"; milliseconds: number }
+  | { kind: "input_unread"; message: string | null }
+  | { kind: "stderr_unreadable"; message: string }
+  | { kind: "invalid_utf8"; message: string };
 
 // `data` of an application error, by its stable `kind`.
 export type ApplicationErrorData =
@@ -505,7 +526,8 @@ export type ApplicationErrorData =
     }
   | { kind: "cannot_dismiss_inconsistency"; key: FindingKey }
   | { kind: "graphviz_unavailable"; message: string }
-  | { kind: "graphviz_failed"; message: string }
+  | { kind: "graphviz_failed"; cause: GraphvizFailure; stderr: string }
+  | { kind: "invalid_seeds"; refused: RefusedSeed[] }
   | { kind: "invalid_params" }
   | { kind: "backend_failure" }
   | { kind: "internal" };
@@ -534,6 +556,7 @@ export interface ErrorCodes {
   cannot_dismiss_inconsistency: 4003;
   graphviz_unavailable: 4004;
   graphviz_failed: 4005;
+  invalid_seeds: 4006;
   invalid_params: -32602;
   backend_failure: 5001;
   internal: -32603;

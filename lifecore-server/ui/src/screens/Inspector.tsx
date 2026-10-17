@@ -158,7 +158,7 @@ export function InspectorScreen({
   }, [place, visit, book]);
   useEffect(() => {
     if (result?.kind === "node") {
-      book.noteNodes(result.edges.map(({ other }) => other));
+      book.noteNodes(result.neighbours);
     }
   }, [result, book]);
   if (load.status === "failed") {
@@ -380,8 +380,7 @@ function NodeInspection({
               </span>
             </h3>
             <RelationshipOutline
-              owner={entry}
-              edges={edges}
+              inspection={inspection}
               view={outline}
               setView={setOutline}
               asOf={view.end_exclusive}

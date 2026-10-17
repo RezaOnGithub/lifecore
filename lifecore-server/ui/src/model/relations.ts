@@ -1,4 +1,11 @@
-import type { EdgeEntry, EntryId, NodeEntry } from "../contract.ts";
+import type {
+  EdgeEntry,
+  EntryId,
+  EntryInspection,
+  IncidentEdge,
+  NodeEntry,
+  NodeRecord,
+} from "../contract.ts";
 import { compareStrings } from "./columns.ts";
 import { entryKey, sameId, typeName } from "./labels.ts";
 import { counted } from "./words.ts";
@@ -109,6 +116,28 @@ export function groupByRelation<T>(
 export interface Neighbour<N, E> {
   node: N;
   edge: E;
+}
+
+// An edge incident to an inspected node, with the record of its other end.
+export interface Incident extends IncidentEdge {
+  node: NodeRecord;
+}
+
+// A node inspection's incident edges in append order, each joined to its
+// other end among `neighbours`, which hold every such node once.
+export function incidents(
+  inspection: Pick<
+    Extract<EntryInspection, { kind: "node" }>,
+    "edges" | "neighbours"
+  >,
+): Incident[] {
+  const nodes = new Map(
+    inspection.neighbours.map((node) => [entryKey(node.id), node]),
+  );
+  return inspection.edges.flatMap((incident) => {
+    const node = nodes.get(entryKey(incident.other));
+    return node === undefined ? [] : [{ ...incident, node }];
+  });
 }
 
 export interface RelationCells<N, E> {

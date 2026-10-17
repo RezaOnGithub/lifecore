@@ -153,6 +153,15 @@ fn ancestry_excludes_self_and_preserves_roots_and_current_descendants_in_each_pr
             view.descendants(ids[0]).map(|n| n.id).collect::<Vec<_>>(),
             descendants
         );
+        // From inside the tree, only the subtree below the start.
+        assert_eq!(
+            view.descendants(ids[3]).map(|n| n.id).collect::<Vec<_>>(),
+            if end_exclusive > 4 {
+                vec![ids[4]]
+            } else {
+                vec![]
+            }
+        );
         assert_eq!(
             view.fresh_successors(ids[0])
                 .map(|n| n.id)

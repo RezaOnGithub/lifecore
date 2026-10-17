@@ -19,6 +19,7 @@ use lifecore::{
 };
 use lifecore_app::{
     AppError, Service,
+    render::GraphvizFailure,
     rpc::{self, Method},
     service::{AnalysisRun, ApplyResult, DismissalList, Published, RestoreResult},
     storage::{DEFAULT_STATE_FILE, StatePath},
@@ -1240,7 +1241,7 @@ fn task_declaration() -> Value {
 }
 
 // Every application error kind; the recorded fixtures must match it exactly.
-const ERROR_KINDS: [&str; 25] = [
+const ERROR_KINDS: [&str; 26] = [
     "state_path_empty",
     "working_directory",
     "directory_missing",
@@ -1263,6 +1264,7 @@ const ERROR_KINDS: [&str; 25] = [
     "cannot_dismiss_inconsistency",
     "graphviz_unavailable",
     "graphviz_failed",
+    "invalid_seeds",
     "invalid_params",
     "backend_failure",
     "internal",
@@ -1294,6 +1296,7 @@ fn listed(error: &AppError) {
     | AppError::CannotDismissInconsistency { .. }
     | AppError::GraphvizUnavailable { .. }
     | AppError::GraphvizFailed { .. }
+    | AppError::InvalidSeeds { .. }
     | AppError::InvalidParams { .. }
     | AppError::Backend { .. }
     | AppError::Internal { .. } => {}
@@ -1468,9 +1471,11 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "render",
         "views.render",
         json!({
-            "seeds": [{"kind": "ids", "ids": [report_id]}],
-            "expand": [{"direction": "incoming", "currentness": "all"}],
-            "edges": {"currentness": "all"},
+            "query": {
+                "seeds": [{"kind": "ids", "ids": [report_id]}],
+                "expand": [{"direction": "incoming", "currentness": "all"}],
+                "edges": {"currentness": "all"},
+            },
             "format": "dot",
         }),
     );
@@ -1710,6 +1715,15 @@ fn application_errors(
         "views.query",
         json!({"seeds": [], "expand": [{"hops": 0}]}),
     ));
+    // An edge and an entry past the boundary, refused together.
+    let raw_entries =
+        recorder.raw_result("entries.list", json!({"currentness": "all"}))["entries"].clone();
+    samples.push(call(
+        recorder,
+        "views.query",
+        json!({"seeds": [{"kind": "ids", "ids": [raw_entries[3]["id"], raw_entries[1]["id"], raw_entries[4]["id"]]}],
+            "as_of": "4"}),
+    ));
     samples.push(call(
         recorder,
         "analyzers.add",
@@ -1799,7 +1813,10 @@ fn application_errors(
             message: "No such file or directory (os error 2)".into(),
         },
         AppError::GraphvizFailed {
-            message: "dot exited with exit status: 1; stderr: Error: <stdin>: syntax error in line 1 near 'x'".into(),
+            cause: GraphvizFailure::Exited {
+                status: "exit status: 1".into(),
+            },
+            stderr: "Error: <stdin>: syntax error in line 1 near 'x'".into(),
         },
         AppError::Internal {
             message: "the result could not be serialized".into(),
@@ -1809,6 +1826,13 @@ fn application_errors(
         listed(error);
         samples.push(recorder.error(error.kind(), error));
     }
+    // Recorded last, so its new database takes the last normalized UUID.
+    samples.push(call(
+        recorder,
+        "findings.dismiss",
+        json!({"key": {"database": Uuid::new_v4(), "analyzer": {"name": "Fixture_Suggestions", "version": "1.0.0", "configuration": "{}"},
+            "kind": "suggestion", "analyzer_certificate": "done:1"}, "reason": "acknowledged"}),
+    ));
     let mut application = BTreeMap::<String, Vec<Value>>::new();
     for sample in samples {
         let kind = sample["error"]["data"]["kind"]

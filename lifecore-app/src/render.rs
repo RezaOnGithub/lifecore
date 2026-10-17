@@ -1,5 +1,5 @@
 use crate::{AppError, query::ViewQuery};
-use lifecore::{Entry, Node, Payload, inspection::dot_quote};
+use lifecore::{Entry, Node, Payload};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -24,17 +24,79 @@ pub struct Rendered {
     pub text: String,
 }
 
+// Why `dot` failed after it started; `views.render` reports it as
+// `graphviz_failed` beside the program's stderr.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, thiserror::Error)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GraphvizFailure {
+    #[error("cannot start a thread for the pipes of dot: {message}")]
+    PipeThread { message: String },
+    #[error("cannot wait for dot: {message}")]
+    Unwaitable { message: String },
+    #[error("dot did not finish within {} and was killed", duration_words(*milliseconds))]
+    Deadline { milliseconds: u64 },
+    #[error("dot produced more than {} of SVG and was killed", size_words(*bytes))]
+    Oversized { bytes: usize },
+    // `status` is the platform's description, such as `exit status: 1`.
+    #[error("dot exited with {status}")]
+    Exited { status: String },
+    #[error("cannot read the output of dot: {message}")]
+    OutputUnreadable { message: String },
+    #[error("the output of dot did not end within {} of its exit", duration_words(*milliseconds))]
+    OutputOpen { milliseconds: u64 },
+    // Without a message, writing was still blocked when the call gave up.
+    #[error("dot did not read all of its input{}", message.as_ref().map(|message| format!(": {message}")).unwrap_or_default())]
+    InputUnread { message: Option<String> },
+    #[error("cannot read the stderr of dot: {message}")]
+    StderrUnreadable { message: String },
+    #[error("dot produced invalid UTF-8: {message}")]
+    InvalidUtf8 { message: String },
+}
+
+fn duration_words(milliseconds: u64) -> String {
+    if milliseconds.is_multiple_of(1000) {
+        format!("{} s", milliseconds / 1000)
+    } else {
+        format!("{milliseconds} ms")
+    }
+}
+
+fn size_words(bytes: usize) -> String {
+    if bytes.is_multiple_of(1 << 20) {
+        format!("{} MiB", bytes >> 20)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn milliseconds(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+// How long `dot` may run, how much SVG it may write, and how long its pipe
+// threads may take to report once it has exited or was killed. A descendant
+// that inherited a pipe can hold it open indefinitely, so after `grace` the
+// threads are abandoned.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Limits {
+    pub(crate) deadline: Duration,
+    pub(crate) output: usize,
+    pub(crate) grace: Duration,
+}
+
+impl Limits {
+    pub(crate) const GRAPHVIZ: Self = Self {
+        deadline: Duration::from_secs(10),
+        output: 16 * 1024 * 1024,
+        grace: Duration::from_millis(500),
+    };
+}
+
 // The client's row label limit (INTERFACES 5.2), so a rendered node reads
 // like its table row.
 const LABEL_LIMIT: usize = 60;
 const GRAPHVIZ: &str = "dot";
-const GRAPHVIZ_TIMEOUT: Duration = Duration::from_secs(10);
 const GRAPHVIZ_POLL: Duration = Duration::from_millis(20);
-// How long the pipe threads may take to report once `dot` has exited or was
-// killed. A descendant that inherited a pipe can hold it open indefinitely,
-// so after this the threads are abandoned.
-const GRAPHVIZ_GRACE: Duration = Duration::from_millis(500);
-const SVG_LIMIT: usize = 16 * 1024 * 1024;
 // Enough of stderr to explain a failure without carrying a runaway log.
 const STDERR_LIMIT: u64 = 64 * 1024;
 
@@ -42,7 +104,7 @@ pub(crate) fn render(query: &ViewQuery, format: RenderFormat) -> Result<Rendered
     let dot = to_dot(query);
     let text = match format {
     RenderFormat::Dot => dot,
-    RenderFormat::Svg => graphviz(Command::new(GRAPHVIZ), &dot)?,
+    RenderFormat::Svg => graphviz(Command::new(GRAPHVIZ), &dot, Limits::GRAPHVIZ)?,
     };
     Ok(Rendered { format, text })
 }
@@ -103,6 +165,31 @@ fn cut(text: &str) -> String {
     }
 }
 
+pub(crate) fn dot_quote(text: &str) -> String {
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for c in text.chars() {
+        match c {
+        // A doubled backslash also keeps Graphviz's own substitutions, such
+        // as `\N`, literal.
+        '\\' => quoted.push_str("\\\\"),
+        '"' => quoted.push_str("\\\""),
+        '\n' => quoted.push_str("\\n"),
+        '\r' => quoted.push_str("\\r"),
+        // Graphviz decodes HTML entities in labels before anything else, so
+        // payload text spelling one must still read literally.
+        '&' => quoted.push_str("&amp;"),
+        // Graphviz has no escape for these: NUL breaks its parser, `\t`
+        // reads as `t`, and the rest would reach SVG, where XML forbids or
+        // discourages them.
+        c if c.is_control() => quoted.push(' '),
+        c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 // HACK: Graphviz (checked with 14.1) unescapes a tooltip twice, once as a
 // tooltip and once while substituting `\N` and the like, so a backslash is
 // doubled before the label quoting doubles it again.
@@ -110,12 +197,11 @@ fn tooltip_quote(text: &str) -> String {
     dot_quote(&text.replace('\\', "\\\\"))
 }
 
-// The queried subgraph in the style of `View::to_dot`: nodes in append
-// order, then revision links between result nodes, then the result edges.
-// Every node and edge carries its position as `id` and an inspector `href`,
-// which Graphviz keeps in SVG output, so the picture is clickable; its
-// tooltip is the label before cutting, since Graphviz would otherwise show
-// the escaped label.
+// The queried subgraph: nodes in append order, then revision links between
+// result nodes, then the result edges. Every node and edge carries its
+// position as `id` and an inspector `href`, which Graphviz keeps in SVG
+// output, so the picture is clickable; its tooltip is the label before
+// cutting, since Graphviz would otherwise show the escaped label.
 pub(crate) fn to_dot(query: &ViewQuery) -> String {
     let mut dot = String::from("digraph lifecore {\n");
     writeln!(
@@ -238,12 +324,15 @@ fn reap(child: &mut Child, until: Instant) {
     }
 }
 
-// Runs `command -Tsvg` synchronously with the DOT text on stdin and a
-// deadline. Each pipe has its own detached thread that reports over a
+// Runs `command -Tsvg` synchronously with the DOT text on stdin, within
+// `limits`. Each pipe has its own detached thread that reports over a
 // channel, and none is ever joined: a descendant of the program can keep a
 // pipe open after the program itself exits or is killed.
-pub(crate) fn graphviz(mut command: Command, dot: &str) -> Result<String, AppError> {
-    let program = command.get_program().to_string_lossy().into_owned();
+pub(crate) fn graphviz(
+    mut command: Command,
+    dot: &str,
+    limits: Limits,
+) -> Result<String, AppError> {
     // Whatever stops the program from starting, missing or not executable,
     // the operating system's text explains it.
     let mut child = command
@@ -259,6 +348,7 @@ pub(crate) fn graphviz(mut command: Command, dot: &str) -> Result<String, AppErr
     let stdout = child.stdout.take().expect("piped stdout");
     let mut stderr = child.stderr.take().expect("piped stderr");
     let input = dot.to_owned();
+    let cap = limits.output;
     let jobs: [Job; 3] = [
         Box::new(move || {
             let written = stdin.write_all(input.as_bytes());
@@ -270,9 +360,9 @@ pub(crate) fn graphviz(mut command: Command, dot: &str) -> Result<String, AppErr
         // the program at once.
         Box::new(move || {
             let mut bytes = Vec::new();
-            match stdout.take(SVG_LIMIT as u64 + 1).read_to_end(&mut bytes) {
+            match stdout.take(cap as u64 + 1).read_to_end(&mut bytes) {
             Err(error) => Report::Output(Err(error)),
-            Ok(_) if bytes.len() > SVG_LIMIT => Report::Oversized,
+            Ok(_) if bytes.len() > cap => Report::Oversized,
             Ok(_) => Report::Output(Ok(bytes)),
             }
         }),
@@ -297,15 +387,18 @@ pub(crate) fn graphviz(mut command: Command, dot: &str) -> Result<String, AppErr
             .spawn(move || sender.send(job()).ok());
         if let Err(error) = started {
             child.kill().ok();
-            reap(&mut child, Instant::now() + GRAPHVIZ_GRACE);
+            reap(&mut child, Instant::now() + limits.grace);
             return Err(AppError::GraphvizFailed {
-                message: format!("cannot start a thread for the pipes of {program}: {error}"),
+                cause: GraphvizFailure::PipeThread {
+                    message: error.to_string(),
+                },
+                stderr: String::new(),
             });
         }
     }
     drop(sender);
     let mut pipes = Pipes::default();
-    let deadline = Instant::now() + GRAPHVIZ_TIMEOUT;
+    let deadline = Instant::now() + limits.deadline;
     let ending = loop {
         if pipes.oversized {
             break Ending::Oversized;
@@ -328,7 +421,7 @@ pub(crate) fn graphviz(mut command: Command, dot: &str) -> Result<String, AppErr
         Err(RecvTimeoutError::Disconnected) => thread::sleep(GRAPHVIZ_POLL.min(left)),
         }
     };
-    let grace = Instant::now() + GRAPHVIZ_GRACE;
+    let grace = Instant::now() + limits.grace;
     if !matches!(ending, Ending::Exited(_)) {
         child.kill().ok();
         reap(&mut child, grace);
@@ -346,69 +439,67 @@ pub(crate) fn graphviz(mut command: Command, dot: &str) -> Result<String, AppErr
     Some(Ok(bytes)) => String::from_utf8_lossy(bytes).trim().to_owned(),
     _ => String::new(),
     };
-    let failed = |message: String| AppError::GraphvizFailed {
-        message: match stderr.as_str() {
-        "" => message,
-        stderr => format!("{message}; stderr: {stderr}"),
-        },
-    };
-    let oversized = || {
-        failed(format!(
-            "{program} produced more than {} MiB of SVG",
-            SVG_LIMIT >> 20
-        ))
+    outcome(ending, pipes, limits).map_err(|cause| AppError::GraphvizFailed { cause, stderr })
+}
+
+// The SVG, or the first reason the run cannot be trusted to have produced
+// all of it.
+fn outcome(ending: Ending, pipes: Pipes, limits: Limits) -> Result<String, GraphvizFailure> {
+    let oversized = GraphvizFailure::Oversized {
+        bytes: limits.output,
     };
     let status = match ending {
     Ending::Exited(status) => status,
-    Ending::Oversized => return Err(oversized()),
+    Ending::Oversized => return Err(oversized),
     Ending::TimedOut => {
-        return Err(failed(format!(
-            "{program} did not finish within {} s and was killed",
-            GRAPHVIZ_TIMEOUT.as_secs()
-        )));
+        return Err(GraphvizFailure::Deadline {
+            milliseconds: milliseconds(limits.deadline),
+        });
     }
     Ending::Unwaitable(error) => {
-        return Err(failed(format!("cannot wait for {program}: {error}")));
+        return Err(GraphvizFailure::Unwaitable {
+            message: error.to_string(),
+        });
     }
     };
     // Output can pass the cap just before the program exits.
     if pipes.oversized {
-        return Err(oversized());
+        return Err(oversized);
     }
     if !status.success() {
-        return Err(failed(format!("{program} exited with {status}")));
+        return Err(GraphvizFailure::Exited {
+            status: status.to_string(),
+        });
     }
     let svg = match pipes.output {
     Some(Ok(svg)) => svg,
     Some(Err(error)) => {
-        return Err(failed(format!(
-            "cannot read the output of {program}: {error}"
-        )));
+        return Err(GraphvizFailure::OutputUnreadable {
+            message: error.to_string(),
+        });
     }
     None => {
-        return Err(failed(format!(
-            "the output of {program} did not end within {} ms of its exit",
-            GRAPHVIZ_GRACE.as_millis()
-        )));
+        return Err(GraphvizFailure::OutputOpen {
+            milliseconds: milliseconds(limits.grace),
+        });
     }
     };
     // An exit before reading all input means the picture may be partial.
     match pipes.input {
     Some(Ok(())) => {}
     Some(Err(error)) => {
-        return Err(failed(format!(
-            "{program} did not read all of its input: {error}"
-        )));
+        return Err(GraphvizFailure::InputUnread {
+            message: Some(error.to_string()),
+        });
     }
-    None => {
-        return Err(failed(format!("{program} did not read all of its input")));
-    }
+    None => return Err(GraphvizFailure::InputUnread { message: None }),
     }
     if let Some(Err(error)) = pipes.errors {
-        return Err(failed(format!(
-            "cannot read the stderr of {program}: {error}"
-        )));
+        return Err(GraphvizFailure::StderrUnreadable {
+            message: error.to_string(),
+        });
     }
-    String::from_utf8(svg)
-        .map_err(|error| failed(format!("{program} produced invalid UTF-8: {error}")))
+    String::from_utf8(svg).map_err(|error| GraphvizFailure::InvalidUtf8 {
+        message: error.to_string(),
+    })
 }

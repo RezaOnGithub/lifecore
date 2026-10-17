@@ -6,11 +6,12 @@ import { keptBy, reconnectable } from "../draft/reconnect.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, NodeLink } from "../links.tsx";
 import { entryKey } from "../model/labels.ts";
+import { type Incident, incidents } from "../model/relations.ts";
 
 type NodeOperation = Extract<ProposalEntry, { kind: "node" }>;
 
 interface Item {
-  incident: IncidentEdge;
+  incident: Incident;
   kept: ProposalEntry | null;
 }
 
@@ -57,7 +58,7 @@ export function Reconnection({
     return null;
   }
   const { entries } = state.proposal;
-  const items: Item[] = reconnectable(result.edges).map((incident) => ({
+  const items: Item[] = reconnectable(incidents(result)).map((incident) => ({
     incident,
     kept: keptBy(entries, operation.name, incident),
   }));
@@ -148,7 +149,7 @@ export function Reconnection({
                         />{" "}
                         {incident.direction === "outgoing" ? "→" : "←"}{" "}
                         {incident.edge.ty_name}{" "}
-                        <NodeLink node={incident.other} />{" "}
+                        <NodeLink node={incident.node} />{" "}
                         <IdLink id={incident.edge.id} />
                         {by !== null && (
                           <span className="muted"> kept as {by.name}</span>

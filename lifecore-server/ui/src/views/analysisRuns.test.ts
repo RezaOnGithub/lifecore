@@ -203,6 +203,7 @@ test("edit failures are classified by what they say about the records", () => {
     "database_missing",
     "database_unreadable",
     "invalid_params",
+    "foreign_database",
     "cannot_dismiss_inconsistency",
   ];
   for (const kind of before) {
@@ -382,52 +383,77 @@ test("a few labels are read entry by entry, nodes only", async () => {
   assert.equal(failure, null);
 });
 
-test("many labels come from one query, dropping ids that are not nodes", async () => {
+// A `views.query` refusal of the seeds at these positions.
+function refusal(edges: string[], absent: string[] = []): RpcError {
+  return new RpcError("views.query", {
+    code: 4006,
+    message: "refused",
+    data: {
+      kind: "invalid_seeds",
+      refused: [
+        ...edges.map((position) => ({
+          id: id(position),
+          reason: "edge" as const,
+        })),
+        ...absent.map((position) => ({
+          id: id(position),
+          reason: "absent" as const,
+        })),
+      ],
+    },
+  });
+}
+
+const seeded = (c: Pending | undefined) =>
+  (c?.params as { seeds: { ids: EntryId[] }[] } | undefined)?.seeds[0]?.ids;
+
+test("many labels come from one query, dropping every refused id at once", async () => {
   const many = Array.from({ length: 25 }, (_, i) => id(String(i)));
   const { calls, call } = fake();
   const read = readLabels(call, many, "30");
   await settle();
-  const notFound = (position: string) =>
-    new RpcError("views.query", {
-      code: 4001,
-      message: "not found",
-      data: { kind: "entry_not_found", id: id(position) },
-    });
   assert.equal(calls[0]?.method, "views.query");
-  calls[0]?.reject(notFound("3"));
+  assert.equal(seeded(calls[0])?.length, 25);
+  calls[0]?.reject(refusal(["3", "8"], ["24"]));
   await settle();
-  const seeds = (c: Pending | undefined) =>
-    (c?.params as { seeds: { ids: EntryId[] }[] } | undefined)?.seeds[0]?.ids
-      .length;
-  assert.equal(seeds(calls[1]), 24);
+  assert.equal(calls[1]?.method, "views.query");
+  assert.deepEqual(
+    seeded(calls[1])?.map(({ position }) => position),
+    many
+      .map(({ position }) => position)
+      .filter((position) => !["3", "8", "24"].includes(position)),
+  );
   calls[1]?.resolve({ nodes: [{ node: node("4") }], edges: [] });
   const { nodes, failure } = await read;
   assert.deepEqual([...nodes.keys()], ["o:4"]);
   assert.equal(failure, null);
+  assert.equal(calls.length, 2);
 });
 
-test("after a few refusals every node of the view is read instead", async () => {
+test("labels are read with one retry at most, and none when all are refused", async () => {
   const many = Array.from({ length: 25 }, (_, i) => id(String(i)));
-  const { calls, call } = fake();
-  const read = readLabels(call, many, "30");
-  for (let refusal = 0; refusal < 4; refusal++) {
-    await settle();
-    calls.at(-1)?.reject(
-      new RpcError("views.query", {
-        code: 4001,
-        message: "not found",
-        data: { kind: "entry_not_found", id: id(String(refusal)) },
-      }),
-    );
-  }
+  const again = fake();
+  const read = readLabels(again.call, many, "30");
   await settle();
-  assert.deepEqual(calls.at(-1)?.params, {
-    kind: "node",
-    currentness: "all",
-    as_of: "30",
-  });
-  calls.at(-1)?.resolve({ entries: [node("7"), node("99")] });
-  const { nodes } = await read;
-  assert.deepEqual([...nodes.keys()], ["o:7"]);
-  assert.equal(calls.length, 5);
+  again.calls[0]?.reject(refusal(["3"]));
+  await settle();
+  const second = refusal(["4"]);
+  again.calls[1]?.reject(second);
+  const { nodes, failure } = await read;
+  assert.equal(nodes.size, 0);
+  assert.equal(failure, second);
+  assert.equal(again.calls.length, 2);
+  const none = fake();
+  const refused = readLabels(none.call, many, "30");
+  await settle();
+  none.calls[0]?.reject(
+    refusal(
+      many.slice(0, 20).map(({ position }) => position),
+      ["20", "21", "22", "23", "24"],
+    ),
+  );
+  const result = await refused;
+  assert.equal(result.nodes.size, 0);
+  assert.equal(result.failure, null);
+  assert.equal(none.calls.length, 1);
 });

@@ -4,7 +4,7 @@ import type {
   DecimalString,
   EdgeRecord,
   EntryId,
-  IncidentEdge,
+  EntryInspection,
   NodeRecord,
 } from "../contract.ts";
 import { latest, useCall } from "../data.tsx";
@@ -35,6 +35,8 @@ import {
   countByType,
   countWords,
   groupByRelation,
+  type Incident,
+  incidents,
   type Neighbour,
   type Relation,
   type RelationGroup,
@@ -238,18 +240,18 @@ function useOutline(): OutlineControl {
   return control;
 }
 
+type NodeInspection = Extract<EntryInspection, { kind: "node" }>;
+
 // The relationships of one node as an outline: a group per edge type and
 // direction, and under each neighbour, on request, that neighbour's own
 // groups, read at `asOf`.
 export function RelationshipOutline({
-  owner,
-  edges,
+  inspection,
   view,
   setView,
   asOf,
 }: {
-  owner: NodeRecord;
-  edges: readonly IncidentEdge[];
+  inspection: NodeInspection;
   view: OutlineView;
   setView: (update: (view: OutlineView) => OutlineView) => void;
   asOf: DecimalString;
@@ -261,10 +263,9 @@ export function RelationshipOutline({
   return (
     <OutlineContext value={control}>
       <OutlineGroups
-        owner={owner}
-        edges={edges}
+        inspection={inspection}
         path=""
-        nodes={[entryKey(owner.id)]}
+        nodes={[entryKey(inspection.entry.id)]}
         testId="relationships"
       />
     </OutlineContext>
@@ -274,25 +275,24 @@ export function RelationshipOutline({
 // `path` names the row whose groups these are; `nodes` holds the keys of
 // the nodes from the inspected one down to `owner`.
 function OutlineGroups({
-  owner,
-  edges,
+  inspection,
   path,
   nodes,
   testId,
 }: {
-  owner: NodeRecord;
-  edges: readonly IncidentEdge[];
+  inspection: NodeInspection;
   path: string;
   nodes: readonly string[];
   testId?: string;
 }) {
+  const owner = inspection.entry;
   const groups = useMemo(
     () =>
-      groupByRelation(edges, ({ edge, direction }) => ({
+      groupByRelation(incidents(inspection), ({ edge, direction }) => ({
         ty_name: edge.ty_name,
         direction,
       })),
-    [edges],
+    [inspection],
   );
   if (groups.length === 0) {
     return (
@@ -316,7 +316,7 @@ function OutlineGroups({
   );
 }
 
-const neighbourLabel = ({ other }: IncidentEdge) => rowLabel(other);
+const neighbourLabel = ({ node }: Incident) => rowLabel(node);
 
 function OutlineGroup({
   owner,
@@ -325,7 +325,7 @@ function OutlineGroup({
   nodes,
 }: {
   owner: NodeRecord;
-  group: RelationGroup<IncidentEdge>;
+  group: RelationGroup<Incident>;
   path: string;
   nodes: readonly string[];
 }) {
@@ -336,7 +336,7 @@ function OutlineGroup({
   const listed = state.withHistorical
     ? group.items
     : group.items.filter(({ edge }) => edge.current);
-  const tags = typeTags(countByType(listed.map(({ other }) => other)));
+  const tags = typeTags(countByType(listed.map(({ node }) => node)));
   const toggleHistorical = () =>
     setView((current) => {
       const next = setHistorical(current, id, !state.withHistorical, owner);
@@ -428,12 +428,12 @@ function NeighbourRow({
   path: parent,
   nodes,
 }: {
-  incident: IncidentEdge;
+  incident: Incident;
   path: string;
   nodes: readonly string[];
 }) {
   const { view, setView } = useOutline();
-  const { edge, other } = incident;
+  const { edge, node: other } = incident;
   const path = rowPath(parent, edge.id);
   const marked = onPath(nodes, other.id);
   const expanded = !marked && view.expanded.includes(path);
@@ -508,12 +508,5 @@ function NeighbourOutline({
   if (result.kind !== "node") {
     return null;
   }
-  return (
-    <OutlineGroups
-      owner={result.entry}
-      edges={result.edges}
-      path={path}
-      nodes={nodes}
-    />
-  );
+  return <OutlineGroups inspection={result} path={path} nodes={nodes} />;
 }

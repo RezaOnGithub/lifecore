@@ -7,27 +7,29 @@ export const request = {
   "jsonrpc": "2.0",
   "method": "views.render",
   "params": {
-    "edges": {
-      "currentness": "all"
-    },
-    "expand": [
-      {
-        "currentness": "all",
-        "direction": "incoming"
-      }
-    ],
     "format": "dot",
-    "seeds": [
-      {
-        "ids": [
-          {
-            "origin": "00000000-0000-4000-8000-000000000005",
-            "position": "1"
-          }
-        ],
-        "kind": "ids"
-      }
-    ]
+    "query": {
+      "edges": {
+        "currentness": "all"
+      },
+      "expand": [
+        {
+          "currentness": "all",
+          "direction": "incoming"
+        }
+      ],
+      "seeds": [
+        {
+          "ids": [
+            {
+              "origin": "00000000-0000-4000-8000-000000000005",
+              "position": "1"
+            }
+          ],
+          "kind": "ids"
+        }
+      ]
+    }
   }
 } satisfies RpcRequest<"views.render">;
 

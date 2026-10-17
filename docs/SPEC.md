@@ -656,11 +656,9 @@ same pass as structural validation, and `transaction::prepare` extends it for ea
 staged entry only after that entry validates, so an invalid entry never affects an
 earlier boundary. Resolved types are not cached.
 
-`View::to_dot` exports all visible history as deterministic Graphviz text.
-Revision links are dashed blue; ordinary directed edges are solid. Stale nodes
-and edges are gray. Labels contain positions, types, and node payloads with
-escaped text; position-based Graphviz names are local to the exported view.
-Inspection and export require neither a valid draft nor installed analyzers.
+Inspection requires neither a valid draft nor installed analyzers. Graphviz
+drawings of a view are an application method, `views.render`
+([INTERFACES §3.1](INTERFACES.md#31-provisional-first-slice-methods)).
 
 ## 10. Examples
 

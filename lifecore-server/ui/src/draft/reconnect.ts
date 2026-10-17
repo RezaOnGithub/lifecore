@@ -15,7 +15,9 @@ import { reviseSuccessor } from "./operations.ts";
 
 // Only current edges can be kept: a historical one already has a superseded
 // endpoint. A self-loop listed once per direction is kept once.
-export function reconnectable(edges: readonly IncidentEdge[]): IncidentEdge[] {
+export function reconnectable<T extends IncidentEdge>(
+  edges: readonly T[],
+): T[] {
   const seen = new Set<string>();
   return edges.filter(({ edge }) => {
     const key = entryKey(edge.id);
@@ -51,7 +53,7 @@ export function otherEnd(
   if (selfLoop(incident)) {
     return { added: operation };
   }
-  const other: ProposalReference = { existing: incident.other.id };
+  const other: ProposalReference = { existing: incident.other };
   const successor = reviseSuccessor(entries, index, other);
   return successor === null ? other : { added: successor };
 }
@@ -95,8 +97,7 @@ export function keepsEdge(
   const index = entries.findIndex((e) => e.name === operation);
   return (
     sameReference(other, otherEnd(entries, index, operation, incident)) ||
-    (!selfLoop(incident) &&
-      sameReference(other, { existing: incident.other.id }))
+    (!selfLoop(incident) && sameReference(other, { existing: incident.other }))
   );
 }
 

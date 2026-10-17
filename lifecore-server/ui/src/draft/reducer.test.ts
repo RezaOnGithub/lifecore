@@ -81,7 +81,7 @@ function incident(
       current: true,
     },
     direction,
-    other,
+    other: other.id,
   };
 }
 

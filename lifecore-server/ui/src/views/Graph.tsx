@@ -81,7 +81,7 @@ export function GraphView({
             : drawing,
         ),
       );
-    client.call("views.render", { ...target.params, format }).then(
+    client.call("views.render", { query: target.params, format }).then(
       (result) => settle({ status: "ready", text: result.text }),
       (failure: unknown) => settle({ status: "failed", failure }),
     );

@@ -1,8 +1,11 @@
 use crate::{
     AppError, Service,
     proposal::{self, Format, PlanId, Proposal},
-    query::{EdgeFilter, EntryInspection, Expansion, Incidence, Provenance, Seed, ViewQuery},
-    render::{self, RenderFormat},
+    query::{
+        EdgeFilter, EntryInspection, Expansion, Incidence, Provenance, RefusedSeed, Seed,
+        SeedRefusal, ViewQuery,
+    },
+    render::{self, GraphvizFailure, Limits, RenderFormat},
     rpc,
     schema::{self, NodeCounts, TypeResolution},
     service::{
@@ -2060,7 +2063,8 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
         ty,
         lineage,
         edges,
-    }) => (view, entry, ty, lineage, edges),
+        neighbours,
+    }) => (view, entry, ty, lineage, edges, neighbours),
     other => panic!("expected a node inspection, got {other:?}"),
     };
     let positions = |records: &[EntryRecord]| {
@@ -2071,7 +2075,7 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
     };
     // B: a historical incoming edge from the superseded A, a current incoming
     // one from A2, and a current outgoing one to A3, in append order.
-    let (view, entry, ty, lineage, edges) = node(ids[2], None);
+    let (view, entry, ty, lineage, edges, neighbours) = node(ids[2], None);
     assert_eq!(view.end_exclusive, 8);
     assert_eq!((entry.entry.id(), entry.current), (ids[2], true));
     assert!(matches!(ty, TypeResolution::Declared { declaration, .. } if declaration == ids[0]));
@@ -2083,18 +2087,24 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
                 incident.edge.entry.id(),
                 incident.edge.current,
                 incident.direction,
-                incident.other.entry.id(),
-                incident.other.current,
+                incident.other,
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         incident,
         [
-            (ids[3], false, Incidence::Incoming, ids[1], false),
-            (ids[6], true, Incidence::Incoming, ids[4], true),
-            (ids[7], true, Incidence::Outgoing, ids[5], true),
+            (ids[3], false, Incidence::Incoming, ids[1]),
+            (ids[6], true, Incidence::Incoming, ids[4]),
+            (ids[7], true, Incidence::Outgoing, ids[5]),
         ]
+    );
+    assert_eq!(
+        neighbours
+            .iter()
+            .map(|record| (record.entry.id(), record.current))
+            .collect::<Vec<_>>(),
+        [(ids[1], false), (ids[4], true), (ids[5], true)]
     );
     // The whole revision tree, root first, from any of its nodes, as far as
     // the inspected view sees it.
@@ -2105,12 +2115,12 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
         (ids[4], Some(5), vec![ids[1], ids[4]]),
         (ids[1], Some(4), vec![ids[1]]),
     ] {
-        let (view, _, _, lineage, _) = node(id, as_of);
+        let (view, _, _, lineage, ..) = node(id, as_of);
         assert_eq!(view.end_exclusive, as_of.unwrap_or(8));
         assert_eq!(positions(&lineage), expected, "{as_of:?}");
     }
     // The superseded root and its edge are historical now, current before.
-    let (_, entry, _, _, edges) = node(ids[1], None);
+    let (_, entry, _, _, edges, _) = node(ids[1], None);
     assert!(!entry.current);
     assert_eq!(
         edges
@@ -2119,19 +2129,19 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
             .collect::<Vec<_>>(),
         [(ids[3], false, Incidence::Outgoing)]
     );
-    let (view, entry, _, _, edges) = node(ids[1], Some(4));
+    let (view, entry, _, _, edges, neighbours) = node(ids[1], Some(4));
     assert_eq!(view.end_exclusive, 4);
     assert!(entry.current);
+    assert_eq!((edges[0].edge.current, edges[0].other), (true, ids[2]));
     assert_eq!(
-        (
-            edges[0].edge.current,
-            edges[0].other.entry.id(),
-            edges[0].other.current
-        ),
-        (true, ids[2], true)
+        neighbours
+            .iter()
+            .map(|record| (record.entry.id(), record.current))
+            .collect::<Vec<_>>(),
+        [(ids[2], true)]
     );
     // Just after the revision, A is stale but the later edges are not visible.
-    let (_, entry, _, _, edges) = node(ids[2], Some(5));
+    let (_, entry, _, _, edges, neighbours) = node(ids[2], Some(5));
     assert!(entry.current);
     assert_eq!(
         edges
@@ -2140,6 +2150,7 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
             .collect::<Vec<_>>(),
         [(ids[3], false)]
     );
+    assert_eq!(positions(&neighbours), [ids[1]]);
     // An edge carries both endpoints as records of the same view.
     let Ok(EntryInspection::Edge {
         view,
@@ -2190,13 +2201,77 @@ fn inspecting_a_node_gives_its_type_lineage_and_incident_edges_in_the_view() {
     assert_eq!(result["lineage"][0]["current"], false);
     assert_eq!(result["edges"][0]["direction"], "incoming");
     assert_eq!(result["edges"][0]["edge"]["kind"], "edge");
-    assert_eq!(result["edges"][0]["other"]["kind"], "node");
+    assert_eq!(result["edges"][0]["other"], json!(ids[2]));
+    assert_eq!(result["neighbours"][0]["kind"], "node");
+    assert_eq!(result["neighbours"][0]["id"], json!(ids[2]));
     let line =
         json!({"jsonrpc": "2.0", "id": 2, "method": "entries.inspect", "params": {"id": ids[3]}})
             .to_string();
     let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
     assert_eq!(response["result"]["kind"], "edge");
     assert_eq!(response["result"]["from"]["kind"], "node");
+}
+
+// However many edges join two nodes, the inspection carries the other
+// node's record once, and the records follow append order, not edge order.
+#[test]
+fn an_inspection_lists_each_neighbour_once_by_the_edges_that_reach_it() {
+    let scratch = Scratch::new();
+    let mut ids = unchecked(&scratch);
+    let service = scratch.service();
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "cites", "kind": "edge", "ty_name": "Cites",
+                "from": existing(ids[2]), "to": existing(ids[0])},
+        ]))))
+        .unwrap();
+    ids.extend(applied.report.operations.iter().map(|o| o.entry));
+    let (ghost, note) = (ids[2], ids[3]);
+    for (as_of, edges, neighbours) in [
+        (Some(6), vec![], vec![]),
+        (
+            Some(8),
+            vec![
+                (ids[6], Incidence::Outgoing, note),
+                (ids[7], Incidence::Incoming, note),
+            ],
+            vec![note],
+        ),
+        (
+            None,
+            vec![
+                (ids[6], Incidence::Outgoing, note),
+                (ids[7], Incidence::Incoming, note),
+                (ids[8], Incidence::Outgoing, ids[0]),
+            ],
+            vec![ids[0], note],
+        ),
+    ] {
+        let Ok(EntryInspection::Node {
+            edges: incident,
+            neighbours: listed,
+            ..
+        }) = service.inspect_entry(EntryInspectRequest { id: ghost, as_of })
+        else {
+            panic!("expected a node inspection")
+        };
+        assert_eq!(
+            incident
+                .iter()
+                .map(|e| (e.edge.entry.id(), e.direction, e.other))
+                .collect::<Vec<_>>(),
+            edges,
+            "{as_of:?}"
+        );
+        assert_eq!(
+            listed
+                .iter()
+                .map(|record| record.entry.id())
+                .collect::<Vec<_>>(),
+            neighbours,
+            "{as_of:?}"
+        );
+    }
 }
 
 #[test]
@@ -2735,8 +2810,7 @@ fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
         ]
     );
     assert_eq!(edges(&result), [ids[6]]);
-    // Boundaries past the end and seeds the view lacks or that are edges are
-    // errors.
+    // A boundary past the end is an error.
     assert!(matches!(
         query(seeds(&[ids[2]]), vec![], EdgeFilter::default(), Some(9)),
         Err(AppError::BeyondBoundary {
@@ -2744,14 +2818,64 @@ fn view_queries_expand_from_seeds_with_provenance_in_append_order() {
             visible: 8
         })
     ));
-    assert!(matches!(
-        query(seeds(&[ids[5]]), vec![], EdgeFilter::default(), Some(5)),
-        Err(AppError::EntryNotFound { id }) if id == ids[5]
-    ));
-    assert!(matches!(
-        query(seeds(&[ids[3]]), vec![], EdgeFilter::default(), None),
-        Err(AppError::EntryNotFound { id }) if id == ids[3]
-    ));
+    // So are seeds the view lacks or that are edges, refused together, each
+    // once and in request order, whichever seed lists them; A3 is absent
+    // before its append and a node after it.
+    let unknown: EntryId =
+        serde_json::from_value(json!({"origin": Uuid::new_v4(), "position": "2"})).unwrap();
+    let mixed = vec![
+        Seed::Ids {
+            ids: vec![ids[5], ids[2], ids[3]],
+        },
+        Seed::Nodes {
+            ty_name: None,
+            currentness: Currentness::All,
+            text: None,
+        },
+        Seed::Ids {
+            ids: vec![unknown, ids[3], ids[5]],
+        },
+    ];
+    let refusal = |id, reason| RefusedSeed { id, reason };
+    for (as_of, expected) in [
+        (
+            Some(5),
+            vec![
+                refusal(ids[5], SeedRefusal::Absent),
+                refusal(ids[3], SeedRefusal::Edge),
+                refusal(unknown, SeedRefusal::Absent),
+            ],
+        ),
+        (
+            Some(6),
+            vec![
+                refusal(ids[3], SeedRefusal::Edge),
+                refusal(unknown, SeedRefusal::Absent),
+            ],
+        ),
+    ] {
+        match query(
+            mixed.clone(),
+            vec![step.clone()],
+            EdgeFilter::default(),
+            as_of,
+        ) {
+        Err(AppError::InvalidSeeds { refused }) => assert_eq!(refused, expected, "{as_of:?}"),
+        other => panic!("expected refused seeds, got {other:?}"),
+        }
+    }
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "views.query",
+        "params": {"seeds": [{"kind": "ids", "ids": [ids[3], ids[2], ids[5]]}], "as_of": "5"}})
+    .to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    assert_eq!(response["error"]["code"], 4006, "{response}");
+    assert_eq!(
+        response["error"]["data"],
+        json!({"kind": "invalid_seeds", "refused": [
+            {"id": ids[3], "reason": "edge"},
+            {"id": ids[5], "reason": "absent"},
+        ]})
+    );
     // No seeds is an empty result.
     let result = query(vec![], vec![step], EdgeFilter::default(), None).unwrap();
     assert!(result.nodes.is_empty() && result.edges.is_empty());
@@ -2997,10 +3121,12 @@ fn warned(scratch: &Scratch) -> EntryId {
 fn render_dot(service: &Service, seeds: Vec<Seed>, as_of: Option<usize>) -> String {
     service
         .render_view(ViewRenderRequest {
-            seeds,
-            expand: vec![],
-            edges: EdgeFilter::default(),
-            as_of,
+            query: ViewQueryRequest {
+                seeds,
+                expand: vec![],
+                edges: EdgeFilter::default(),
+                as_of,
+            },
             format: RenderFormat::Dot,
         })
         .unwrap()
@@ -3579,18 +3705,27 @@ fn dismissal_edits_keep_the_graph_and_publish_only_changes() {
     let stored = scratch.bytes();
     assert!(dismiss(&failing, &key, None).is_ok());
     assert_eq!(scratch.bytes(), stored);
-    // A key of another database is invalid for a dismissal, and restoring
+    // A key of another database is foreign to a dismissal, and restoring
     // one matches nothing and publishes nothing.
     let foreign = FindingKey {
         database: Uuid::new_v4(),
         ..key.clone()
     };
     let error = dismiss(&service, &foreign, None).unwrap_err();
+    let selected = before.graph.view().id().database;
     assert!(
-        matches!(&error, AppError::InvalidParams { message } if message.contains(&foreign.database.to_string())),
+        matches!(&error, AppError::ForeignDatabase { expected, actual, .. }
+            if *expected == foreign.database && *actual == selected),
         "{error}"
     );
-    assert_eq!(error.to_object().code, -32602);
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "the finding key names database {}, but the selected database is {selected}",
+            foreign.database
+        )
+    );
+    assert_eq!(error.to_object().code, 2004);
     assert_eq!(scratch.bytes(), stored);
     let restored = failing
         .restore_finding(RestoreRequest {
@@ -3604,8 +3739,11 @@ fn dismissal_edits_keep_the_graph_and_publish_only_changes() {
         "params": {"key": foreign, "reason": "acknowledged"}})
     .to_string();
     let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
-    assert_eq!(response["error"]["code"], -32602, "{response}");
-    assert_eq!(response["error"]["data"]["kind"], "invalid_params");
+    assert_eq!(response["error"]["code"], 2004, "{response}");
+    assert_eq!(
+        response["error"]["data"],
+        json!({"kind": "foreign_database", "expected": foreign.database, "actual": selected})
+    );
     assert_eq!(scratch.bytes(), stored);
     assert!(storage::read(&scratch.state()).unwrap().graph == before.graph);
 }
@@ -3708,18 +3846,20 @@ fn around(
     format: RenderFormat,
 ) -> Result<crate::render::Rendered, AppError> {
     service.render_view(ViewRenderRequest {
-        seeds: vec![Seed::Ids { ids: vec![seed] }],
-        expand: vec![Expansion {
-            hops: NonZeroUsize::MIN,
-            direction: Direction::Both,
-            ty_names: None,
-            currentness: Currentness::All,
-        }],
-        edges: EdgeFilter {
-            ty_names: None,
-            currentness: Currentness::All,
+        query: ViewQueryRequest {
+            seeds: vec![Seed::Ids { ids: vec![seed] }],
+            expand: vec![Expansion {
+                hops: NonZeroUsize::MIN,
+                direction: Direction::Both,
+                ty_names: None,
+                currentness: Currentness::All,
+            }],
+            edges: EdgeFilter {
+                ty_names: None,
+                currentness: Currentness::All,
+            },
+            as_of,
         },
-        as_of,
         format,
     })
 }
@@ -3827,21 +3967,25 @@ fn render_draws_only_the_queried_subgraph_as_dot() {
     assert!(early.contains(&node(1, "A", false)), "{early}");
     assert!(matches!(
         service.render_view(ViewRenderRequest {
-            seeds: vec![Seed::Ids { ids: vec![ids[4]] }],
-            expand: vec![],
-            edges: EdgeFilter::default(),
-            as_of: Some(2),
+            query: ViewQueryRequest {
+                seeds: vec![Seed::Ids { ids: vec![ids[4]] }],
+                expand: vec![],
+                edges: EdgeFilter::default(),
+                as_of: Some(2),
+            },
             format: RenderFormat::Dot,
         }),
-        Err(AppError::EntryNotFound { .. })
+        Err(AppError::InvalidSeeds { refused })
+            if refused == [RefusedSeed { id: ids[4], reason: SeedRefusal::Absent }]
     ));
-    // Through RPC: the format is required and spelled in lowercase.
+    // Through RPC: the query is one member, and the format is required and
+    // spelled in lowercase.
     let call = |params: Value| {
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": "views.render", "params": params})
             .to_string();
         serde_json::to_value(rpc::handle(&service, &line)).unwrap()
     };
-    let response = call(json!({"seeds": [], "format": "dot"}));
+    let response = call(json!({"query": {"seeds": []}, "format": "dot"}));
     assert_eq!(response["result"]["format"], "dot", "{response}");
     assert!(
         response["result"]["text"]
@@ -3850,17 +3994,21 @@ fn render_draws_only_the_queried_subgraph_as_dot() {
             .starts_with("digraph lifecore {\n")
     );
     for params in [
-        json!({"seeds": []}),
-        json!({"seeds": [], "format": "DOT"}),
-        json!({"seeds": [], "format": "png"}),
-        json!({"seeds": [], "format": null}),
-        json!({"seeds": [], "format": "dot", "as_of": 1}),
+        json!({"query": {"seeds": []}}),
+        json!({"query": {"seeds": []}, "format": "DOT"}),
+        json!({"query": {"seeds": []}, "format": "png"}),
+        json!({"query": {"seeds": []}, "format": null}),
+        json!({"query": {"seeds": [], "as_of": 1}, "format": "dot"}),
+        json!({"seeds": [], "format": "dot"}),
+        json!({"query": {"seeds": [], "format": "dot"}, "format": "dot"}),
+        json!({"query": null, "format": "dot"}),
+        json!({"format": "dot"}),
     ] {
         let response = call(params.clone());
         assert_eq!(response["error"]["code"], -32602, "{params} {response}");
     }
     assert_eq!(
-        call(json!({"seeds": [], "format": "dot", "as_of": "9"}))["error"]["code"],
+        call(json!({"query": {"seeds": [], "as_of": "9"}, "format": "dot"}))["error"]["code"],
         4002
     );
 }
@@ -3940,9 +4088,38 @@ fn render_labels_read_like_table_rows_with_the_full_text_as_tooltip() {
 }
 
 #[test]
+fn dot_quote_escapes_metacharacters_and_blanks_control_characters() {
+    assert_eq!(
+        render::dot_quote("a\"b\\N c\\"),
+        "\"a\\\"b\\\\N c\\\\\"",
+        "quotes and backslashes, a trailing one too"
+    );
+    assert_eq!(
+        render::dot_quote("one\ntwo\rthree"),
+        "\"one\\ntwo\\rthree\""
+    );
+    assert_eq!(
+        render::dot_quote("&amp; &#60; &"),
+        "\"&amp;amp; &amp;#60; &amp;\""
+    );
+    assert_eq!(
+        render::dot_quote("nul\0tab\tvt\u{b}del\u{7f}c1\u{85}end"),
+        "\"nul tab vt del c1 end\""
+    );
+    assert_eq!(
+        render::dot_quote("Ünïcode \u{2026}"),
+        "\"Ünïcode \u{2026}\""
+    );
+}
+
+#[test]
 fn graphviz_that_cannot_start_is_unavailable() {
-    let missing =
-        render::graphviz(Command::new("lifecore-no-such-graphviz"), "digraph {}").unwrap_err();
+    let missing = render::graphviz(
+        Command::new("lifecore-no-such-graphviz"),
+        "digraph {}",
+        Limits::GRAPHVIZ,
+    )
+    .unwrap_err();
     assert!(
         matches!(&missing, AppError::GraphvizUnavailable { message } if message.contains("os error")),
         "{missing}"
@@ -3963,7 +4140,7 @@ fn graphviz_that_cannot_start_is_unavailable() {
         // go on past a file it may not execute.
         let mut command = Command::new("dot");
         command.env("PATH", &scratch.0);
-        let refused = render::graphviz(command, "digraph {}").unwrap_err();
+        let refused = render::graphviz(command, "digraph {}", Limits::GRAPHVIZ).unwrap_err();
         assert!(
             matches!(&refused, AppError::GraphvizUnavailable { message }
                 if *message == io::Error::from(io::ErrorKind::PermissionDenied).to_string()
@@ -4007,13 +4184,17 @@ impl StandIn {
     }
 
     fn run(&self, dot: &str) -> Result<String, AppError> {
+        self.run_within(dot, Limits::GRAPHVIZ)
+    }
+
+    fn run_within(&self, dot: &str, limits: Limits) -> Result<String, AppError> {
         // A test forking while another wrote its script can briefly hold the
         // script open for writing in that child, and executing it then fails
         // with ETXTBSY, so such a start is retried.
         for _ in 0..50 {
             let mut command = Command::new("dot");
             command.env("PATH", &self.path);
-            match render::graphviz(command, dot) {
+            match render::graphviz(command, dot, limits) {
             Err(AppError::GraphvizUnavailable { message }) if message.contains("os error 26") => {
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -4033,15 +4214,28 @@ impl Drop for StandIn {
     }
 }
 
+// The cause and stderr of a Graphviz failure, which its error object
+// carries as data beside a message that names both.
 #[cfg(unix)]
-fn graphviz_failure(result: Result<String, AppError>) -> String {
+fn graphviz_failure(result: Result<String, AppError>) -> (GraphvizFailure, String) {
     match result {
     Err(error @ AppError::GraphvizFailed { .. }) => {
-        assert_eq!(error.to_object().code, 4005);
-        let AppError::GraphvizFailed { message } = error else {
+        let object = error.to_object();
+        assert_eq!(object.code, 4005);
+        let AppError::GraphvizFailed { cause, stderr } = error else {
             unreachable!()
         };
-        message
+        assert_eq!(
+            object.data.unwrap(),
+            json!({"kind": "graphviz_failed", "cause": cause, "stderr": stderr})
+        );
+        assert!(
+            object.message.contains(&cause.to_string()),
+            "{}",
+            object.message
+        );
+        assert!(object.message.ends_with(&stderr), "{}", object.message);
+        (cause, stderr)
     }
     other => panic!("expected a Graphviz failure, got {other:?}"),
     }
@@ -4063,12 +4257,26 @@ fn graphviz_is_killed_at_the_deadline_even_when_its_pipes_stay_open() {
     };
     // More input than a pipe buffers, so the writer blocks for good.
     let input = format!("digraph {{}}\n{}", " ".repeat(1 << 20));
+    let limits = Limits {
+        deadline: Duration::from_millis(300),
+        grace: Duration::from_millis(200),
+        ..Limits::GRAPHVIZ
+    };
     let started = Instant::now();
-    let message = graphviz_failure(dot.run(&input));
+    let (cause, _) = graphviz_failure(dot.run_within(&input, limits));
     let elapsed = started.elapsed();
-    assert!(message.contains("did not finish within 10 s"), "{message}");
-    assert!(elapsed >= Duration::from_secs(10), "{elapsed:?}");
-    assert!(elapsed < Duration::from_millis(11_500), "{elapsed:?}");
+    assert_eq!(cause, GraphvizFailure::Deadline { milliseconds: 300 });
+    assert_eq!(
+        cause.to_string(),
+        "dot did not finish within 300 ms and was killed"
+    );
+    // Past the deadline, the call waits out the grace period for the pipes
+    // and no longer: the descendant would hold them for 100 s.
+    assert!(elapsed >= limits.deadline, "{elapsed:?}");
+    assert!(
+        elapsed < limits.deadline + limits.grace + Duration::from_secs(2),
+        "{elapsed:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -4081,21 +4289,34 @@ fn graphviz_stand_ins_report_output_exit_and_pipe_failures() {
     };
     assert_eq!(ok.run("digraph {}\n").unwrap(), "<svg/>");
     // Output past the cap kills the program at once, long before the
-    // deadline.
+    // deadline, at the production cap and at a smaller one.
     let flood = stand_in(
         "flood",
         "cat > /dev/null\nexec yes aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
     )
     .unwrap();
     let started = Instant::now();
-    let message = graphviz_failure(flood.run("digraph {}\n"));
-    assert!(message.contains("more than 16 MiB of SVG"), "{message}");
+    let (cause, _) = graphviz_failure(flood.run("digraph {}\n"));
+    assert_eq!(cause, GraphvizFailure::Oversized { bytes: 16 << 20 });
+    assert_eq!(
+        cause.to_string(),
+        "dot produced more than 16 MiB of SVG and was killed"
+    );
+    let small = Limits {
+        output: 1000,
+        ..Limits::GRAPHVIZ
+    };
+    let (cause, _) = graphviz_failure(flood.run_within("digraph {}\n", small));
+    assert_eq!(cause, GraphvizFailure::Oversized { bytes: 1000 });
     assert!(started.elapsed() < Duration::from_secs(5));
-    // A failed exit quotes stderr.
+    // A failed exit reports its status and stderr.
     let exit = stand_in("exit", "cat > /dev/null\necho 'bad graph' >&2\nexit 3\n").unwrap();
-    let message = graphviz_failure(exit.run("digraph {}\n"));
-    assert!(message.contains("exited with"), "{message}");
-    assert!(message.ends_with("; stderr: bad graph"), "{message}");
+    let (cause, stderr) = graphviz_failure(exit.run("digraph {}\n"));
+    assert!(
+        matches!(&cause, GraphvizFailure::Exited { status } if status.contains('3')),
+        "{cause:?}"
+    );
+    assert_eq!(stderr, "bad graph");
     // A successful exit whose output a descendant keeps open is incomplete
     // after the grace period.
     let held = stand_in(
@@ -4104,18 +4325,23 @@ fn graphviz_stand_ins_report_output_exit_and_pipe_failures() {
     )
     .unwrap();
     let started = Instant::now();
-    let message = graphviz_failure(held.run("digraph {}\n"));
-    assert!(
-        message.contains("did not end within 500 ms of its exit"),
-        "{message}"
-    );
+    let (cause, _) = graphviz_failure(held.run("digraph {}\n"));
+    assert_eq!(cause, GraphvizFailure::OutputOpen { milliseconds: 500 });
     assert!(started.elapsed() < Duration::from_secs(5));
     // So is a successful exit that left input unread.
     let unread = stand_in("unread", "printf '<svg/>'\n").unwrap();
-    let message = graphviz_failure(unread.run(&" ".repeat(1 << 20)));
+    let (cause, stderr) = graphviz_failure(unread.run(&" ".repeat(1 << 20)));
     assert!(
-        message.contains("did not read all of its input"),
-        "{message}"
+        matches!(cause, GraphvizFailure::InputUnread { .. }),
+        "{cause:?}"
+    );
+    assert_eq!(stderr, "");
+    // Output that is not UTF-8 is no SVG.
+    let binary = stand_in("binary", "cat > /dev/null\nprintf '<svg>\\377</svg>'\n").unwrap();
+    let (cause, _) = graphviz_failure(binary.run("digraph {}\n"));
+    assert!(
+        matches!(cause, GraphvizFailure::InvalidUtf8 { .. }),
+        "{cause:?}"
     );
 }
 
@@ -4204,20 +4430,21 @@ fn render_svg_runs_graphviz_with_clickable_identities() {
             vec!["@6 DependsOn".into()]
         )
     );
-    // A DOT syntax error is a failure that quotes Graphviz's own complaint.
-    let failed = render::graphviz(Command::new("dot"), "digraph {").unwrap_err();
-    let AppError::GraphvizFailed { message } = &failed else {
+    // A DOT syntax error is a failed exit that carries Graphviz's own
+    // complaint.
+    let failed = render::graphviz(Command::new("dot"), "digraph {", Limits::GRAPHVIZ).unwrap_err();
+    let AppError::GraphvizFailed { cause, stderr } = &failed else {
         panic!("expected a Graphviz failure, got {failed}")
     };
-    assert!(message.contains("exited with"), "{message}");
-    assert!(message.contains("stderr:"), "{message}");
+    assert!(matches!(cause, GraphvizFailure::Exited { .. }), "{cause:?}");
+    assert!(stderr.contains("syntax error"), "{stderr}");
     assert_eq!(failed.to_object().code, 4005);
     assert_eq!(
         failed.to_object().data.unwrap(),
-        json!({"kind": "graphviz_failed", "message": message})
+        json!({"kind": "graphviz_failed", "cause": cause, "stderr": stderr})
     );
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": "views.render",
-        "params": {"seeds": [], "format": "svg"}})
+        "params": {"query": {"seeds": []}, "format": "svg"}})
     .to_string();
     let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
     assert_eq!(response["result"]["format"], "svg", "{response}");
@@ -4279,12 +4506,14 @@ fn rendered_svg_shows_payload_text_literally() {
         .collect::<Vec<_>>();
     let svg = service
         .render_view(ViewRenderRequest {
-            seeds: vec![Seed::Ids {
-                ids: ids[..ids.len() - 1].to_vec(),
-            }],
-            expand: vec![],
-            edges: EdgeFilter::default(),
-            as_of: None,
+            query: ViewQueryRequest {
+                seeds: vec![Seed::Ids {
+                    ids: ids[..ids.len() - 1].to_vec(),
+                }],
+                expand: vec![],
+                edges: EdgeFilter::default(),
+                as_of: None,
+            },
             format: RenderFormat::Svg,
         })
         .unwrap()

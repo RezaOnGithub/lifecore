@@ -221,6 +221,19 @@ export const application = {
       },
       "id": "call",
       "jsonrpc": "2.0"
+    },
+    {
+      "error": {
+        "code": 2004,
+        "data": {
+          "actual": "00000000-0000-4000-8000-000000000001",
+          "expected": "00000000-0000-4000-8000-000000000020",
+          "kind": "foreign_database"
+        },
+        "message": "the finding key names database 00000000-0000-4000-8000-000000000020, but the selected database is 00000000-0000-4000-8000-000000000001"
+      },
+      "id": "call",
+      "jsonrpc": "2.0"
     }
   ],
   "graphviz_failed": [
@@ -228,8 +241,12 @@ export const application = {
       "error": {
         "code": 4005,
         "data": {
+          "cause": {
+            "kind": "exited",
+            "status": "exit status: 1"
+          },
           "kind": "graphviz_failed",
-          "message": "dot exited with exit status: 1; stderr: Error: <stdin>: syntax error in line 1 near 'x'"
+          "stderr": "Error: <stdin>: syntax error in line 1 near 'x'"
         },
         "message": "Graphviz failed: dot exited with exit status: 1; stderr: Error: <stdin>: syntax error in line 1 near 'x'"
       },
@@ -314,6 +331,35 @@ export const application = {
         "message": "invalid proposal: plan reference 3 does not name an earlier entry operation"
       },
       "id": "invalid_without_location",
+      "jsonrpc": "2.0"
+    }
+  ],
+  "invalid_seeds": [
+    {
+      "error": {
+        "code": 4006,
+        "data": {
+          "kind": "invalid_seeds",
+          "refused": [
+            {
+              "id": {
+                "origin": "00000000-0000-4000-8000-000000000005",
+                "position": "3"
+              },
+              "reason": "edge"
+            },
+            {
+              "id": {
+                "origin": "00000000-0000-4000-8000-000000000007",
+                "position": "4"
+              },
+              "reason": "absent"
+            }
+          ]
+        },
+        "message": "seeds must be nodes of the selected view, but EntryId { position: 3, origin: 00000000-0000-4000-8000-000000000005 } is an edge, EntryId { position: 4, origin: 00000000-0000-4000-8000-000000000007 } is not present in it"
+      },
+      "id": "call",
       "jsonrpc": "2.0"
     }
   ],

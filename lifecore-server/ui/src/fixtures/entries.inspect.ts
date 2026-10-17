@@ -39,17 +39,8 @@ export const response = {
           "ty_name": "DependsOn"
         },
         "other": {
-          "current": false,
-          "id": {
-            "origin": "00000000-0000-4000-8000-000000000005",
-            "position": "2"
-          },
-          "kind": "node",
-          "payload": {
-            "notes": "Ask Teto",
-            "title": "Review the report"
-          },
-          "ty_name": "Task"
+          "origin": "00000000-0000-4000-8000-000000000005",
+          "position": "2"
         }
       },
       {
@@ -72,22 +63,8 @@ export const response = {
           "ty_name": "DependsOn"
         },
         "other": {
-          "current": true,
-          "id": {
-            "origin": "00000000-0000-4000-8000-000000000007",
-            "position": "4"
-          },
-          "kind": "node",
-          "payload": {
-            "notes": "Ask Teto",
-            "status": "in progress",
-            "title": "Review the report"
-          },
-          "predecessor": {
-            "origin": "00000000-0000-4000-8000-000000000005",
-            "position": "2"
-          },
-          "ty_name": "Task"
+          "origin": "00000000-0000-4000-8000-000000000007",
+          "position": "4"
         }
       }
     ],
@@ -122,6 +99,39 @@ export const response = {
             "value": "2"
           },
           "title": "Write the report"
+        },
+        "ty_name": "Task"
+      }
+    ],
+    "neighbours": [
+      {
+        "current": false,
+        "id": {
+          "origin": "00000000-0000-4000-8000-000000000005",
+          "position": "2"
+        },
+        "kind": "node",
+        "payload": {
+          "notes": "Ask Teto",
+          "title": "Review the report"
+        },
+        "ty_name": "Task"
+      },
+      {
+        "current": true,
+        "id": {
+          "origin": "00000000-0000-4000-8000-000000000007",
+          "position": "4"
+        },
+        "kind": "node",
+        "payload": {
+          "notes": "Ask Teto",
+          "status": "in progress",
+          "title": "Review the report"
+        },
+        "predecessor": {
+          "origin": "00000000-0000-4000-8000-000000000005",
+          "position": "2"
         },
         "ty_name": "Task"
       }
@@ -252,20 +262,8 @@ export const revisionResponse = {
           "ty_name": "DependsOn"
         },
         "other": {
-          "current": true,
-          "id": {
-            "origin": "00000000-0000-4000-8000-000000000005",
-            "position": "1"
-          },
-          "kind": "node",
-          "payload": {
-            "priority": {
-              "kind": "integer",
-              "value": "2"
-            },
-            "title": "Write the report"
-          },
-          "ty_name": "Task"
+          "origin": "00000000-0000-4000-8000-000000000005",
+          "position": "1"
         }
       }
     ],
@@ -317,6 +315,24 @@ export const revisionResponse = {
         "predecessor": {
           "origin": "00000000-0000-4000-8000-000000000005",
           "position": "2"
+        },
+        "ty_name": "Task"
+      }
+    ],
+    "neighbours": [
+      {
+        "current": true,
+        "id": {
+          "origin": "00000000-0000-4000-8000-000000000005",
+          "position": "1"
+        },
+        "kind": "node",
+        "payload": {
+          "priority": {
+            "kind": "integer",
+            "value": "2"
+          },
+          "title": "Write the report"
         },
         "ty_name": "Task"
       }

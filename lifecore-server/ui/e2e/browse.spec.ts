@@ -425,7 +425,7 @@ test("an as-of boundary narrows every read and current resets it", async () => {
     .getByRole("button", { name: "Explore", exact: true })
     .click();
   await expect(main().getByRole("alert")).toContainText(
-    `Entry @${ids.report_done?.position} is not in this view`,
+    `@${ids.report_done?.position} is not in this view`,
   );
   await expect(page.getByTestId("seeds")).toContainText(
     `@${ids.report_done?.position}`,

@@ -333,7 +333,7 @@ fn comparison_rejects_foreign_histories_and_sibling_candidates() {
 }
 
 #[test]
-fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
+fn structured_inspection_is_deterministic_and_bounded() {
     let (mut graph, ids) = fixture();
     let plan = prepare(
         &graph,
@@ -345,15 +345,6 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
     .unwrap();
     plan.commit(&mut graph).unwrap();
     let before = graph.view().prefix(3).unwrap();
-    let dot = before.to_dot();
-    assert!(!dot.contains("revision"));
-    assert!(!dot.contains("n3"));
-    let dot = graph.view().to_dot();
-    assert!(dot.contains("n0 -> n3 [label=\"revision\", style=dashed, color=blue]"));
-    assert!(dot.contains("n0 -> n1 [label=\"@2 link\", style=solid, color=gray]"));
-    assert!(dot.contains("n3 -> n1 [label=\"@5 link\", style=solid, color=black]"));
-    assert!(dot.contains("quote\\\\\\\" slash\\\\\\\\ line\\\\n<angle>"));
-    assert_eq!(dot, graph.view().to_dot());
     let json = serde_json::to_value(before.inspection()).unwrap();
     assert_eq!(json["view"]["end_exclusive"], "3");
     assert_eq!(json["entries"].as_array().unwrap().len(), 3);
@@ -365,24 +356,6 @@ fn structured_inspection_and_dot_are_deterministic_bounded_and_escape_labels() {
         serde_json::to_vec(&graph.view().inspection()).unwrap(),
         serde_json::to_vec(&reload.view().inspection()).unwrap()
     );
-    assert_eq!(dot, reload.view().to_dot());
-}
-
-#[test]
-fn dot_quote_escapes_metacharacters_and_blanks_control_characters() {
-    use crate::inspection::dot_quote;
-    assert_eq!(
-        dot_quote("a\"b\\N c\\"),
-        "\"a\\\"b\\\\N c\\\\\"",
-        "quotes and backslashes, a trailing one too"
-    );
-    assert_eq!(dot_quote("one\ntwo\rthree"), "\"one\\ntwo\\rthree\"");
-    assert_eq!(dot_quote("&amp; &#60; &"), "\"&amp;amp; &amp;#60; &amp;\"");
-    assert_eq!(
-        dot_quote("nul\0tab\tvt\u{b}del\u{7f}c1\u{85}end"),
-        "\"nul tab vt del c1 end\""
-    );
-    assert_eq!(dot_quote("Ünïcode \u{2026}"), "\"Ünïcode \u{2026}\"");
 }
 
 #[test]

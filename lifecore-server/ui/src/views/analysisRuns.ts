@@ -11,6 +11,7 @@ import type {
   NodeRecord,
   Params,
   Result,
+  ViewQuery,
 } from "../contract.ts";
 import type { Evaluation } from "../draft/model.ts";
 import {
@@ -83,6 +84,7 @@ const BEFORE_PUBLICATION: ReadonlySet<ErrorKind> = new Set<ErrorKind>([
   "database_missing",
   "database_unreadable",
   "invalid_params",
+  "foreign_database",
   "cannot_dismiss_inconsistency",
 ]);
 
@@ -129,13 +131,14 @@ export interface Bulk {
 
 // Below this many, labels are read one entry at a time.
 const FEW = 20;
-// Retries of `views.query` after it refuses an id that is not a node.
-const REFUSALS = 3;
 
-function refusedId(failure: unknown): EntryId | null {
+// The keys of the ids a `views.query` refused as seeds, if it did.
+function refusedKeys(failure: unknown): Set<string> | null {
   if (failure instanceof RpcError && "data" in failure.error) {
     const { data } = failure.error;
-    return data.kind === "entry_not_found" ? data.id : null;
+    return data.kind === "invalid_seeds"
+      ? new Set(data.refused.map(({ id }) => entryKey(id)))
+      : null;
   }
   return null;
 }
@@ -169,10 +172,9 @@ export function namedIds(run: AnalysisRun): EntryId[] {
 
 // The nodes among `ids` in the view [0, as_of), for labels; edges and
 // anything else stay positions. A few are read one by one; more with one
-// `views.query`, which seeds only nodes and refuses the first id that is
-// not one, though nothing tells an edge apart beforehand, so each refused id
-// is dropped and the query asked again a few times before every node of the
-// view is read instead.
+// `views.query`, which seeds only nodes, though nothing tells an edge apart
+// beforehand. Its refusal names every id that is not a node, so one retry
+// without them reads the rest.
 export async function readLabels(
   call: Call,
   ids: readonly EntryId[],
@@ -197,42 +199,32 @@ export async function readLabels(
     }
     return { nodes, failure };
   }
-  const seeds = new Map(wanted);
-  for (let refusals = 0; refusals <= REFUSALS; refusals++) {
-    try {
-      const result = await call("views.query", {
-        seeds: [{ kind: "ids", ids: [...seeds.values()] }],
-        as_of,
-      });
-      for (const { node } of result.nodes) {
-        nodes.set(entryKey(node.id), node);
-      }
-      return { nodes, failure: null };
-    } catch (failure) {
-      const refused = refusedId(failure);
-      if (refused === null || !seeds.delete(entryKey(refused))) {
-        return { nodes, failure };
-      }
-      if (seeds.size === 0) {
-        return { nodes, failure: null };
-      }
-    }
-  }
+  const ask = (seeds: EntryId[]) =>
+    call("views.query", { seeds: [{ kind: "ids", ids: seeds }], as_of });
+  let answer: ViewQuery;
   try {
-    const list = await call("entries.list", {
-      kind: "node",
-      currentness: "all",
-      as_of,
-    });
-    for (const entry of list.entries) {
-      if (entry.kind === "node" && wanted.has(entryKey(entry.id))) {
-        nodes.set(entryKey(entry.id), entry);
-      }
-    }
-    return { nodes, failure: null };
+    answer = await ask([...wanted.values()]);
   } catch (failure) {
-    return { nodes, failure };
+    const refused = refusedKeys(failure);
+    if (refused === null) {
+      return { nodes, failure };
+    }
+    const rest = [...wanted]
+      .filter(([key]) => !refused.has(key))
+      .map(([, id]) => id);
+    if (rest.length === 0) {
+      return { nodes, failure: null };
+    }
+    try {
+      answer = await ask(rest);
+    } catch (failure) {
+      return { nodes, failure };
+    }
   }
+  for (const { node } of answer.nodes) {
+    nodes.set(entryKey(node.id), node);
+  }
+  return { nodes, failure: null };
 }
 
 // Outputs replay the whole history and can be large, so only a few are

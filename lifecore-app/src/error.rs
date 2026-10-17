@@ -1,5 +1,7 @@
 use crate::{
     proposal::{DecodeError, ProposalLocation},
+    query::{RefusedSeed, SeedRefusal},
+    render::GraphvizFailure,
     service::{ProposalReport, Published},
 };
 use lifecore::{EntryId, LifeCoreError, analysis::FindingKey};
@@ -50,8 +52,13 @@ pub enum AppError {
         "`acknowledges` is not supported yet; remove it to check or apply these entries as an ordinary proposal"
     )]
     AcknowledgmentUnsupported,
-    #[error("the plan ID names database {expected}, but the selected database is {actual}")]
-    ForeignDatabase { expected: Uuid, actual: Uuid },
+    // `named_by` says what named the other database, for the message only.
+    #[error("the {named_by} names database {expected}, but the selected database is {actual}")]
+    ForeignDatabase {
+        named_by: &'static str,
+        expected: Uuid,
+        actual: Uuid,
+    },
     #[error("the plan ID base {expected} is stale; the current graph revision is {actual}")]
     StaleBase { expected: Uuid, actual: Uuid },
     #[error("analysis emitted blocking inconsistencies; nothing was stored")]
@@ -68,8 +75,15 @@ pub enum AppError {
     // The `dot` program could not be started at all; `message` is the OS text.
     #[error("Graphviz is not available: {message}")]
     GraphvizUnavailable { message: String },
-    #[error("Graphviz failed: {message}")]
-    GraphvizFailed { message: String },
+    // `stderr` is what the program wrote there, trimmed, possibly empty.
+    #[error("Graphviz failed: {cause}{}", if stderr.is_empty() { String::new() } else { format!("; stderr: {stderr}") })]
+    GraphvizFailed {
+        cause: GraphvizFailure,
+        stderr: String,
+    },
+    // Every refused seed at once, so a caller can drop them in one retry.
+    #[error("seeds must be nodes of the selected view, but {}", refusals(refused))]
+    InvalidSeeds { refused: Vec<RefusedSeed> },
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
     // Raised by a host, not the service: the task running a call ended
@@ -119,6 +133,7 @@ impl AppError {
         Self::CannotDismissInconsistency { .. } => "cannot_dismiss_inconsistency",
         Self::GraphvizUnavailable { .. } => "graphviz_unavailable",
         Self::GraphvizFailed { .. } => "graphviz_failed",
+        Self::InvalidSeeds { .. } => "invalid_seeds",
         Self::InvalidParams { .. } => "invalid_params",
         Self::Backend { .. } => "backend_failure",
         Self::Internal { .. } => "internal",
@@ -151,6 +166,7 @@ impl AppError {
         Self::CannotDismissInconsistency { .. } => 4003,
         Self::GraphvizUnavailable { .. } => 4004,
         Self::GraphvizFailed { .. } => 4005,
+        Self::InvalidSeeds { .. } => 4006,
         Self::Backend { .. } => 5001,
         }
     }
@@ -170,9 +186,10 @@ impl AppError {
             location: Some(location),
             ..
         } => json!({ "location": location }),
-        Self::ForeignDatabase { expected, actual } | Self::StaleBase { expected, actual } => {
-            json!({ "expected": expected, "actual": actual })
+        Self::ForeignDatabase {
+            expected, actual, ..
         }
+        | Self::StaleBase { expected, actual } => json!({ "expected": expected, "actual": actual }),
         Self::PublicationUncertain { outcome, .. } => json!({ "outcome": outcome }),
         Self::Rejected(report) => json!({ "report": report }),
         Self::Analyzer(LifeCoreError::AnalyzerExecution(failure)) => {
@@ -184,9 +201,9 @@ impl AppError {
             json!({ "requested": requested.to_string(), "visible": visible.to_string() })
         }
         Self::CannotDismissInconsistency { key } => json!({ "key": key }),
-        Self::GraphvizUnavailable { message } | Self::GraphvizFailed { message } => {
-            json!({ "message": message })
-        }
+        Self::GraphvizUnavailable { message } => json!({ "message": message }),
+        Self::GraphvizFailed { cause, stderr } => json!({ "cause": cause, "stderr": stderr }),
+        Self::InvalidSeeds { refused } => json!({ "refused": refused }),
         _ => json!({}),
         }
     }
@@ -200,4 +217,15 @@ impl AppError {
             data: Some(data),
         }
     }
+}
+
+fn refusals(refused: &[RefusedSeed]) -> String {
+    refused
+        .iter()
+        .map(|RefusedSeed { id, reason }| match reason {
+        SeedRefusal::Absent => format!("{id:?} is not present in it"),
+        SeedRefusal::Edge => format!("{id:?} is an edge"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

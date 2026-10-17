@@ -11,6 +11,7 @@ use lifecore::{
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    iter,
     num::NonZeroUsize,
 };
 
@@ -26,12 +27,13 @@ pub enum Incidence {
 pub struct IncidentEdge {
     pub edge: EntryRecord,
     pub direction: Incidence,
-    pub other: EntryRecord,
+    pub other: EntryId,
 }
 
 // A node with its type, its whole revision tree in append order (root first,
-// itself included), and every incident edge of any currentness in append
-// order; or an edge with its endpoints.
+// itself included), every incident edge of any currentness in append order,
+// and the record of each edge's other endpoint once, in append order, however
+// many edges reach it; or an edge with its endpoints.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EntryInspection {
@@ -42,6 +44,7 @@ pub enum EntryInspection {
         ty: TypeResolution,
         lineage: Vec<EntryRecord>,
         edges: Vec<IncidentEdge>,
+        neighbours: Vec<EntryRecord>,
     },
     Edge {
         view: ViewId,
@@ -63,34 +66,28 @@ pub fn inspect(view: View<'_>, id: EntryId) -> Result<EntryInspection, AppError>
     let entry = view.get(id).ok_or(AppError::EntryNotFound { id })?;
     Ok(match entry {
     Entry::Node(node) => {
-        // The root is the last ancestor, or the node itself when it has none.
-        let root = view.ancestors(id).last().map_or(id, |ancestor| ancestor.id);
-        // A predecessor precedes its successors, so one pass in append order
-        // meets every member's predecessor before the member itself: a node
-        // is in the tree exactly when it is the root or its predecessor is.
-        let mut members = BTreeSet::from([root]);
-        let mut lineage = vec![];
-        for other in view.nodes() {
-            if other.id == root
-                || other
-                    .predecessor
-                    .is_some_and(|predecessor| members.contains(&predecessor))
-            {
-                members.insert(other.id);
-                lineage.push(EntryRecord::node(view, other));
-            }
-        }
+        let root = view
+            .root_of(id)
+            .and_then(|root| view.node(root))
+            .expect("a node of the view has its root there");
+        let lineage = iter::once(root)
+            .chain(view.descendants(root.id))
+            .map(|member| EntryRecord::node(view, member))
+            .collect();
         let mut edges = vec![];
+        // Keyed by position, which is append order within one view.
+        let mut neighbours = BTreeMap::new();
         for edge in view.edges_of(id) {
             let (direction, other) = if edge.from == id {
                 (Incidence::Outgoing, edge.to)
             } else {
                 (Incidence::Incoming, edge.from)
             };
+            neighbours.insert(other.position(), endpoint(view, other)?);
             edges.push(IncidentEdge {
                 edge: EntryRecord::edge(view, edge),
                 direction,
-                other: EntryRecord::node(view, endpoint(view, other)?),
+                other,
             });
         }
         EntryInspection::Node {
@@ -99,6 +96,10 @@ pub fn inspect(view: View<'_>, id: EntryId) -> Result<EntryInspection, AppError>
             ty: schema::resolve_name(view, &node.ty_name),
             lineage,
             edges,
+            neighbours: neighbours
+                .into_values()
+                .map(|neighbour| EntryRecord::node(view, neighbour))
+                .collect(),
         }
     }
     Entry::Edge(edge) => EntryInspection::Edge {
@@ -180,6 +181,20 @@ pub enum Provenance {
     },
 }
 
+// Why an `ids` seed names no node of the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeedRefusal {
+    Absent,
+    Edge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedSeed {
+    pub id: EntryId,
+    pub reason: SeedRefusal,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueriedNode {
     pub node: EntryRecord,
@@ -197,12 +212,13 @@ fn matches(ty_names: Option<&[String]>, ty_name: &str) -> bool {
     ty_names.is_none_or(|names| names.iter().any(|name| name == ty_name))
 }
 
-// Seeds, then each step breadth first. A hop reads the frontier's incident
-// edges and crosses, in append order, every matching one that joins a
-// frontier node to a node not yet found, so the earliest edge decides a
-// node's provenance whatever order the seeds were given in. The frontier
-// after a step is the nodes its last hop added. Edges are then the matching
-// ones among the result nodes.
+// Seeds, all refused together before any expansion if some `ids` seed is
+// not a node of the view, then each step breadth first. A hop reads the
+// frontier's incident edges and crosses, in append order, every matching one
+// that joins a frontier node to a node not yet found, so the earliest edge
+// decides a node's provenance whatever order the seeds were given in. The
+// frontier after a step is the nodes its last hop added. Edges are then the
+// matching ones among the result nodes.
 pub fn query<'a>(
     view: View<'a>,
     seeds: &[Seed],
@@ -220,12 +236,24 @@ pub fn query<'a>(
             frontier.insert(node.id);
         }
     };
+    // In request order, each id once.
+    let mut refused = vec![];
+    let mut refused_ids = BTreeSet::new();
     for selection in seeds {
         match selection {
         Seed::Ids { ids } => {
             for &id in ids {
-                let node = view.node(id).ok_or(AppError::EntryNotFound { id })?;
-                seed(node, &mut frontier);
+                let reason = match view.get(id) {
+                Some(Entry::Node(node)) => {
+                    seed(node, &mut frontier);
+                    continue;
+                }
+                Some(Entry::Edge(_)) => SeedRefusal::Edge,
+                None => SeedRefusal::Absent,
+                };
+                if refused_ids.insert(id) {
+                    refused.push(RefusedSeed { id, reason });
+                }
             }
         }
         Seed::Nodes {
@@ -244,6 +272,9 @@ pub fn query<'a>(
             }
         }
         }
+    }
+    if !refused.is_empty() {
+        return Err(AppError::InvalidSeeds { refused });
     }
     // Every edge of the view under each of its endpoints, in append order
     // within each list, so a hop reads only the frontier's incident edges.

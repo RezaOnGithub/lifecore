@@ -3,7 +3,7 @@ use crate::{
     typing::{ResolutionError, TypeDefinition},
 };
 use serde::{Deserialize, Serialize};
-use std::fmt::Write;
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -166,9 +166,26 @@ impl<'a> View<'a> {
 
     // Ancestors and descendants exclude the starting revision. Fresh successors
     // include it when current. All traversal retains exact revision identities.
+    // A predecessor precedes its successors, so one pass in append order meets
+    // each member of the tree below `id` after its predecessor.
     pub fn descendants(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
-        self.nodes()
-            .filter(move |node| self.ancestors(node.id).any(|n| n.id == id))
+        let start = self.node(id);
+        let mut members = start
+            .map(|start| start.id)
+            .into_iter()
+            .collect::<HashSet<_>>();
+        self.entries()
+            .skip(start.map_or(self.len(), |start| start.id.position() + 1))
+            .filter_map(Entry::as_node)
+            .filter(move |node| {
+                let member = node
+                    .predecessor
+                    .is_some_and(|predecessor| members.contains(&predecessor));
+                if member {
+                    members.insert(node.id);
+                }
+                member
+            })
     }
 
     pub fn resolve(self, id: EntryId) -> Option<Resolution<'a>> {
@@ -223,66 +240,6 @@ impl<'a> View<'a> {
             changed,
         })
     }
-
-    pub fn to_dot(self) -> String {
-        let mut dot = String::from("digraph lifecore {\n");
-        writeln!(
-            dot,
-            "  label=\"{} boundary {}\";",
-            self.id().database,
-            self.len()
-        )
-        .unwrap();
-        for node in self.nodes() {
-            let label = format!(
-                "@{} {}\n{}",
-                node.id.position(),
-                node.ty_name,
-                serde_json::to_string(&node.payload).expect("payload JSON")
-            );
-            let color = if self.is_stale(node.id) == Some(true) {
-                "gray"
-            } else {
-                "black"
-            };
-            writeln!(
-                dot,
-                "  n{} [label={}, color={color}];",
-                node.id.position(),
-                dot_quote(&label)
-            )
-            .unwrap();
-        }
-        for node in self.nodes() {
-            if let Some(predecessor) = node.predecessor {
-                writeln!(
-                    dot,
-                    "  n{} -> n{} [label=\"revision\", style=dashed, color=blue];",
-                    predecessor.position(),
-                    node.id.position()
-                )
-                .unwrap();
-            }
-        }
-        for edge in self.edges() {
-            let color = if self.is_stale(edge.id) == Some(true) {
-                "gray"
-            } else {
-                "black"
-            };
-            let label = format!("@{} {}", edge.id.position(), edge.ty_name);
-            writeln!(
-                dot,
-                "  n{} -> n{} [label={}, style=solid, color={color}];",
-                edge.from.position(),
-                edge.to.position(),
-                dot_quote(&label)
-            )
-            .unwrap();
-        }
-        dot.push_str("}\n");
-        dot
-    }
 }
 
 fn contains_text(value: &Payload, needle: &str) -> bool {
@@ -292,31 +249,6 @@ fn contains_text(value: &Payload, needle: &str) -> bool {
     Payload::Record(fields) => fields.values().any(|value| contains_text(value, needle)),
     _ => false,
     }
-}
-
-pub fn dot_quote(text: &str) -> String {
-    let mut quoted = String::with_capacity(text.len() + 2);
-    quoted.push('"');
-    for c in text.chars() {
-        match c {
-        // A doubled backslash also keeps Graphviz's own substitutions, such
-        // as `\N`, literal.
-        '\\' => quoted.push_str("\\\\"),
-        '"' => quoted.push_str("\\\""),
-        '\n' => quoted.push_str("\\n"),
-        '\r' => quoted.push_str("\\r"),
-        // Graphviz decodes HTML entities in labels before anything else, so
-        // payload text spelling one must still read literally.
-        '&' => quoted.push_str("&amp;"),
-        // Graphviz has no escape for these: NUL breaks its parser, `\t`
-        // reads as `t`, and the rest would reach SVG, where XML forbids or
-        // discourages them.
-        c if c.is_control() => quoted.push(' '),
-        c => quoted.push(c),
-        }
-    }
-    quoted.push('"');
-    quoted
 }
 
 #[cfg(test)]
