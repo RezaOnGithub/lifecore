@@ -2,13 +2,19 @@ import type {
   Currentness,
   Direction,
   EdgeFilter,
+  EdgeRecord,
   EntryId,
   Expansion,
+  NodeRecord,
+  Provenance,
   Seed,
+  ViewQuery,
   ViewQueryParams,
 } from "../contract.ts";
+import { compareStrings } from "./columns.ts";
 import { isRecord } from "./guards.ts";
-import { sameId, typeName } from "./labels.ts";
+import { entryKey, sameId, typeName } from "./labels.ts";
+import { truncate } from "./payload.ts";
 
 // The Explore form. Edge type names are kept as the typed text and split when
 // the query is built, so the input never fights the user. A node seed's
@@ -323,4 +329,47 @@ export function querySummary(
     }`;
   });
   return `${seeds.length === 0 ? "no seeds" : seeds.join(" + ")}, then ${steps.join(", then ")}`;
+}
+
+// A name for the form about to be saved: its seeds by label where known,
+// else as positions and selections.
+export function suggestedName(
+  form: ExploreForm,
+  label: (id: EntryId) => string | undefined,
+): string {
+  const parts = form.ids.map((id) => label(id) ?? `@${id.position}`);
+  if (form.nodes.enabled) {
+    const text = form.nodes.text.trim();
+    parts.push(
+      `${form.nodes.ty_name === null ? "any type" : typeName(form.nodes.ty_name)}${
+        text === "" ? "" : ` "${text}"`
+      }`,
+    );
+  }
+  return truncate(parts.join(" + "), 40);
+}
+
+export type QueriedRow = NodeRecord & { provenance: Provenance };
+
+// What the result tables share, derived once per result.
+export interface Shaped {
+  groups: [string, QueriedRow[]][];
+  nodes: Map<string, NodeRecord>;
+  edges: Map<string, EdgeRecord>;
+}
+
+export function shape(result: ViewQuery): Shaped {
+  const groups = new Map<string, QueriedRow[]>();
+  const nodes = new Map<string, NodeRecord>();
+  for (const { node, provenance } of result.nodes) {
+    nodes.set(entryKey(node.id), node);
+    const rows = groups.get(node.ty_name) ?? [];
+    rows.push({ ...node, provenance });
+    groups.set(node.ty_name, rows);
+  }
+  return {
+    groups: [...groups].sort(([a], [b]) => compareStrings(a, b)),
+    nodes,
+    edges: new Map(result.edges.map((edge) => [entryKey(edge.id), edge])),
+  };
 }

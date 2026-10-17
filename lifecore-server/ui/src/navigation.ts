@@ -1,10 +1,12 @@
 import type { Currentness, EntryId } from "./contract.ts";
+import type { Edit, Open } from "./links.tsx";
 import type { Sort } from "./model/columns.ts";
 import { sameId } from "./model/labels.ts";
 import { emptyOutline, type OutlineView } from "./model/outline.ts";
 import {
   type ExploreForm,
   type ExploreState,
+  type ExploreStep,
   emptyForm,
   toParams,
 } from "./model/query.ts";
@@ -223,6 +225,30 @@ export function exploreScreen(
   view: ExploreView = defaultExploreView,
 ): ExploreScreen {
   return { kind: "explore", form, ran: { form, run: 0 }, view };
+}
+
+// Puts an Explore step into the history: a new query is a new step, and the
+// step it leaves shows its own query again.
+export function applyExploreStep(
+  step: ExploreStep,
+  view: ExploreView,
+  open: Open,
+  edit: Edit,
+) {
+  switch (step.kind) {
+    case "none":
+      return;
+    case "replace":
+      edit((screen) =>
+        screen.kind === "explore" ? { ...screen, ...step.state } : screen,
+      );
+      return;
+    case "push":
+      open(
+        { kind: "explore", ...step.state, view },
+        { leaving: { kind: "explore", ...step.leaving, view } },
+      );
+  }
 }
 
 const INSPECT_HREF = /^#inspect\/([^/]+)\/(0|[1-9][0-9]*)$/;

@@ -47,6 +47,7 @@ import {
   seedName,
 } from "./model/query.ts";
 import {
+  applyExploreStep,
   defaultInspectorView,
   defaultTableScreenView,
   exploreScreen,
@@ -60,7 +61,7 @@ import {
 } from "./navigation.ts";
 import type { RpcClient } from "./rpc.ts";
 import { DatabaseScreen } from "./screens/Database.tsx";
-import { applyExploreStep, ExploreScreen } from "./screens/Explore.tsx";
+import { ExploreScreen } from "./screens/Explore.tsx";
 import { FindingsScreen } from "./screens/Findings.tsx";
 import { InspectorScreen } from "./screens/Inspector.tsx";
 import { OperationScreen } from "./screens/Operation.tsx";
