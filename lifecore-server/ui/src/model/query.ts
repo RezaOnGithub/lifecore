@@ -8,13 +8,14 @@ import type {
   ViewQueryParams,
 } from "../contract.ts";
 import { isRecord } from "./guards.ts";
-import { sameId } from "./labels.ts";
+import { sameId, typeName } from "./labels.ts";
 
 // The Explore form. Edge type names are kept as the typed text and split when
-// the query is built, so the input never fights the user.
+// the query is built, so the input never fights the user. A node seed's
+// `ty_name` is null for any type, since the empty name is a type of its own.
 export interface NodeSeedForm {
   enabled: boolean;
-  ty_name: string;
+  ty_name: string | null;
   text: string;
   currentness: Currentness;
 }
@@ -45,7 +46,7 @@ export function defaultExpansion(): ExpansionForm {
 
 export const emptyForm: ExploreForm = {
   ids: [],
-  nodes: { enabled: false, ty_name: "", text: "", currentness: "current" },
+  nodes: { enabled: false, ty_name: null, text: "", currentness: "current" },
   expand: [defaultExpansion()],
   edges: { ty_names: "", currentness: "current" },
 };
@@ -177,9 +178,8 @@ export function toParams(form: ExploreForm): ViewQueryParams | null {
       kind: "nodes",
       currentness: form.nodes.currentness,
     };
-    const ty_name = form.nodes.ty_name.trim();
-    if (ty_name !== "") {
-      seed.ty_name = ty_name;
+    if (form.nodes.ty_name !== null) {
+      seed.ty_name = form.nodes.ty_name;
     }
     const text = form.nodes.text.trim();
     if (text !== "") {
@@ -271,7 +271,7 @@ export function readForm(value: unknown): ExploreForm | null {
     expand.length === 0 ||
     expand.length > MAX_STEPS ||
     typeof nodes.enabled !== "boolean" ||
-    typeof nodes.ty_name !== "string" ||
+    (nodes.ty_name !== null && typeof nodes.ty_name !== "string") ||
     typeof nodes.text !== "string" ||
     !isCurrentness(nodes.currentness) ||
     typeof edges.ty_names !== "string" ||
@@ -311,7 +311,7 @@ export function querySummary(
   if (form.nodes.enabled) {
     const text = form.nodes.text.trim();
     seeds.push(
-      `${form.nodes.currentness} ${form.nodes.ty_name.trim() || "any type"}${
+      `${form.nodes.currentness} ${form.nodes.ty_name === null ? "any type" : typeName(form.nodes.ty_name)}${
         text === "" ? "" : ` containing "${text}"`
       }`,
     );

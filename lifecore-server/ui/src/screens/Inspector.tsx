@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type {
   EdgeRecord,
   EntryId,
@@ -13,6 +13,7 @@ import {
   latest,
   useAsOf,
   useCall,
+  useData,
   useLabels,
   usePlaces,
   useTypes,
@@ -30,7 +31,13 @@ import {
   useEdit,
   useOpen,
 } from "../links.tsx";
-import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
+import {
+  entryKey,
+  rowLabel,
+  sameId,
+  typeName,
+  viewWords,
+} from "../model/labels.ts";
 import { lineageRows } from "../model/lineage.ts";
 import type { OutlineView } from "../model/outline.ts";
 import { isPinned, type Place } from "../model/places.ts";
@@ -80,6 +87,36 @@ function PinButton({ inspection }: { inspection: EntryInspection }) {
   );
 }
 
+// The view the inspection was read at, and "As of here", which sets the
+// global boundary just after the entry, so that it is the last one in view.
+function ViewNote({ id, view }: { id: EntryId; view: ViewId }) {
+  const { setAsOf } = useData();
+  const boundary = String(BigInt(id.position) + 1n);
+  const last = view.end_exclusive === boundary;
+  return (
+    <>
+      <span
+        className="muted"
+        title={`read as ${viewWords(view.end_exclusive)}`}
+      >
+        view [0, {view.end_exclusive})
+      </span>
+      <button
+        type="button"
+        disabled={last}
+        title={
+          last
+            ? "this entry is already the last one in view"
+            : `set as-of to ${boundary}, showing ${viewWords(boundary)}`
+        }
+        onClick={() => setAsOf(boundary)}
+      >
+        As of here
+      </button>
+    </>
+  );
+}
+
 export function InspectorScreen({
   id,
   view,
@@ -104,18 +141,21 @@ export function InspectorScreen({
   );
   const load = useCall("entries.inspect", { ...asOf, id });
   // The screen is keyed by the entry, so a previous result is this entry
-  // under another boundary; it stays until the reload answers.
+  // under a narrower boundary or before a refresh; it stays until the reload
+  // answers.
   const result = latest(load);
   // Each answer records the visit, refreshing the label kept for it.
-  const place = load.status === "ready" ? placeOf(load.result) : null;
-  const placeKey = place === null ? null : JSON.stringify(place);
+  const ready = load.status === "ready" ? load.result : null;
+  const place = useMemo(
+    () => (ready === null ? null : placeOf(ready)),
+    [ready],
+  );
   useEffect(() => {
-    if (placeKey !== null) {
-      const place = JSON.parse(placeKey) as Place;
+    if (place !== null) {
       visit(place);
       book.note(place.id, place.label);
     }
-  }, [placeKey, visit, book]);
+  }, [place, visit, book]);
   useEffect(() => {
     if (result?.kind === "node") {
       book.noteNodes(result.edges.map(({ other }) => other));
@@ -245,11 +285,16 @@ function NodeInspection({
   );
   const types = useTypes();
   const { state, actions } = useDraft();
+  const { asOf } = useData();
   const open = useOpen();
   const locked = frozen(state);
   // A revise needs its predecessor current (FILES §2.4); a superseded node
-  // can only be branched.
-  const revisable = entry.current;
+  // can only be branched. Under an as-of boundary `current` describes that
+  // view, not the current state drafts apply to, so Revise waits until the
+  // boundary is cleared. Branch stays: it copies this revision's own
+  // payload, which no boundary changes.
+  const bounded = asOf !== null;
+  const revisable = entry.current && !bounded;
   const declaration =
     entry.ty_name === "Type" ? ownDeclaration(types, entry) : null;
   const revise = (intent: "revise" | "branch") => {
@@ -274,7 +319,7 @@ function NodeInspection({
             revises <IdLink id={entry.predecessor} />
           </span>
         )}
-        <span className="muted">view [0, {view.end_exclusive})</span>
+        <ViewNote id={entry.id} view={view} />
       </div>
       <div className="row">
         <button type="button" onClick={() => onExplore(entry.id)}>
@@ -284,9 +329,11 @@ function NodeInspection({
           type="button"
           disabled={locked || !revisable}
           title={
-            revisable
-              ? "a new revision with this payload; current edges are kept"
-              : "only a current node can be revised; Branch instead"
+            bounded
+              ? "drafts apply to the current state; clear the as-of boundary (current) to revise"
+              : revisable
+                ? "a new revision with this payload; current edges are kept"
+                : "only a current node can be revised; Branch instead"
           }
           onClick={() => revise("revise")}
         >
@@ -295,7 +342,11 @@ function NodeInspection({
         <button
           type="button"
           disabled={locked}
-          title="a new branch with this payload; no edges are kept"
+          title={
+            bounded
+              ? "a new branch with this revision's own payload, which is the same at every boundary; no edges are kept, and the draft applies to the current state"
+              : "a new branch with this payload; no edges are kept"
+          }
           onClick={() => revise("branch")}
         >
           Branch
@@ -449,7 +500,7 @@ function EdgeInspection({
       <div className="row">
         <span className="muted">edge</span>
         <CurrentBadge current={entry.current} kind="edge" />
-        <span className="muted">view [0, {view.end_exclusive})</span>
+        <ViewNote id={entry.id} view={view} />
       </div>
       <table className="payload">
         <tbody>

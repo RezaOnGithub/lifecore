@@ -120,27 +120,44 @@ function EntryTableOf<R extends NodeRecord>({
   const shown =
     view.limit === null ? sorted : sorted.slice(0, Math.max(view.limit, 1));
   const hidden = sorted.length - shown.length;
-  const header = (key: string, label: ReactNode, sortable = true) => (
-    <th key={key} scope="col">
-      {sortable ? (
-        <button
-          type="button"
-          className="sort"
-          onClick={() =>
-            onView((current) => ({
-              ...current,
-              sort: toggleSort(current.sort, key),
-            }))
-          }
-        >
-          {label}
-          {sort?.column === key && (sort.descending ? " ▼" : " ▲")}
-        </button>
-      ) : (
-        label
-      )}
-    </th>
-  );
+  // The sorted column says so through `aria-sort`; its arrow is only drawn,
+  // so the button keeps the column's name as its accessible name.
+  const header = (key: string, label: ReactNode, sortable = true) => {
+    const sorted = sortable && sort?.column === key ? sort : null;
+    return (
+      <th
+        key={key}
+        scope="col"
+        aria-sort={
+          sorted === null
+            ? undefined
+            : sorted.descending
+              ? "descending"
+              : "ascending"
+        }
+      >
+        {sortable ? (
+          <button
+            type="button"
+            className="sort"
+            onClick={() =>
+              onView((current) => ({
+                ...current,
+                sort: toggleSort(current.sort, key),
+              }))
+            }
+          >
+            {label}
+            {sorted !== null && (
+              <span aria-hidden="true">{sorted.descending ? " ▼" : " ▲"}</span>
+            )}
+          </button>
+        ) : (
+          label
+        )}
+      </th>
+    );
+  };
   return (
     <>
       <table className="entries">

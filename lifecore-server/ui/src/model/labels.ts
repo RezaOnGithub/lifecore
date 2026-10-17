@@ -1,4 +1,5 @@
-import type { EntryId, NodeEntry } from "../contract.ts";
+import type { DecimalString, EntryId, NodeEntry } from "../contract.ts";
+import { compareCodePoints } from "./values.ts";
 
 // Map key of an entry identity.
 export function entryKey(id: EntryId): string {
@@ -7,6 +8,26 @@ export function entryKey(id: EntryId): string {
 
 export function sameId(a: EntryId, b: EntryId): boolean {
   return a.origin === b.origin && a.position === b.position;
+}
+
+// Whether the entry lies past the as-of boundary, null being the whole
+// history. Anything learned of it at a wider boundary, its label included,
+// must not show while it does.
+export function pastBoundary(id: EntryId, asOf: DecimalString | null): boolean {
+  return asOf !== null && BigInt(id.position) >= BigInt(asOf);
+}
+
+// The view `[0, end)` in plain words, for a reader who does not know
+// half-open intervals.
+export function viewWords(end: DecimalString): string {
+  switch (end) {
+    case "0":
+      return "the database before its first entry";
+    case "1":
+      return "the database as it was after its first entry, position 0";
+    default:
+      return `the database as it was after its first ${end} entries, positions 0 to ${BigInt(end) - 1n}`;
+  }
 }
 
 // A type name as shown on screen: the empty name is legal and must stay
@@ -26,7 +47,8 @@ function isLabelText(value: unknown): value is string {
 
 // The payload field a row is labeled by (INTERFACES §5.2): `title` when text,
 // else `name` when text, else the top-level text field whose name sorts first
-// by UTF-16 code units; null when the row has none.
+// by code point, the byte order `views.render` labels its drawing by; null
+// when the row has none.
 export function labelField(node: Pick<NodeEntry, "payload">): string | null {
   const { payload } = node;
   for (const preferred of ["title", "name"]) {
@@ -37,7 +59,7 @@ export function labelField(node: Pick<NodeEntry, "payload">): string | null {
   const textual = Object.keys(payload).filter((field) =>
     isLabelText(payload[field]),
   );
-  textual.sort();
+  textual.sort(compareCodePoints);
   return textual[0] ?? null;
 }
 

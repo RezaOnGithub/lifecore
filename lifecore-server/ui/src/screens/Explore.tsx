@@ -21,6 +21,7 @@ import {
   schemaOf,
   useAsOf,
   useCall,
+  useData,
   useLabels,
   usePlaces,
   useTypes,
@@ -36,7 +37,7 @@ import {
   useOpen,
 } from "../links.tsx";
 import { compareStrings } from "../model/columns.ts";
-import { entryKey, rowLabel, typeName } from "../model/labels.ts";
+import { entryKey, rowLabel, typeName, viewWords } from "../model/labels.ts";
 import { truncate } from "../model/payload.ts";
 import {
   type ExploreAction,
@@ -275,7 +276,7 @@ function suggestedName(
   if (form.nodes.enabled) {
     const text = form.nodes.text.trim();
     parts.push(
-      `${form.nodes.ty_name === "" ? "any type" : typeName(form.nodes.ty_name)}${
+      `${form.nodes.ty_name === null ? "any type" : typeName(form.nodes.ty_name)}${
         text === "" ? "" : ` "${text}"`
       }`,
     );
@@ -376,15 +377,18 @@ const DISPLAYS: [Display, string][] = [
 // It stays mounted under other screens, showing the last Explore step, so
 // its results and drawings survive a detour; `useEdit` changes the step
 // only while it is the current one. A run, focus, or + seed of another
-// query is a new step.
+// query is a new step. While `hidden` it reads nothing.
 export const ExploreScreen = memo(function ExploreScreen({
   screen,
+  hidden,
 }: {
   screen: ExploreStepScreen;
+  hidden: boolean;
 }) {
   const edit = useEdit();
   const open = useOpen();
   const asOf = useAsOf();
+  const { asOf: boundary } = useData();
   const book = useLabels();
   const { form, ran, view } = screen;
   // Actions read the step through a ref, so the row actions keep their
@@ -409,8 +413,16 @@ export const ExploreScreen = memo(function ExploreScreen({
     [edit],
   );
   const query = ran === null ? null : toParams(ran.form);
-  const params = query === null ? null : { ...asOf, ...query };
-  const load = useCall("views.query", params, ran?.run ?? 0);
+  const params = query === null || hidden ? null : { ...asOf, ...query };
+  const live = useCall("views.query", params, ran?.run ?? 0);
+  // Hidden, Explore keeps what it showed when it was left, so its results
+  // and drawings stay mounted, and asks again on return, at the boundary
+  // then selected.
+  const held = useRef(live);
+  if (!hidden) {
+    held.current = live;
+  }
+  const load = hidden ? held.current : live;
   // A rerun keeps the last result, and with it the display and thread
   // choices, on screen until the new one arrives.
   const result = latest(load);
@@ -426,9 +438,9 @@ export const ExploreScreen = memo(function ExploreScreen({
   const label = useCallback(
     (id: EntryId) => {
       const node = shaped?.nodes.get(entryKey(id));
-      return node === undefined ? book.get(id) : rowLabel(node);
+      return node === undefined ? book.get(id, boundary) : rowLabel(node);
     },
-    [shaped, book],
+    [shaped, book, boundary],
   );
   const onChange = (changed: ExploreForm) =>
     act({ kind: "change", form: changed });
@@ -580,7 +592,12 @@ export const ExploreScreen = memo(function ExploreScreen({
                 relationships
               </label>
             )}
-            <span className="muted">view [0, {result.view.end_exclusive})</span>
+            <span
+              className="muted"
+              title={`read as ${viewWords(result.view.end_exclusive)}`}
+            >
+              view [0, {result.view.end_exclusive})
+            </span>
             {ran !== null && ran.form.ids.length > 0 && (
               <span className="muted" title="the seeds of the query on show">
                 from {ran.form.ids.map((id) => seedName(id, label)).join(", ")}

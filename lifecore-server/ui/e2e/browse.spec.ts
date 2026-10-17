@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type Request, test } from "@playwright/test";
 import type {
   EntryId,
   Method,
@@ -341,23 +341,96 @@ test("an as-of boundary narrows every read and current resets it", async () => {
     .getByLabel("as of")
     .fill(String(BigInt(total) + 1n));
   await expect(banner().getByRole("button", { name: "Set" })).toBeDisabled();
-  await expect(banner()).toContainText(`max ${total}`);
-  // Up to and including the original report: one Task, no revision yet.
-  const boundary = String(BigInt(ids.report?.position ?? "0") + 1n);
-  await banner().getByLabel("as of").fill(boundary);
-  await banner().getByRole("button", { name: "Set" }).click();
-  await expect(page.getByTestId("as-of")).toContainText(
-    `view [0, ${boundary}) of ${total} entries`,
+  await expect(banner()).toContainText(`at most ${total}`);
+  // The original report, through the lineage of its revision, the seed.
+  await page
+    .getByTestId("seeds")
+    .getByRole("button", { name: /^Write the report/ })
+    .click();
+  await page
+    .getByTestId("lineage")
+    .getByRole("button", { name: "Write the report" })
+    .click();
+  await expect(
+    main().getByRole("heading", { name: "Write the report" }),
+  ).toContainText(`@${ids.report?.position}`);
+  await expect(page.getByTestId("lineage").getByRole("listitem")).toHaveCount(
+    2,
   );
+  // "As of here" makes it the last entry in view: one Task, no revision
+  // yet. Until the bounded answer arrives, nothing of the wider read shows,
+  // and the hidden Explore asks nothing.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/rpc", async (route) => {
+    const body = route.request().postDataJSON() as {
+      method?: string;
+      params?: { as_of?: string };
+    } | null;
+    if (body?.method === "entries.inspect" && body.params?.as_of) {
+      await held;
+    }
+    await route.fallback();
+  });
+  const queries: string[] = [];
+  const onRequest = (request: Request) => {
+    const body = request.postDataJSON() as { method?: string } | null;
+    if (body?.method === "views.query") {
+      queries.push(request.postData() ?? "");
+    }
+  };
+  page.on("request", onRequest);
+  const boundary = String(BigInt(ids.report?.position ?? "0") + 1n);
+  await main().getByRole("button", { name: "As of here" }).click();
+  await expect(page.getByTestId("as-of")).toContainText(
+    `showing the first ${boundary} of ${total} entries, view [0, ${boundary})`,
+  );
+  await expect(banner().getByLabel("as of")).toHaveValue(boundary);
+  await expect(main().getByText("loading…", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("lineage")).toHaveCount(0);
+  release();
+  await expect(page.getByTestId("lineage").getByRole("listitem")).toHaveCount(
+    1,
+  );
+  await page.unroute("**/rpc");
+  await expect(
+    main().getByRole("button", { name: "As of here" }),
+  ).toBeDisabled();
+  // Drafts apply to the current state, which a bounded read does not show;
+  // a branch copies this revision's payload, the same at every boundary.
+  await expect(main().getByRole("button", { name: "Revise" })).toBeDisabled();
+  await expect(main().getByRole("button", { name: "Branch" })).toBeEnabled();
   const task = sidebar().getByRole("listitem").filter({ hasText: "Task" });
   await expect(task).toContainText("1/0");
-  // The hidden Explore reran with a seed past the boundary; its failure is
-  // waiting on return.
+  page.off("request", onRequest);
+  expect(queries).toEqual([]);
+  // Past the boundary, the trail names the revision, and the other tasks
+  // it visited, by position alone, though their labels were read before.
+  const trail = page.getByTestId("trail");
+  await expect(
+    trail
+      .getByRole("button", {
+        name: `@${ids.report_done?.position}`,
+        exact: true,
+      })
+      .first(),
+  ).toBeVisible();
+  await expect(trail.getByRole("button", { name: /report/ })).toHaveCount(0);
+  // Explore asks again on return; its seed is past the boundary, and the
+  // failure says so in words, the seed chip naming it by position alone.
   await page
     .getByRole("navigation")
     .getByRole("button", { name: "Explore", exact: true })
     .click();
-  await expect(main().getByRole("alert")).toContainText("entry_not_found");
+  await expect(main().getByRole("alert")).toContainText(
+    `Entry @${ids.report_done?.position} is not in this view`,
+  );
+  await expect(page.getByTestId("seeds")).toContainText(
+    `@${ids.report_done?.position}`,
+  );
+  await expect(page.getByTestId("seeds")).not.toContainText("Write the report");
   await task.getByRole("button", { name: "Task", exact: true }).click();
   await expect(table().locator("table.entries tbody tr")).toHaveCount(1);
   await expect(table()).toContainText(`view [0, ${boundary})`);

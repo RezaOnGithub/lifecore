@@ -54,8 +54,8 @@ fn type_name(name: &str) -> &str {
 
 // The payload text a row is labeled by, as the client labels it (INTERFACES
 // 5.2): `title`, then `name`, then the top-level text field whose name sorts
-// first by bytes, which agrees with the client's UTF-16 order outside astral
-// characters; blank text does not count.
+// first by bytes, which is the client's code point order; blank text does not
+// count.
 fn label_text(node: &Node) -> Option<&str> {
     let text = |field: &str| match node.payload.get(field) {
     Some(Payload::Text(text)) if !text.trim().is_empty() => Some(text.as_str()),

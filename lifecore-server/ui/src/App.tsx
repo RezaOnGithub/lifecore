@@ -23,6 +23,7 @@ import {
   TypesContext,
   useAsOf,
   useCall,
+  useData,
   useLabels,
   usePlaces,
 } from "./data.tsx";
@@ -37,7 +38,7 @@ import {
   ReplaceContext,
   useOpen,
 } from "./links.tsx";
-import { sameId, typeName } from "./model/labels.ts";
+import { pastBoundary, sameId, typeName, viewWords } from "./model/labels.ts";
 import { truncate } from "./model/payload.ts";
 import {
   type ExploreForm,
@@ -72,16 +73,36 @@ export function App({ client }: { client: RpcClient }) {
   const [asOf, setAsOf] = useState<DecimalString | null>(null);
   const [refresh, setRefresh] = useState(0);
   const bumpRefresh = useCallback(() => setRefresh((count) => count + 1), []);
-  const [cache] = useState(() => new ResultCache());
-  const [labels] = useState(() => new LabelBook());
+  // What was read of one database; another database's answers start afresh.
+  const [{ cache, labels }, setScope] = useState(() => ({
+    cache: new ResultCache(),
+    labels: new LabelBook(),
+  }));
+  const known = useRef<string | null>(null);
+  // The first database to answer adopts the scope its reads already filled.
+  // Another one, as after an `init` or a restore under a running server,
+  // replaces it, and the boundary, which may be past its end, is cleared.
+  const onDatabase = useCallback((database: string) => {
+    const last = known.current;
+    known.current = database;
+    if (last !== null && last !== database) {
+      setScope({ cache: new ResultCache(), labels: new LabelBook() });
+      setAsOf(null);
+    }
+  }, []);
   const source = useMemo(
-    () => ({ client, asOf, refresh, bumpRefresh, cache }),
+    () => ({ client, asOf, setAsOf, refresh, bumpRefresh, cache }),
     [client, asOf, refresh, bumpRefresh, cache],
   );
   return (
     <DataContext value={source}>
       <LabelsContext value={labels}>
-        <Shell asOf={asOf} onAsOf={setAsOf} onRefresh={bumpRefresh} />
+        <Shell
+          asOf={asOf}
+          onAsOf={setAsOf}
+          onRefresh={bumpRefresh}
+          onDatabase={onDatabase}
+        />
       </LabelsContext>
     </DataContext>
   );
@@ -154,10 +175,12 @@ function Shell({
   asOf,
   onAsOf,
   onRefresh,
+  onDatabase,
 }: {
   asOf: DecimalString | null;
   onAsOf: (asOf: DecimalString | null) => void;
   onRefresh: () => void;
+  onDatabase: (database: string) => void;
 }) {
   const [nav, dispatch] = useReducer(navigate, initialNavigation);
   const latestNav = useRef(nav);
@@ -236,6 +259,11 @@ function Shell({
   if (described !== null && described.database !== database) {
     setDatabase(described.database);
   }
+  useEffect(() => {
+    if (database !== null) {
+      onDatabase(database);
+    }
+  }, [database, onDatabase]);
   const head = described?.view.end_exclusive ?? null;
   const stable = useStableScreen(screen);
   const tray = <StableTray screen={stable} head={head} />;
@@ -312,7 +340,10 @@ function Shell({
                           </EditContext>
                           <div hidden={screen.kind !== "explore"}>
                             <EditContext value={editExplore}>
-                              <ExploreScreen screen={shownExplore} />
+                              <ExploreScreen
+                                screen={shownExplore}
+                                hidden={screen.kind !== "explore"}
+                              />
                             </EditContext>
                           </div>
                         </div>
@@ -348,7 +379,14 @@ function TopBar({
   onRefresh: () => void;
 }) {
   const open = useOpen();
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(asOf ?? "");
+  // A boundary set elsewhere, such as the inspector's "As of here", or
+  // cleared for another database, shows in the field.
+  const [shown, setShown] = useState(asOf);
+  if (shown !== asOf) {
+    setShown(asOf);
+    setDraft(asOf ?? "");
+  }
   const valid = BOUNDARY.test(draft);
   const visible =
     description.status === "ready"
@@ -379,31 +417,35 @@ function TopBar({
             </code>
           </button>
           {asOf === null ? (
-            <span>
+            <span title="the whole history">
               entries{" "}
               <strong data-testid="entries">
                 {description.result.view.end_exclusive}
               </strong>
             </span>
           ) : (
-            <span className="badge asof" data-testid="as-of">
-              view [0, {asOf}) of{" "}
+            <span
+              className="badge asof"
+              data-testid="as-of"
+              title={`Every screen shows ${viewWords(asOf)}; "current" shows the whole history again.`}
+            >
+              showing the first {asOf} of{" "}
               <strong data-testid="entries">
                 {description.result.view.end_exclusive}
               </strong>{" "}
-              entries
+              entries, view [0, {asOf})
             </span>
           )}
         </>
       )}
       <form className="row" onSubmit={submit}>
-        <label>
+        <label title="Show the database as it was after this many entries were appended. The inspector's “As of here” sets it at an entry.">
           as of{" "}
           <input
             name="boundary"
             inputMode="numeric"
             size={8}
-            placeholder="boundary"
+            placeholder="entry count"
             value={draft}
             onChange={(event) => setDraft(event.target.value.trim())}
           />
@@ -411,14 +453,14 @@ function TopBar({
         <button type="submit" disabled={!valid || beyond}>
           Set
         </button>
-        {beyond && <span className="muted">max {visible}</span>}
+        {beyond && (
+          <span className="muted">at most {visible}, the whole history</span>
+        )}
         {asOf !== null && (
           <button
             type="button"
-            onClick={() => {
-              onAsOf(null);
-              setDraft("");
-            }}
+            title="show the whole history again"
+            onClick={() => onAsOf(null)}
           >
             current
           </button>
@@ -486,13 +528,18 @@ function Trail({
   dispatch: (action: NavigationAction) => void;
 }) {
   const book = useLabels();
+  const { asOf } = useData();
   // Labels are noted as screens read entries; the trail follows the notes.
   useSyncExternalStore(book.subscribe, book.version);
   const { places } = usePlaces();
+  // Past the boundary, a step names its entry by position alone.
   const label = (id: EntryId) =>
-    book.get(id) ??
-    [...places.recent, ...places.pinned].find((place) => sameId(place.id, id))
-      ?.label;
+    pastBoundary(id, asOf)
+      ? undefined
+      : (book.get(id, asOf) ??
+        [...places.recent, ...places.pinned].find((place) =>
+          sameId(place.id, id),
+        )?.label);
   const { history } = nav;
   const first = Math.max(0, history.length - TRAIL);
   return (

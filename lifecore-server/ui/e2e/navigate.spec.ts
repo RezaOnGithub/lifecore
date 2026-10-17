@@ -13,9 +13,9 @@ import type {
 // the inspector's relationship outline, Explore's thread across edge types,
 // focus and seed actions, pinned, recent, and saved places in the sidebar,
 // the rendered graph, and Back returning to where the user was. The file
-// declares its own `Area`, `Chore`, `Member`, and `Stage` types and never
-// touches `Task` or `Job`; the steps share one page, so in-memory
-// navigation and Explore state carry over.
+// declares its own `Area`, `Chore`, `Member`, and `Stage` types, ends by
+// declaring the unnamed type, and never touches `Task` or `Job`; the steps
+// share one page, so in-memory navigation and Explore state carry over.
 test.describe.configure({ mode: "serial" });
 
 function launched(): { page: string; rpc: string; token: string } {
@@ -245,7 +245,16 @@ test("a type table lists each row's neighbours by edge type and direction", asyn
   );
   await expect(headers).toContainText(["label", "@position", "current"]);
   await table().getByLabel("show").selectOption("current");
+  // Without the columns, the table reads its rows alone.
+  const rowsAlone = page.waitForRequest((request) => {
+    const body = request.postDataJSON() as {
+      method?: string;
+      params?: { expand?: unknown[] };
+    } | null;
+    return body?.method === "views.query" && body.params?.expand?.length === 0;
+  });
   await table().getByLabel("relationships").uncheck();
+  await rowsAlone;
   await expect(headers).toHaveText(["label", "@position"]);
   await table().getByLabel("relationships").check();
   await expect(headers.last()).toHaveText("← Within");
@@ -474,12 +483,20 @@ test("the graph renders on request and a node opens its inspector", async () => 
 test("Back returns to a table's sort and scroll and to an expanded outline", async () => {
   await openTable("Stage");
   await expect(table().locator("table.entries tbody tr")).toHaveCount(60);
+  // The arrow is drawn, not named: the sorted header says how through
+  // `aria-sort`.
   const sortByLabel = table()
     .locator("thead")
-    .getByRole("button", { name: /^label/ });
+    .getByRole("button", { name: "label", exact: true });
+  const labelHeader = table()
+    .locator("thead th")
+    .filter({ has: page.getByRole("button", { name: "label", exact: true }) });
+  await expect(labelHeader).not.toHaveAttribute("aria-sort");
   await sortByLabel.click();
+  await expect(labelHeader).toHaveAttribute("aria-sort", "ascending");
   await sortByLabel.click();
   await expect(sortByLabel).toHaveText("label ▼");
+  await expect(labelHeader).toHaveAttribute("aria-sort", "descending");
   await expect(table().locator("tbody tr").first()).toContainText("Stage 60");
   const pane = main();
   await pane.evaluate((element) => {
@@ -570,4 +587,58 @@ test("a hub's cell counts its neighbours and opens them in Explore", async () =>
   await within.getByRole("button", { name: /← Within/ }).click();
   await within.getByLabel("filter ← Within").fill("Stage 4");
   await expect(within.getByTestId("neighbour")).toHaveCount(10);
+});
+
+test("the unnamed type is an Explore seed of its own, apart from any type", async () => {
+  await call("proposal.apply", {
+    proposal: {
+      entries: [
+        { ...declaration("", "title", [], []), name: "unnamed_type" },
+        node("nameless", "", { title: "Nameless thing" }),
+      ],
+    },
+  });
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: "Refresh" })
+    .click();
+  await sidebar().getByRole("button", { name: "Explore", exact: true }).click();
+  const unfold = main().getByRole("button", { name: "unfold the form" });
+  if (await unfold.isVisible()) {
+    await unfold.click();
+  }
+  const remove = page
+    .getByTestId("seeds")
+    .getByRole("button", { name: /^remove @/ });
+  while ((await remove.count()) > 0) {
+    await remove.first().click();
+  }
+  await main().getByLabel("nodes of type").check();
+  const type = main().getByLabel("seed node type");
+  const seeded = (ty_name: string | undefined) =>
+    page.waitForRequest((request) => {
+      const body = request.postDataJSON() as {
+        method?: string;
+        params?: { seeds?: { kind: string; ty_name?: string }[] };
+      } | null;
+      const seeds = body?.params?.seeds ?? [];
+      return (
+        body?.method === "views.query" &&
+        seeds.length === 1 &&
+        seeds[0]?.kind === "nodes" &&
+        seeds[0].ty_name === ty_name
+      );
+    });
+  await type.selectOption({ label: "(unnamed)" });
+  const unnamed = seeded("");
+  await main().getByRole("button", { name: "Run", exact: true }).click();
+  await unnamed;
+  await expect(results()).toContainText("Nameless thing");
+  await expect(results()).not.toContainText("Workshop");
+  await type.selectOption({ label: "any type" });
+  const any = seeded(undefined);
+  await main().getByRole("button", { name: "Run", exact: true }).click();
+  await any;
+  await expect(results()).toContainText("Workshop");
+  await expect(results()).toContainText("Nameless thing");
 });

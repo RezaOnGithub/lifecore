@@ -498,20 +498,27 @@ them; none is a server contract.
 #### Identity, labels, and boundaries
 
 - Row label: a node's `title` field when it is text, else `name` when text,
-  else the text field whose name sorts first by code unit, else
-  `<ty_name> @<position>`. Blank text does not count. An empty type name reads
-  "(unnamed)". Labels are cut at 60 characters (30 in relationship cells and
-  seed chips, 40 in sidebar places, 28 in the trail), with the full text as a
-  tooltip.
+  else the text field whose name sorts first by code point, the byte order
+  `views.render` labels by, else `<ty_name> @<position>`. Blank text does not
+  count. An empty type name reads "(unnamed)". Labels are cut at 60
+  characters (30 in relationship cells and seed chips, 40 in sidebar places,
+  28 in the trail), with the full text as a tooltip.
 - `@position` is an entry's on-screen identity, shown beside a field label; the
   origin UUID is never shown.
 - Badges call a node current or superseded and an edge current or historical.
   Lists show current entries unless asked for historical or all.
-- As-of is one global boundary, set in the top bar up to the visible end, and
-  not part of Back history. Browsing reads send it as `as_of`;
-  `database.describe` (the Database screen) and reconnection read the whole
-  history. The top bar shows `view [0, as_of) of N entries`; tables and
-  the inspector show the `view` their response names.
+- As-of is one global boundary, set in the top bar up to the visible end or by
+  an inspector's "As of here" just after its entry, and not part of Back
+  history; another database answering clears it. Browsing reads send it as
+  `as_of`; `database.describe` (the Database screen) and reconnection read the
+  whole history. The top bar shows `showing the first N of M entries, view
+  [0, N)`; tables and the inspector show the `view` their response names,
+  with the same words as a tooltip.
+- Nothing learned at a wider boundary names an entry past the as-of boundary:
+  the trail, seed chips, and sidebar places name it by `@position` alone.
+- A failed read shows a heading and a sentence for the error kinds a reader
+  meets (an entry not in the view, a boundary past the end), else the
+  server's message; the method, code, kind, and data wait behind "Details".
 
 #### Navigation and places
 
@@ -526,19 +533,23 @@ them; none is a server contract.
   pane's scroll offset once the content is tall enough, unless the user
   scrolls, clicks, or types there first.
 - The last result of each call is cached (40 calls), so a screen returned to
-  renders at once, reads again, and shows "reloading…" until the answer. A
-  read determined by its view (`entries.*`, `types.list`, `views.query`) keeps
-  the cached object when the answer names the same view of the same database.
-  Explore stays mounted under the other screens, so its results, drawings, or
-  failure survive a detour.
+  renders at once, reads again, and shows "reloading…" until the answer. An
+  answer with the same JSON as the cached one keeps the cached object. A
+  reload shows the previous answer only if it was read at the same or a
+  narrower boundary, so lowering as-of shows "loading…" until the bounded
+  answer. The cache and the labels noted from reads hold one database and
+  start afresh when another answers. Explore stays mounted under the other
+  screens, so its results, drawings, or failure survive a detour; hidden, it
+  reads nothing, and on return it reads again at the boundary then selected.
 - Places, per database in `localStorage` under `lifecore.places.<database>`,
   are listed in the sidebar below Views: Pinned entries (☆/★ in the inspector
   header), Saved views (the Explore form under a name, replacing one of that
   name; opening one restores the form and runs it), and Recent (the last 15
   inspected entries, most recent first, without repeats). An entry keeps the
   label and type of its last inspection; an edge reads `from —Type→ to`.
-  Entries past the as-of boundary are dimmed. Another tab's change arrives
-  through the `storage` event. Malformed stored items are dropped one by one.
+  Entries past the as-of boundary are dimmed and named by `@position` alone,
+  without their type. Another tab's change arrives through the `storage`
+  event. Malformed stored items are dropped one by one.
 
 #### Tables and relationships
 
@@ -557,8 +568,9 @@ them; none is a server contract.
   after the last keystroke; Explore sends its own on Run. The Findings and
   outline filters run in the client.
 - Relationship columns: a type table reads its rows with `views.query`, the
-  rows as node seeds and one hop both ways over edges of the rows' currentness
-  (`all` for historical or all rows), keeping only the seeds. Each edge type
+  rows as node seeds and, while the columns are on, one hop both ways over
+  edges of the rows' currentness (`all` for historical or all rows), keeping
+  only the seeds; with them off, it sends no expansion. Each edge type
   and direction among the rows' incident edges gets a column, outgoing first
   and then by name, headed `→ PartOf` or `← DependsOn`. A cell lists the
   neighbours' labels and sorts by the first. Beyond three, it starts with the
@@ -584,7 +596,8 @@ them; none is a server contract.
 #### Explore, threads, and drawings
 
 - The client bounds an Explore query to 3 expansion steps of up to 3 hops
-  each; the server imposes none.
+  each; the server imposes none. Its node selection takes any type or one
+  type, the unnamed one included.
 - Each query run is a Back step: Run, a row's "focus" (the node as the only
   seed, node selection off, steps and edge filter kept) or "+ seed", a saved
   view, "+N in Explore", or "Explore from here", which seeds the node alone
@@ -653,9 +666,12 @@ them; none is a server contract.
   Connect starts an edge from the inspected node and picks its `to`. A draft
   with an endpoint or predecessor unpicked is neither sent nor exported.
 - Revise and Branch copy the node's payload; only a current node can be
-  revised. Reconnection lists the predecessor's current edges, read without
-  `as_of`, by direction and type, collapsed beyond 10. Revise keeps all of them
-  by default, also for a picked predecessor; Branch keeps none. Each kept edge
+  revised. Under an as-of boundary Revise is off, since a bounded read does
+  not say what is current in the state drafts apply to; Branch stays, as a
+  revision's payload is the same at every boundary. Reconnection lists the
+  predecessor's current edges, read without `as_of`, by direction and type,
+  collapsed beyond 10. Revise keeps all of them by default, also for a
+  picked predecessor; Branch keeps none. Each kept edge
   becomes an explicit edge operation, `<operation>_keep_<edge position>`,
   placed after the revision ([SPEC §5](SPEC.md#5-current-and-historical-data)).
   Its other end is the revision itself for a self-loop, else the latest earlier

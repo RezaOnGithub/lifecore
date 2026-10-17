@@ -17,7 +17,7 @@ import type {
   TypeSchema,
   TypeSummary,
 } from "./contract.ts";
-import { entryKey, rowLabel } from "./model/labels.ts";
+import { entryKey, pastBoundary, rowLabel } from "./model/labels.ts";
 import {
   emptyPlaces,
   loadPlaces,
@@ -35,29 +35,38 @@ import type { ExploreForm } from "./model/query.ts";
 import type { RpcClient } from "./rpc.ts";
 
 // What every read shares: the client, the selected boundary (null for the
-// whole history), and a counter the Refresh button bumps to re-fetch.
-// `bumpRefresh` bumps it from anywhere, such as after an applied draft.
-// `cache` keeps the last results by call, so a screen returned to by Back
-// renders at once while it reads again.
+// whole history) and its setter, and a counter the Refresh button bumps to
+// re-fetch. `bumpRefresh` bumps it from anywhere, such as after an applied
+// draft. `cache` keeps the last results by call, so a screen returned to by
+// Back renders at once while it reads again; it holds one database's
+// answers and is replaced when another database answers.
 export interface DataSource {
   client: RpcClient;
   asOf: DecimalString | null;
+  setAsOf: (asOf: DecimalString | null) => void;
   refresh: number;
   bumpRefresh: () => void;
   cache: ResultCache;
 }
 
+// A cached result with its JSON text, which decides whether a fresh answer
+// is the same.
+interface Cached {
+  value: unknown;
+  text: string;
+}
+
 // The last result of each call, by method and params, the least recently
 // used dropped beyond `limit`. Results are only ever replaced whole.
 export class ResultCache {
-  readonly #entries = new Map<string, unknown>();
+  readonly #entries = new Map<string, Cached>();
   readonly #limit: number;
 
   constructor(limit = 40) {
     this.#limit = limit;
   }
 
-  get(key: string): unknown {
+  get(key: string): Cached | undefined {
     const value = this.#entries.get(key);
     if (value !== undefined) {
       this.#entries.delete(key);
@@ -66,7 +75,7 @@ export class ResultCache {
     return value;
   }
 
-  set(key: string, value: unknown) {
+  set(key: string, value: Cached) {
     this.#entries.delete(key);
     this.#entries.set(key, value);
     for (const oldest of this.#entries.keys()) {
@@ -119,39 +128,33 @@ export function latest<T>(load: Load<T>): T | null {
   }
 }
 
-// Reads whose answer is a function of the view alone: the history is
-// append-only, so the same params answered at the same boundary of the same
-// database give the same result, and a reread that names the cached view
-// keeps the cached object, sparing the screen a re-render.
-const VIEW_PURE = new Set<Method>([
-  "entries.inspect",
-  "entries.list",
-  "types.list",
-  "views.query",
-]);
-
-function sameView(a: unknown, b: unknown): boolean {
-  const view = (value: unknown) =>
-    typeof value === "object" && value !== null && "view" in value
-      ? (value.view as { database?: unknown; end_exclusive?: unknown })
-      : null;
-  const x = view(a);
-  const y = view(b);
-  return (
-    x !== null &&
-    y !== null &&
-    x.database === y.database &&
-    x.end_exclusive === y.end_exclusive
-  );
+// The boundary a call reads at: its `as_of`, or null for the whole history.
+function boundaryOf(params: unknown): DecimalString | null {
+  return typeof params === "object" &&
+    params !== null &&
+    "as_of" in params &&
+    typeof params.as_of === "string"
+    ? params.as_of
+    : null;
 }
 
-// Calls `method` whenever the JSON of `params`, the refresh counter, or `run`
-// changes; null params mean no call. Keying by JSON, not identity, lets
-// screens build params inline on every render. The loading state is derived:
-// the stored answer names the key it answers, and any other key is loading,
-// so a changed key never renders a stale answer as ready. While loading, the
-// result on show is the cached one for the same call, else the last answer
-// this caller had.
+// Whether an answer read at `read` shows nothing past `wanted`. A
+// whole-history answer may show any entry, so it never stands in for a
+// bounded one; any answer stands in for the whole history, which within one
+// database only grows.
+function within(read: DecimalString | null, wanted: DecimalString | null) {
+  return wanted === null || (read !== null && BigInt(read) <= BigInt(wanted));
+}
+
+// Calls `method` whenever the JSON of `params`, the refresh counter, `run`,
+// or the database's cache changes; null params mean no call. Keying by
+// JSON, not identity, lets screens build params inline on every render.
+// The loading state is derived: the stored answer names the key and cache
+// it answers, and anything else is loading, so a changed key never renders
+// a stale answer as ready, nor another database's as current. While
+// loading, the result on show is the cached one for the same call, else the
+// last answer this caller had, unless that one was read at a wider boundary:
+// lowering as-of shows nothing until the bounded answer arrives.
 export function useCall<M extends Method>(
   method: M,
   params: Params<M> | null,
@@ -162,6 +165,8 @@ export function useCall<M extends Method>(
   const key = call === null ? null : `${refresh}:${call}`;
   const [settled, setSettled] = useState<{
     key: string;
+    cache: ResultCache;
+    boundary: DecimalString | null;
     load: Settled<Result<M>>;
   } | null>(null);
   useEffect(() => {
@@ -170,23 +175,35 @@ export function useCall<M extends Method>(
     }
     let active = true;
     const { params: sent } = JSON.parse(call) as { params: Params<M> };
+    const boundary = boundaryOf(sent);
     client.call(method, sent).then(
       (fresh) => {
-        const cached = cache.get(call) as Result<M> | undefined;
+        // An answer identical to the cached one keeps the cached object,
+        // sparing the screen a re-render; nothing else decides sameness.
+        const text = JSON.stringify(fresh);
+        const cached = cache.get(call);
         const result =
-          cached !== undefined &&
-          VIEW_PURE.has(method) &&
-          sameView(cached, fresh)
-            ? cached
+          cached !== undefined && cached.text === text
+            ? (cached.value as Result<M>)
             : fresh;
-        cache.set(call, result);
+        cache.set(call, { value: result, text });
         if (active) {
-          setSettled({ key, load: { status: "ready", result } });
+          setSettled({
+            key,
+            cache,
+            boundary,
+            load: { status: "ready", result },
+          });
         }
       },
       (failure: unknown) => {
         if (active) {
-          setSettled({ key, load: { status: "failed", failure } });
+          setSettled({
+            key,
+            cache,
+            boundary,
+            load: { status: "failed", failure },
+          });
         }
       },
     );
@@ -197,29 +214,34 @@ export function useCall<M extends Method>(
   if (key === null || call === null) {
     return { status: "idle" };
   }
-  if (settled !== null && settled.key === key) {
-    return settled.load;
+  const own = settled !== null && settled.cache === cache ? settled : null;
+  if (own !== null && own.key === key) {
+    return own.load;
   }
-  const cached = cache.get(call) as Result<M> | undefined;
+  const cached = cache.get(call);
   if (cached !== undefined) {
-    return { status: "loading", previous: cached };
+    return { status: "loading", previous: cached.value as Result<M> };
   }
-  return settled?.load.status === "ready"
-    ? { status: "loading", previous: settled.load.result }
+  return own?.load.status === "ready" &&
+    within(own.boundary, boundaryOf(params))
+    ? { status: "loading", previous: own.load.result }
     : { status: "loading" };
 }
 
 // Labels of entries met on any screen, by entry key, so the Back trail and
 // Explore's seeds can name entries the screen on show has not read. Notes
 // are made in effects, after rendering; `subscribe` and `version` let a
-// component follow them as an external store.
+// component follow them as an external store. A book holds one database's
+// entries and is replaced when another database answers.
 export class LabelBook {
   readonly #labels = new Map<string, string>();
   readonly #listeners = new Set<() => void>();
   #version = 0;
 
-  get(id: EntryId): string | undefined {
-    return this.#labels.get(entryKey(id));
+  // An entry past `asOf` has no label here, whatever a wider read noted:
+  // the screens name it by `@position` only.
+  get(id: EntryId, asOf: DecimalString | null): string | undefined {
+    return pastBoundary(id, asOf) ? undefined : this.#labels.get(entryKey(id));
   }
 
   note(id: EntryId, label: string) {

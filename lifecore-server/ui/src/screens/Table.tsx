@@ -4,6 +4,7 @@ import type {
   NodeRecord,
   Seed,
   TypeSummary,
+  ViewQuery,
   ViewQueryParams,
 } from "../contract.ts";
 import {
@@ -18,7 +19,7 @@ import { useDraft } from "../draft/context.tsx";
 import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, useEdit, useOpen } from "../links.tsx";
-import { entryKey, typeName } from "../model/labels.ts";
+import { entryKey, typeName, viewWords } from "../model/labels.ts";
 import {
   defaultTableScreenView,
   type TableScreenView,
@@ -87,6 +88,13 @@ function ResolutionNote({
   }
 }
 
+// Results read with the hop the relationship columns need. The cache hands
+// back the same objects, so a result keeps its mark across Back and
+// refreshes. A result read without the hop, still on show while turning the
+// columns on reloads, gets no columns rather than ones missing every
+// neighbour outside the rows.
+const EXPANDED = new WeakSet<ViewQuery>();
+
 export function TableScreen({
   ty_name,
   view,
@@ -126,18 +134,24 @@ export function TableScreen({
   if (applied !== "") {
     seed.text = applied;
   }
-  // The rows are the seeds; one hop both ways brings their neighbours, and
-  // the edges among the result include every edge incident to a row. The
-  // edges followed match the rows: current rows meet current edges, while a
-  // superseded row's edges are all historical.
+  // The rows are the seeds; for the relationship columns, one hop both ways
+  // brings their neighbours, and the edges among the result include every
+  // edge incident to a row. The edges followed match the rows: current rows
+  // meet current edges, while a superseded row's edges are all historical.
+  // Without the columns, nothing beyond the rows is read.
   const followed: Currentness = currentness === "current" ? "current" : "all";
   const params: ViewQueryParams = {
     ...asOf,
     seeds: [seed],
-    expand: [{ hops: 1, direction: "both", currentness: followed }],
+    expand: relationships
+      ? [{ hops: 1, direction: "both", currentness: followed }]
+      : [],
     edges: { currentness: followed },
   };
   const load = useCall("views.query", params);
+  if (load.status === "ready" && relationships) {
+    EXPANDED.add(load.result);
+  }
   // A reload keeps the last rows, and the sort, on screen until the new ones
   // arrive.
   const result = latest(load);
@@ -157,7 +171,7 @@ export function TableScreen({
   }, [book, nodes]);
   const columns = useMemo(
     () =>
-      result !== null && relationships
+      result !== null && relationships && EXPANDED.has(result)
         ? relationColumns(rows, result.edges, nodes, followed)
         : [],
     [result, relationships, rows, nodes, followed],
@@ -217,7 +231,12 @@ export function TableScreen({
             <span className="muted">
               {rows.length} row{rows.length === 1 ? "" : "s"}
             </span>
-            <span className="muted">view [0, {result.view.end_exclusive})</span>
+            <span
+              className="muted"
+              title={`read as ${viewWords(result.view.end_exclusive)}`}
+            >
+              view [0, {result.view.end_exclusive})
+            </span>
           </>
         )}
         {load.status === "loading" && (

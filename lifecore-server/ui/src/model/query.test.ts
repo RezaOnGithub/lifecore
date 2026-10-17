@@ -35,7 +35,7 @@ test("the form becomes a query with only the members that are set", () => {
     ...addSeed(emptyForm, id("1")),
     nodes: {
       enabled: true,
-      ty_name: " Task ",
+      ty_name: "Task",
       text: "",
       currentness: "all" as const,
     },
@@ -167,6 +167,37 @@ test("Explore from here replaces the seeds and resets the steps and filters", ()
       ],
       edges: { currentness: "all" },
     },
+  );
+});
+
+test("the empty type name seeds its own type, distinct from any type", () => {
+  const any: ExploreForm = {
+    ...emptyForm,
+    nodes: { ...emptyForm.nodes, enabled: true },
+  };
+  assert.deepEqual(toParams(any)?.seeds, [
+    { kind: "nodes", currentness: "current" },
+  ]);
+  const unnamed: ExploreForm = { ...any, nodes: { ...any.nodes, ty_name: "" } };
+  assert.deepEqual(toParams(unnamed)?.seeds, [
+    { kind: "nodes", currentness: "current", ty_name: "" },
+  ]);
+  // A name is sent as chosen, never trimmed.
+  assert.deepEqual(
+    toParams({ ...any, nodes: { ...any.nodes, ty_name: " Task" } })?.seeds,
+    [{ kind: "nodes", currentness: "current", ty_name: " Task" }],
+  );
+  assert.equal(
+    formChanged({ form: unnamed, ran: { form: any, run: 0 } }),
+    true,
+  );
+  assert.equal(querySummary(any), "current any type, then 1 hop both");
+  assert.equal(querySummary(unnamed), "current (unnamed), then 1 hop both");
+  assert.deepEqual(readForm(JSON.parse(JSON.stringify(unnamed))), unnamed);
+  assert.deepEqual(readForm(JSON.parse(JSON.stringify(any))), any);
+  assert.equal(
+    readForm({ ...unnamed, nodes: { ...unnamed.nodes, ty_name: 3 } }),
+    null,
   );
 });
 

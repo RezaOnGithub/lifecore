@@ -20,6 +20,11 @@ interface FormProps {
   onChange: (form: ExploreForm) => void;
 }
 
+// The type select's value for any type; a type name cannot clash with it,
+// the empty one included, because the select lists names only as
+// `type:<name>`.
+const ANY_TYPE = "any";
+
 // A seed chip: the node's label and position, linking to its inspector.
 function SeedChip({ id, label }: { id: EntryId; label: string | undefined }) {
   const open = useOpen();
@@ -85,21 +90,42 @@ export function SeedsFieldset({
           nodes of type
         </label>
         <select
-          value={form.nodes.ty_name}
+          aria-label="seed node type"
+          value={
+            form.nodes.ty_name === null
+              ? ANY_TYPE
+              : `type:${form.nodes.ty_name}`
+          }
           disabled={!form.nodes.enabled}
-          onChange={(event) =>
+          onChange={(event) => {
+            const { value } = event.target;
             onChange({
               ...form,
-              nodes: { ...form.nodes, ty_name: event.target.value },
-            })
-          }
+              nodes: {
+                ...form.nodes,
+                ty_name: value.startsWith("type:")
+                  ? value.slice("type:".length)
+                  : null,
+              },
+            });
+          }}
         >
-          <option value="">any type</option>
+          <option value={ANY_TYPE}>any type</option>
           {(types ?? []).map((type) => (
-            <option key={type.name} value={type.name}>
+            <option key={type.name} value={`type:${type.name}`}>
               {typeName(type.name)}
             </option>
           ))}
+          {/* A saved view may name a type this view does not list, or the
+              list may still be loading; the select still shows the form's
+              choice. */}
+          {form.nodes.ty_name !== null &&
+            !types?.some((type) => type.name === form.nodes.ty_name) && (
+              <option value={`type:${form.nodes.ty_name}`}>
+                {typeName(form.nodes.ty_name)}
+                {types !== null && " (not in this view)"}
+              </option>
+            )}
         </select>
         <label>
           containing{" "}

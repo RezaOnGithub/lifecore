@@ -190,7 +190,11 @@ function PlaceList({
   return (
     <ul className="types places" data-testid={testId}>
       {places.map((place) => {
+        // What was kept of an entry past the boundary shows nothing of it
+        // but its position.
         const past = beyondBoundary(place, asOf);
+        const position = `@${place.id.position}`;
+        const name = past ? position : place.label;
         const active =
           screen.kind === "inspector" && sameId(screen.id, place.id);
         return (
@@ -205,25 +209,29 @@ function PlaceList({
             <button
               type="button"
               className="link place-label"
-              title={`${place.label}\n@${place.id.position} ${
-                place.kind === "edge" ? "edge " : ""
-              }${typeName(place.ty_name)}${
-                past ? "\npast the as-of boundary" : ""
-              }`}
+              title={
+                past
+                  ? `${position}\npast the as-of boundary`
+                  : `${place.label}\n${position} ${
+                      place.kind === "edge" ? "edge " : ""
+                    }${typeName(place.ty_name)}`
+              }
               onClick={() => open({ kind: "inspector", id: place.id })}
             >
-              {truncate(place.label, PLACE_LIMIT)}
+              {truncate(name, PLACE_LIMIT)}
             </button>
             <span className="place-type">
-              {place.kind === "edge"
-                ? `@${place.id.position}`
-                : typeName(place.ty_name)}
+              {past
+                ? ""
+                : place.kind === "edge"
+                  ? position
+                  : typeName(place.ty_name)}
             </span>
             {onRemove && (
               <button
                 type="button"
                 className="link remove"
-                aria-label={`unpin ${place.label}`}
+                aria-label={`unpin ${name}`}
                 onClick={() => onRemove(place)}
               >
                 ×

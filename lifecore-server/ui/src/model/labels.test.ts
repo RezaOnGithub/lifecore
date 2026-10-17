@@ -5,9 +5,11 @@ import {
   commonLabelField,
   entryKey,
   labelField,
+  pastBoundary,
   rowLabel,
   sameId,
   typeName,
+  viewWords,
 } from "./labels.ts";
 
 function node(payload: NodeEntry["payload"], ty_name = "Task"): NodeEntry {
@@ -39,6 +41,14 @@ test("without title or name the alphabetically first text field labels", () => {
   assert.equal(rowLabel(row), "b");
 });
 
+test("field names sort by code point, as the server's drawing labels do", () => {
+  // UTF-16 units put U+1F600 (D83D DE00) before U+FF5E; code points and
+  // UTF-8 bytes put it after.
+  const row = node({ "\u{1F600}": "astral", "～": "wide" });
+  assert.equal(labelField(row), "～");
+  assert.equal(rowLabel(row), "wide");
+});
+
 test("blank text is skipped and a row without text falls back", () => {
   assert.equal(rowLabel(node({ title: "  ", alpha: "a" })), "a");
   assert.equal(labelField(node({ n: { kind: "integer", value: "1" } })), null);
@@ -54,6 +64,29 @@ test("a non-text title is skipped and an empty type name reads (unnamed)", () =>
   assert.equal(rowLabel(node({}, "")), "(unnamed) @7");
   assert.equal(typeName(""), "(unnamed)");
   assert.equal(typeName("Task"), "Task");
+});
+
+test("an entry is past a boundary at or after it, never in the whole history", () => {
+  const id = { origin: "o", position: "7" };
+  assert.equal(pastBoundary(id, null), false);
+  assert.equal(pastBoundary(id, "8"), false);
+  assert.equal(pastBoundary(id, "7"), true);
+  assert.equal(pastBoundary(id, "0"), true);
+  // Positions compare as integers, not as text.
+  assert.equal(pastBoundary({ origin: "o", position: "10" }, "9"), true);
+  assert.equal(pastBoundary({ origin: "o", position: "9" }, "10"), false);
+});
+
+test("a view reads in words by its entry count", () => {
+  assert.equal(viewWords("0"), "the database before its first entry");
+  assert.equal(
+    viewWords("1"),
+    "the database as it was after its first entry, position 0",
+  );
+  assert.equal(
+    viewWords("12"),
+    "the database as it was after its first 12 entries, positions 0 to 11",
+  );
 });
 
 test("entry keys and identity comparison", () => {
