@@ -10,8 +10,8 @@ import {
 } from "../model/columns.ts";
 import { commonLabelField, entryKey, rowLabel } from "../model/labels.ts";
 import {
+  declarationOf,
   declarationSummary,
-  readDeclaration,
   serverReadings,
 } from "../model/schema.ts";
 import { ROW_PAGE, type TableView } from "../navigation.ts";
@@ -69,10 +69,7 @@ function EntryTableOf<R extends NodeRecord>({
       return null;
     }
     const server = serverReadings(types);
-    return (row: R) =>
-      declarationSummary(
-        server.get(entryKey(row.id)) ?? readDeclaration(row.payload),
-      );
+    return (row: R) => declarationSummary(declarationOf(server, row));
   }, [typeTable, types]);
   const fields = useMemo(() => {
     if (typeTable) {

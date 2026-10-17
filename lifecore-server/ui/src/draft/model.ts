@@ -6,6 +6,7 @@ import type {
   OperationEntry,
   PlanId,
   Proposal,
+  ProposalEntry,
   ProposalLocation,
   ProposalReference,
   ProposalReport,
@@ -248,6 +249,50 @@ export function frozenReason(state: DraftState): string | null {
     return "an apply is in flight in another tab";
   }
   return frozen(state) ? "an apply is in flight" : null;
+}
+
+// What an existing node is put to in the draft: the predecessor of a revise
+// or of a branch, or an end of an edge.
+export type NodeUse = "revise" | "branch" | "endpoint";
+
+// The use a pending pick puts its node to. A predecessor picked for an
+// operation without an intent makes it a revise, as the reducer does.
+export function pickUse(
+  picking: Picking,
+  entries: readonly ProposalEntry[],
+): NodeUse {
+  if (picking.role !== "predecessor") {
+    return "endpoint";
+  }
+  const entry = entries.find((e) => e.name === picking.operation);
+  return entry?.kind === "node" && entry.intent === "branch"
+    ? "branch"
+    : "revise";
+}
+
+// Why a node read as `current` cannot be put to `use`, for the title of a
+// disabled control; null when it can. A revise's predecessor and an edge's
+// ends must be current immediately before the append (FILES §2.4, SPEC
+// §7.1); a branch may start from any revision. Under an as-of boundary
+// `current` describes that view, not the current state drafts apply to, so
+// those uses wait until the boundary is cleared.
+export function currentRefusal(
+  use: NodeUse,
+  current: boolean,
+  bounded: boolean,
+): string | null {
+  if (use === "branch") {
+    return null;
+  }
+  if (bounded) {
+    return `drafts apply to the current state; clear the as-of boundary (current) to ${use === "revise" ? "revise" : "connect"} this node`;
+  }
+  if (!current) {
+    return use === "revise"
+      ? "only a current node can be revised"
+      : "only a current node can be an end of an edge";
+  }
+  return null;
 }
 
 export function applyingElsewhere(state: DraftState): boolean {

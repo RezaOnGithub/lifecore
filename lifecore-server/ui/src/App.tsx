@@ -90,6 +90,14 @@ export function App({ client }: { client: RpcClient }) {
       setAsOf(null);
     }
   }, []);
+  // A restore or re-init of the same database may leave the boundary past
+  // its new end, where every read fails. Only a description's answer judges
+  // it: a boundary set from a later read may well be past an older answer.
+  const onHead = useCallback((head: DecimalString) => {
+    setAsOf((asOf) =>
+      asOf !== null && BigInt(head) < BigInt(asOf) ? null : asOf,
+    );
+  }, []);
   const source = useMemo(
     () => ({ client, asOf, setAsOf, refresh, bumpRefresh, cache }),
     [client, asOf, refresh, bumpRefresh, cache],
@@ -102,6 +110,7 @@ export function App({ client }: { client: RpcClient }) {
           onAsOf={setAsOf}
           onRefresh={bumpRefresh}
           onDatabase={onDatabase}
+          onHead={onHead}
         />
       </LabelsContext>
     </DataContext>
@@ -176,11 +185,13 @@ function Shell({
   onAsOf,
   onRefresh,
   onDatabase,
+  onHead,
 }: {
   asOf: DecimalString | null;
   onAsOf: (asOf: DecimalString | null) => void;
   onRefresh: () => void;
   onDatabase: (database: string) => void;
+  onHead: (head: DecimalString) => void;
 }) {
   const [nav, dispatch] = useReducer(navigate, initialNavigation);
   const latestNav = useRef(nav);
@@ -264,6 +275,12 @@ function Shell({
       onDatabase(database);
     }
   }, [database, onDatabase]);
+  const answered = description.status === "ready" ? description.result : null;
+  useEffect(() => {
+    if (answered !== null) {
+      onHead(answered.view.end_exclusive);
+    }
+  }, [answered, onHead]);
   const head = described?.view.end_exclusive ?? null;
   const stable = useStableScreen(screen);
   const tray = <StableTray screen={stable} head={head} />;

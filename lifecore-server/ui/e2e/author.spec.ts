@@ -291,7 +291,7 @@ test("revising a Job keeps the chosen edge and leaves the old ones historical", 
   await expect(relationships.nth(0)).toContainText("Send invites");
   await expect(relationships.nth(0)).not.toContainText("historical");
   // The superseded revision keeps both of its edges, now historical, and
-  // can only be branched.
+  // can only be branched: no new edge can end at it either.
   await lineage.nth(0).getByRole("button", { name: "Draft agenda" }).click();
   await expect(
     main().getByRole("heading", { name: "Draft agenda" }),
@@ -303,6 +303,15 @@ test("revising a Job keeps the chosen edge and leaves the old ones historical", 
   await expect(
     main().getByRole("button", { name: "Revise", exact: true }),
   ).toBeDisabled();
+  const connect = main().getByRole("button", { name: "Connect" });
+  await expect(connect).toBeDisabled();
+  await expect(connect).toHaveAttribute(
+    "title",
+    "only a current node can be an end of an edge",
+  );
+  await expect(
+    main().getByRole("button", { name: "Branch", exact: true }),
+  ).toBeEnabled();
   await applied.getByRole("button", { name: "Dismiss" }).click();
 });
 
@@ -575,4 +584,65 @@ test("an imported bare integer is a decimal string and an undeclared type blocks
   );
   await expect(operation("imported").getByTestId("findings")).toHaveCount(0);
   await expect(trayButton("Apply")).toBeDisabled();
+});
+
+test("under an as-of boundary only a branch's predecessor is picked", async () => {
+  await fresh();
+  await openJobs();
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Book room" })
+    .click();
+  const heading = main().getByRole("heading", { name: "Book room" });
+  await expect(heading).toBeVisible();
+  // Connect picks the edge's other end; this node is current, so it could
+  // be that end too.
+  await main().getByRole("button", { name: "Connect" }).click();
+  await expect(main().getByTestId("operation-screen")).toBeVisible();
+  await page.getByRole("button", { name: "← Back" }).click();
+  await expect(heading).toBeVisible();
+  const pick = page.getByTestId("pick-banner");
+  const useAs = (role: string) =>
+    pick.getByRole("button", { name: `Use as ${role}` });
+  await expect(useAs("to")).toBeEnabled();
+  // A bounded read does not say whether the node is current in the state
+  // the draft applies to, which an edge's end and a revise's predecessor
+  // must be.
+  await main().getByRole("button", { name: "As of here" }).click();
+  await expect(page.getByTestId("as-of")).toBeVisible();
+  await expect(useAs("to")).toBeDisabled();
+  await expect(useAs("to")).toHaveAttribute(
+    "title",
+    /^drafts apply to the current state; clear the as-of boundary/,
+  );
+  await expect(main().getByRole("button", { name: "Connect" })).toBeDisabled();
+  await pick.getByRole("button", { name: "Cancel" }).click();
+  await expect(pick).toHaveCount(0);
+  // A branch may start from any revision.
+  await main().getByRole("button", { name: "Branch", exact: true }).click();
+  await expect(main().getByLabel("name", { exact: true })).toHaveValue("job_1");
+  await main().getByRole("button", { name: "pick predecessor" }).click();
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Book room" })
+    .click();
+  await expect(useAs("predecessor")).toBeEnabled();
+  // The same pick for a revise waits for the boundary to be cleared.
+  await trayButton("job_1").click();
+  await main().getByRole("radio", { name: "revise" }).check();
+  await main().getByRole("button", { name: "pick predecessor" }).click();
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Book room" })
+    .click();
+  await expect(useAs("predecessor")).toBeDisabled();
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: "current" })
+    .click();
+  await expect(page.getByTestId("as-of")).toHaveCount(0);
+  await expect(useAs("predecessor")).toBeEnabled();
+  await useAs("predecessor").click();
+  await expect(main().getByLabel("name", { exact: true })).toHaveValue("job_1");
+  await expect(main().getByRole("radio", { name: "revise" })).toBeChecked();
 });

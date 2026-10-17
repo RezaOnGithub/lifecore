@@ -4,11 +4,13 @@ import type { ProposalEntry, ProposalReport } from "../contract.ts";
 import {
   applicable,
   applyParams,
+  currentRefusal,
   type DraftState,
   detachedDraft,
   frozenReason,
   initialDraft,
   isUnset,
+  pickUse,
   proposalOf,
   requestOf,
   sameEvaluation,
@@ -200,4 +202,58 @@ test("a frozen draft says why it takes no edit", () => {
     frozenReason({ ...initialDraft, inFlight }),
     "an apply is in flight in another tab",
   );
+});
+
+test("a pick puts its node to the use of the operation's role and intent", () => {
+  const revision: ProposalEntry = {
+    name: "task_2",
+    kind: "node",
+    ty_name: "Task",
+    predecessor: UNSET,
+    intent: "revise",
+    payload: {},
+  };
+  const branch: ProposalEntry = {
+    ...revision,
+    name: "task_3",
+    intent: "branch",
+  };
+  const entries = [task, edge, revision, branch];
+  const use = (operation: string, role: "predecessor" | "from" | "to") =>
+    pickUse({ operation, role }, entries);
+  assert.equal(use("dependson_1", "from"), "endpoint");
+  assert.equal(use("dependson_1", "to"), "endpoint");
+  assert.equal(use("task_2", "predecessor"), "revise");
+  assert.equal(use("task_3", "predecessor"), "branch");
+  // A root without an intent becomes a revise when its predecessor lands.
+  assert.equal(use("task_1", "predecessor"), "revise");
+});
+
+test("only a branch takes a node not known to be current in the current state", () => {
+  for (const current of [true, false]) {
+    for (const bounded of [true, false]) {
+      assert.equal(currentRefusal("branch", current, bounded), null);
+    }
+  }
+  assert.equal(currentRefusal("revise", true, false), null);
+  assert.equal(currentRefusal("endpoint", true, false), null);
+  assert.equal(
+    currentRefusal("revise", false, false),
+    "only a current node can be revised",
+  );
+  assert.equal(
+    currentRefusal("endpoint", false, false),
+    "only a current node can be an end of an edge",
+  );
+  // A bounded read says what was current at the boundary, current or not.
+  for (const current of [true, false]) {
+    assert.match(
+      currentRefusal("revise", current, true) ?? "",
+      /^drafts apply to the current state; clear the as-of boundary/,
+    );
+    assert.match(
+      currentRefusal("endpoint", current, true) ?? "",
+      /^drafts apply to the current state; clear the as-of boundary/,
+    );
+  }
 });

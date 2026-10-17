@@ -9,6 +9,7 @@ import {
 import {
   declarationBody,
   declarationForForm,
+  declarationOf,
   declarationSummary,
   MAX_SHAPE_DEPTH,
   PRESENCE_WORDS,
@@ -713,4 +714,47 @@ test("the server's readings cover each claimant of a listed name", () => {
     "ok",
   ]);
   assert.deepEqual(kinds(null), []);
+});
+
+test("a declaration reads as the server read it, else as the client does", () => {
+  const server = serverReadings(unresolvedResponse.result.types);
+  const at = (position: string) => ({
+    origin: "00000000-0000-4000-8000-000000000008",
+    position,
+  });
+  // The payloads differ from what the server read: its reading wins for
+  // every claimant of an ambiguous name and for a malformed declaration.
+  assert.deepEqual(declarationOf(server, { id: at("1"), payload: task }), {
+    kind: "ok",
+    schema: {
+      name: "Note",
+      fields: {},
+      outgoing: [],
+      incoming: [],
+      successors: [],
+    },
+  });
+  assert.deepEqual(declarationOf(server, { id: at("2"), payload: task }), {
+    kind: "malformed",
+    error: {
+      path: ["outgoing"],
+      kind: "wrong_shape",
+      expected: "list",
+      actual: "text",
+    },
+  });
+  assert.equal(
+    declarationOf(server, { id: at("3"), payload: task }).kind,
+    "malformed",
+  );
+  // A declaration the list does not cover, as a superseded one, reads as
+  // the client parses it.
+  assert.deepEqual(
+    declarationOf(server, { id: at("7"), payload: task }),
+    readDeclaration(task),
+  );
+  assert.deepEqual(
+    declarationOf(server, { id: at("7"), payload: { name: "X", other: "" } }),
+    { kind: "unknown_keys", keys: ["other"] },
+  );
 });

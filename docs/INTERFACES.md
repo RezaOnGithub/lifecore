@@ -516,7 +516,8 @@ them; none is a server contract.
   Lists show current entries unless asked for historical or all.
 - As-of is one global boundary, set in the top bar up to the visible end or by
   an inspector's "As of here" just after its entry, and not part of Back
-  history; another database answering clears it. Browsing reads send it as
+  history; another database answering clears it, as does a description of
+  this one ending before it, as after a restore. Browsing reads send it as
   `as_of`; `database.describe` (the Database screen) and reconnection read the
   whole history. The top bar shows `showing the first N of M entries, view
   [0, N)`; tables and the inspector show the `view` their response names,
@@ -599,9 +600,11 @@ them; none is a server contract.
   per-group toggle, except under a superseded node, all of whose edges are
   historical.
 - A `Type` node's inspector shows the parsed schema, then the full payload
-  table, so `name` and fields outside the grammar stay visible. The schema is
-  the server's parse when the boundary's `types.list` resolves the name to this
-  node, else a client-side reading.
+  table, so `name` and fields outside the grammar stay visible. As in the
+  `Type` table, the schema is the server's reading when the boundary's
+  `types.list` covers this node (the declaration a name resolves to, a
+  malformed one, or any claimant of an ambiguous name), else a client-side
+  reading; an unreadable declaration shows its error instead.
 
 #### Explore, threads, and drawings
 
@@ -688,13 +691,17 @@ them; none is a server contract.
   an `existing` reference and returns to the operation; edges cannot be picked.
   Connect starts an edge from the inspected node and picks its `to`. A draft
   with an endpoint or predecessor unpicked is neither sent nor exported.
-- Revise and Branch copy the node's payload; only a current node can be
-  revised. Under an as-of boundary Revise is off, since a bounded read does
-  not say what is current in the state drafts apply to; Branch stays, as a
-  revision's payload is the same at every boundary. Reconnection lists the
-  predecessor's current edges, read without `as_of`, by direction and type,
-  collapsed beyond 10. Revise keeps all of them by default, also for a
-  picked predecessor; Branch keeps none. Each kept edge
+- Revise and Branch copy the node's payload. A revise's predecessor and an
+  edge's ends must be current ([FILES §2.4](FILES.md#24-node-and-edge-operations)),
+  so Revise, Connect, and "Use as" an edge's end or a revise's predecessor (a
+  predecessor picked for an operation without an intent makes it a revise)
+  are off for a superseded node and, under an as-of boundary, for every node,
+  since a bounded read does not say what is current in the state drafts apply
+  to. Branch and a branch's predecessor pick stay: a branch may start from
+  any revision, whose payload is the same at every boundary. Reconnection
+  lists the predecessor's current edges, read without `as_of`, by direction
+  and type, collapsed beyond 10. Revise keeps all of them by default, also
+  for a picked predecessor; Branch keeps none. Each kept edge
   becomes an explicit edge operation, `<operation>_keep_<edge position>`,
   placed after the revision ([SPEC §5](SPEC.md#5-current-and-historical-data)).
   Its other end is the revision itself for a self-loop, else the latest earlier

@@ -398,9 +398,18 @@ test("an as-of boundary narrows every read and current resets it", async () => {
   await expect(
     main().getByRole("button", { name: "As of here" }),
   ).toBeDisabled();
-  // Drafts apply to the current state, which a bounded read does not show;
-  // a branch copies this revision's payload, the same at every boundary.
-  await expect(main().getByRole("button", { name: "Revise" })).toBeDisabled();
+  // Drafts apply to the current state, which a bounded read does not show,
+  // so neither a revision nor an edge starts from this node, current at the
+  // boundary; a branch copies this revision's payload, the same at every
+  // boundary.
+  for (const name of ["Revise", "Connect"]) {
+    const button = main().getByRole("button", { name, exact: true });
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveAttribute(
+      "title",
+      /^drafts apply to the current state; clear the as-of boundary/,
+    );
+  }
   await expect(main().getByRole("button", { name: "Branch" })).toBeEnabled();
   const task = sidebar().getByRole("listitem").filter({ hasText: "Task" });
   await expect(task).toContainText("1/0");
@@ -437,4 +446,105 @@ test("an as-of boundary narrows every read and current resets it", async () => {
   await banner().getByRole("button", { name: "current" }).click();
   await expect(page.getByTestId("as-of")).toHaveCount(0);
   await expect(table().locator("table.entries tbody tr")).toHaveCount(3);
+});
+
+// Answers `method` with what the server answered, changed by `change`.
+async function changeAnswers<M extends Method>(
+  method: M,
+  change: (result: Result<M>) => void,
+) {
+  await page.route(launched().rpc, async (route) => {
+    const body = route.request().postDataJSON() as { method?: string } | null;
+    if (body?.method !== method) {
+      await route.fallback();
+      return;
+    }
+    const answer = (await (await route.fetch()).json()) as RpcResponse<M>;
+    if ("result" in answer) {
+      change(answer.result);
+    }
+    await route.fulfill({ json: answer });
+  });
+}
+
+test("a description that ends before the boundary clears it", async () => {
+  const total = BigInt(
+    (await page.getByTestId("entries").textContent()) ?? "0",
+  );
+  const boundary = String(total - 1n);
+  await banner().getByLabel("as of").fill(boundary);
+  await banner().getByRole("button", { name: "Set" }).click();
+  await expect(page.getByTestId("as-of")).toContainText(
+    `view [0, ${boundary})`,
+  );
+  // A restore of the same database to an earlier snapshot, described after
+  // a Refresh: a boundary at its end stays, and one past it, which every
+  // read would refuse, is cleared.
+  let end = boundary;
+  await changeAnswers("database.describe", (description) => {
+    description.view.end_exclusive = end;
+  });
+  await banner().getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("as-of")).toContainText(
+    `showing the first ${boundary} of ${boundary} entries`,
+  );
+  end = String(total - 2n);
+  await banner().getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("as-of")).toHaveCount(0);
+  await expect(page.getByTestId("entries")).toHaveText(end);
+  await page.unroute(launched().rpc);
+  await banner().getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("entries")).toHaveText(String(total));
+  await expect(page.getByTestId("as-of")).toHaveCount(0);
+});
+
+test("a Type node's inspector reads its declaration as the type list does", async () => {
+  await sidebar().getByRole("button", { name: "Type", exact: true }).click();
+  await table()
+    .locator("td.label-cell")
+    .getByRole("button", { name: "Task", exact: true })
+    .click();
+  await expect(main().getByRole("heading", { name: "Task" })).toContainText(
+    `@${ids.task_type?.position}`,
+  );
+  // The schema lists the declared fields; the payload table below it only
+  // the declaration's own keys.
+  const declared = inspector().getByRole("rowheader", {
+    name: "title",
+    exact: true,
+  });
+  await expect(declared).toBeVisible();
+  await expect(inspector().getByTestId("unreadable")).toHaveCount(0);
+  // The client parses this payload, but the server's reading wins: here a
+  // malformed claimant of an ambiguous name, as a suite without TypeCheck
+  // could store.
+  await changeAnswers("types.list", ({ types }) => {
+    const task = types.find((type) => type.name === "Task");
+    if (task?.resolution.kind === "declared") {
+      task.resolution = {
+        kind: "ambiguous",
+        claimants: [
+          {
+            declaration: task.resolution.declaration,
+            kind: "malformed",
+            error: {
+              path: ["outgoing"],
+              kind: "wrong_shape",
+              expected: "list",
+              actual: "text",
+            },
+          },
+        ],
+      };
+    }
+  });
+  await banner().getByRole("button", { name: "Refresh" }).click();
+  await expect(inspector().getByTestId("unreadable")).toHaveText(
+    "unreadable declaration: outgoing: expected a list, found text",
+  );
+  await expect(declared).toHaveCount(0);
+  await page.unroute(launched().rpc);
+  await banner().getByRole("button", { name: "Refresh" }).click();
+  await expect(inspector().getByTestId("unreadable")).toHaveCount(0);
+  await expect(declared).toBeVisible();
 });

@@ -5,8 +5,6 @@ import type {
   EntryInspection,
   NodeRecord,
   TypeResolution,
-  TypeSchema,
-  TypeSummary,
   ViewId,
 } from "../contract.ts";
 import {
@@ -19,7 +17,7 @@ import {
   useTypes,
 } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
-import { frozen } from "../draft/model.ts";
+import { currentRefusal, frozen, pickUse } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import {
   CurrentBadge,
@@ -42,7 +40,12 @@ import { lineageRows } from "../model/lineage.ts";
 import type { OutlineView } from "../model/outline.ts";
 import { isPinned, type Place } from "../model/places.ts";
 import { edgeWords } from "../model/relations.ts";
-import { parseDeclaration, schemaErrorText } from "../model/schema.ts";
+import {
+  declarationOf,
+  declarationSummary,
+  schemaErrorText,
+  serverReadings,
+} from "../model/schema.ts";
 import { defaultInspectorView, type InspectorView } from "../navigation.ts";
 import { EntryFindings } from "../views/EntryFindings.tsx";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
@@ -207,35 +210,29 @@ function TypeNote({ type }: { type: TypeResolution }) {
   }
 }
 
-// The schema of a `Type` node's own payload: the server's parse when this node
-// is a current declaration, else a client-side reading of the word list.
-function ownDeclaration(
-  types: TypeSummary[] | null,
-  node: NodeRecord,
-): TypeSchema | null {
-  for (const type of types ?? []) {
-    if (
-      type.resolution.kind === "declared" &&
-      sameId(type.resolution.declaration, node.id)
-    ) {
-      return type.resolution.schema;
-    }
-  }
-  return parseDeclaration(node.payload);
-}
-
-// While an operation waits for a node, every node inspection offers itself;
-// an edge inspection says it cannot be picked.
-function PickBanner({ id }: { id: EntryId | null }) {
+// While an operation waits for a node, every node inspection offers itself,
+// unless the operation needs a current node and this one is not known to be
+// current in the state drafts apply to; an edge inspection says it cannot be
+// picked.
+function PickBanner({ node }: { node: NodeRecord | null }) {
   const { state, actions } = useDraft();
+  const { asOf } = useData();
   const open = useOpen();
   const { picking } = state;
   if (picking === null) {
     return null;
   }
+  const refusal =
+    node === null
+      ? null
+      : currentRefusal(
+          pickUse(picking, state.proposal.entries),
+          node.current,
+          asOf !== null,
+        );
   return (
     <div className="banner picking" role="status" data-testid="pick-banner">
-      {id === null ? (
+      {node === null ? (
         <>
           Edges cannot be picked as the {picking.role} of{" "}
           <OperationLink name={picking.operation} />; open a node.
@@ -246,9 +243,10 @@ function PickBanner({ id }: { id: EntryId | null }) {
           <OperationLink name={picking.operation} />?{" "}
           <button
             type="button"
-            disabled={frozen(state)}
+            disabled={frozen(state) || refusal !== null}
+            title={refusal ?? undefined}
             onClick={() => {
-              const operation = actions.resolvePick(id);
+              const operation = actions.resolvePick(node.id);
               if (operation !== null) {
                 open({ kind: "operation", name: operation });
               }
@@ -288,15 +286,19 @@ function NodeInspection({
   const { asOf } = useData();
   const open = useOpen();
   const locked = frozen(state);
-  // A revise needs its predecessor current (FILES §2.4); a superseded node
-  // can only be branched. Under an as-of boundary `current` describes that
-  // view, not the current state drafts apply to, so Revise waits until the
-  // boundary is cleared. Branch stays: it copies this revision's own
-  // payload, which no boundary changes.
+  // Revise and Connect need this node current in the state drafts apply to.
+  // Branch does not: it copies this revision's own payload, which no
+  // boundary changes.
   const bounded = asOf !== null;
-  const revisable = entry.current && !bounded;
-  const declaration =
-    entry.ty_name === "Type" ? ownDeclaration(types, entry) : null;
+  const unrevisable = currentRefusal("revise", entry.current, bounded);
+  const unconnectable = currentRefusal("endpoint", entry.current, bounded);
+  const declaration = useMemo(
+    () =>
+      entry.ty_name === "Type"
+        ? declarationOf(serverReadings(types), entry)
+        : null,
+    [types, entry],
+  );
   const revise = (intent: "revise" | "branch") => {
     const name = actions.revise(entry, intent);
     if (name !== null) {
@@ -305,7 +307,7 @@ function NodeInspection({
   };
   return (
     <article data-testid="inspector">
-      <PickBanner id={entry.id} />
+      <PickBanner node={entry} />
       <h2>
         <PinButton inspection={inspection} /> {rowLabel(entry)}{" "}
         <Position id={entry.id} />
@@ -327,13 +329,13 @@ function NodeInspection({
         </button>
         <button
           type="button"
-          disabled={locked || !revisable}
+          disabled={locked || unrevisable !== null}
           title={
-            bounded
-              ? "drafts apply to the current state; clear the as-of boundary (current) to revise"
-              : revisable
-                ? "a new revision with this payload; current edges are kept"
-                : "only a current node can be revised; Branch instead"
+            unrevisable === null
+              ? "a new revision with this payload; current edges are kept"
+              : bounded
+                ? unrevisable
+                : `${unrevisable}; Branch instead`
           }
           onClick={() => revise("revise")}
         >
@@ -353,8 +355,8 @@ function NodeInspection({
         </button>
         <button
           type="button"
-          disabled={locked}
-          title="a new edge from this node"
+          disabled={locked || unconnectable !== null}
+          title={unconnectable ?? "a new edge from this node"}
           onClick={() => {
             const name = actions.connect(entry.id);
             if (name !== null) {
@@ -410,7 +412,13 @@ function NodeInspection({
                 {declaration !== null && (
                   <>
                     <h4>declares</h4>
-                    <SchemaView schema={declaration} />
+                    {declaration.kind === "ok" ? (
+                      <SchemaView schema={declaration.schema} />
+                    ) : (
+                      <p className="field-error" data-testid="unreadable">
+                        {declarationSummary(declaration)}
+                      </p>
+                    )}
                     <h4>payload</h4>
                   </>
                 )}
@@ -491,7 +499,7 @@ function EdgeInspection({
   } = inspection;
   return (
     <article data-testid="inspector">
-      <PickBanner id={null} />
+      <PickBanner node={null} />
       <h2>
         <PinButton inspection={inspection} /> {typeName(entry.ty_name)}{" "}
         <Position id={entry.id} />

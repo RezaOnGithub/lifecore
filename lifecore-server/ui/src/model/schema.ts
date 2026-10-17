@@ -1,5 +1,6 @@
 import type {
   Body,
+  EntryId,
   FieldDecl,
   FieldDecls,
   FieldStatus,
@@ -348,6 +349,16 @@ export function serverReadings(
     }
   }
   return readings;
+}
+
+// A `Type` node's declaration as the client shows it, in the inspector and
+// the `Type` table alike: the server's reading when `types.list` covers the
+// node, else the client's own.
+export function declarationOf(
+  server: ReadonlyMap<string, DeclarationReading>,
+  node: { id: EntryId; payload: Body },
+): DeclarationReading {
+  return server.get(entryKey(node.id)) ?? readDeclaration(node.payload);
 }
 
 // The deepest run of nested `list` and `record` words in a shape.
