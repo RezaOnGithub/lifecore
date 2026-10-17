@@ -12,8 +12,12 @@ import type {
   ProposalReport,
 } from "../contract.ts";
 import { entryKey } from "../model/labels.ts";
-import { HttpRejectionError, RpcError, TransportError } from "../rpc.ts";
-import type { Call } from "./analysisRuns.ts";
+import {
+  type Call,
+  HttpRejectionError,
+  RpcError,
+  TransportError,
+} from "../rpc.ts";
 import {
   AnalyzerAdds,
   addCounts,

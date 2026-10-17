@@ -29,8 +29,9 @@ import {
 import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
 import { formatBody } from "../model/payload.ts";
 import { counted } from "../model/words.ts";
-import type { AnalysisRuns, Bulk, Ran } from "./analysisRuns.ts";
+import type { AnalysisRuns, Ran } from "./analysisRuns.ts";
 import { ConfirmButton } from "./ConfirmButton.tsx";
+import type { Bulk } from "./dismissalEdits.ts";
 import { useAnalysisRuns } from "./useAnalysisRuns.ts";
 
 // What the sticky flag and the historical label do and do not say

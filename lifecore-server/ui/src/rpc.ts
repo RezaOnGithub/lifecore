@@ -39,6 +39,12 @@ export class TransportError extends Error {}
 
 export type CallFailure = RpcError | HttpRejectionError | TransportError;
 
+// One RPC call, as `RpcClient.call` makes it.
+export type Call = <M extends Method>(
+  method: M,
+  params: Params<M>,
+) => Promise<Result<M>>;
+
 function parseRejection(text: string): HttpRejection | null {
   try {
     const body: unknown = JSON.parse(text);

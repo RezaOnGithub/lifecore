@@ -12,8 +12,13 @@ import type {
 } from "../contract.ts";
 import type { Counts } from "../draft/findings.ts";
 import type { Evaluation } from "../draft/model.ts";
-import { HttpRejectionError, RpcError, TransportError } from "../rpc.ts";
-import { type Call, readLabels } from "./analysisRuns.ts";
+import {
+  type Call,
+  HttpRejectionError,
+  RpcError,
+  TransportError,
+} from "../rpc.ts";
+import { readLabels } from "./entryLabels.ts";
 
 // The Add analyzer form, kept across visits of the Database screen. `name`
 // is null until the user picks one, for the screen's default.
