@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Body, TypeSchema } from "../contract.ts";
+import type { Body, SchemaError, TypeSchema } from "../contract.ts";
 import {
   declarationBody,
   declarationForForm,
@@ -9,6 +9,7 @@ import {
   PRESENCE_WORDS,
   parseDeclaration,
   readDeclaration,
+  schemaErrorText,
   shapeDepth,
 } from "./schema.ts";
 
@@ -103,10 +104,13 @@ test("fields given as a list are unreadable; an empty name still parses", () => 
 
 test("the Type table summarizes a declaration", () => {
   assert.equal(
-    declarationSummary(task),
+    declarationSummary(readDeclaration(task)),
     "3 fields; out DependsOn; in DependsOn, Mentions; successors none",
   );
-  assert.equal(declarationSummary({}), "unreadable declaration");
+  assert.equal(
+    declarationSummary(readDeclaration({})),
+    "unreadable declaration: name: required but missing",
+  );
 });
 
 const roundTrips: [string, TypeSchema][] = [
@@ -401,15 +405,20 @@ test("a new Type node's empty payload opens in the form", () => {
   // A name that is there is read as it is.
   assert.deepEqual(declarationForForm({ name: ["X"] }), {
     kind: "malformed",
-    path: "name",
-    message: "expected text, found list",
+    error: {
+      path: ["name"],
+      kind: "wrong_shape",
+      expected: "text",
+      actual: "list",
+    },
   });
 });
 
 test("keys outside the five are reported, not dropped", () => {
+  // In code point order, the first being the one the server reports.
   assert.deepEqual(readDeclaration({ name: "X", outgoin: ["A"], extra: "" }), {
     kind: "unknown_keys",
-    keys: ["outgoin", "extra"],
+    keys: ["extra", "outgoin"],
   });
   assert.equal(parseDeclaration({ name: "X", outgoin: ["A"] }), null);
   assert.deepEqual(declarationForForm({ outgoin: [] }), {
@@ -422,67 +431,71 @@ test("keys outside the five are reported, not dropped", () => {
   });
 });
 
-function malformedAt(words: unknown): { path: string; message: string } {
+function malformedAt(words: unknown): SchemaError | null {
   const reading = readDeclaration({
     name: "X",
     fields: { kind: "record", value: { a: words as never } },
   });
   assert.equal(reading.kind, "malformed", JSON.stringify(words));
-  return reading.kind === "malformed"
-    ? { path: reading.path, message: reading.message }
-    : { path: "", message: "" };
+  return reading.kind === "malformed" ? reading.error : null;
 }
+
+const at = (...rest: (string | number)[]) => ["fields", "a", ...rest];
+const integerWord = { kind: "integer", value: "1" } as const;
 
 test("malformed word lists are reported at the offending position", () => {
   assert.deepEqual(malformedAt([]), {
-    path: "fields.a[0]",
-    message: "missing a presence word",
+    path: at(0),
+    kind: "missing_presence",
   });
   assert.deepEqual(malformedAt(["text"]), {
-    path: "fields.a[0]",
-    message: `unknown presence "text"; expected ${PRESENCE_WORDS.join(", ")}`,
+    path: at(0),
+    kind: "unknown_presence",
+    word: "text",
   });
   assert.deepEqual(malformedAt(["optional"]), {
-    path: "fields.a[1]",
-    message: "missing a shape word",
+    path: at(1),
+    kind: "missing_shape",
   });
   assert.deepEqual(malformedAt(["optional", "list"]), {
-    path: "fields.a[2]",
-    message: "missing a shape word",
+    path: at(2),
+    kind: "missing_shape",
   });
-  assert.deepEqual(malformedAt(["optional", { kind: "integer", value: "1" }]), {
-    path: "fields.a[1]",
-    message: "expected a shape word, found integer",
+  assert.deepEqual(malformedAt(["optional", integerWord]), {
+    path: at(1),
+    kind: "wrong_shape",
+    expected: "text",
+    actual: "integer",
   });
-  assert.equal(malformedAt([["optional"], "text"]).path, "fields.a[0]");
+  assert.deepEqual(malformedAt([["optional"], "text"])?.path, at(0));
   assert.deepEqual(malformedAt(["optional", "txt"]), {
-    path: "fields.a[1]",
-    message:
-      'unknown shape word "txt"; expected text, integer, boolean, timestamp, list, or record',
+    path: at(1),
+    kind: "unknown_shape",
+    word: "txt",
   });
   assert.deepEqual(malformedAt(["optional", "text", "text"]), {
-    path: "fields.a[2]",
-    message: "unexpected element after the shape",
+    path: at(2),
+    kind: "trailing_elements",
   });
   assert.deepEqual(malformedAt(["optional", "record"]), {
-    path: "fields.a[2]",
-    message:
-      "record must be followed by a record envelope of field declarations",
+    path: at(2),
+    kind: "missing_record_fields",
   });
-  assert.deepEqual(
-    malformedAt(["optional", "record", { kind: "integer", value: "1" }]),
-    {
-      path: "fields.a[2]",
-      message: "expected a record envelope, found integer",
-    },
-  );
+  assert.deepEqual(malformedAt(["optional", "record", integerWord]), {
+    path: at(2),
+    kind: "wrong_shape",
+    expected: "record",
+    actual: "integer",
+  });
   assert.deepEqual(malformedAt(["optional", "record", ["mandatory", "text"]]), {
-    path: "fields.a[2]",
-    message: "expected a record envelope, found list",
+    path: at(2),
+    kind: "wrong_shape",
+    expected: "record",
+    actual: "list",
   });
   assert.deepEqual(
     malformedAt(["optional", "record", { kind: "record", value: {} }, "text"]),
-    { path: "fields.a[3]", message: "unexpected element after the shape" },
+    { path: at(3), kind: "trailing_elements" },
   );
   assert.deepEqual(
     malformedAt([
@@ -491,21 +504,60 @@ test("malformed word lists are reported at the offending position", () => {
       "record",
       { kind: "record", value: { b: ["mandatory", "lst"] } },
     ]),
-    {
-      path: "fields.a[3].b[1]",
-      message:
-        'unknown shape word "lst"; expected text, integer, boolean, timestamp, list, or record',
-    },
+    { path: at(3, "b", 1), kind: "unknown_shape", word: "lst" },
   );
   assert.deepEqual(malformedAt("text"), {
-    path: "fields.a",
-    message: 'expected a list of words, found text "text"',
+    path: at(),
+    kind: "wrong_shape",
+    expected: "list",
+    actual: "text",
   });
   assert.deepEqual(readDeclaration({ name: "X", fields: [] }), {
     kind: "malformed",
-    path: "fields",
-    message: "expected a record envelope, found list",
+    error: {
+      path: ["fields"],
+      kind: "wrong_shape",
+      expected: "record",
+      actual: "list",
+    },
   });
+});
+
+test("declaration errors read as a path and the client's words", () => {
+  const text = (error: SchemaError) => schemaErrorText(error);
+  assert.equal(
+    text({ path: ["name"], kind: "missing_field" }),
+    "name: required but missing",
+  );
+  assert.equal(
+    text({ path: ["colour"], kind: "unknown_field" }),
+    "colour: not a declaration key; a declaration has name, fields, outgoing, incoming, successors",
+  );
+  assert.equal(
+    text({
+      path: ["fields", "a.b", 1],
+      kind: "wrong_shape",
+      expected: "text",
+      actual: "integer",
+    }),
+    'fields."a.b"[1]: expected text, found an integer',
+  );
+  assert.equal(
+    text({ path: at(0), kind: "unknown_presence", word: "sometimes" }),
+    `fields.a[0]: unknown presence "sometimes"; expected ${PRESENCE_WORDS.join(", ")}`,
+  );
+  assert.equal(
+    text({ path: at(65), kind: "too_deep" }),
+    "fields.a[65]: more than 64 nested list and record words",
+  );
+  assert.equal(
+    text({ path: ["outgoing", 2], kind: "duplicate_permission", name: "A" }),
+    'outgoing[2]: "A" is repeated',
+  );
+  assert.equal(
+    text({ path: [], kind: "trailing_elements" }),
+    "unexpected element after the shape",
+  );
 });
 
 function nestedLists(count: number): unknown[] {
@@ -532,8 +584,8 @@ test("at most 64 nested list and record words, counted across records", () => {
     );
   }
   assert.deepEqual(malformedAt(["optional", ...nestedLists(65)]), {
-    path: "fields.a[65]",
-    message: "more than 64 nested list and record words",
+    path: at(65),
+    kind: "too_deep",
   });
   // 63 lists, then a record whose field adds one more `list`: 65 in all.
   assert.deepEqual(
@@ -543,10 +595,7 @@ test("at most 64 nested list and record words, counted across records", () => {
       "record",
       { kind: "record", value: { g: ["mandatory", "list", "text"] } },
     ]),
-    {
-      path: "fields.a[65].g[1]",
-      message: "more than 64 nested list and record words",
-    },
+    { path: at(65, "g", 1), kind: "too_deep" },
   );
   assert.equal(
     shapeDepth({
@@ -567,8 +616,7 @@ test("at most 64 nested list and record words, counted across records", () => {
 test("permission lists: text only, no repeats, code point order", () => {
   assert.deepEqual(readDeclaration({ name: "X", outgoing: ["A", "B", "A"] }), {
     kind: "malformed",
-    path: "outgoing[2]",
-    message: '"A" is repeated',
+    error: { path: ["outgoing", 2], kind: "duplicate_permission", name: "A" },
   });
   assert.equal(parseDeclaration({ name: "X", incoming: ["A", "A"] }), null);
   assert.deepEqual(
@@ -578,14 +626,22 @@ test("permission lists: text only, no repeats, code point order", () => {
     }),
     {
       kind: "malformed",
-      path: "successors[1]",
-      message: "expected text, found integer",
+      error: {
+        path: ["successors", 1],
+        kind: "wrong_shape",
+        expected: "text",
+        actual: "integer",
+      },
     },
   );
   assert.deepEqual(readDeclaration({ name: "X", outgoing: "A" }), {
     kind: "malformed",
-    path: "outgoing",
-    message: 'expected a list, found text "A"',
+    error: {
+      path: ["outgoing"],
+      kind: "wrong_shape",
+      expected: "list",
+      actual: "text",
+    },
   });
   const schema = parseDeclaration({
     name: "X",
@@ -606,11 +662,11 @@ test("permission lists: text only, no repeats, code point order", () => {
 
 test("the Type table summarizes what the server would reject as unreadable", () => {
   assert.equal(
-    declarationSummary({ name: "X", outgoing: ["A", "A"] }),
-    "unreadable declaration",
+    declarationSummary(readDeclaration({ name: "X", outgoing: ["A", "A"] })),
+    'unreadable declaration: outgoing[1]: "A" is repeated',
   );
   assert.equal(
-    declarationSummary({ name: "X", other: "" }),
-    "unreadable declaration",
+    declarationSummary(readDeclaration({ name: "X", other: "", more: "" })),
+    "unreadable declaration: more, other are not keys",
   );
 });

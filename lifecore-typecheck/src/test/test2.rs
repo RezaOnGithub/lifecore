@@ -13,8 +13,8 @@ use lifecore::{
         RevisionIntent, prepare,
     },
     typing::{
-        FieldDecl, FieldIssueKind, FieldStatus, PathPart, ResolutionError, SchemaError,
-        SchemaErrorKind, Type, TypeDefinition, ValueType,
+        FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaError, SchemaErrorKind, Type,
+        TypeResolution, ValueType,
     },
 };
 
@@ -82,10 +82,7 @@ fn builtin_metatype_needs_no_bootstrap_and_cannot_be_redeclared() {
     assert!(analyzer.initialize(&Default::default()).unwrap().is_empty());
     let mut graph = LifeCoreList::default();
     assert!(findings(&graph, 0).is_empty());
-    assert_eq!(
-        graph.view().resolve_type("Type").unwrap(),
-        Some(TypeDefinition::Builtin)
-    );
+    assert_eq!(graph.view().resolve_type("Type"), TypeResolution::Builtin);
     append(&mut graph, &[declaration(&ty("Type"), None)]);
     assert!(matches!(
         findings(&graph, 1)[0],
@@ -164,7 +161,8 @@ fn the_former_envelope_encoding_is_a_malformed_declaration() {
         )));
         assert!(matches!(
             graph.view().resolve_type("A"),
-            Err(ResolutionError::Malformed { id, error }) if id == ids[0] && error == expected
+            TypeResolution::Malformed { declaration, error }
+                if declaration == ids[0] && error == expected
         ));
         // With TypeCheck configured, the declaration is rejected, not stored.
         let checked = prepare(
@@ -279,14 +277,18 @@ fn correctly_shaped_empty_collections_count_as_present() {
             (
                 "list",
                 (
-                    ValueType::List(Box::new(ValueType::Text)),
+                    ValueType::List {
+                        element: Box::new(ValueType::Text),
+                    },
                     FieldStatus::Mandatory,
                 ),
             ),
             (
                 "record",
                 (
-                    ValueType::Record(Default::default()),
+                    ValueType::Record {
+                        fields: Default::default(),
+                    },
                     FieldStatus::Encouraged,
                 ),
             ),
@@ -320,7 +322,9 @@ fn wrong_empty_container_is_a_shape_error_not_a_missing_field() {
         &[(
             "list",
             (
-                ValueType::List(Box::new(ValueType::Text)),
+                ValueType::List {
+                    element: Box::new(ValueType::Text),
+                },
                 FieldStatus::Mandatory,
             ),
         )],
@@ -356,21 +360,26 @@ fn wrong_empty_container_is_a_shape_error_not_a_missing_field() {
 #[test]
 fn nested_records_and_scalar_lists_are_checked_recursively() {
     let mut graph = LifeCoreList::default();
-    let shape = ValueType::Record(
-        [(
+    let shape = ValueType::Record {
+        fields: [(
             "flag".into(),
             FieldDecl {
-                ty: ValueType::Boolean,
                 status: FieldStatus::Mandatory,
+                shape: ValueType::Boolean,
             },
         )]
         .into(),
-    );
+    };
     let schema = Type::new(
         "A",
         &[(
             "rows",
-            (ValueType::List(Box::new(shape)), FieldStatus::Mandatory),
+            (
+                ValueType::List {
+                    element: Box::new(shape),
+                },
+                FieldStatus::Mandatory,
+            ),
         )],
         &[],
         &[],
@@ -692,7 +701,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
     assert_eq!(
         certificate(&key),
         serde_json::json!({"Field": {"subject": ids[1],
-            "issue": {"path": [{"Field": "first"}], "kind": "MissingEncouraged"}}})
+            "issue": {"path": ["first"], "kind": "MissingEncouraged"}}})
     );
     assert_eq!(
         key.analyzer.version,
@@ -1057,24 +1066,38 @@ fn a_warning_that_holds_until_the_head_is_one_observation_per_subject() {
 }
 
 #[test]
-fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() {
+fn transitions_from_ambiguous_types_leave_the_judgment_to_declaration_findings() {
     let mut graph = LifeCoreList::default();
     let mut other_a = ty("A");
     other_a.outgoing.insert("link".into());
-    let child = append(
+    let ids = append(
         &mut graph,
         &[
             declaration(&ty("A"), None),
             declaration(&other_a, None),
             node("A", Body::new(), None),
-            node("A", Body::from([("v".into(), 1.into())]), Some(Added(2))),
+            node(
+                "Other",
+                Body::from([("v".into(), 1.into())]),
+                Some(Added(2)),
+            ),
         ],
-    )[3];
-    assert!(findings(&graph, 4).iter().any(|f| matches!(
-        f,
-        TypeCheckMessage::DuplicateType { subject, name }
-            if *subject == child && name == "A"
-    )));
+    );
+    let child = ids[3];
+    for end in [3, 4] {
+        let report = findings(&graph, end);
+        assert!(has_error(&report));
+        assert!(report.iter().any(|f| matches!(
+            f,
+            TypeCheckMessage::DuplicateType { subject, name }
+                if *subject == ids[1] && name == "A"
+        )));
+        assert!(report.iter().all(|f| f.subject() != child
+            || matches!(
+                f,
+                TypeCheckMessage::MissingType { name, .. } if name == "Other"
+            )));
+    }
 
     // The built-in metatype permits only declaration successors.
     let mut graph = LifeCoreList::default();
@@ -1095,8 +1118,8 @@ fn transitions_from_ambiguous_types_and_from_declarations_have_typed_findings() 
 }
 
 // The transition loop from a07483e, verbatim apart from the later `successors`,
-// `BadSuccessor`, and `subject` changes, and independent of
-// `TypeCheck::transition`: every child in the view is judged against the
+// `BadSuccessor`, `subject`, and per-name resolution changes, and independent
+// of `TypeCheck::transition`: every child in the view is judged against the
 // prefix before it, at every prefix containing it.
 fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
     use TypeCheckMessage::*;
@@ -1111,31 +1134,18 @@ fn all_children_transitions(view: View<'_>) -> Vec<TypeCheckMessage> {
             .node(child.predecessor.expect("selected child"))
             .expect("validated parent");
         let allowed = match before.resolve_type(&parent.ty_name) {
-        Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
-        Ok(Some(TypeDefinition::Declared { schema, .. })) => {
+        TypeResolution::Builtin => child.ty_name == Type::TYPE_NAME,
+        TypeResolution::Declared { schema, .. } => {
             child.ty_name == schema.name || schema.successors.contains(&child.ty_name)
         }
-        Ok(None) => {
+        TypeResolution::Missing => {
             output.push(MissingType {
                 subject: child.id,
                 name: parent.ty_name.clone(),
             });
             continue;
         }
-        Err(ResolutionError::Malformed { error, .. }) => {
-            output.push(MalformedDeclaration {
-                subject: child.id,
-                error,
-            });
-            continue;
-        }
-        Err(ResolutionError::Ambiguous { name, .. }) => {
-            output.push(DuplicateType {
-                subject: child.id,
-                name,
-            });
-            continue;
-        }
+        TypeResolution::Malformed { .. } | TypeResolution::Ambiguous { .. } => continue,
         };
         if !allowed {
             output.push(BadSuccessor {
@@ -1339,7 +1349,8 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
     );
     graphs.push(graph);
 
-    // An ambiguous parent type, later disambiguated by renaming a declaration.
+    // An ambiguous parent type is judged by neither loop until renaming a
+    // declaration disambiguates it.
     let mut graph = LifeCoreList::default();
     let mut other_a = with_field("A");
     other_a.outgoing.insert("link".into());
@@ -1349,34 +1360,43 @@ fn newest_only_transitions_match_the_all_children_loop_under_full_replay() {
             declaration(&with_field("A"), None),
             declaration(&other_a, None),
             node("A", Body::new(), None),
-            node("A", v(1), Some(Added(2))),
+            node("C", v(1), Some(Added(2))),
         ],
     );
     append(
         &mut graph,
         &[
             declaration(&with_field("C"), Some(Existing(ids[1]))),
-            node("A", v(2), Some(Existing(ids[3]))),
+            node("C", v(2), Some(Existing(ids[2]))),
+            node("A", v(3), None),
         ],
     );
     graphs.push(graph);
 
-    // A malformed declaration blocks resolving the parent type until repaired.
+    // So is a parent type whose only declaration is malformed, until it is
+    // repaired; a nameless malformed declaration affects no name.
     let mut graph = LifeCoreList::default();
+    let broken = Body::from([
+        ("name".into(), "A".into()),
+        ("fields".into(), "text".into()),
+    ]);
     let ids = append(
         &mut graph,
         &[
-            declaration(&with_field("A"), None),
-            node("A", Body::new(), None),
+            node("Type", broken, None),
             node("Type", Body::new(), None),
-            node("A", v(1), Some(Added(1))),
+            declaration(&with_field("B"), None),
+            node("A", Body::new(), None),
+            node("B", v(1), Some(Added(3))),
+            node("B", v(2), Some(Added(4))),
         ],
     );
     append(
         &mut graph,
         &[
-            declaration(&with_field("B"), Some(Existing(ids[2]))),
-            node("A", v(2), Some(Existing(ids[3]))),
+            declaration(&with_field("A"), Some(Existing(ids[0]))),
+            node("B", v(3), Some(Existing(ids[3]))),
+            node("A", v(4), None),
         ],
     );
     graphs.push(graph);
@@ -1514,7 +1534,7 @@ fn messages_name_the_field_path_and_the_issue_in_words() {
             subject,
             error: SchemaError {
                 path: vec![F("fields".into()), F("title".into()), Index(1)],
-                kind: SchemaErrorKind::UnknownShape("txt".into()),
+                kind: SchemaErrorKind::UnknownShape { word: "txt".into() },
             },
         }),
         r#"invalid schema at fields.title[1]: unknown shape word "txt""#
@@ -1532,4 +1552,310 @@ fn messages_name_the_field_path_and_the_issue_in_words() {
         message(TypeCheckMessage::ReservedTypeName { subject }),
         r#"the name "Type" is reserved for the built-in metatype"#
     );
+}
+
+// Every name TypeCheck judges reads the view's declaration index, so its
+// findings agree with `resolve_type` for each node and declaration.
+fn assert_agrees_with_the_index(view: View<'_>, report: &[TypeCheckMessage]) {
+    use lifecore::typing::Declaration;
+    let declarations = view.declarations();
+    for node in view.fresh_nodes().filter(|n| n.ty_name != Type::TYPE_NAME) {
+        let resolution = view.resolve_type(&node.ty_name);
+        let missing = report.iter().any(
+            |f| matches!(f, TypeCheckMessage::MissingType { subject, .. } if *subject == node.id),
+        );
+        assert_eq!(missing, resolution == TypeResolution::Missing, "{node:?}");
+        let fields = report
+            .iter()
+            .any(|f| matches!(f, TypeCheckMessage::Field { subject, .. } if *subject == node.id));
+        assert!(
+            !fields || matches!(resolution, TypeResolution::Declared { .. }),
+            "{node:?}"
+        );
+    }
+    for (name, declaration) in declarations.iter() {
+        let malformed = report.iter().any(|f| {
+            matches!(f, TypeCheckMessage::MalformedDeclaration { subject, error }
+                if *subject == declaration.id() && Err(error) == declaration.schema())
+        });
+        assert_eq!(
+            malformed,
+            matches!(declaration, Declaration::Malformed { .. })
+        );
+        let duplicate = report.iter().any(|f| {
+            matches!(f, TypeCheckMessage::DuplicateType { subject, .. } if *subject == declaration.id())
+        });
+        let later_claimant = name.is_some_and(|name| {
+            matches!(
+                view.resolve_type(name),
+                TypeResolution::Ambiguous { claimants } if claimants[0].id() != declaration.id()
+            )
+        });
+        assert_eq!(duplicate, later_claimant);
+    }
+}
+
+#[test]
+fn findings_follow_each_names_own_declarations_at_every_boundary() {
+    use TypeCheckMessage::*;
+    use lifecore::typing::Declaration;
+    let declared = |name: &str, status| {
+        Type::new(
+            name,
+            &[("title", (ValueType::Text, status))],
+            &["link"],
+            &["link"],
+            &[],
+        )
+    };
+    let task = declared("Task", FieldStatus::Mandatory);
+    let other_task = declared("Task", FieldStatus::Optional);
+    let note = Type::new(
+        "Note",
+        &[("text", (ValueType::Text, FieldStatus::Mandatory))],
+        &[],
+        &[],
+        &["Gone"],
+    );
+    let raw = |fields: &[(&str, Payload)]| {
+        fields
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect::<Body>()
+    };
+    let broken_note = raw(&[("name", "Note".into()), ("fields", "text".into())]);
+    let broken_task = raw(&[("name", "Task".into()), ("outgoing", "x".into())]);
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&task, None),
+            node("Task", Body::new(), None),
+            node("Task", raw(&[("title", "t".into())]), None),
+            Change::Entry(EntryChange::Edge(NewEdge {
+                from: Added(2),
+                ty_name: "link".into(),
+                to: Added(1),
+            })),
+            node("Note", Body::new(), None),
+            node("Type", broken_note, None),
+            node("Type", Body::new(), None),
+            node("", Body::new(), None),
+            declaration(&ty(""), None),
+            declaration(&other_task, None),
+            node("Type", broken_task, None),
+        ],
+    );
+    let fixes = append(
+        &mut graph,
+        &[
+            declaration(&note, Some(Existing(ids[5]))),
+            declaration(&ty("Other"), Some(Existing(ids[9]))),
+            declaration(&ty("Spare"), Some(Existing(ids[10]))),
+        ],
+    );
+    let ids = [ids, fixes].concat();
+    let error = |path: &str, expected, actual| SchemaError {
+        path: vec![PathPart::Field(path.into())],
+        kind: SchemaErrorKind::WrongShape { expected, actual },
+    };
+    let note_error = error("fields", PayloadKind::Record, PayloadKind::Text);
+    let task_error = error("outgoing", PayloadKind::List, PayloadKind::Text);
+    let nameless_error = SchemaError {
+        path: vec![PathPart::Field("name".into())],
+        kind: SchemaErrorKind::MissingField,
+    };
+    let malformed = |at: usize, error: &SchemaError| MalformedDeclaration {
+        subject: ids[at],
+        error: error.clone(),
+    };
+    let duplicate = |at: usize| DuplicateType {
+        subject: ids[at],
+        name: "Task".into(),
+    };
+    let missing = |at: usize, name: &str| MissingType {
+        subject: ids[at],
+        name: name.into(),
+    };
+    let field = |at: usize, name: &str| Field {
+        subject: ids[at],
+        issue: lifecore::typing::FieldIssue {
+            path: vec![PathPart::Field(name.into())],
+            kind: FieldIssueKind::MissingMandatory,
+        },
+    };
+    let gone = UnknownSuccessorType {
+        subject: ids[11],
+        name: "Gone".into(),
+    };
+    let expected = [
+        // Before any malformed declaration.
+        (5, vec![field(1, "title"), missing(4, "Note")]),
+        // A malformed claimant makes `Note` malformed, not missing, and
+        // leaves `Task` declared.
+        (6, vec![malformed(5, &note_error), field(1, "title")]),
+        // A nameless one claims nothing, not even the empty name.
+        (
+            7,
+            vec![
+                malformed(5, &note_error),
+                malformed(6, &nameless_error),
+                field(1, "title"),
+            ],
+        ),
+        (
+            8,
+            vec![
+                malformed(5, &note_error),
+                malformed(6, &nameless_error),
+                field(1, "title"),
+                missing(7, ""),
+            ],
+        ),
+        (
+            9,
+            vec![
+                malformed(5, &note_error),
+                malformed(6, &nameless_error),
+                field(1, "title"),
+            ],
+        ),
+        // An ambiguous `Task` suppresses its field and endpoint checks.
+        (
+            10,
+            vec![
+                malformed(5, &note_error),
+                malformed(6, &nameless_error),
+                duplicate(9),
+            ],
+        ),
+        // A malformed claimant counts as a duplicate.
+        (
+            11,
+            vec![
+                malformed(5, &note_error),
+                malformed(6, &nameless_error),
+                duplicate(9),
+                malformed(10, &task_error),
+                duplicate(10),
+            ],
+        ),
+        // Repairing `Note` declares it again.
+        (
+            12,
+            vec![
+                malformed(6, &nameless_error),
+                duplicate(9),
+                malformed(10, &task_error),
+                duplicate(10),
+                gone.clone(),
+                field(4, "text"),
+            ],
+        ),
+        (
+            13,
+            vec![
+                malformed(6, &nameless_error),
+                malformed(10, &task_error),
+                duplicate(10),
+                gone.clone(),
+                field(4, "text"),
+            ],
+        ),
+        (
+            14,
+            vec![
+                malformed(6, &nameless_error),
+                gone,
+                field(1, "title"),
+                field(4, "text"),
+            ],
+        ),
+    ];
+    for (end, expected) in expected {
+        let report = findings(&graph, end);
+        assert_eq!(report, expected, "boundary {end}");
+        assert_agrees_with_the_index(graph.view().prefix(end).unwrap(), &report);
+    }
+    let at = |end: usize, name: &str| graph.view().prefix(end).unwrap().resolve_type(name);
+    assert_eq!(
+        at(11, "Task"),
+        TypeResolution::Ambiguous {
+            claimants: vec![
+                Declaration::Parsed {
+                    declaration: ids[0],
+                    schema: task.clone(),
+                },
+                Declaration::Parsed {
+                    declaration: ids[9],
+                    schema: other_task,
+                },
+                Declaration::Malformed {
+                    declaration: ids[10],
+                    error: task_error,
+                },
+            ],
+        }
+    );
+    assert_eq!(
+        at(6, "Note"),
+        TypeResolution::Malformed {
+            declaration: ids[5],
+            error: note_error,
+        }
+    );
+    assert_eq!(at(8, ""), TypeResolution::Missing);
+    assert!(matches!(
+        at(9, ""),
+        TypeResolution::Declared { declaration, .. } if declaration == ids[8]
+    ));
+    assert_eq!(
+        at(14, "Task"),
+        TypeResolution::Declared {
+            declaration: ids[0],
+            schema: task,
+        }
+    );
+}
+
+#[test]
+fn a_claimed_reserved_name_stays_the_builtin_metatype() {
+    let mut linked = ty("Type");
+    linked.outgoing.insert("link".into());
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&ty("Type"), None),
+            declaration(&linked, None),
+            node(
+                "Type",
+                Body::from([
+                    ("name".into(), "Type".into()),
+                    ("fields".into(), "x".into()),
+                ]),
+                None,
+            ),
+        ],
+    );
+    let report = findings(&graph, 3);
+    assert_eq!(graph.view().resolve_type("Type"), TypeResolution::Builtin);
+    assert_eq!(
+        report,
+        [
+            TypeCheckMessage::ReservedTypeName { subject: ids[0] },
+            TypeCheckMessage::ReservedTypeName { subject: ids[1] },
+            TypeCheckMessage::MalformedDeclaration {
+                subject: ids[2],
+                error: SchemaError {
+                    path: vec![PathPart::Field("fields".into())],
+                    kind: SchemaErrorKind::WrongShape {
+                        expected: PayloadKind::Record,
+                        actual: PayloadKind::Text,
+                    },
+                },
+            },
+        ]
+    );
+    assert_agrees_with_the_index(graph.view(), &report);
 }

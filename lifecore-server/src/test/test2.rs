@@ -1413,8 +1413,8 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
     let types = recorder.call("types", "types.list", json!({}));
     let types_as_of = recorder.call("types_as_of", "types.list", json!({"as_of": "1"}));
     // Resolutions TypeCheck refuses, from an unchecked database in the same
-    // directory: two current `Note` declarations, a malformed `Tag`, and a
-    // `Ghost` node with no declaration.
+    // directory: three current `Note` declarations, one of them malformed, a
+    // malformed `Tag`, and a `Ghost` node with no declaration.
     let unchecked = service(StatePath::new(scratch.0.join("unchecked.json")));
     unchecked.init(&[]).unwrap();
     let checked = std::mem::replace(&mut recorder.service, unchecked);
@@ -1424,6 +1424,8 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
             {"name": "note", "kind": "node", "ty_name": "Type", "payload": {"name": "Note",
                 "fields": {"kind": "record", "value": {"text": ["mandatory", "text"]}}}},
             {"name": "note_again", "kind": "node", "ty_name": "Type", "payload": {"name": "Note"}},
+            {"name": "note_broken", "kind": "node", "ty_name": "Type",
+                "payload": {"name": "Note", "outgoing": "Link"}},
             {"name": "tag", "kind": "node", "ty_name": "Type", "payload": {"name": "Tag", "fields": "text"}},
             {"name": "ghost", "kind": "node", "ty_name": "Ghost", "payload": {"title": "Undeclared"}},
         ]}}),

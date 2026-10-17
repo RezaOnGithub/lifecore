@@ -42,7 +42,7 @@ import { lineageRows } from "../model/lineage.ts";
 import type { OutlineView } from "../model/outline.ts";
 import { isPinned, type Place } from "../model/places.ts";
 import { edgeWords } from "../model/relations.ts";
-import { parseDeclaration } from "../model/schema.ts";
+import { parseDeclaration, schemaErrorText } from "../model/schema.ts";
 import { defaultInspectorView, type InspectorView } from "../navigation.ts";
 import { EntryFindings } from "../views/EntryFindings.tsx";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
@@ -201,7 +201,7 @@ function TypeNote({ type }: { type: TypeResolution }) {
       return (
         <>
           <ResolutionBadge resolution={type} />{" "}
-          <span className="muted">{type.message}</span>
+          <span className="muted">{schemaErrorText(type.error)}</span>
         </>
       );
   }

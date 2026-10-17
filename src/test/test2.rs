@@ -8,7 +8,7 @@ use crate::{
     },
     typing::{
         FieldDecl, FieldIssueKind, FieldStatus, PathPart, SchemaError, SchemaErrorKind, Type,
-        TypeDefinition, ValueType, kind_word, path_text,
+        TypeResolution, ValueType, kind_word, path_text,
     },
 };
 use std::{
@@ -45,10 +45,7 @@ fn empty_view_has_builtin_type_and_cannot_expand() {
     let view = graph.view();
     assert!(view.is_empty());
     assert!(view.at(0).is_none());
-    assert_eq!(
-        view.resolve_type("Type").unwrap(),
-        Some(TypeDefinition::Builtin)
-    );
+    assert_eq!(view.resolve_type("Type"), TypeResolution::Builtin);
     assert!(matches!(
         view.prefix(1),
         Err(ViewError::BeyondBoundary { .. })
@@ -354,21 +351,26 @@ fn scalar_and_nested_payloads_round_trip_without_coercion() {
 
 #[test]
 fn schemas_round_trip_as_named_records_and_nested_shapes_report_precise_paths() {
-    let record = ValueType::Record(
-        [(
+    let record = ValueType::Record {
+        fields: [(
             "label".into(),
             FieldDecl {
-                ty: ValueType::Text,
                 status: FieldStatus::Mandatory,
+                shape: ValueType::Text,
             },
         )]
         .into(),
-    );
+    };
     let ty = Type::new(
         "Thing",
         &[(
             "rows",
-            (ValueType::List(Box::new(record)), FieldStatus::Mandatory),
+            (
+                ValueType::List {
+                    element: Box::new(record),
+                },
+                FieldStatus::Mandatory,
+            ),
         )],
         &["link"],
         &[],
@@ -424,27 +426,29 @@ fn nested_records(levels: usize) -> Payload {
 fn declarations_encode_fields_as_word_lists_and_round_trip_every_shape() {
     use FieldStatus::*;
     use ValueType::*;
-    let list = |element| List(Box::new(element));
-    let owner = Record(
-        [(
+    let list = |element| List {
+        element: Box::new(element),
+    };
+    let owner = Record {
+        fields: [(
             "owner".into(),
             FieldDecl {
-                ty: Text,
                 status: Mandatory,
+                shape: Text,
             },
         )]
         .into(),
-    );
-    let row = Record(
-        [(
+    };
+    let row = Record {
+        fields: [(
             "inner".into(),
             FieldDecl {
-                ty: owner.clone(),
                 status: Encouraged,
+                shape: owner.clone(),
             },
         )]
         .into(),
-    );
+    };
     let ty = Type::new(
         "Task",
         &[
@@ -559,13 +563,17 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
         (
             words(&["required", "text"], None),
             at(&[Index(0)]),
-            UnknownPresence("required".into()),
+            UnknownPresence {
+                word: "required".into(),
+            },
         ),
         // Presence comes first, so a leading shape word is an unknown presence.
         (
             words(&["text", "optional"], None),
             at(&[Index(0)]),
-            UnknownPresence("text".into()),
+            UnknownPresence {
+                word: "text".into(),
+            },
         ),
         (words(&["optional"], None), at(&[Index(1)]), MissingShape),
         (
@@ -576,12 +584,16 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
         (
             words(&["optional", "float"], None),
             at(&[Index(1)]),
-            UnknownShape("float".into()),
+            UnknownShape {
+                word: "float".into(),
+            },
         ),
         (
             words(&["optional", "list", "Text"], None),
             at(&[Index(2)]),
-            UnknownShape("Text".into()),
+            UnknownShape {
+                word: "Text".into(),
+            },
         ),
         (
             Payload::List(vec!["optional".into(), true.into()]),
@@ -647,7 +659,9 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
                 )])),
             ),
             at(&[Index(3), field("b"), Index(0)]),
-            UnknownPresence("sometimes".into()),
+            UnknownPresence {
+                word: "sometimes".into(),
+            },
         ),
         (lists(65), at(&[Index(65)]), TooDeep),
         // A flat list far deeper than the stack could recurse is still reported.
@@ -694,7 +708,7 @@ fn malformed_declarations_report_the_offending_element_and_kind() {
         (
             named("successors", words(&["A", "B", "A"], None)),
             vec![field("successors"), Index(2)],
-            DuplicatePermission("A".into()),
+            DuplicatePermission { name: "A".into() },
         ),
         // The former names of `fields` and `successors` are unknown keys.
         (
@@ -1484,5 +1498,305 @@ fn entries_and_changes_serialize_in_the_proposal_vocabulary() {
             serde_json::json!([{"name": "Type_Check", "config": "{}"}])
         )
         .is_err()
+    );
+}
+
+#[test]
+fn typing_values_serialize_in_tagged_snake_case() {
+    use crate::typing::Declaration;
+    use serde_json::json;
+    let owner = FieldDecl {
+        status: FieldStatus::Mandatory,
+        shape: ValueType::Text,
+    };
+    let ty = Type::new(
+        "Task",
+        &[
+            (
+                "tags",
+                (
+                    ValueType::List {
+                        element: Box::new(ValueType::Timestamp),
+                    },
+                    FieldStatus::Optional,
+                ),
+            ),
+            (
+                "details",
+                (
+                    ValueType::Record {
+                        fields: [("owner".into(), owner)].into(),
+                    },
+                    FieldStatus::Encouraged,
+                ),
+            ),
+        ],
+        &["DependsOn"],
+        &[],
+        &["Note"],
+    );
+    let encoded = json!({
+        "name": "Task",
+        "fields": {
+            "details": {
+                "status": "encouraged",
+                "shape": {"kind": "record", "fields": {
+                    "owner": {"status": "mandatory", "shape": {"kind": "text"}},
+                }},
+            },
+            "tags": {
+                "status": "optional",
+                "shape": {"kind": "list", "element": {"kind": "timestamp"}},
+            },
+        },
+        "outgoing": ["DependsOn"],
+        "incoming": [],
+        "successors": ["Note"],
+    });
+    assert_eq!(serde_json::to_value(&ty).unwrap(), encoded);
+    assert_eq!(serde_json::from_value::<Type>(encoded).unwrap(), ty);
+    let errors = [
+        (
+            SchemaError {
+                path: vec![
+                    PathPart::Field("fields".into()),
+                    PathPart::Field("a".into()),
+                    PathPart::Index(1),
+                ],
+                kind: SchemaErrorKind::UnknownShape { word: "txt".into() },
+            },
+            json!({"path": ["fields", "a", 1], "kind": "unknown_shape", "word": "txt"}),
+        ),
+        (
+            SchemaError {
+                path: vec![PathPart::Field("outgoing".into())],
+                kind: SchemaErrorKind::WrongShape {
+                    expected: PayloadKind::List,
+                    actual: PayloadKind::Text,
+                },
+            },
+            json!({"path": ["outgoing"], "kind": "wrong_shape", "expected": "list", "actual": "text"}),
+        ),
+        (
+            SchemaError {
+                path: vec![],
+                kind: SchemaErrorKind::TooDeep,
+            },
+            json!({"path": [], "kind": "too_deep"}),
+        ),
+    ];
+    for (error, encoded) in errors {
+        assert_eq!(serde_json::to_value(&error).unwrap(), encoded);
+        assert_eq!(
+            serde_json::from_value::<SchemaError>(encoded).unwrap(),
+            error
+        );
+    }
+    let mut graph = LifeCoreList::default();
+    let id = append(
+        &mut graph,
+        &[Change::Entry(EntryChange::Node(NewNode {
+            ty_name: "Type".into(),
+            payload: Body::new(),
+            predecessor: None,
+            intent: None,
+        }))],
+    )[0];
+    let error = SchemaError {
+        path: vec![PathPart::Field("name".into())],
+        kind: SchemaErrorKind::MissingField,
+    };
+    let id_json = serde_json::to_value(id).unwrap();
+    let resolutions = [
+        (TypeResolution::Builtin, json!({"kind": "builtin"})),
+        (TypeResolution::Missing, json!({"kind": "missing"})),
+        (
+            TypeResolution::Declared {
+                declaration: id,
+                schema: Type::new("A", &[], &[], &[], &[]),
+            },
+            json!({"kind": "declared", "declaration": id_json, "schema": {
+                "name": "A", "fields": {}, "outgoing": [], "incoming": [], "successors": [],
+            }}),
+        ),
+        (
+            TypeResolution::Malformed {
+                declaration: id,
+                error: error.clone(),
+            },
+            json!({"kind": "malformed", "declaration": id_json,
+                "error": {"path": ["name"], "kind": "missing_field"}}),
+        ),
+        (
+            TypeResolution::Ambiguous {
+                claimants: vec![
+                    Declaration::Malformed {
+                        declaration: id,
+                        error,
+                    },
+                    Declaration::Parsed {
+                        declaration: id,
+                        schema: Type::new("A", &[], &[], &[], &[]),
+                    },
+                ],
+            },
+            json!({"kind": "ambiguous", "claimants": [
+                {"kind": "malformed", "declaration": id_json,
+                    "error": {"path": ["name"], "kind": "missing_field"}},
+                {"kind": "parsed", "declaration": id_json, "schema": {
+                    "name": "A", "fields": {}, "outgoing": [], "incoming": [], "successors": [],
+                }},
+            ]}),
+        ),
+    ];
+    for (resolution, encoded) in resolutions {
+        assert_eq!(serde_json::to_value(&resolution).unwrap(), encoded);
+        assert_eq!(
+            serde_json::from_value::<TypeResolution>(encoded).unwrap(),
+            resolution
+        );
+    }
+}
+
+// The index files each current declaration under the `name` text it claims,
+// in append order, whether or not the rest parses; a declaration without one
+// claims nothing. It reads only its own view's current declarations.
+#[test]
+fn the_declaration_index_files_claims_by_name_text_at_each_boundary() {
+    use crate::typing::Declaration;
+    let declare = |payload: Body, predecessor| {
+        Change::Entry(EntryChange::Node(NewNode {
+            ty_name: "Type".into(),
+            payload,
+            predecessor,
+            intent: predecessor.map(|_| RevisionIntent::Branch),
+        }))
+    };
+    let named = |name: &str| Body::from([("name".into(), name.into())]);
+    let mut colourful = named("A");
+    colourful.insert("colour".into(), "red".into());
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declare(named("A"), None),
+            declare(Body::from([("name".into(), 1.into())]), None),
+            declare(named(""), None),
+            declare(colourful, None),
+            declare(named("B"), Some(Added(0))),
+        ],
+    );
+    let parsed = |at: usize, name: &str| Declaration::Parsed {
+        declaration: ids[at],
+        schema: Type::new(name, &[], &[], &[], &[]),
+    };
+    let nameless = Declaration::Malformed {
+        declaration: ids[1],
+        error: SchemaError {
+            path: vec![PathPart::Field("name".into())],
+            kind: SchemaErrorKind::WrongShape {
+                expected: PayloadKind::Text,
+                actual: PayloadKind::Integer,
+            },
+        },
+    };
+    let colour = Declaration::Malformed {
+        declaration: ids[3],
+        error: SchemaError {
+            path: vec![PathPart::Field("colour".into())],
+            kind: SchemaErrorKind::UnknownField,
+        },
+    };
+    let alone = |declaration: &Declaration| match declaration {
+    Declaration::Parsed {
+        declaration,
+        schema,
+    } => TypeResolution::Declared {
+        declaration: *declaration,
+        schema: schema.clone(),
+    },
+    Declaration::Malformed { declaration, error } => TypeResolution::Malformed {
+        declaration: *declaration,
+        error: error.clone(),
+    },
+    };
+    let ambiguous = TypeResolution::Ambiguous {
+        claimants: vec![parsed(0, "A"), colour.clone()],
+    };
+    let cases = [
+        (0, vec![], vec![], vec![("A", TypeResolution::Missing)]),
+        (1, vec!["A"], vec![], vec![("A", alone(&parsed(0, "A")))]),
+        (
+            2,
+            vec!["A"],
+            vec![nameless.clone()],
+            vec![("A", alone(&parsed(0, "A"))), ("", TypeResolution::Missing)],
+        ),
+        (
+            3,
+            vec!["", "A"],
+            vec![nameless.clone()],
+            vec![("", alone(&parsed(2, "")))],
+        ),
+        (
+            4,
+            vec!["", "A"],
+            vec![nameless.clone()],
+            vec![("A", ambiguous), ("", alone(&parsed(2, "")))],
+        ),
+        (
+            5,
+            vec!["", "A", "B"],
+            vec![nameless],
+            vec![
+                ("A", alone(&colour)),
+                ("B", alone(&parsed(4, "B"))),
+                ("Type", TypeResolution::Builtin),
+            ],
+        ),
+    ];
+    for (end, names, without_name, resolutions) in cases {
+        let view = graph.view().prefix(end).unwrap();
+        let index = view.declarations();
+        assert_eq!(index.names().collect::<Vec<_>>(), names, "boundary {end}");
+        assert_eq!(
+            index.nameless().cloned().collect::<Vec<_>>(),
+            without_name,
+            "boundary {end}"
+        );
+        for (name, resolution) in resolutions {
+            assert_eq!(index.resolve(name), resolution, "{name:?} at {end}");
+            assert_eq!(view.resolve_type(name), resolution, "{name:?} at {end}");
+            assert_eq!(
+                index.declared(name),
+                match &resolution {
+                TypeResolution::Declared {
+                    declaration,
+                    schema,
+                } => Some((*declaration, schema)),
+                _ => None,
+                },
+                "{name:?} at {end}"
+            );
+            assert_eq!(
+                index.is_missing(name),
+                resolution == TypeResolution::Missing,
+                "{name:?} at {end}"
+            );
+        }
+    }
+    // Current declarations in append order, each with its claim.
+    let index = graph.view().declarations();
+    assert_eq!(
+        index
+            .iter()
+            .map(|(name, declaration)| (name, declaration.id()))
+            .collect::<Vec<_>>(),
+        [
+            (None, ids[1]),
+            (Some(""), ids[2]),
+            (Some("A"), ids[3]),
+            (Some("B"), ids[4]),
+        ]
     );
 }

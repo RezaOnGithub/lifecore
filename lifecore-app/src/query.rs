@@ -1,12 +1,8 @@
-use crate::{
-    AppError,
-    proposal::present,
-    schema::{self, TypeResolution},
-    service::EntryRecord,
-};
+use crate::{AppError, proposal::present, service::EntryRecord};
 use lifecore::{
     Edge, Entry, EntryId, Node, View, ViewId,
     inspection::{Currentness, Direction, EdgeSelection, NodeSelection},
+    typing::TypeResolution,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::{
@@ -93,7 +89,7 @@ pub fn inspect(view: View<'_>, id: EntryId) -> Result<EntryInspection, AppError>
         EntryInspection::Node {
             view: view.id(),
             entry: EntryRecord::node(view, node),
-            ty: schema::resolve_name(view, &node.ty_name),
+            ty: view.resolve_type(&node.ty_name),
             lineage,
             edges,
             neighbours: neighbours

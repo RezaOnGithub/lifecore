@@ -4,10 +4,7 @@ use lifecore::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, Diagnostic, EvaluationInputs,
         InnerMessageType, Message, MessageKind, MessageType, TypedAnalyzer,
     },
-    typing::{
-        FieldIssue, FieldIssueKind, ResolutionError, SchemaError, Type, TypeDefinition, kind_word,
-        path_text,
-    },
+    typing::{FieldIssue, FieldIssueKind, SchemaError, Type, TypeResolution, kind_word, path_text},
 };
 use semver::Version;
 use serde::Serialize;
@@ -184,66 +181,72 @@ impl TypedAnalyzer for TypeCheck {
 
 impl TypeCheck {
     // Declarations, missing types, fields, and edge endpoints of the current
-    // graph in `view`.
+    // graph in `view`. Every judgment of a name reads the view's declaration
+    // index, so these findings agree with `View::resolve_type` (SPEC 6.2).
     fn current_state(view: View<'_>) -> Vec<TypeCheckMessage> {
         use TypeCheckMessage::*;
         let mut output = Vec::new();
-        let mut types = BTreeMap::<String, (EntryId, Type)>::new();
-        for node in view.fresh_nodes().filter(|n| n.ty_name == Type::TYPE_NAME) {
-            match Type::from_body(&node.payload) {
-            Err(error) => output.push(MalformedDeclaration {
-                subject: node.id,
-                error,
+        let declarations = view.declarations();
+        for (name, declaration) in declarations.iter() {
+            let subject = declaration.id();
+            match (declaration.schema(), name) {
+            (Err(error), _) => output.push(MalformedDeclaration {
+                subject,
+                error: error.clone(),
             }),
-            Ok(ty) if ty.name == Type::TYPE_NAME => {
-                output.push(ReservedTypeName { subject: node.id })
+            (Ok(_), Some(Type::TYPE_NAME)) => output.push(ReservedTypeName { subject }),
+            (Ok(_), _) => {}
             }
-            Ok(ty) => {
-                if types.contains_key(&ty.name) {
-                    output.push(DuplicateType {
-                        subject: node.id,
-                        name: ty.name.clone(),
-                    });
-                }
-                // NOTDO: No ambiguity tracking here yet. DuplicateType rejects the
-                // candidate, but retaining the last declaration makes subsequent body
-                // and edge findings depend on declaration order. Track ambiguous names
-                // separately to suppress dependent checks without reporting MissingType.
-                types.insert(ty.name.clone(), (node.id, ty));
-            }
+            // `Type` always resolves to the metatype, so its claimants are
+            // reserved, not ambiguous.
+            if let Some(name) = name.filter(|name| *name != Type::TYPE_NAME)
+                && declarations
+                    .claimants(name)
+                    .next()
+                    .is_some_and(|first| first.id() != subject)
+            {
+                output.push(DuplicateType {
+                    subject,
+                    name: name.into(),
+                });
             }
         }
-        for (id, ty) in types.values() {
-            for name in &ty.successors {
-                if name != Type::TYPE_NAME && !types.contains_key(name) {
+        for name in declarations.names() {
+            let Some((id, ty)) = declarations.declared(name) else {
+                continue;
+            };
+            for successor in &ty.successors {
+                if declarations.is_missing(successor) {
                     output.push(UnknownSuccessorType {
-                        subject: *id,
-                        name: name.clone(),
+                        subject: id,
+                        name: successor.clone(),
                     });
                 }
             }
         }
+        // An ambiguous or malformed name already has its declaration findings,
+        // so its nodes and endpoints get neither dependent findings nor
+        // `MissingType`.
         for node in view.fresh_nodes().filter(|n| n.ty_name != Type::TYPE_NAME) {
-            let Some((_, ty)) = types.get(&node.ty_name) else {
+            if let Some((_, ty)) = declarations.declared(&node.ty_name) {
+                output.extend(ty.check(&node.payload).into_iter().map(|issue| Field {
+                    subject: node.id,
+                    issue,
+                }));
+            } else if declarations.is_missing(&node.ty_name) {
                 output.push(MissingType {
                     subject: node.id,
                     name: node.ty_name.clone(),
                 });
-                continue;
-            };
-            output.extend(ty.check(&node.payload).into_iter().map(|issue| Field {
-                subject: node.id,
-                issue,
-            }));
+            }
         }
         for edge in view.fresh_edges() {
             for (endpoint, outgoing) in [(edge.from, true), (edge.to, false)] {
                 let node = view.node(endpoint).expect("validated endpoint");
-                // Built-in Type has no ordinary edge permissions. Missing declarations
-                // already have diagnostics.
+                // Built-in Type has no ordinary edge permissions.
                 let allowed = if node.ty_name == Type::TYPE_NAME {
                     false
-                } else if let Some((_, ty)) = types.get(&node.ty_name) {
+                } else if let Some((_, ty)) = declarations.declared(&node.ty_name) {
                     (if outgoing { &ty.outgoing } else { &ty.incoming }).contains(&edge.ty_name)
                 } else {
                     continue;
@@ -272,22 +275,20 @@ impl TypeCheck {
             .node(child.predecessor?)
             .expect("validated predecessor");
         let allowed = match before.resolve_type(&predecessor.ty_name) {
-        Ok(Some(TypeDefinition::Builtin)) => child.ty_name == Type::TYPE_NAME,
-        Ok(Some(TypeDefinition::Declared { schema, .. })) => {
+        TypeResolution::Builtin => child.ty_name == Type::TYPE_NAME,
+        TypeResolution::Declared { schema, .. } => {
             child.ty_name == schema.name || schema.successors.contains(&child.ty_name)
         }
-        Ok(None) => {
+        TypeResolution::Missing => {
             return Some(MissingType {
                 subject,
                 name: predecessor.ty_name.clone(),
             });
         }
-        Err(ResolutionError::Malformed { error, .. }) => {
-            return Some(MalformedDeclaration { subject, error });
-        }
-        Err(ResolutionError::Ambiguous { name, .. }) => {
-            return Some(DuplicateType { subject, name });
-        }
+        // The child supersedes an ordinary node, not a declaration, so every
+        // claimant of the name is still current in the view ending with the
+        // child, and their declaration findings stand in for this judgment.
+        TypeResolution::Malformed { .. } | TypeResolution::Ambiguous { .. } => return None,
         };
         (!allowed).then(|| BadSuccessor {
             subject,

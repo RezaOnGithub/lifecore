@@ -14,6 +14,8 @@ import {
   declarationForForm,
   MAX_SHAPE_DEPTH,
   PRESENCE_WORDS,
+  schemaErrorMessage,
+  schemaPathText,
   shapeDepth,
 } from "../model/schema.ts";
 import type { PayloadKind } from "../model/values.ts";
@@ -422,8 +424,10 @@ function rawNote(reading: DeclarationReading): string | undefined {
       return undefined;
     case "unknown_keys":
       return `The payload has ${reading.keys.length === 1 ? "a key" : "keys"} outside the declaration: ${reading.keys.join(", ")}. A declaration has only ${DECLARATION_KEYS.join(", ")} (FILES §2.6), and the form would drop the rest, so it returns once they are gone.`;
-    case "malformed":
-      return `Outside the declaration grammar at ${reading.path === "" ? "the payload" : reading.path}: ${reading.message} (FILES §2.6). The form returns once it parses.`;
+    case "malformed": {
+      const path = schemaPathText(reading.error.path);
+      return `Outside the declaration grammar at ${path === "" ? "the payload" : path}: ${schemaErrorMessage(reading.error)} (FILES §2.6). The form returns once it parses.`;
+    }
   }
 }
 

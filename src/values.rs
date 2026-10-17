@@ -89,6 +89,7 @@ pub enum Payload {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PayloadKind {
     Text,
     Integer,

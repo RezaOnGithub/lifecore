@@ -1,4 +1,5 @@
 import type { Currentness, TypeResolution } from "../contract.ts";
+import { schemaErrorText } from "../model/schema.ts";
 
 export function CurrentnessSelect({
   id,
@@ -40,7 +41,7 @@ export function ResolutionBadge({
       return <span className="badge warn">ambiguous</span>;
     case "malformed":
       return (
-        <span className="badge warn" title={resolution.message}>
+        <span className="badge warn" title={schemaErrorText(resolution.error)}>
           malformed
         </span>
       );

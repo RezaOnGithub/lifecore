@@ -4,7 +4,10 @@ import type {
   FieldDecls,
   FieldStatus,
   Payload,
+  PayloadKind,
   RecordPayload,
+  SchemaError,
+  SchemaErrorKind,
   Shape,
   TypeSchema,
 } from "../contract.ts";
@@ -30,48 +33,45 @@ export const DECLARATION_KEYS: readonly string[] = [
 // nested records (FILES §2.6).
 export const MAX_SHAPE_DEPTH = 64;
 
+// Keys outside the five are reported together, so the raw editor can name
+// them all; the server reports the first in code point order.
 export type DeclarationReading =
   | { kind: "ok"; schema: TypeSchema }
   | { kind: "unknown_keys"; keys: string[] }
-  | { kind: "malformed"; path: string; message: string };
+  | { kind: "malformed"; error: SchemaError };
 
-// A path segment as the server reports it: a field name or a list position.
-type Part = string | number;
+type Part = SchemaError["path"][number];
 
 class Malformed extends Error {
+  readonly problem: SchemaErrorKind;
   readonly path: Part[];
-  constructor(message: string, path: Part[] = []) {
-    super(message);
+  constructor(problem: SchemaErrorKind, path: Part[] = []) {
+    super(problem.kind);
+    this.problem = problem;
     this.path = path;
   }
   // Errors gain their path from the inside out, as the server's do.
   at(part: Part): Malformed {
-    return new Malformed(this.message, [part, ...this.path]);
+    return new Malformed(this.problem, [part, ...this.path]);
   }
 }
 
-function formatPath(path: readonly Part[]): string {
-  let text = "";
-  for (const part of path) {
-    text +=
-      typeof part === "number" ? `[${part}]` : text === "" ? part : `.${part}`;
-  }
-  return text;
-}
-
-function describe(value: Payload): string {
-  const kind = kindOf(value);
-  return kind === "text" ? `text ${JSON.stringify(value)}` : kind;
+function wrongShape(expected: PayloadKind, value: Payload): Malformed {
+  return new Malformed({
+    kind: "wrong_shape",
+    expected,
+    actual: kindOf(value),
+  });
 }
 
 // Reads a `Type` declaration payload (FILES §2.6) the way the server's
 // `Type::from_body` does, in the same order: keys, then `name`, `fields`,
-// and the three permission lists. A failure names the offending element's
-// path, with list positions for words.
+// and the three permission lists, each record's fields in code point order.
+// A failure is the error the server reports for the payload.
 export function readDeclaration(payload: Body): DeclarationReading {
-  const unknown = Object.keys(payload).filter(
-    (key) => !DECLARATION_KEYS.includes(key),
-  );
+  const unknown = Object.keys(payload)
+    .filter((key) => !DECLARATION_KEYS.includes(key))
+    .sort(compareCodePoints);
   if (unknown.length > 0) {
     return { kind: "unknown_keys", keys: unknown };
   }
@@ -92,8 +92,7 @@ export function readDeclaration(payload: Body): DeclarationReading {
     if (failure instanceof Malformed) {
       return {
         kind: "malformed",
-        path: formatPath(failure.path),
-        message: failure.message,
+        error: { path: failure.path, ...failure.problem },
       };
     }
     throw failure;
@@ -125,11 +124,11 @@ function within<T>(part: Part, read: () => T): T {
 
 function readName(payload: Body): string {
   if (!Object.hasOwn(payload, "name")) {
-    throw new Malformed("name is required", ["name"]);
+    throw new Malformed({ kind: "missing_field" }, ["name"]);
   }
   const name = payload.name as Payload;
   if (typeof name !== "string") {
-    throw new Malformed(`expected text, found ${describe(name)}`, ["name"]);
+    throw wrongShape("text", name).at("name");
   }
   return name;
 }
@@ -142,37 +141,37 @@ function readNames(payload: Body, key: string): string[] {
   }
   const value = payload[key] as Payload;
   if (!Array.isArray(value)) {
-    throw new Malformed(`expected a list, found ${describe(value)}`, [key]);
+    throw wrongShape("list", value).at(key);
   }
   const names = new Set<string>();
   value.forEach((item, index) => {
     if (typeof item !== "string") {
-      throw new Malformed(`expected text, found ${describe(item)}`, [
+      throw wrongShape("text", item).at(index).at(key);
+    }
+    if (names.has(item)) {
+      throw new Malformed({ kind: "duplicate_permission", name: item }, [
         key,
         index,
       ]);
-    }
-    if (names.has(item)) {
-      throw new Malformed(`${JSON.stringify(item)} is repeated`, [key, index]);
     }
     names.add(item);
   });
   return [...names].sort(compareCodePoints);
 }
 
+// Fields are read in code point order, the server's `BTreeMap` order, so
+// both report the same field when several are malformed.
 function readFieldDecls(value: Payload, depth: number): FieldDecls {
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Malformed(`expected a record envelope, found ${describe(value)}`);
+  if (kindOf(value) !== "record") {
+    throw wrongShape("record", value);
   }
-  if (value.kind !== "record") {
-    throw new Malformed(`expected a record envelope, found ${value.kind}`);
-  }
+  const fields = (value as RecordPayload).value;
   const decls: FieldDecls = {};
-  for (const [field, words] of Object.entries(value.value)) {
+  for (const field of Object.keys(fields).sort(compareCodePoints)) {
     setOwn(
       decls,
       field,
-      within(field, () => readFieldDecl(words, depth)),
+      within(field, () => readFieldDecl(fields[field] as Payload, depth)),
     );
   }
   return decls;
@@ -182,29 +181,30 @@ function readFieldDecls(value: Payload, depth: number): FieldDecls {
 // its field declarations, so it ends the list.
 function readFieldDecl(value: Payload, depth: number): FieldDecl {
   if (!Array.isArray(value)) {
-    throw new Malformed(`expected a list of words, found ${describe(value)}`);
+    throw wrongShape("list", value);
   }
-  const status = word(value, 0, "a presence word");
+  const status = word(value, 0, { kind: "missing_presence" });
   if (!PRESENCE_WORDS.includes(status as FieldStatus)) {
-    throw new Malformed(
-      `unknown presence ${JSON.stringify(status)}; expected ${PRESENCE_WORDS.join(", ")}`,
-      [0],
-    );
+    throw new Malformed({ kind: "unknown_presence", word: status }, [0]);
   }
   const [shape, end] = readShape(value, 1, depth);
   if (end < value.length) {
-    throw new Malformed("unexpected element after the shape", [end]);
+    throw new Malformed({ kind: "trailing_elements" }, [end]);
   }
   return { status: status as FieldStatus, shape };
 }
 
-function word(words: readonly Payload[], index: number, what: string): string {
+function word(
+  words: readonly Payload[],
+  index: number,
+  missing: SchemaErrorKind,
+): string {
   const value = words[index];
   if (value === undefined) {
-    throw new Malformed(`missing ${what}`, [index]);
+    throw new Malformed(missing, [index]);
   }
   if (typeof value !== "string") {
-    throw new Malformed(`expected ${what}, found ${describe(value)}`, [index]);
+    throw wrongShape("text", value).at(index);
   }
   return value;
 }
@@ -216,12 +216,9 @@ function readShape(
   start: number,
   depth: number,
 ): [Shape, number] {
-  const head = word(words, start, "a shape word");
+  const head = word(words, start, { kind: "missing_shape" });
   if ((head === "list" || head === "record") && depth >= MAX_SHAPE_DEPTH) {
-    throw new Malformed(
-      `more than ${MAX_SHAPE_DEPTH} nested list and record words`,
-      [start],
-    );
+    throw new Malformed({ kind: "too_deep" }, [start]);
   }
   switch (head) {
     case "text":
@@ -237,20 +234,79 @@ function readShape(
       const next = start + 1;
       const envelope = words[next];
       if (envelope === undefined) {
-        throw new Malformed(
-          "record must be followed by a record envelope of field declarations",
-          [next],
-        );
+        throw new Malformed({ kind: "missing_record_fields" }, [next]);
       }
       const fields = within(next, () => readFieldDecls(envelope, depth + 1));
       return [{ kind: "record", fields }, next + 1];
     }
     default:
-      throw new Malformed(
-        `unknown shape word ${JSON.stringify(head)}; expected text, integer, boolean, timestamp, list, or record`,
-        [start],
-      );
+      throw new Malformed({ kind: "unknown_shape", word: head }, [start]);
   }
+}
+
+// ---- Words for declaration errors ----
+
+// The client words every declaration error it shows, whether its own
+// parse or a server resolution found it; Rust's `Display` words the same
+// errors where the server writes text, as in TypeCheck findings.
+const KIND_WORDS: { [K in PayloadKind]: string } = {
+  text: "text",
+  integer: "an integer",
+  boolean: "a boolean",
+  timestamp: "a timestamp",
+  list: "a list",
+  record: "a record",
+};
+
+export function schemaErrorMessage(error: SchemaErrorKind): string {
+  switch (error.kind) {
+    case "missing_field":
+      return "required but missing";
+    case "unknown_field":
+      return `not a declaration key; a declaration has ${DECLARATION_KEYS.join(", ")}`;
+    case "wrong_shape":
+      return `expected ${KIND_WORDS[error.expected]}, found ${KIND_WORDS[error.actual]}`;
+    case "missing_presence":
+      return "missing a presence word";
+    case "unknown_presence":
+      return `unknown presence ${JSON.stringify(error.word)}; expected ${PRESENCE_WORDS.join(", ")}`;
+    case "missing_shape":
+      return "missing a shape word";
+    case "unknown_shape":
+      return `unknown shape word ${JSON.stringify(error.word)}; expected text, integer, boolean, timestamp, list, or record`;
+    case "missing_record_fields":
+      return "record must be followed by a record envelope of field declarations";
+    case "trailing_elements":
+      return "unexpected element after the shape";
+    case "too_deep":
+      return `more than ${MAX_SHAPE_DEPTH} nested list and record words`;
+    case "duplicate_permission":
+      return `${JSON.stringify(error.name)} is repeated`;
+  }
+}
+
+const PLAIN_FIELD = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+// `fields.a[1]`. A field name outside the identifier grammar is quoted, so
+// a dot, bracket, or space inside a name cannot read as structure.
+export function schemaPathText(path: readonly Part[]): string {
+  let text = "";
+  for (const part of path) {
+    if (typeof part === "number") {
+      text += `[${part}]`;
+    } else {
+      text += `${text === "" ? "" : "."}${PLAIN_FIELD.test(part) ? part : JSON.stringify(part)}`;
+    }
+  }
+  return text;
+}
+
+// `fields.a[1]: unknown shape word "txt"; …`, or the words alone for the
+// payload as a whole.
+export function schemaErrorText(error: SchemaError): string {
+  const path = schemaPathText(error.path);
+  const message = schemaErrorMessage(error);
+  return path === "" ? message : `${path}: ${message}`;
 }
 
 // The deepest run of nested `list` and `record` words in a shape.
@@ -315,11 +371,16 @@ function shapeWordList(shape: Shape): Payload[] {
 }
 
 // The summary column of the `Type` table.
-export function declarationSummary(payload: Body): string {
-  const schema = parseDeclaration(payload);
-  if (schema === null) {
-    return "unreadable declaration";
+export function declarationSummary(reading: DeclarationReading): string {
+  switch (reading.kind) {
+    case "unknown_keys":
+      return `unreadable declaration: ${reading.keys.join(", ")} ${reading.keys.length === 1 ? "is not a key" : "are not keys"}`;
+    case "malformed":
+      return `unreadable declaration: ${schemaErrorText(reading.error)}`;
+    case "ok":
+      break;
   }
+  const { schema } = reading;
   const count = Object.keys(schema.fields).length;
   const names = (list: string[]) =>
     list.length === 0 ? "none" : list.join(", ");

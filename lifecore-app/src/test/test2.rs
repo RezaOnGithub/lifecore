@@ -7,7 +7,7 @@ use crate::{
     },
     render::{self, GraphvizFailure, Limits, RenderFormat},
     rpc,
-    schema::{self, NodeCounts, TypeResolution},
+    schema::{self, NodeCounts},
     service::{
         AddAnalyzerRequest, AnalysisRunRequest, DismissRequest, DismissalList, EntryGetRequest,
         EntryInspectRequest, EntryListRequest, EntryRecord, NoParams, ProposalRequest, Published,
@@ -24,13 +24,16 @@ use lifecore::{
     },
     inspection::{Currentness, Direction},
     transaction::{self, Change, EntryChange, NewEdge, NewNode, RevisionIntent},
-    typing::{FieldDecl, FieldStatus, Type, ValueType},
+    typing::{
+        Declaration, FieldDecl, FieldStatus, PathPart, SchemaError, SchemaErrorKind, Type,
+        TypeResolution, ValueType,
+    },
 };
 use lifecore_dag_check::DagCheckFactory;
 use lifecore_typecheck::TypeCheckFactory;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs, io,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -894,7 +897,7 @@ fn plan_ids_detect_stale_foreign_divergent_and_suite_only_bases() {
     assert_eq!(
         serde_json::from_str::<Value>(&warnings[0].key.analyzer_certificate.0).unwrap(),
         json!({"Field": {"subject": x,
-            "issue": {"path": [{"Field": "notes"}], "kind": "MissingEncouraged"}}})
+            "issue": {"path": ["notes"], "kind": "MissingEncouraged"}}})
     );
     assert_eq!(applied.report.analysis.observations().count(), 0);
     assert!(matches!(
@@ -951,17 +954,19 @@ fn a_hand_written_toml_declaration_applies_and_typechecks_nodes() {
     let proposal::ProposalEntry::Node { payload, .. } = &declaration.entries[0] else {
         panic!("expected a node")
     };
-    let owner = ValueType::Record(
-        [(
+    let owner = ValueType::Record {
+        fields: [(
             "owner".into(),
             FieldDecl {
-                ty: ValueType::Text,
                 status: FieldStatus::Mandatory,
+                shape: ValueType::Text,
             },
         )]
         .into(),
-    );
-    let list = |element| ValueType::List(Box::new(element));
+    };
+    let list = |element| ValueType::List {
+        element: Box::new(element),
+    };
     let expected = Type::new(
         "Task",
         &[
@@ -1010,10 +1015,10 @@ fn a_hand_written_toml_declaration_applies_and_typechecks_nodes() {
         findings,
         [
             json!({"Field": {"subject": entry, "issue": {
-                "path": [{"Field": "details"}, {"Field": "owner"}], "kind": "MissingMandatory"}}}),
+                "path": ["details", "owner"], "kind": "MissingMandatory"}}}),
             json!({"Field": {"subject": entry, "issue": {
-                "path": [{"Field": "grid"}, {"Index": 0}, {"Index": 0}],
-                "kind": {"TypeMismatch": {"expected": "Integer", "actual": "Text"}}}}}),
+                "path": ["grid", 0, 0],
+                "kind": {"TypeMismatch": {"expected": "integer", "actual": "text"}}}}}),
         ]
     );
 }
@@ -1738,14 +1743,10 @@ fn split(scratch: &Scratch) -> Vec<EntryId> {
 fn unchecked(scratch: &Scratch) -> Vec<EntryId> {
     let service = scratch.service();
     service.init(&[]).unwrap();
-    let note =
-        |fields: Value| json!({"name": "Note", "fields": {"kind": "record", "value": fields}});
     let applied = service
         .apply(request(proposal(json!([
-            {"name": "note", "kind": "node", "ty_name": "Type",
-                "payload": note(json!({"text": ["mandatory", "text"]}))},
-            {"name": "note_again", "kind": "node", "ty_name": "Type",
-                "payload": note(json!({"text": ["optional", "list", "text"]}))},
+            {"name": "note", "kind": "node", "ty_name": "Type", "payload": note_declaration()},
+            {"name": "note_again", "kind": "node", "ty_name": "Type", "payload": note_again()},
             {"name": "ghost", "kind": "node", "ty_name": "Ghost", "payload": {"title": "G"}},
             {"name": "a_note", "kind": "node", "ty_name": "Note", "payload": {"text": "t"}},
             {"name": "tag", "kind": "node", "ty_name": "Type", "payload": tag_declaration()},
@@ -1759,6 +1760,14 @@ fn unchecked(scratch: &Scratch) -> Vec<EntryId> {
     applied.report.operations.iter().map(|o| o.entry).collect()
 }
 
+fn note_declaration() -> Value {
+    json!({"name": "Note", "fields": {"kind": "record", "value": {"text": ["mandatory", "text"]}}})
+}
+
+fn note_again() -> Value {
+    json!({"name": "Note", "fields": {"kind": "record", "value": {"text": ["optional", "list", "text"]}}})
+}
+
 fn tag_declaration() -> Value {
     json!({"name": "Tag", "fields": "text"})
 }
@@ -1767,25 +1776,37 @@ fn nameless_declaration() -> Value {
     json!({"fields": {"kind": "record", "value": {}}})
 }
 
-// The display text a malformed declaration payload fails with.
-fn schema_error(payload: Value) -> String {
-    let body: Body = serde_json::from_value(payload).unwrap();
-    Type::from_body(&body).unwrap_err().to_string()
+fn declaration_body(payload: Value) -> Body {
+    serde_json::from_value(payload).unwrap()
+}
+
+// The error a malformed declaration payload fails with.
+fn schema_error(payload: Value) -> SchemaError {
+    Type::from_body(&declaration_body(payload)).unwrap_err()
+}
+
+fn parsed(declaration: EntryId, payload: Value) -> Declaration {
+    Declaration::Parsed {
+        declaration,
+        schema: Type::from_body(&declaration_body(payload)).unwrap(),
+    }
 }
 
 #[test]
-fn type_schemas_are_the_structured_form_of_declarations() {
-    let list = |element| ValueType::List(Box::new(element));
-    let owner = ValueType::Record(
-        [(
+fn declarations_travel_as_the_core_schema_in_tagged_form() {
+    let list = |element| ValueType::List {
+        element: Box::new(element),
+    };
+    let owner = ValueType::Record {
+        fields: [(
             "owner".into(),
             FieldDecl {
-                ty: ValueType::Text,
                 status: FieldStatus::Mandatory,
+                shape: ValueType::Text,
             },
         )]
         .into(),
-    );
+    };
     let nested = Type::new(
         "Nested",
         &[
@@ -1801,57 +1822,28 @@ fn type_schemas_are_the_structured_form_of_declarations() {
         &[],
         &["Nested"],
     );
-    let schema = schema::TypeSchema::from(&nested);
-    assert_eq!(schema.name, "Nested");
-    assert_eq!(
-        schema.fields["grid"],
-        schema::FieldDecl {
-            status: schema::FieldStatus::Optional,
-            shape: schema::Shape::List {
-                element: Box::new(schema::Shape::List {
-                    element: Box::new(schema::Shape::Integer)
-                })
-            },
-        }
-    );
-    assert_eq!(
-        schema.fields["details"],
-        schema::FieldDecl {
-            status: schema::FieldStatus::Deprecated,
-            shape: schema::Shape::Record {
-                fields: BTreeMap::from([(
-                    "owner".to_string(),
-                    schema::FieldDecl {
-                        status: schema::FieldStatus::Mandatory,
-                        shape: schema::Shape::Text,
-                    }
-                )])
-            },
-        }
-    );
-    assert_eq!(schema.fields["when"].shape, schema::Shape::Timestamp);
-    assert_eq!(schema.fields["done"].shape, schema::Shape::Boolean);
     // Permissions keep their set order; shapes and statuses are tagged words.
+    let encoded = json!({
+        "name": "Nested",
+        "fields": {
+            "details": {"status": "deprecated", "shape": {"kind": "record", "fields": {
+                "owner": {"status": "mandatory", "shape": {"kind": "text"}}}}},
+            "done": {"status": "mandatory", "shape": {"kind": "boolean"}},
+            "grid": {"status": "optional", "shape": {"kind": "list", "element": {
+                "kind": "list", "element": {"kind": "integer"}}}},
+            "when": {"status": "encouraged", "shape": {"kind": "timestamp"}},
+        },
+        "outgoing": ["DependsOn", "Explains"],
+        "incoming": [],
+        "successors": ["Nested"],
+    });
+    assert_eq!(serde_json::to_value(&nested).unwrap(), encoded);
+    assert_eq!(serde_json::from_value::<Type>(encoded).unwrap(), nested);
+    // The payload encoding (FILES 2.6) is a separate, word-list form.
     assert_eq!(
-        serde_json::to_value(&schema).unwrap(),
-        json!({
-            "name": "Nested",
-            "fields": {
-                "details": {"status": "deprecated", "shape": {"kind": "record", "fields": {
-                    "owner": {"status": "mandatory", "shape": {"kind": "text"}}}}},
-                "done": {"status": "mandatory", "shape": {"kind": "boolean"}},
-                "grid": {"status": "optional", "shape": {"kind": "list", "element": {
-                    "kind": "list", "element": {"kind": "integer"}}}},
-                "when": {"status": "encouraged", "shape": {"kind": "timestamp"}},
-            },
-            "outgoing": ["DependsOn", "Explains"],
-            "incoming": [],
-            "successors": ["Nested"],
-        })
+        serde_json::to_value(nested.to_body()).unwrap()["fields"]["value"]["grid"],
+        json!(["optional", "list", "list", "integer"])
     );
-    let round_trip: schema::TypeSchema =
-        serde_json::from_value(serde_json::to_value(&schema).unwrap()).unwrap();
-    assert_eq!(round_trip, schema);
 }
 
 #[test]
@@ -1879,15 +1871,12 @@ fn types_list_summarizes_every_name_the_view_knows_at_each_boundary() {
         panic!("Task is declared: {:?}", task.resolution)
     };
     assert_eq!(*declaration, ids[0]);
-    assert_eq!(
-        *schema,
-        schema::TypeSchema::from(&Type::from_body(&task_type()).unwrap())
-    );
+    assert_eq!(*schema, Type::from_body(&task_type()).unwrap());
     assert_eq!(
         schema.fields["title"],
-        schema::FieldDecl {
-            status: schema::FieldStatus::Mandatory,
-            shape: schema::Shape::Text,
+        FieldDecl {
+            status: FieldStatus::Mandatory,
+            shape: ValueType::Text,
         }
     );
     assert_eq!(schema.outgoing, BTreeSet::from(["DependsOn".to_string()]));
@@ -1975,31 +1964,27 @@ fn types_list_judges_each_name_by_its_own_declarations() {
         .iter()
         .map(|summary| summary.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, ["", "Ghost", "Note", "Tag", "Type"]);
+    // The nameless declaration claims no name, not even the empty one.
+    assert_eq!(names, ["Ghost", "Note", "Tag", "Type"]);
     let summary = |name: &str| listed.types.iter().find(|t| t.name == name).unwrap();
     let one = NodeCounts {
         current: 1,
         historical: 0,
     };
     assert_eq!(
-        summary("").resolution,
-        TypeResolution::Malformed {
-            declaration: ids[5],
-            message: schema_error(nameless_declaration()),
-        }
-    );
-    assert_eq!(summary("").nodes, NodeCounts::default());
-    assert_eq!(
         summary("Tag").resolution,
         TypeResolution::Malformed {
             declaration: ids[4],
-            message: schema_error(tag_declaration()),
+            error: schema_error(tag_declaration()),
         }
     );
     assert_eq!(
         summary("Note").resolution,
         TypeResolution::Ambiguous {
-            declarations: vec![ids[0], ids[1]],
+            claimants: vec![
+                parsed(ids[0], note_declaration()),
+                parsed(ids[1], note_again())
+            ],
         }
     );
     assert_eq!(summary("Note").nodes, one);
@@ -2045,6 +2030,18 @@ fn types_list_judges_each_name_by_its_own_declarations() {
                 }
             )
         ]
+    );
+    // The structured error travels with its path and kind.
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "types.list", "params": {}}).to_string();
+    let response = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    assert_eq!(
+        response["result"]["types"][2]["resolution"],
+        json!({"kind": "malformed", "declaration": ids[4], "error": {
+            "path": ["fields"], "kind": "wrong_shape", "expected": "record", "actual": "text"}})
+    );
+    assert_eq!(
+        response["result"]["types"][1]["resolution"]["claimants"][1]["kind"],
+        "parsed"
     );
 }
 
@@ -2294,7 +2291,10 @@ fn inspection_resolves_the_node_type_in_the_inspected_view() {
         assert_eq!(
             ty(ids[3], as_of),
             TypeResolution::Ambiguous {
-                declarations: vec![ids[0], ids[1]],
+                claimants: vec![
+                    parsed(ids[0], note_declaration()),
+                    parsed(ids[1], note_again())
+                ],
             },
             "{as_of:?}"
         );
@@ -2310,7 +2310,7 @@ fn inspection_resolves_the_node_type_in_the_inspected_view() {
         ty(tag, None),
         TypeResolution::Malformed {
             declaration: ids[4],
-            message: schema_error(tag_declaration()),
+            error: schema_error(tag_declaration()),
         }
     );
     assert_eq!(ty(ids[2], None), TypeResolution::Missing);
@@ -2366,8 +2366,8 @@ fn a_same_name_declaration_revision_resolves_from_its_append_onward() {
     let scratch = Scratch::new();
     let (ids, revised) = revised_task(&scratch);
     let service = scratch.service();
-    let old_schema = schema::TypeSchema::from(&Type::from_body(&task_type()).unwrap());
-    let new_schema = schema::TypeSchema::from(&revised);
+    let old_schema = Type::from_body(&task_type()).unwrap();
+    let new_schema = revised;
     let counts = |current, historical| NodeCounts {
         current,
         historical,
@@ -2465,7 +2465,7 @@ fn a_declaration_revised_to_another_name_leaves_its_old_nodes_missing() {
     };
     let declared = |declaration, ty: &Type| TypeResolution::Declared {
         declaration,
-        schema: schema::TypeSchema::from(ty),
+        schema: ty.clone(),
     };
     // Before the revision `Note` is declared; from the revision onward it is
     // missing while its nodes still use it, and `Memo` is declared unused.
@@ -4545,4 +4545,222 @@ fn rendered_svg_shows_payload_text_literally() {
         svg_element(&svg, "e7"),
         (vec![edge.clone(), edge.clone()], vec![edge])
     );
+}
+
+// `types.list`, `entries.inspect`, and TypeCheck read one declaration index,
+// so they agree on every name in each view: before and after a malformed and
+// a duplicate declaration, and after the revisions that repair them.
+#[test]
+fn types_list_and_inspection_agree_with_typecheck_at_each_boundary() {
+    use lifecore::analysis::TypedAnalyzer;
+    use lifecore_typecheck::{TypeCheck, TypeCheckMessage};
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&[]).unwrap();
+    let task = |status| {
+        Type::new(
+            "Task",
+            &[("title", (ValueType::Text, status))],
+            &["link"],
+            &["link"],
+            &[],
+        )
+    };
+    let note = Type::new(
+        "Note",
+        &[("text", (ValueType::Text, FieldStatus::Mandatory))],
+        &[],
+        &[],
+        &[],
+    );
+    let broken_note = json!({"name": "Note", "fields": "text"});
+    let broken_task = json!({"name": "Task", "outgoing": "x"});
+    let mut ids = vec![];
+    let mut apply = |entries: Value| {
+        let applied = service.apply(request(proposal(entries))).unwrap();
+        ids.extend(applied.report.operations.iter().map(|o| o.entry));
+        ids.clone()
+    };
+    // Positions 0 to 5: `Task`, two tasks and an edge, a `Note` and a node of
+    // the empty type name, neither declared.
+    apply(json!([
+        {"name": "task_type", "kind": "node", "ty_name": "Type",
+            "payload": task(FieldStatus::Mandatory).to_body()},
+        {"name": "untitled", "kind": "node", "ty_name": "Task", "payload": {}},
+        {"name": "titled", "kind": "node", "ty_name": "Task", "payload": {"title": "t"}},
+        {"name": "link", "kind": "edge", "ty_name": "link",
+            "from": {"added": "titled"}, "to": {"added": "untitled"}},
+        {"name": "a_note", "kind": "node", "ty_name": "Note", "payload": {}},
+        {"name": "unnamed", "kind": "node", "ty_name": "", "payload": {}},
+    ]));
+    // 6 and 7: a malformed `Note` declaration and a nameless one.
+    apply(json!([
+        {"name": "broken_note", "kind": "node", "ty_name": "Type", "payload": broken_note},
+        {"name": "nameless", "kind": "node", "ty_name": "Type", "payload": nameless_declaration()},
+    ]));
+    // 8 and 9: a second `Task` declaration and a malformed third.
+    let before = apply(json!([
+        {"name": "task_again", "kind": "node", "ty_name": "Type",
+            "payload": task(FieldStatus::Optional).to_body()},
+        {"name": "broken_task", "kind": "node", "ty_name": "Type", "payload": broken_task},
+    ]));
+    // 10 to 12: the repairs.
+    let ids = apply(json!([
+        {"name": "note_type", "kind": "node", "ty_name": "Type", "predecessor": existing(before[6]),
+            "intent": "revise", "payload": note.to_body()},
+        {"name": "other", "kind": "node", "ty_name": "Type", "predecessor": existing(before[8]),
+            "intent": "revise", "payload": Type::new("Other", &[], &[], &[], &[]).to_body()},
+        {"name": "spare", "kind": "node", "ty_name": "Type", "predecessor": existing(before[9]),
+            "intent": "revise", "payload": Type::new("Spare", &[], &[], &[], &[]).to_body()},
+    ]));
+    let graph = storage::read(&scratch.state()).unwrap().graph;
+    let note_error = SchemaError {
+        path: vec![PathPart::Field("fields".into())],
+        kind: SchemaErrorKind::WrongShape {
+            expected: lifecore::PayloadKind::Record,
+            actual: lifecore::PayloadKind::Text,
+        },
+    };
+    let task_error = schema_error(json!({"name": "Task", "outgoing": "x"}));
+    let declared = |at: usize, ty: &Type| TypeResolution::Declared {
+        declaration: ids[at],
+        schema: ty.clone(),
+    };
+    let cases = [
+        (
+            6,
+            vec![
+                ("", TypeResolution::Missing),
+                ("Note", TypeResolution::Missing),
+                ("Task", declared(0, &task(FieldStatus::Mandatory))),
+            ],
+        ),
+        // A malformed `Note` leaves `Task` declared, and the nameless
+        // declaration leaves the empty name missing.
+        (
+            8,
+            vec![
+                ("", TypeResolution::Missing),
+                (
+                    "Note",
+                    TypeResolution::Malformed {
+                        declaration: ids[6],
+                        error: note_error.clone(),
+                    },
+                ),
+                ("Task", declared(0, &task(FieldStatus::Mandatory))),
+            ],
+        ),
+        (
+            10,
+            vec![
+                ("", TypeResolution::Missing),
+                (
+                    "Task",
+                    TypeResolution::Ambiguous {
+                        claimants: vec![
+                            Declaration::Parsed {
+                                declaration: ids[0],
+                                schema: task(FieldStatus::Mandatory),
+                            },
+                            Declaration::Parsed {
+                                declaration: ids[8],
+                                schema: task(FieldStatus::Optional),
+                            },
+                            Declaration::Malformed {
+                                declaration: ids[9],
+                                error: task_error.clone(),
+                            },
+                        ],
+                    },
+                ),
+            ],
+        ),
+        (
+            13,
+            vec![
+                ("Note", declared(10, &note)),
+                ("Task", declared(0, &task(FieldStatus::Mandatory))),
+            ],
+        ),
+    ];
+    for (end, expected) in cases {
+        let as_of = Some(end);
+        let listed = service.list_types(TypeListRequest { as_of }).unwrap();
+        let view = graph.view().prefix(end).unwrap();
+        let report = TypeCheck::default()
+            .analyze_inner(view, &Default::default())
+            .unwrap();
+        assert!(listed.types.iter().all(
+            |summary| !summary.name.is_empty() || summary.resolution == TypeResolution::Missing
+        ));
+        for (name, resolution) in expected {
+            assert_eq!(
+                summary(&listed, name).resolution,
+                resolution,
+                "{name:?} at {end}"
+            );
+        }
+        for summary in &listed.types {
+            assert_eq!(summary.resolution, view.resolve_type(&summary.name));
+            match &summary.resolution {
+            TypeResolution::Malformed { declaration, error } => {
+                assert!(report.contains(&TypeCheckMessage::MalformedDeclaration {
+                    subject: *declaration,
+                    error: error.clone(),
+                }));
+            }
+            TypeResolution::Ambiguous { claimants } => {
+                for (i, claimant) in claimants.iter().enumerate() {
+                    let duplicate = TypeCheckMessage::DuplicateType {
+                        subject: claimant.id(),
+                        name: summary.name.clone(),
+                    };
+                    assert_eq!(report.contains(&duplicate), i > 0, "{claimant:?}");
+                    if let Err(error) = claimant.schema() {
+                        assert!(report.contains(&TypeCheckMessage::MalformedDeclaration {
+                            subject: claimant.id(),
+                            error: error.clone(),
+                        }));
+                    }
+                }
+            }
+            _ => {}
+            }
+        }
+        for at in [1, 2, 4, 5] {
+            let ty = node_type(&service, ids[at], as_of);
+            let node = view.node(ids[at]).unwrap();
+            assert_eq!(ty, summary(&listed, &node.ty_name).resolution);
+            let about = |f: &&TypeCheckMessage| match f {
+            TypeCheckMessage::MissingType { subject, .. }
+            | TypeCheckMessage::Field { subject, .. } => *subject == ids[at],
+            _ => false,
+            };
+            let findings = report.iter().filter(about).collect::<Vec<_>>();
+            match ty {
+            TypeResolution::Missing => assert!(matches!(
+                findings[..],
+                [TypeCheckMessage::MissingType { .. }]
+            )),
+            TypeResolution::Declared { .. } => assert!(
+                findings
+                    .iter()
+                    .all(|f| matches!(f, TypeCheckMessage::Field { .. }))
+            ),
+            _ => assert!(findings.is_empty(), "{at} at {end}: {findings:?}"),
+            }
+        }
+        // The untitled task misses its title only while `Task` is declared,
+        // and the edge between tasks is judged only then.
+        let untitled = report
+            .iter()
+            .any(|f| matches!(f, TypeCheckMessage::Field { subject, .. } if *subject == ids[1]));
+        assert_eq!(untitled, end != 10, "boundary {end}");
+        assert!(
+            !report
+                .iter()
+                .any(|f| matches!(f, TypeCheckMessage::BadEdgeEndpoint { .. }))
+        );
+    }
 }

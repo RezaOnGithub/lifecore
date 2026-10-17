@@ -165,7 +165,7 @@ export const response = {
                 "name": "Type_Check",
                 "version": "0.1.0"
               },
-              "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000005\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
+              "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000005\"},\"issue\":{\"path\":[\"notes\"],\"kind\":\"MissingEncouraged\"}}}",
               "database": "00000000-0000-4000-8000-000000000001",
               "kind": "warning"
             }
@@ -691,7 +691,7 @@ export const rejectedResponse = {
                 "name": "Type_Check",
                 "version": "0.1.0"
               },
-              "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000005\"},\"issue\":{\"path\":[{\"Field\":\"notes\"}],\"kind\":\"MissingEncouraged\"}}}",
+              "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000005\"},\"issue\":{\"path\":[\"notes\"],\"kind\":\"MissingEncouraged\"}}}",
               "database": "00000000-0000-4000-8000-000000000001",
               "kind": "warning"
             }

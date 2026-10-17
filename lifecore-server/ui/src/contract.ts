@@ -120,13 +120,35 @@ export interface TypeSchema {
   incoming: string[];
   successors: string[];
 }
-// How a type name resolves in the selected view (SPEC §6.2).
+export type PayloadKind = Shape["kind"];
+// What is wrong with a declaration payload at one element.
+export type SchemaErrorKind =
+  | { kind: "missing_field" }
+  | { kind: "unknown_field" }
+  | { kind: "wrong_shape"; expected: PayloadKind; actual: PayloadKind }
+  | { kind: "missing_presence" }
+  | { kind: "unknown_presence"; word: string }
+  | { kind: "missing_shape" }
+  | { kind: "unknown_shape"; word: string }
+  | { kind: "missing_record_fields" }
+  | { kind: "trailing_elements" }
+  | { kind: "too_deep" }
+  | { kind: "duplicate_permission"; name: string };
+// Why a declaration payload does not parse: the path of the offending
+// element, by field name and list index, beside its kind.
+export type SchemaError = { path: (string | number)[] } & SchemaErrorKind;
+// A current declaration and how its payload parses.
+export type Declaration =
+  | { kind: "parsed"; declaration: EntryId; schema: TypeSchema }
+  | { kind: "malformed"; declaration: EntryId; error: SchemaError };
+// How a type name resolves in the selected view (SPEC §6.2): by the current
+// declarations that claim it; `claimants` are in append order.
 export type TypeResolution =
   | { kind: "builtin" }
   | { kind: "declared"; declaration: EntryId; schema: TypeSchema }
   | { kind: "missing" }
-  | { kind: "ambiguous"; declarations: EntryId[] }
-  | { kind: "malformed"; declaration: EntryId; message: string };
+  | { kind: "ambiguous"; claimants: Declaration[] }
+  | { kind: "malformed"; declaration: EntryId; error: SchemaError };
 // One type name known to the view: declared, built in, or merely used by a
 // node. Counts are of nodes whose `ty_name` is this name.
 export interface TypeSummary {

@@ -8,7 +8,7 @@ import {
   toggleSort,
 } from "../model/columns.ts";
 import { commonLabelField, entryKey, rowLabel } from "../model/labels.ts";
-import { declarationSummary } from "../model/schema.ts";
+import { declarationSummary, readDeclaration } from "../model/schema.ts";
 import { ROW_PAGE, type TableView } from "../navigation.ts";
 import { ValueCell } from "./Payload.tsx";
 
@@ -84,7 +84,7 @@ function EntryTableOf<R extends NodeRecord>({
         return row.current ? "current" : "superseded";
       }
       if (column === "declaration") {
-        return declarationSummary(row.payload);
+        return declarationSummary(readDeclaration(row.payload));
       }
       if (column.startsWith("field:")) {
         return row.payload[column.slice("field:".length)];
@@ -290,7 +290,11 @@ function RowOf<R extends NodeRecord>({
           <CurrentBadge current={row.current} kind="node" />
         </td>
       )}
-      {typeTable && <td className="cell">{declarationSummary(row.payload)}</td>}
+      {typeTable && (
+        <td className="cell">
+          {declarationSummary(readDeclaration(row.payload))}
+        </td>
+      )}
       {extra.map((column) => (
         <td key={column.key} className={column.className}>
           {cell(column)}

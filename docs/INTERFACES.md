@@ -190,7 +190,7 @@ inside it, such as `entries[0].payload.n`; failures of other parameters are
 | `entries.list` | optional `kind` (`node`/`edge`), `ty_name`, `currentness` (`current` default, `historical`, `all`), `text` (node text search), `as_of` | `database`, `graph_revision`, `view`, `entries` in append order |
 | `entries.get` | `id` (exact `EntryId`), optional `as_of` | `view` and `entry` |
 | `entries.inspect` | `id`, optional `as_of` | tagged by `kind`: a node with its `type` resolution, its `lineage` (the whole revision tree, root first), its incident `edges` of any currentness in append order (each with `direction` and the id of the `other` endpoint), and `neighbours`, the record of each other endpoint once, in append order; or an edge with `from` and `to` |
-| `types.list` | optional `as_of` | `view` and `types`: one summary per name the view knows, sorted by name, with its `resolution` (`builtin`, `declared` with the structured schema, `missing`, `ambiguous`, `malformed`) and node counts by currentness |
+| `types.list` | optional `as_of` | `view` and `types`: one summary per name the view knows (the built-in `Type`, every name a current declaration claims, and every name a node uses), sorted by name, with its `resolution` ([SPEC §6.2](SPEC.md#62-name-resolution)): `builtin`; `declared` with the declaration and its structured schema; `missing`; `malformed` with the declaration and its structured `error`; or `ambiguous` with every claimant, `parsed` with its schema or `malformed` with its error; and node counts by currentness |
 | `views.query` | `seeds` (exact node `ids`, each a node of the view, else `invalid_seeds`; or a node selection), ordered `expand` steps (`hops`, `direction`, `ty_names`, `currentness`), an `edges` filter, optional `as_of` | `view`, `nodes` with their `provenance` (`seed`, or `reached` at a hop over an edge from a node), and the matching `edges` among them |
 | `views.render` | `query` (the `views.query` parameters) and `format` (`dot`/`svg`) | `format` and `text`: the queried subgraph as deterministic DOT (`digraph lifecore`, labeled with the database and boundary; nodes `n<position>`, names local to the view, with the row label on one line and cut at 60 characters, `@position`, and type, superseded ones gray; dashed blue `revision` links only between result nodes; solid edges labeled `@position <ty_name>`, historical ones gray; the empty type name reads `(unnamed)`; every node and edge has `id`, an `href` of `#inspect/<origin>/<position>`, and the uncut label as `tooltip`; payload text reads literally, with control characters shown as spaces), or that DOT rendered by Graphviz's `dot -Tsvg`, run synchronously with a 10 s deadline and a 16 MiB output cap |
 | `plan_id.mint` | none | `plan_id` |
@@ -559,7 +559,9 @@ them; none is a server contract.
   relationship columns, the declared fields by status (mandatory, encouraged,
   optional, deprecated) and name, then undeclared fields present in the rows,
   marked. The field that labels every row has no column. The `Type` table
-  shows a declaration summary instead of field columns.
+  shows a declaration summary instead of field columns. The client words
+  schema errors itself, from their path and kind, for its own parse and the
+  server's alike.
 - A table renders 500 rows, then "show next 500" and "show all" with the count
   of the rest. Cells render on one line (`[a, b]`, `{owner: me}`, `true`), cut
   at 80 characters with the full text as a tooltip. Integers sort by value,

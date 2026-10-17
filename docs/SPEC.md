@@ -224,14 +224,40 @@ freshness rules as other nodes.
 
 ### 6.2 Name resolution
 
-Within a view, resolve a name by finding the current declaration with that
-`name`. Resolution of `Type` returns the built-in metatype.
+Within a view, a name resolves by the current declarations that claim it. A
+declaration claims the text of its payload's `name` field, whether or not the
+rest of the payload parses; one without a text `name` claims no name, not even
+the empty one, which is a legal type name. `Type` always resolves to the
+built-in metatype, whatever declarations claim it. Any other name resolves by
+its own claimants alone:
 
-- Every type name used by a current node must resolve to exactly one
-  declaration.
+| Claimants | Resolution |
+| --- | --- |
+| None | Missing |
+| One that parses | Declared by that declaration and its schema |
+| One that does not parse | Malformed, with its structured schema error |
+| Two or more | Ambiguous, listing every claimant in append order, each with its schema or its error |
+
+A malformed declaration therefore affects only the name it claims.
+`View::declarations` indexes a view's current declarations by the names they
+claim, keeping those that claim none apart. `View::resolve_type`, inspection,
+TypeCheck, and the application's type list and inspector all resolve through
+it, so they agree on every name.
+
+- Every type name used by a current node must resolve as declared.
 - Two current declarations with the same name are invalid, even if their schemas
   are identical or no ordinary node currently uses that name.
 - A missing declaration for a current node is invalid.
+
+TypeCheck reports `MalformedDeclaration` for each malformed declaration, named
+or not; `ReservedTypeName` for each parsing declaration that claims `Type`; and
+`DuplicateType` for every claimant of an ambiguous name after the first,
+malformed ones included. Field, edge endpoint, and successor checks run only
+against a name that resolves as declared. A node, endpoint, or predecessor whose
+type is ambiguous or malformed gets no finding of its own, not even
+`MissingType`, because the declarations of its name already have theirs.
+`MissingType` reports only a missing name, and `UnknownSuccessorType` only a
+missing successor name in a declared type's `successors`.
 
 A declaration revision changes the meaning of its name for the resulting view.
 Every current node with that name must satisfy the resulting declaration,
@@ -301,8 +327,10 @@ The transition is permitted if the successor has the same type name, or its type
 name occurs in the predecessor declaration's `successors`. The
 predecessor itself need not be current.
 
-The necessary declaration must resolve uniquely at this point. A missing or
-ambiguous declaration prevents the append. In particular, a superseded
+The necessary declaration must resolve as declared at this point. A missing,
+ambiguous, or malformed declaration prevents the append: a missing one through
+the transition's `MissingType`, the others through their declarations' own
+findings ([section 6.2](#62-name-resolution)). In particular, a superseded
 predecessor's type name may no longer have an active declaration; branching from
 that predecessor still requires the declaration to be available.
 
@@ -629,9 +657,9 @@ use append order. Traversal of unavailable identities yields no results.
 `resolve` returns absence for unavailable identities. `inspection` produces a
 serializable, ordered snapshot with source/boundary and `Resolution` values.
 Each resolution directly holds its borrowed entry, `stale`, and
-`type_definition: TypeResolution`. Its variants distinguish `NotApplicableToEdge`,
-`MissingDeclaration`, `Resolved(TypeDefinition)`, and `Failed(ResolutionError)`;
-there is no interpretation wrapper.
+`type_resolution`: a node's `TypeResolution` in the view
+([section 6.2](#62-name-resolution)), or none for an edge, which carries a
+relationship label rather than a declared type.
 An old node's type is interpreted in the requested view, just as with a direct
 `resolve_type` call; this does not assert that TypeCheck checks stale nodes.
 `base.compare(target)` requires the target to extend the entire base history,

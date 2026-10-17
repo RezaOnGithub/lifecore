@@ -3,14 +3,13 @@ use crate::{
     analysis::AnalysisRunner,
     inspection::{
         Currentness, Direction, EdgeSelection, FieldFilter, NodeSelection, ResolutionDifference,
-        TypeResolution,
     },
     transaction::{
         Change, EntryChange, NewEdge, NewNode,
         Reference::{Added, Existing},
         RevisionIntent, prepare,
     },
-    typing::{FieldStatus, Type, TypeDefinition, ValueType},
+    typing::{FieldStatus, Type, TypeResolution, ValueType},
 };
 
 fn node(title: &str, predecessor: Option<crate::transaction::Reference>) -> Change {
@@ -256,11 +255,11 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
     assert_eq!(comparison.changed.len(), 4);
     for change in comparison.changed {
         assert_eq!(
-            change.at_base().type_definition,
-            TypeResolution::MissingDeclaration
+            change.at_base().type_resolution,
+            Some(TypeResolution::Missing)
         );
         assert!(
-            matches!(change.at_target().type_definition, TypeResolution::Resolved(TypeDefinition::Declared {id, ..}) if id == declaration)
+            matches!(change.at_target().type_resolution, Some(TypeResolution::Declared { declaration: id, .. }) if id == declaration)
         );
     }
     plan.commit(&mut graph).unwrap();
@@ -287,8 +286,8 @@ fn comparisons_show_edge_currentness_and_schema_reinterpretation() {
             .unwrap()
             .resolve(ids[0])
             .unwrap()
-            .type_definition,
-        TypeResolution::MissingDeclaration
+            .type_resolution,
+        Some(TypeResolution::Missing)
     );
 }
 
@@ -472,115 +471,154 @@ fn resolution_differences_require_changed_resolutions_of_the_same_entry() {
 }
 
 #[test]
-fn type_resolution_names_edge_missing_resolved_and_failed_outcomes_at_each_boundary() {
-    use crate::typing::ResolutionError;
+fn type_resolution_names_edge_missing_declared_ambiguous_and_malformed_outcomes_at_each_boundary() {
+    use crate::typing::{Declaration, PathPart, SchemaError, SchemaErrorKind};
     let (mut graph, ids) = fixture();
-    let undeclared = graph.view().resolve(ids[0]).unwrap().type_definition;
-    let edge = graph.view().resolve(ids[2]).unwrap().type_definition;
-    assert_eq!(undeclared, TypeResolution::MissingDeclaration);
-    assert_eq!(edge, TypeResolution::NotApplicableToEdge);
-    let schema = Type::new("Note", &[], &[], &[], &[]);
-    let declaration = |schema: &Type| {
-        Change::Entry(EntryChange::Node(NewNode {
-            ty_name: "Type".into(),
-            payload: schema.to_body(),
-            predecessor: None,
-            intent: None,
-        }))
+    let resolution = |graph: &LifeCoreList, end: usize, id| {
+        graph
+            .view()
+            .prefix(end)
+            .unwrap()
+            .resolve(id)
+            .unwrap()
+            .type_resolution
     };
-    let checked = prepare(
-        &graph,
-        &[declaration(&schema)],
-        &mut AnalysisRunner::default(),
-    )
-    .unwrap()
-    .accepted()
-    .unwrap();
-    let schema_id = checked.added()[0];
-    checked.commit(&mut graph).unwrap();
-    let resolved = graph.view().resolve(ids[0]).unwrap().type_definition;
+    let undeclared = graph.view().resolve(ids[0]).unwrap().type_resolution;
+    let edge = graph.view().resolve(ids[2]).unwrap().type_resolution;
+    assert_eq!(undeclared, Some(TypeResolution::Missing));
+    assert_eq!(edge, None);
+    let declare = |graph: &mut LifeCoreList, payload: Body| {
+        let checked = prepare(
+            graph,
+            &[Change::Entry(EntryChange::Node(NewNode {
+                ty_name: "Type".into(),
+                payload,
+                predecessor: None,
+                intent: None,
+            }))],
+            &mut AnalysisRunner::default(),
+        )
+        .unwrap()
+        .accepted()
+        .unwrap();
+        let id = checked.added()[0];
+        checked.commit(graph).unwrap();
+        id
+    };
+    let schema = Type::new("Note", &[], &[], &[], &[]);
+    let schema_id = declare(&mut graph, schema.to_body());
+    let resolved = graph.view().resolve(ids[0]).unwrap().type_resolution;
     assert_eq!(
         resolved,
-        TypeResolution::Resolved(TypeDefinition::Declared {
-            id: schema_id,
+        Some(TypeResolution::Declared {
+            declaration: schema_id,
             schema: schema.clone()
         })
     );
-    let builtin = graph.view().resolve(schema_id).unwrap().type_definition;
-    assert_eq!(builtin, TypeResolution::Resolved(TypeDefinition::Builtin));
-    assert_eq!(
-        graph
-            .view()
-            .prefix(6)
-            .unwrap()
-            .resolve(ids[0])
-            .unwrap()
-            .type_definition,
-        undeclared
-    );
+    let builtin = graph.view().resolve(schema_id).unwrap().type_resolution;
+    assert_eq!(builtin, Some(TypeResolution::Builtin));
+    assert_eq!(resolution(&graph, 6, ids[0]), undeclared);
 
-    let mut duplicate = schema;
+    // A nameless malformed declaration claims no name, not even the legal
+    // empty one, and leaves `Note` declared.
+    let nameless_id = declare(&mut graph, Body::new());
+    assert_eq!(resolution(&graph, 8, ids[0]), resolved);
+    assert_eq!(
+        graph.view().resolve_type(""),
+        TypeResolution::Missing,
+        "a nameless declaration is not filed under the empty name"
+    );
+    let declarations = graph.view().declarations();
+    assert_eq!(
+        declarations
+            .nameless()
+            .map(Declaration::id)
+            .collect::<Vec<_>>(),
+        [nameless_id]
+    );
+    assert_eq!(declarations.names().collect::<Vec<_>>(), ["Note"]);
+
+    let mut duplicate = schema.clone();
     duplicate.outgoing.insert("link".into());
-    let checked = prepare(
-        &graph,
-        &[declaration(&duplicate)],
-        &mut AnalysisRunner::default(),
-    )
-    .unwrap()
-    .accepted()
-    .unwrap();
-    let duplicate_id = checked.added()[0];
-    checked.commit(&mut graph).unwrap();
-    let ambiguous = graph.view().resolve(ids[0]).unwrap().type_definition;
+    let duplicate_id = declare(&mut graph, duplicate.to_body());
+    let ambiguous = graph.view().resolve(ids[0]).unwrap().type_resolution;
     assert_eq!(
         ambiguous,
-        TypeResolution::Failed(ResolutionError::Ambiguous {
-            name: "Note".into(),
-            entries: vec![schema_id, duplicate_id],
+        Some(TypeResolution::Ambiguous {
+            claimants: vec![
+                Declaration::Parsed {
+                    declaration: schema_id,
+                    schema: schema.clone()
+                },
+                Declaration::Parsed {
+                    declaration: duplicate_id,
+                    schema: duplicate.clone()
+                },
+            ],
         })
     );
-    assert_eq!(
-        graph
-            .view()
-            .prefix(7)
-            .unwrap()
-            .resolve(ids[0])
-            .unwrap()
-            .type_definition,
-        resolved
-    );
+    assert_eq!(resolution(&graph, 8, ids[0]), resolved);
 
-    let checked = prepare(
-        &graph,
-        &[Change::Entry(EntryChange::Node(NewNode {
-            ty_name: "Type".into(),
-            payload: Body::new(),
-            predecessor: None,
-            intent: None,
-        }))],
-        &mut AnalysisRunner::default(),
-    )
-    .unwrap()
-    .accepted()
-    .unwrap();
-    let malformed_id = checked.added()[0];
-    checked.commit(&mut graph).unwrap();
-    let malformed = graph.view().resolve(ids[0]).unwrap().type_definition;
-    assert!(
-        matches!(&malformed, TypeResolution::Failed(ResolutionError::Malformed { id, .. }) if *id == malformed_id)
+    // A malformed claimant joins the name's claimants and is identified.
+    let mut broken = schema.to_body();
+    broken.insert("outgoing".into(), "link".into());
+    let broken_id = declare(&mut graph, broken);
+    let broken_error = SchemaError {
+        path: vec![PathPart::Field("outgoing".into())],
+        kind: SchemaErrorKind::WrongShape {
+            expected: crate::PayloadKind::List,
+            actual: crate::PayloadKind::Text,
+        },
+    };
+    let three = graph.view().resolve(ids[0]).unwrap().type_resolution;
+    assert_eq!(
+        three,
+        Some(TypeResolution::Ambiguous {
+            claimants: vec![
+                Declaration::Parsed {
+                    declaration: schema_id,
+                    schema: schema.clone()
+                },
+                Declaration::Parsed {
+                    declaration: duplicate_id,
+                    schema: duplicate
+                },
+                Declaration::Malformed {
+                    declaration: broken_id,
+                    error: broken_error.clone()
+                },
+            ],
+        })
+    );
+    assert_eq!(resolution(&graph, 9, ids[0]), ambiguous);
+
+    // Alone, that claimant makes the name malformed, in a view of its own.
+    let mut alone = LifeCoreList::default();
+    let mut payload = schema.to_body();
+    payload.insert("outgoing".into(), "link".into());
+    let alone_id = declare(&mut alone, payload);
+    let malformed = alone.view().resolve_type("Note");
+    assert_eq!(
+        malformed,
+        TypeResolution::Malformed {
+            declaration: alone_id,
+            error: broken_error
+        }
     );
     assert_eq!(
-        graph
-            .view()
-            .prefix(8)
-            .unwrap()
-            .resolve(ids[0])
-            .unwrap()
-            .type_definition,
-        ambiguous
+        alone.view().prefix(0).unwrap().resolve_type("Note"),
+        TypeResolution::Missing
     );
-    assert_eq!(graph.view().resolve(ids[2]).unwrap().type_definition, edge);
-    for resolution in [undeclared, edge, resolved, builtin, ambiguous, malformed] {
+    assert_eq!(graph.view().resolve(ids[2]).unwrap().type_resolution, edge);
+    let resolutions = [
+        undeclared,
+        resolved,
+        builtin,
+        ambiguous,
+        three,
+        Some(malformed),
+    ];
+    for resolution in resolutions.into_iter().flatten() {
         let encoded = serde_json::to_vec(&resolution).unwrap();
         let decoded: TypeResolution = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, resolution);

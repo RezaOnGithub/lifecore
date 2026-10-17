@@ -1,6 +1,6 @@
 use crate::{
     Edge, Entry, EntryId, Node, Payload, View, ViewError, ViewId,
-    typing::{ResolutionError, TypeDefinition},
+    typing::{Declarations, TypeResolution},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -59,16 +59,9 @@ pub enum Direction {
 pub struct Resolution<'a> {
     pub entry: &'a Entry,
     pub stale: bool,
-    pub type_definition: TypeResolution,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypeResolution {
-    // Edges carry relationship labels rather than node type declarations.
-    NotApplicableToEdge,
-    MissingDeclaration,
-    Resolved(TypeDefinition),
-    Failed(ResolutionError),
+    // None for an edge, which carries a relationship label rather than a
+    // declared type.
+    pub type_resolution: Option<TypeResolution>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -189,27 +182,28 @@ impl<'a> View<'a> {
     }
 
     pub fn resolve(self, id: EntryId) -> Option<Resolution<'a>> {
+        self.resolve_with(&self.declarations(), id)
+    }
+
+    // `declarations` must be this view's own index.
+    fn resolve_with(self, declarations: &Declarations<'_>, id: EntryId) -> Option<Resolution<'a>> {
         let entry = self.get(id)?;
         Some(Resolution {
             entry,
             stale: self.is_stale(id)?,
-            type_definition: match entry {
-            Entry::Edge(_) => TypeResolution::NotApplicableToEdge,
-            Entry::Node(node) => match self.resolve_type(&node.ty_name) {
-            Ok(Some(definition)) => TypeResolution::Resolved(definition),
-            Ok(None) => TypeResolution::MissingDeclaration,
-            Err(error) => TypeResolution::Failed(error),
-            },
-            },
+            type_resolution: entry
+                .as_node()
+                .map(|node| declarations.resolve(&node.ty_name)),
         })
     }
 
     pub fn inspection(self) -> Inspection<'a> {
+        let declarations = self.declarations();
         Inspection {
             view: self.id(),
             entries: self
                 .entries()
-                .filter_map(|entry| self.resolve(entry.id()))
+                .filter_map(|entry| self.resolve_with(&declarations, entry.id()))
                 .collect(),
         }
     }
@@ -221,12 +215,15 @@ impl<'a> View<'a> {
         target: View<'target>,
     ) -> Result<ResolutionComparison<'a, 'target>, ViewError> {
         target.extends(self)?;
+        let at_base = self.declarations();
+        let at_target = target.declarations();
         let changed = self
             .entries()
             .filter_map(|entry| {
-                let at_base = self.resolve(entry.id())?;
-                let at_target = target.resolve(entry.id())?;
-                ResolutionDifference::new(at_base, at_target)
+                ResolutionDifference::new(
+                    self.resolve_with(&at_base, entry.id())?,
+                    target.resolve_with(&at_target, entry.id())?,
+                )
             })
             .collect();
         Ok(ResolutionComparison {
@@ -235,7 +232,7 @@ impl<'a> View<'a> {
             added: target
                 .entries()
                 .skip(self.len())
-                .filter_map(|entry| target.resolve(entry.id()))
+                .filter_map(|entry| target.resolve_with(&at_target, entry.id()))
                 .collect(),
             changed,
         })

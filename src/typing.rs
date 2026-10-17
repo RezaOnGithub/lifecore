@@ -6,6 +6,7 @@ use std::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FieldStatus {
     Mandatory,
     Encouraged,
@@ -14,19 +15,20 @@ pub enum FieldStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValueType {
     Text,
     Integer,
     Boolean,
     Timestamp,
-    List(Box<ValueType>),
-    Record(BTreeMap<String, FieldDecl>),
+    List { element: Box<ValueType> },
+    Record { fields: BTreeMap<String, FieldDecl> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FieldDecl {
-    pub ty: ValueType,
     pub status: FieldStatus,
+    pub shape: ValueType,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,7 +40,10 @@ pub struct Type {
     pub successors: BTreeSet<String>,
 }
 
+// A field name or a list position; the two never share a JSON type, so the
+// untagged form is unambiguous.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum PathPart {
     Field(String),
     Index(usize),
@@ -65,10 +70,12 @@ pub struct FieldIssue {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, thiserror::Error)]
 pub struct SchemaError {
     pub path: Vec<PathPart>,
+    #[serde(flatten)]
     pub kind: SchemaErrorKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SchemaErrorKind {
     MissingField,
     UnknownField,
@@ -77,13 +84,19 @@ pub enum SchemaErrorKind {
         actual: PayloadKind,
     },
     MissingPresence,
-    UnknownPresence(String),
+    UnknownPresence {
+        word: String,
+    },
     MissingShape,
-    UnknownShape(String),
+    UnknownShape {
+        word: String,
+    },
     MissingRecordFields,
     TrailingElements,
     TooDeep,
-    DuplicatePermission(String),
+    DuplicatePermission {
+        name: String,
+    },
 }
 
 // A payload path as messages write it: `email`, `details.owner`, `tags[1]`.
@@ -143,9 +156,9 @@ impl fmt::Display for SchemaError {
             kind_word(*actual)
         ),
         SchemaErrorKind::MissingPresence => f.write_str("missing presence word"),
-        SchemaErrorKind::UnknownPresence(word) => write!(f, "unknown presence word {word:?}"),
+        SchemaErrorKind::UnknownPresence { word } => write!(f, "unknown presence word {word:?}"),
         SchemaErrorKind::MissingShape => f.write_str("missing shape word"),
-        SchemaErrorKind::UnknownShape(word) => write!(f, "unknown shape word {word:?}"),
+        SchemaErrorKind::UnknownShape { word } => write!(f, "unknown shape word {word:?}"),
         SchemaErrorKind::MissingRecordFields => {
             f.write_str("missing field declarations after \"record\"")
         }
@@ -153,7 +166,7 @@ impl fmt::Display for SchemaError {
         SchemaErrorKind::TooDeep => {
             write!(f, "shape nested more than {MAX_SHAPE_DEPTH} levels deep")
         }
-        SchemaErrorKind::DuplicatePermission(name) => {
+        SchemaErrorKind::DuplicatePermission { name } => {
             write!(f, "duplicate permission {name:?}")
         }
         }
@@ -174,42 +187,170 @@ impl SchemaError {
     }
 }
 
+// One current declaration and how its payload parses.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypeDefinition {
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Declaration {
+    Parsed {
+        declaration: EntryId,
+        schema: Type,
+    },
+    Malformed {
+        declaration: EntryId,
+        error: SchemaError,
+    },
+}
+
+impl Declaration {
+    pub fn id(&self) -> EntryId {
+        match self {
+        Self::Parsed { declaration, .. } | Self::Malformed { declaration, .. } => *declaration,
+        }
+    }
+    pub fn schema(&self) -> Result<&Type, &SchemaError> {
+        match self {
+        Self::Parsed { schema, .. } => Ok(schema),
+        Self::Malformed { error, .. } => Err(error),
+        }
+    }
+}
+
+// How a type name resolves in a view (SPEC 6.2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TypeResolution {
     Builtin,
-    Declared { id: EntryId, schema: Type },
+    Declared {
+        declaration: EntryId,
+        schema: Type,
+    },
+    Missing,
+    Malformed {
+        declaration: EntryId,
+        error: SchemaError,
+    },
+    // Every claimant, in append order.
+    Ambiguous {
+        claimants: Vec<Declaration>,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-pub enum ResolutionError {
-    #[error("type {name:?} has multiple active declarations")]
-    Ambiguous { name: String, entries: Vec<EntryId> },
-    #[error("malformed declaration {id:?}: {error}")]
-    Malformed { id: EntryId, error: SchemaError },
+// The current declarations of one view, indexed by the name each claims.
+// Derived from that view alone; nothing caches or serializes it.
+#[derive(Clone, Debug)]
+pub struct Declarations<'a> {
+    // Append order, each with the `name` text it claims, if any.
+    all: Vec<(Option<&'a str>, Declaration)>,
+    // Indexes into `all`, in append order. A declaration without a text
+    // `name` claims nothing, so it is never filed under `""`, which is a
+    // legal type name.
+    claims: BTreeMap<&'a str, Vec<usize>>,
 }
 
-impl View<'_> {
-    pub fn resolve_type(self, name: &str) -> Result<Option<TypeDefinition>, ResolutionError> {
+impl<'a> Declarations<'a> {
+    pub fn iter(&self) -> impl Iterator<Item = (Option<&'a str>, &Declaration)> {
+        self.all
+            .iter()
+            .map(|(name, declaration)| (*name, declaration))
+    }
+    // Every claimed name in order, including a claimed `Type`.
+    pub fn names(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.claims.keys().copied()
+    }
+    pub fn claimants(&self, name: &str) -> impl Iterator<Item = &Declaration> {
+        self.claimed(name).iter().map(|&i| &self.all[i].1)
+    }
+    pub fn nameless(&self) -> impl Iterator<Item = &Declaration> {
+        self.iter()
+            .filter(|(name, _)| name.is_none())
+            .map(|(_, declaration)| declaration)
+    }
+    fn claimed(&self, name: &str) -> &[usize] {
+        self.claims.get(name).map_or(&[], Vec::as_slice)
+    }
+    // Only a name's own claimants decide it: a malformed declaration under
+    // another name, or under none, affects nothing here.
+    pub fn resolve(&self, name: &str) -> TypeResolution {
         if name == Type::TYPE_NAME {
-            return Ok(Some(TypeDefinition::Builtin));
+            return TypeResolution::Builtin;
         }
-        let mut found = vec![];
-        for node in self.fresh_nodes().filter(|n| n.ty_name == Type::TYPE_NAME) {
-            let schema = Type::from_body(&node.payload)
-                .map_err(|error| ResolutionError::Malformed { id: node.id, error })?;
-            if schema.name == name {
-                found.push((node.id, schema));
+        match self.claimed(name) {
+        [] => TypeResolution::Missing,
+        [only] => match &self.all[*only].1 {
+        Declaration::Parsed {
+            declaration,
+            schema,
+        } => TypeResolution::Declared {
+            declaration: *declaration,
+            schema: schema.clone(),
+        },
+        Declaration::Malformed { declaration, error } => TypeResolution::Malformed {
+            declaration: *declaration,
+            error: error.clone(),
+        },
+        },
+        _ => TypeResolution::Ambiguous {
+            claimants: self.claimants(name).cloned().collect(),
+        },
+        }
+    }
+    // The schema exactly when `resolve` answers `Declared`, without a copy.
+    pub fn declared(&self, name: &str) -> Option<(EntryId, &Type)> {
+        if name == Type::TYPE_NAME {
+            return None;
+        }
+        match self.claimed(name) {
+        [only] => match &self.all[*only].1 {
+        Declaration::Parsed {
+            declaration,
+            schema,
+        } => Some((*declaration, schema)),
+        Declaration::Malformed { .. } => None,
+        },
+        _ => None,
+        }
+    }
+    // Exactly when `resolve` answers `Missing`.
+    pub fn is_missing(&self, name: &str) -> bool {
+        name != Type::TYPE_NAME && self.claimed(name).is_empty()
+    }
+}
+
+impl<'a> View<'a> {
+    pub fn declarations(self) -> Declarations<'a> {
+        let mut index = Declarations {
+            all: vec![],
+            claims: BTreeMap::new(),
+        };
+        for node in self
+            .fresh_nodes()
+            .filter(|node| node.ty_name == Type::TYPE_NAME)
+        {
+            // The claim reads the `name` text alone, so a declaration whose
+            // other keys do not parse still claims its name.
+            let name = match node.payload.get("name") {
+            Some(Payload::Text(name)) => Some(name.as_str()),
+            _ => None,
+            };
+            let declaration = match Type::from_body(&node.payload) {
+            Ok(schema) => Declaration::Parsed {
+                declaration: node.id,
+                schema,
+            },
+            Err(error) => Declaration::Malformed {
+                declaration: node.id,
+                error,
+            },
+            };
+            if let Some(name) = name {
+                index.claims.entry(name).or_default().push(index.all.len());
             }
+            index.all.push((name, declaration));
         }
-        if found.len() > 1 {
-            return Err(ResolutionError::Ambiguous {
-                name: name.into(),
-                entries: found.into_iter().map(|(id, _)| id).collect(),
-            });
-        }
-        Ok(found
-            .pop()
-            .map(|(id, schema)| TypeDefinition::Declared { id, schema }))
+        index
+    }
+    pub fn resolve_type(self, name: &str) -> TypeResolution {
+        self.declarations().resolve(name)
     }
 }
 
@@ -236,8 +377,8 @@ impl Type {
                     (
                         name.to_string(),
                         FieldDecl {
-                            ty: ty.clone(),
                             status: *status,
+                            shape: ty.clone(),
                         },
                     )
                 })
@@ -291,8 +432,8 @@ impl ValueType {
         Self::Integer => PayloadKind::Integer,
         Self::Boolean => PayloadKind::Boolean,
         Self::Timestamp => PayloadKind::Timestamp,
-        Self::List(_) => PayloadKind::List,
-        Self::Record(_) => PayloadKind::Record,
+        Self::List { .. } => PayloadKind::List,
+        Self::Record { .. } => PayloadKind::Record,
         }
     }
     fn push_words(&self, words: &mut Vec<Payload>) {
@@ -301,11 +442,11 @@ impl ValueType {
         Self::Integer => words.push("integer".into()),
         Self::Boolean => words.push("boolean".into()),
         Self::Timestamp => words.push("timestamp".into()),
-        Self::List(element) => {
+        Self::List { element } => {
             words.push("list".into());
             element.push_words(words);
         }
-        Self::Record(fields) => {
+        Self::Record { fields } => {
             words.push("record".into());
             words.push(fields_to_payload(fields));
         }
@@ -335,17 +476,24 @@ impl ValueType {
         "timestamp" => (Self::Timestamp, next),
         "list" => {
             let (element, end) = Self::from_words(words, next, depth + 1)?;
-            (Self::List(Box::new(element)), end)
+            (
+                Self::List {
+                    element: Box::new(element),
+                },
+                end,
+            )
         }
         "record" => {
             let fields = words.get(next).ok_or_else(|| {
                 SchemaError::new(SchemaErrorKind::MissingRecordFields).index(next)
             })?;
             let fields = fields_from_payload(fields, depth + 1).map_err(|e| e.index(next))?;
-            (Self::Record(fields), next + 1)
+            (Self::Record { fields }, next + 1)
         }
         other => {
-            return Err(SchemaError::new(SchemaErrorKind::UnknownShape(other.into())).index(start));
+            return Err(
+                SchemaError::new(SchemaErrorKind::UnknownShape { word: other.into() }).index(start),
+            );
         }
         })
     }
@@ -361,14 +509,16 @@ impl ValueType {
             return;
         }
         match (self, value) {
-        (Self::List(element), Payload::List(values)) => {
+        (Self::List { element }, Payload::List(values)) => {
             for (i, value) in values.iter().enumerate() {
                 path.push(PathPart::Index(i));
                 element.check_value(value, path, issues);
                 path.pop();
             }
         }
-        (Self::Record(fields), Payload::Record(body)) => check_fields(fields, body, path, issues),
+        (Self::Record { fields }, Payload::Record(body)) => {
+            check_fields(fields, body, path, issues)
+        }
         _ => {}
         }
     }
@@ -398,7 +548,7 @@ fn check_fields(
             });
         }
         if let Some(value) = value {
-            field.ty.check_value(value, path, issues);
+            field.shape.check_value(value, path, issues);
         }
         path.pop();
     }
@@ -424,7 +574,7 @@ fn fields_to_payload(fields: &BTreeMap<String, FieldDecl>) -> Payload {
                 FieldStatus::Optional => "optional",
                 };
                 let mut words = vec![presence.into()];
-                decl.ty.push_words(&mut words);
+                decl.shape.push_words(&mut words);
                 (name.clone(), Payload::List(words))
             })
             .collect(),
@@ -460,14 +610,16 @@ fn field_from_payload(value: &Payload, depth: usize) -> Result<FieldDecl, Schema
     "deprecated" => FieldStatus::Deprecated,
     "optional" => FieldStatus::Optional,
     other => {
-        return Err(SchemaError::new(SchemaErrorKind::UnknownPresence(other.into())).index(0));
+        return Err(
+            SchemaError::new(SchemaErrorKind::UnknownPresence { word: other.into() }).index(0),
+        );
     }
     };
     let (ty, end) = ValueType::from_words(words, 1, depth)?;
     if end < words.len() {
         return Err(SchemaError::new(SchemaErrorKind::TrailingElements).index(end));
     }
-    Ok(FieldDecl { ty, status })
+    Ok(FieldDecl { status, shape: ty })
 }
 
 fn keys(body: &Body, allowed: &[&str]) -> Result<(), SchemaError> {
@@ -511,11 +663,11 @@ fn permissions(body: &Body, name: &str) -> Result<BTreeSet<String>, SchemaError>
     for (i, value) in values.iter().enumerate() {
         let value = text(value).map_err(|e| e.index(i).field(name))?;
         if !result.insert(value.to_string()) {
-            return Err(
-                SchemaError::new(SchemaErrorKind::DuplicatePermission(value.into()))
-                    .index(i)
-                    .field(name),
-            );
+            return Err(SchemaError::new(SchemaErrorKind::DuplicatePermission {
+                name: value.into(),
+            })
+            .index(i)
+            .field(name));
         }
     }
     Ok(result)

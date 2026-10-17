@@ -271,14 +271,56 @@ export const unresolvedResponse = {
           "historical": "0"
         },
         "resolution": {
-          "declarations": [
+          "claimants": [
             {
-              "origin": "00000000-0000-4000-8000-000000000008",
-              "position": "0"
+              "declaration": {
+                "origin": "00000000-0000-4000-8000-000000000008",
+                "position": "0"
+              },
+              "kind": "parsed",
+              "schema": {
+                "fields": {
+                  "text": {
+                    "shape": {
+                      "kind": "text"
+                    },
+                    "status": "mandatory"
+                  }
+                },
+                "incoming": [],
+                "name": "Note",
+                "outgoing": [],
+                "successors": []
+              }
             },
             {
-              "origin": "00000000-0000-4000-8000-000000000008",
-              "position": "1"
+              "declaration": {
+                "origin": "00000000-0000-4000-8000-000000000008",
+                "position": "1"
+              },
+              "kind": "parsed",
+              "schema": {
+                "fields": {},
+                "incoming": [],
+                "name": "Note",
+                "outgoing": [],
+                "successors": []
+              }
+            },
+            {
+              "declaration": {
+                "origin": "00000000-0000-4000-8000-000000000008",
+                "position": "2"
+              },
+              "error": {
+                "actual": "text",
+                "expected": "list",
+                "kind": "wrong_shape",
+                "path": [
+                  "outgoing"
+                ]
+              },
+              "kind": "malformed"
             }
           ],
           "kind": "ambiguous"
@@ -293,16 +335,23 @@ export const unresolvedResponse = {
         "resolution": {
           "declaration": {
             "origin": "00000000-0000-4000-8000-000000000008",
-            "position": "2"
+            "position": "3"
           },
-          "kind": "malformed",
-          "message": "invalid schema at fields: should be record, found text"
+          "error": {
+            "actual": "text",
+            "expected": "record",
+            "kind": "wrong_shape",
+            "path": [
+              "fields"
+            ]
+          },
+          "kind": "malformed"
         }
       },
       {
         "name": "Type",
         "nodes": {
-          "current": "3",
+          "current": "4",
           "historical": "0"
         },
         "resolution": {
@@ -312,10 +361,10 @@ export const unresolvedResponse = {
     ],
     "view": {
       "database": "00000000-0000-4000-8000-000000000009",
-      "end_exclusive": "4",
+      "end_exclusive": "5",
       "head": {
         "origin": "00000000-0000-4000-8000-000000000008",
-        "position": "3"
+        "position": "4"
       }
     }
   }

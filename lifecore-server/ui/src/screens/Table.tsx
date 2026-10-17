@@ -20,6 +20,7 @@ import { frozen } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, useEdit, useOpen } from "../links.tsx";
 import { entryKey, typeName, viewWords } from "../model/labels.ts";
+import { schemaErrorText } from "../model/schema.ts";
 import {
   defaultTableScreenView,
   type TableScreenView,
@@ -68,11 +69,13 @@ function ResolutionNote({
       return (
         <p className="muted">
           <ResolutionBadge resolution={resolution} />{" "}
-          {resolution.declarations.length} current declarations:{" "}
-          {resolution.declarations.map((id, index) => (
-            <span key={id.position}>
+          {resolution.claimants.length} current declarations:{" "}
+          {resolution.claimants.map((claimant, index) => (
+            <span key={entryKey(claimant.declaration)}>
               {index > 0 && ", "}
-              <IdLink id={id} />
+              <IdLink id={claimant.declaration} />
+              {claimant.kind === "malformed" &&
+                ` (does not parse: ${schemaErrorText(claimant.error)})`}
             </span>
           ))}
         </p>
@@ -82,7 +85,7 @@ function ResolutionNote({
         <p className="muted">
           <ResolutionBadge resolution={resolution} /> Declaration{" "}
           <IdLink id={resolution.declaration} /> does not parse:{" "}
-          {resolution.message}
+          {schemaErrorText(resolution.error)}
         </p>
       );
   }
