@@ -1,7 +1,8 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type {
   AnalyzerIdentity,
   DecimalString,
+  Dismissal,
   DismissalReason,
   EntryChange,
   EntryId,
@@ -16,10 +17,10 @@ import { FailureView } from "../failure.tsx";
 import { IdLink, NodeLink, OperationLink } from "../links.tsx";
 import {
   addBlocker,
+  clusterFoci,
   type FindingCluster,
   type FindingGroup,
   keyText,
-  lead,
   rangeWords,
   type Selection,
   shownSubjects,
@@ -32,6 +33,21 @@ import type { AnalysisRuns, Bulk, Ran } from "./analysisRuns.ts";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 import { useAnalysisRuns } from "./useAnalysisRuns.ts";
 
+// What the sticky flag and the historical label do and do not say
+// (SPEC §8.3), each in its own tooltip.
+const STICKY =
+  "sticky: current reports keep this advisory after the analyzer stops emitting it, until it is dismissed; that does not mean it still applies";
+const UNCONFIRMED =
+  "a sticky advisory last emitted before this boundary: current reports keep it, but nothing says whether it still applies here";
+
+function Sticky() {
+  return (
+    <span className="muted" title={STICKY} data-testid="sticky">
+      sticky
+    </span>
+  );
+}
+
 export function AnalyzerName({
   analyzer,
   sticky = false,
@@ -40,12 +56,15 @@ export function AnalyzerName({
   sticky?: boolean;
 }) {
   return (
-    <span
-      className="muted"
-      title={`configuration ${JSON.stringify(analyzer.configuration)}`}
-    >
-      {analyzer.name} {analyzer.version}
-      {sticky && ", sticky"}
+    <span className="muted">
+      <span title={`configuration ${JSON.stringify(analyzer.configuration)}`}>
+        {analyzer.name} {analyzer.version}
+      </span>
+      {sticky && (
+        <>
+          , <Sticky />
+        </>
+      )}
     </span>
   );
 }
@@ -78,7 +97,11 @@ function ObservedRange({
         <>
           {" "}
           {unconfirmed(observation, boundary) ? (
-            <span className="badge unconfirmed">
+            <span
+              className="badge unconfirmed"
+              title={UNCONFIRMED}
+              data-testid="unconfirmed"
+            >
               historical; applicability unconfirmed
             </span>
           ) : (
@@ -142,7 +165,11 @@ export function FindingRow<T>({
           />{" "}
         </>
       ) : (
-        diagnostic.sticky && <span className="muted">sticky </span>
+        diagnostic.sticky && (
+          <>
+            <Sticky />{" "}
+          </>
+        )
       )}
       <ObservedRange
         observation={observation}
@@ -213,7 +240,12 @@ export const UNDISMISSABLE =
 export const MAY_BE_STORED =
   "A dismissal edit may have been stored; Run again to see the stored records.";
 
-// A reason and an optional note, kept as typed.
+// A failed run keeps the last answer of the same parameters on show.
+export const PREVIOUS =
+  "This run failed: the findings below are from the previous run of the same parameters.";
+
+// A reason and an optional note, kept as typed. It reads its seed once, so
+// a form opened on a record closes when that record changes.
 function ReasonForm({
   reason: initialReason = "acknowledged",
   note: initialNote = "",
@@ -296,11 +328,25 @@ function EditFailureView({
   );
 }
 
+function sameRecord(a: Dismissal | null, b: Dismissal | null): boolean {
+  return a === null || b === null
+    ? a === b
+    : a.reason === b.reason && a.note === b.note;
+}
+
 // Dismissal is display state only (SPEC §8.3): it hides an advisory from
 // reports and never changes what blocks a change.
 function DismissalBar({ group, ran }: { group: FindingGroup; ran: Ran }) {
   const store = useAnalysisRuns();
-  const [editing, setEditing] = useState(false);
+  // The record an open form was seeded from. When an edit's answer or a
+  // newer run replaces it, the form closes: it would otherwise send values
+  // read before, and seeding it again would discard what was typed.
+  const [editing, setEditing] = useState<{ seed: Dismissal | null } | null>(
+    null,
+  );
+  if (editing !== null && !sameRecord(editing.seed, group.dismissal)) {
+    setEditing(null);
+  }
   const busy = store.busy();
   if (group.key.kind === "inconsistency") {
     return (
@@ -339,11 +385,11 @@ function DismissalBar({ group, ran }: { group: FindingGroup; ran: Ran }) {
             written; durability unconfirmed
           </span>
         )}
-        {!editing && (
+        {editing === null && (
           <button
             type="button"
             disabled={busy}
-            onClick={() => setEditing(true)}
+            onClick={() => setEditing({ seed: dismissal })}
           >
             {dismissal === null ? "Dismiss…" : "Change…"}
           </button>
@@ -359,20 +405,20 @@ function DismissalBar({ group, ran }: { group: FindingGroup; ran: Ran }) {
         )}
         {store.editing() === group.id && <span className="muted">saving…</span>}
       </div>
-      {editing && (
+      {editing !== null && (
         <ReasonForm
-          reason={dismissal?.reason}
-          note={dismissal?.note ?? ""}
-          submit={dismissal === null ? "Dismiss" : "Save"}
+          reason={editing.seed?.reason}
+          note={editing.seed?.note ?? ""}
+          submit={editing.seed === null ? "Dismiss" : "Save"}
           busy={busy}
           onSubmit={(reason, note) =>
             void store.dismiss(group.key, reason, note).then((result) => {
               if (result === "stored" || result === "written") {
-                setEditing(false);
+                setEditing(null);
               }
             })
           }
-          onCancel={() => setEditing(false)}
+          onCancel={() => setEditing(null)}
         />
       )}
       <EditFailureView store={store} group={group} />
@@ -412,11 +458,22 @@ function SuggestedActions({
   const { refresh } = useData();
   const store = useAnalysisRuns();
   const { nodes } = ran;
+  const id = `${keyText(observation.key)}${JSON.stringify(observation.evaluated_view)}`;
+  const recorded = store.added(id);
+  const inDraft = new Set(state.proposal.entries.map((entry) => entry.name));
+  const added = recorded?.filter((name) => inDraft.has(name)) ?? [];
+  const gone = recorded !== null && added.length === 0;
+  // Once none of them is in the draft, as after an apply or a clear, the
+  // record goes, so a later operation of one of their names is not taken
+  // for them.
+  useEffect(() => {
+    if (gone) {
+      store.forgetAdded(id);
+    }
+  }, [store, id, gone]);
   if (actions.length === 0) {
     return <p className="muted">no suggested operations</p>;
   }
-  const id = `${keyText(observation.key)}${JSON.stringify(observation.evaluated_view)}`;
-  const added = store.added(id);
   const blocker = addBlocker(observation, ran.run.analysis, {
     whole: ran.params.as_of === undefined,
     current: ran.refresh === refresh,
@@ -467,7 +524,7 @@ function SuggestedActions({
         ))}
       </ol>
       <div className="row" title={blocker ?? undefined}>
-        {added === null ? (
+        {added.length === 0 ? (
           <button
             type="button"
             disabled={locked || blocker !== null}
@@ -486,7 +543,7 @@ function SuggestedActions({
             added ({counted(added.length, "operation")})
           </ConfirmButton>
         )}
-        {added !== null && (
+        {added.length > 0 && (
           <span className="muted">
             {added.map((name) => (
               <span key={name}>
@@ -628,9 +685,10 @@ export function BulkProgress({
 }
 
 // Findings that read alike, on one line: the message, the analyzer when the
-// suite has several, how many keys, and the first foci; expanded, one row
-// per key, each dismissed on its own. "Dismiss all" takes one reason and
-// note for every undismissed key and sends one edit per key, in turn.
+// suite has several, how many keys, the first foci, and how many findings
+// those leave unnamed; expanded, one row per key, each dismissed on its own.
+// "Dismiss all" takes one reason and note for every undismissed key and
+// sends one edit per key, in turn.
 export function ClusterRow({
   cluster,
   ran,
@@ -649,7 +707,7 @@ export function ClusterRow({
   const store = useAnalysisRuns();
   const [dismissing, setDismissing] = useState(false);
   const { groups, kind } = cluster;
-  const shown = groups.slice(0, 3);
+  const { foci, rest } = clusterFoci(cluster);
   const undismissed = groups
     .filter((group) => group.dismissal === null)
     .map((group) => group.key);
@@ -675,28 +733,28 @@ export function ClusterRow({
           ×{groups.length}
         </span>
         <ul className="cluster-chips">
-          {shown.map((group) => {
-            const { focus } = lead(group).diagnostic;
-            return (
-              focus !== null && (
-                <li key={group.id}>
-                  <EntryChip id={focus} nodes={ran.nodes} />
-                </li>
-              )
-            );
-          })}
-          {groups.length > shown.length && (
+          {foci.map((focus) => (
+            <li key={entryKey(focus)}>
+              <EntryChip id={focus} nodes={ran.nodes} />
+            </li>
+          ))}
+          {foci.length > 0 && rest > 0 && (
             <li>
               <button
                 type="button"
                 className="link"
                 onClick={() => onExpand(true)}
               >
-                +{groups.length - shown.length} more
+                +{counted(rest, "more finding")}
               </button>
             </li>
           )}
         </ul>
+        {kind !== "inconsistency" && undismissed.length === 0 && (
+          <span className="badge dismissed" data-testid="cluster-dismissed">
+            all dismissed
+          </span>
+        )}
         {kind !== "inconsistency" && undismissed.length > 0 && !dismissing && (
           <span className="cluster-actions">
             <button

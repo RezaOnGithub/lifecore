@@ -15,6 +15,7 @@ import {
   aboutEntry,
   addBlocker,
   categoryCounts,
+  clusterFoci,
   clusterGroups,
   defaultFilter,
   type FindingFilter,
@@ -295,12 +296,15 @@ test("findings about an entry match its focus or subjects", () => {
   assert.deepEqual(aboutEntry(groups, { origin: "x", position: "2" }), []);
 });
 
-test("subjects that only repeat the focus are not listed", () => {
+test("subjects are listed without the focus, which is named once", () => {
   assert.deepEqual(shownSubjects(id("1"), [id("1")], sameId), []);
   assert.deepEqual(shownSubjects(id("1"), [id("1"), id("1")], sameId), []);
   assert.deepEqual(shownSubjects(id("1"), [id("1"), id("2")], sameId), [
-    id("1"),
     id("2"),
+  ]);
+  assert.deepEqual(shownSubjects(id("2"), [id("1"), id("3")], sameId), [
+    id("1"),
+    id("3"),
   ]);
   assert.deepEqual(shownSubjects(null, [id("1")], sameId), [id("1")]);
   assert.deepEqual(shownSubjects(id("1"), [], sameId), []);
@@ -385,6 +389,40 @@ test("clusters gather one analyzer's findings of one kind and message", () => {
       ["A", "suggestion", "m", ["e"]],
     ],
   );
+});
+
+test("a cluster head names its first distinct foci and counts the findings they leave out", () => {
+  const alike = (certificate: string, focus: EntryId | null) =>
+    observation("warning", certificate, prefixes("9"), { message: "m", focus });
+  const head = (observations: Observation[], limit?: number) => {
+    const [cluster] = clusterGroups(
+      groupFindings(output(observations), [], defaultFilter),
+    );
+    assert.ok(cluster);
+    const { foci, rest } = clusterFoci(cluster, limit);
+    return [foci.map((focus) => focus.position), rest];
+  };
+  // A lead without a focus is skipped and counted with the rest.
+  assert.deepEqual(
+    head([
+      alike("a", null),
+      alike("b", id("1")),
+      alike("c", id("2")),
+      alike("d", id("3")),
+      alike("e", id("4")),
+    ]),
+    [["1", "2", "3"], 2],
+  );
+  // A focus already named names its other findings too.
+  assert.deepEqual(
+    head([alike("a", id("1")), alike("b", id("1")), alike("c", id("2"))]),
+    [["1", "2"], 0],
+  );
+  assert.deepEqual(head([alike("a", null), alike("b", null)]), [[], 2]);
+  assert.deepEqual(head([alike("a", id("1")), alike("b", id("2"))], 1), [
+    ["1"],
+    1,
+  ]);
 });
 
 // The core's `AnalysisOutput::groups` of a recorded run under every report

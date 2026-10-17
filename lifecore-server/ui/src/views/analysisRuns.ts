@@ -35,8 +35,9 @@ export interface Ran {
   params: AnalysisRunParams;
   refresh: number;
   nodes: Map<string, NodeRecord>;
-  // Why some labels could not be read; those entries show as positions.
-  labels: unknown;
+  // Why some labels could not be read, null when none failed; those entries
+  // show as positions.
+  labelFailure: unknown;
   sent: number;
 }
 
@@ -109,6 +110,8 @@ export function classifyEdit(failure: unknown): EditFailure {
   return { kind: "uncertain", failure };
 }
 
+// A single edit is refused while another edit or a "Dismiss all" is under
+// way.
 export type EditResult = "stored" | EditFailure["kind"] | "refused";
 
 // A "Dismiss all" over the keys of one cluster, one edit at a time.
@@ -347,7 +350,7 @@ export class AnalysisRuns {
       if (current()) {
         this.#set(key, {
           status: "ready",
-          ran: { run, params, refresh, nodes, labels: failure, sent },
+          ran: { run, params, refresh, nodes, labelFailure: failure, sent },
         });
       }
     })();
@@ -391,14 +394,11 @@ export class AnalysisRuns {
     return this.#failures.get(keyText(key)) ?? null;
   }
 
+  // Callers make sure no other edit is in flight.
   async #edit(
     key: FindingKey,
     call: () => Promise<{ dismissals: Dismissal[] }>,
-    bulk = false,
-  ): Promise<EditResult> {
-    if (this.#editing !== null || (!bulk && this.#bulk?.running === true)) {
-      return "refused";
-    }
+  ): Promise<"stored" | EditFailure["kind"]> {
     const id = keyText(key);
     this.#editing = id;
     this.#failures.delete(id);
@@ -448,15 +448,21 @@ export class AnalysisRuns {
     );
   }
 
-  dismiss(
+  async dismiss(
     key: FindingKey,
     reason: DismissalReason,
     note: string,
   ): Promise<EditResult> {
+    if (this.busy()) {
+      return "refused";
+    }
     return this.#edit(key, () => this.#dismissCall(key, reason, note));
   }
 
-  restore(key: FindingKey): Promise<EditResult> {
+  async restore(key: FindingKey): Promise<EditResult> {
+    if (this.busy()) {
+      return "refused";
+    }
     return this.#edit(key, () => this.#call("findings.restore", { key }));
   }
 
@@ -486,6 +492,8 @@ export class AnalysisRuns {
       stopping: false,
       stopped: null,
     };
+    // From here until it ends, `busy()` refuses every other edit, and each
+    // of its own is awaited, so none of them overlaps another.
     this.#bulk = bulk;
     this.#changed();
     for (const key of keys) {
@@ -493,10 +501,8 @@ export class AnalysisRuns {
         bulk.stopped = "stopped";
         break;
       }
-      const result = await this.#edit(
-        key,
-        () => this.#dismissCall(key, reason, note),
-        true,
+      const result = await this.#edit(key, () =>
+        this.#dismissCall(key, reason, note),
       );
       if (result === "stored" || result === "written") {
         bulk.stored += 1;
@@ -505,10 +511,6 @@ export class AnalysisRuns {
       }
       if (result === "uncertain") {
         bulk.stopped = "an edit's outcome is unknown";
-        break;
-      }
-      if (result === "refused") {
-        bulk.stopped = "another edit was in flight";
         break;
       }
     }
@@ -540,6 +542,12 @@ export class AnalysisRuns {
   setAdded(observation: string, names: string[]) {
     this.#added.set(observation, names);
     this.#changed();
+  }
+
+  forgetAdded(observation: string) {
+    if (this.#added.delete(observation)) {
+      this.#changed();
+    }
   }
 
   screen(): ScreenMemo {

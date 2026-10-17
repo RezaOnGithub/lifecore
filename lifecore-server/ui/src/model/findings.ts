@@ -277,6 +277,29 @@ export function clusterGroups(
   return [...clusters.values()];
 }
 
+// The foci a cluster's head names: those of its first groups' leads, up to
+// `limit` distinct ones, skipping leads without a focus, and how many groups
+// none of them names.
+export function clusterFoci(
+  cluster: FindingCluster,
+  limit = 3,
+): { foci: EntryId[]; rest: number } {
+  const foci: EntryId[] = [];
+  let rest = 0;
+  for (const group of cluster.groups) {
+    const { focus } = lead(group).diagnostic;
+    if (focus !== null && foci.some((shown) => sameId(shown, focus))) {
+      continue;
+    }
+    if (focus !== null && foci.length < limit) {
+      foci.push(focus);
+    } else {
+      rest += 1;
+    }
+  }
+  return { foci, rest };
+}
+
 // Advisories whose shown message or focus label contains `text`, ignoring
 // case. Like every advisory filter it never hides an inconsistency.
 export function filterText(
@@ -300,16 +323,16 @@ export function filterText(
   );
 }
 
-// Subjects worth listing beside the focus: none when they only repeat it.
+// Subjects worth listing beside the focus: those other than the focus,
+// which is named once, by its own chip or by the place it is shown in.
 export function shownSubjects<T>(
   focus: T | null,
   subjects: readonly T[],
   same: (a: T, b: T) => boolean,
 ): readonly T[] {
-  if (focus !== null && subjects.every((subject) => same(subject, focus))) {
-    return [];
-  }
-  return subjects;
+  return focus === null
+    ? subjects
+    : subjects.filter((subject) => !same(subject, focus));
 }
 
 // "12 warnings" or "1 inconsistency, 2 suggestions": only the kinds present.

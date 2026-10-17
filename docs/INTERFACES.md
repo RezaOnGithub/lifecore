@@ -717,27 +717,33 @@ them; none is a server contract.
 #### Findings and analyzers
 
 - One finding row everywhere: kind, message, analyzer name and version (the
-  configuration string as a tooltip), range, the focus, and the subjects only
-  when they name more than the focus. Ranges read against the boundary of their
-  report: `since N` when they run up to it, `N–M` or `at N` when they ended
-  before it, and `initialization`. Runs of the stored database mark an ended
-  range "(ended)". A sticky advisory that ended before the boundary is labeled
-  "historical; applicability unconfirmed" instead.
+  configuration string as a tooltip), range, the focus, and the subjects other
+  than the focus. Ranges read against the boundary of their report: `since N`
+  when they run up to it, `N–M` or `at N` when they ended before it, and
+  `initialization`. Runs of the stored database mark an ended range "(ended)",
+  and reports of a check or a replay "not emitted at the head". A sticky
+  advisory that ended before the boundary is labeled "historical;
+  applicability unconfirmed" instead. The "sticky" mark and that label each
+  have a tooltip saying what they do not claim.
 - The Findings screen runs `analysis.run` at the top bar's as-of only on Run,
   which always asks the server again. The last run stays on show with its
   view, evaluation time, and analyzers with versions and configuration strings,
   and says so when the top bar selects another view (a whole-history run of
-  `[0, N)` is the view as of N) or a reload has moved on. The page keeps 4 runs
-  and never evicts the one on show.
+  `[0, N)` is the view as of N) or a reload has moved on. A failed Run shows
+  its failure, and over a previous run of the same parameters says that the
+  findings on show are that run's. The page keeps 4 runs and never evicts the
+  one on show.
 - Groups follow the core's grouping and current or history selection
   ([SPEC §8.3](SPEC.md#83-presentation-and-dismissal)). Category,
   "show dismissed", and text (message or focus label) filters apply to
   advisories only; counts per category are taken before them. Groups with one
   analyzer identity, kind, and message cluster into one line: the message, the
-  analyzer when the suite has several, the count, the first three foci, and
-  "+N more", which expands to a row per key. History mode dims nonsticky
-  advisories that ended before the boundary. Inconsistencies are never dimmed
-  or filtered out, and their clusters offer no "Dismiss all".
+  analyzer when the suite has several, the count, the first three distinct
+  foci (keys without one are skipped), and "+N more findings" for the keys
+  none of them names, which expands to a row per key. A cluster whose keys are
+  all dismissed says so. History mode dims nonsticky advisories that ended
+  before the boundary. Inconsistencies are never dimmed or filtered out, and
+  their clusters offer no "Dismiss all".
 - Labels are read at the run's boundary, only for the entries findings name:
   `entries.get` for each below 20, else one `views.query` of `ids` seeds,
   retried without each id it refuses, up to three times, before `entries.list`
@@ -746,7 +752,9 @@ them; none is a server contract.
   disabled, with the reason. "Dismiss all N" on an advisory cluster takes them
   once and dismisses its undismissed keys with progress and Stop; a key's
   failure stays on its row. Edits go one at a time, and the records each answer
-  lists replace the run's without a new run.
+  lists replace the run's without a new run. A form opened on a record closes
+  when an answer or a newer run changes that record, so it never sends values
+  read before.
 - A dismissal failure that changed nothing shows on its row.
   `publication_uncertain` with a `dismissed` or `restored` outcome adopts its
   records and labels the row "written; durability unconfirmed". Any other
@@ -760,17 +768,17 @@ them; none is a server contract.
   left unset), and never sets `acknowledges`. It is enabled only for an
   observation emitted at the boundary of a whole-history run of the current
   reload, since the draft applies to the current history, and otherwise says
-  why. Afterwards it reads "added (N operations)" and asks before adding them
-  again.
+  why. Afterwards, while any of those operations remain in the draft, it reads
+  "added (N operations)" and asks before adding them again.
 - The inspector's "Findings about this entry" sits above the relationships of a
   node and below an edge. It is collapsed until opened and then stays open
   across inspections; collapsed, it counts from a run already held for its
   parameters. One run without an evaluation time per as-of selection and
   reload serves every inspection, reusing a Findings run with the same
   parameters; while the section is open, a changed boundary or reload waits
-  300 ms before running. It names the analyzers that ran and lists the current
-  findings whose focus or subjects name the entry, without a focus chip that
-  names it again.
+  300 ms before running; a failed run waits for Run again. It names the
+  analyzers that ran and lists the current findings whose focus or subjects
+  name the entry, without a focus chip that names it again.
 - Analyzers: the Database screen lists the suite with each configuration
   string verbatim and appends only names from `registered`, with a
   configuration (default `{}`) sent as typed. "Add…" asks first, naming the

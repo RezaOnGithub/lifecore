@@ -170,6 +170,20 @@ async function openFindings() {
   ).toBeVisible();
 }
 
+const methodOf = (route: Route) =>
+  (route.request().postDataJSON() as { method?: string } | null)?.method;
+
+// Until unrouted, every `analysis.run` fails with its answer lost.
+async function failRuns() {
+  await page.route(launched().rpc, async (route) => {
+    if (methodOf(route) === "analysis.run") {
+      await route.abort();
+    } else {
+      await route.fallback();
+    }
+  });
+}
+
 async function run() {
   await main().getByRole("button", { name: "Run", exact: true }).click();
   await expect(main().getByTestId("findings-context")).toBeVisible();
@@ -273,8 +287,12 @@ test("a dismissed warning hides, shows on request with its note, and restores", 
     reason: "acknowledged",
     note: null,
   });
+  // A form open on a record closes when the record changes under it, so
+  // it never sends what it read before.
+  await sprocket().getByRole("button", { name: "Change…" }).click();
   await sprocket().getByRole("button", { name: "Restore" }).click();
   await expect(sprocket().getByTestId("dismissed")).toHaveCount(0);
+  await expect(sprocket().getByLabel("reason")).toHaveCount(0);
   await expect(
     sprocket().getByRole("button", { name: "Dismiss…" }),
   ).toBeVisible();
@@ -285,12 +303,10 @@ test("a dismissed warning hides, shows on request with its note, and restores", 
 
 test("an edit whose answer is lost or unconfirmed says what is known", async () => {
   const { rpc } = launched();
-  const method = (route: Route) =>
-    (route.request().postDataJSON() as { method?: string } | null)?.method;
   // The dismissal reaches the server, but its answer is lost on the way
   // back: it may have been stored, and nothing retries it.
   await page.route(rpc, async (route) => {
-    if (method(route) !== "findings.dismiss") {
+    if (methodOf(route) !== "findings.dismiss") {
       await route.fallback();
       return;
     }
@@ -315,7 +331,7 @@ test("an edit whose answer is lost or unconfirmed says what is known", async () 
   // A restore published without confirmed durability: its records are
   // adopted and the row says so.
   await page.route(rpc, async (route) => {
-    if (method(route) !== "findings.restore") {
+    if (methodOf(route) !== "findings.restore") {
       await route.fallback();
       return;
     }
@@ -352,6 +368,17 @@ test("an edit whose answer is lost or unconfirmed says what is known", async () 
   await expect(sprocket()).toHaveCount(1);
 });
 
+test("a failed run says the findings on show are the previous run's", async () => {
+  await failRuns();
+  await main().getByRole("button", { name: "Run", exact: true }).click();
+  await expect(main().getByTestId("findings-previous")).toBeVisible();
+  await expect(sprocket()).toHaveCount(1);
+  await page.unroute(launched().rpc);
+  await run();
+  await expect(main().getByTestId("findings-previous")).toHaveCount(0);
+  await expect(sprocket()).toHaveCount(1);
+});
+
 test("findings that read alike cluster, filter by text, and dismiss together", async () => {
   const cluster = () =>
     main().getByTestId("finding-cluster").filter({ hasText: "steward" });
@@ -371,7 +398,7 @@ test("findings that read alike cluster, filter by text, and dismiss together", a
   await expect(cluster()).toHaveCount(0);
   await expect(sprocket()).toHaveCount(1);
   await filter.fill("");
-  await cluster().getByRole("button", { name: "+1 more" }).click();
+  await cluster().getByRole("button", { name: "+1 more finding" }).click();
   await expect(cluster().getByTestId("finding-group")).toHaveCount(4);
   await cluster().getByRole("button", { name: "Dismiss all 4…" }).click();
   await cluster().getByLabel("reason").selectOption("no_longer_relevant");
@@ -391,6 +418,9 @@ test("findings that read alike cluster, filter by text, and dismiss together", a
   }
   await main().getByLabel("show dismissed").check();
   await expect(cluster().getByTestId("cluster-count")).toHaveText("×4");
+  await expect(cluster().getByTestId("cluster-dismissed")).toHaveText(
+    "all dismissed",
+  );
   await main().getByLabel("show dismissed").uncheck();
 });
 
@@ -430,6 +460,17 @@ test("the focus opens the inspector, whose section lists the entry's findings", 
   // The section stays open for the next inspection.
   await inspectGadget("Widget F1");
   await expect(main().getByTestId("no-entry-findings")).toBeVisible();
+  // A first run that fails, here for a new boundary, can be run again.
+  await failRuns();
+  await setAsOf(String(BigInt(ids.widget?.position ?? "") + 1n));
+  const again = section.getByRole("button", { name: "Run again" });
+  await expect(again).toBeVisible();
+  await expect(section.getByTestId("entry-analyzers")).toHaveCount(0);
+  await page.unroute(launched().rpc);
+  await again.click();
+  await expect(section.getByTestId("entry-analyzers")).toBeVisible();
+  await expect(main().getByTestId("no-entry-findings")).toBeVisible();
+  await setAsOf(null);
 });
 
 test("the tray folds the findings already in history into one line", async () => {

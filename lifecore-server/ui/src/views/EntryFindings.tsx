@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AnalysisRunParams, EntryId } from "../contract.ts";
 import { useData } from "../data.tsx";
 import { FailureView } from "../failure.tsx";
@@ -10,7 +10,12 @@ import {
   groupFindings,
 } from "../model/findings.ts";
 import { type Ran, runKey, shownRun } from "./analysisRuns.ts";
-import { AnalyzerName, GroupRow, MAY_BE_STORED } from "./FindingRow.tsx";
+import {
+  AnalyzerName,
+  GroupRow,
+  MAY_BE_STORED,
+  PREVIOUS,
+} from "./FindingRow.tsx";
 import { useAnalysisRuns } from "./useAnalysisRuns.ts";
 
 // How long a changed boundary or reload waits before the open section runs
@@ -48,23 +53,18 @@ export function EntryFindings({ id }: { id: EntryId }) {
   const { asOf, refresh } = useData();
   const [dismissed, setDismissed] = useState(false);
   const expanded = store.entryOpen();
-  const params: AnalysisRunParams = asOf === null ? {} : { as_of: asOf };
-  const key = runKey(params, refresh);
+  const params = useMemo(
+    (): AnalysisRunParams => (asOf === null ? {} : { as_of: asOf }),
+    [asOf],
+  );
   useEffect(() => {
     if (!expanded) {
       return;
     }
-    const wanted = JSON.parse(key) as {
-      params: AnalysisRunParams;
-      refresh: number;
-    };
-    const timer = setTimeout(
-      () => store.run(wanted.params, wanted.refresh),
-      SETTLE_MS,
-    );
+    const timer = setTimeout(() => store.run(params, refresh), SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [store, expanded, key]);
-  const state = store.get(key);
+  }, [store, expanded, params, refresh]);
+  const state = store.get(runKey(params, refresh));
   const ran = shownRun(state);
   const all: FindingGroup[] | null =
     ran === null
@@ -78,12 +78,25 @@ export function EntryFindings({ id }: { id: EntryId }) {
         );
   const hidden = all?.filter((group) => group.dismissal !== null).length ?? 0;
   const count = all === null ? null : all.length - hidden;
+  // Expanding reuses a known run, a failed one too; only this replaces it.
+  const again = (
+    <button
+      type="button"
+      disabled={state?.status === "running"}
+      onClick={() => store.run(params, refresh, true)}
+    >
+      Run again
+    </button>
+  );
   let body = null;
   if (expanded) {
     if (ran === null || all === null) {
       body =
         state?.status === "failed" ? (
-          <FailureView failure={state.failure} compact />
+          <>
+            <FailureView failure={state.failure} compact />
+            <div className="row">{again}</div>
+          </>
         ) : (
           <p className="muted">running the analyzers…</p>
         );
@@ -113,13 +126,7 @@ export function EntryFindings({ id }: { id: EntryId }) {
                 show dismissed ({hidden})
               </label>
             )}
-            <button
-              type="button"
-              disabled={state?.status === "running"}
-              onClick={() => store.run(params, refresh, true)}
-            >
-              Run again
-            </button>
+            {again}
             <button
               type="button"
               className="link"
@@ -132,7 +139,12 @@ export function EntryFindings({ id }: { id: EntryId }) {
             <p className="muted">running the analyzers…</p>
           )}
           {state?.status === "failed" && (
-            <FailureView failure={state.failure} compact />
+            <>
+              <FailureView failure={state.failure} compact />
+              <p className="muted" data-testid="entry-findings-previous">
+                {PREVIOUS}
+              </p>
+            </>
           )}
           {store.uncertain(ran) && (
             <p className="banner uncertain" data-testid="dismissal-uncertain">

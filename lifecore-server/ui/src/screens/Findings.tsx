@@ -27,6 +27,7 @@ import {
   GroupRow,
   labelOf,
   MAY_BE_STORED,
+  PREVIOUS,
 } from "../views/FindingRow.tsx";
 import { EvaluationChoice } from "../views/TrayHeader.tsx";
 import { useAnalysisRuns } from "../views/useAnalysisRuns.ts";
@@ -210,7 +211,7 @@ function Report({
   return (
     <>
       <Context ran={ran} />
-      {ran.labels !== null && (
+      {ran.labelFailure !== null && (
         <p className="muted">
           Some entries are shown by position: their labels could not be read.
         </p>
@@ -326,6 +327,11 @@ export function FindingsScreen() {
       {state?.status === "failed" && <FailureView failure={state.failure} />}
       {ran !== null && last !== null && (
         <>
+          {state?.status === "failed" && (
+            <p className="banner asof" data-testid="findings-previous">
+              {PREVIOUS}
+            </p>
+          )}
           {moved(ran, last, asOf) ? (
             <p className="banner asof" data-testid="findings-moved">
               This run is of [0, {ran.run.analysis.view.end_exclusive}), and the
