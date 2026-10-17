@@ -6,6 +6,7 @@ import { countWords } from "../draft/findings.ts";
 import { type Evaluation, evaluationParams } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { sameId } from "../model/labels.ts";
+import { counted } from "../model/words.ts";
 import type { RpcClient } from "../rpc.ts";
 import {
   type AddOutcome,
@@ -16,7 +17,7 @@ import {
   type Sent,
   suiteHolds,
 } from "./analyzerAdd.ts";
-import { EntryChip, FindingRow } from "./FindingRow.tsx";
+import { EntryChip, FindingRow, NOT_AT_HEAD } from "./FindingRow.tsx";
 import { EvaluationChoice } from "./TrayHeader.tsx";
 
 const stores = new WeakMap<RpcClient, AnalyzerAdds>();
@@ -71,10 +72,6 @@ function evaluationWords(evaluation: Evaluation): string {
   }
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 // The first registered analyzer the suite does not configure yet, else the
 // first one; null when the host registers none.
 function defaultName(description: Description): string | null {
@@ -126,9 +123,9 @@ function Confirmation({
         <li>evaluation time: {evaluationWords(evaluation)}</li>
       </ul>
       <p className="note">
-        The whole history, {entries} {entries === "1" ? "entry" : "entries"}, is
-        replayed at every prefix under the extended suite. An inconsistency
-        anywhere rejects the addition, and nothing is stored.
+        The whole history, {counted(entries, "entry")}, is replayed at every
+        prefix under the extended suite. An inconsistency anywhere rejects the
+        addition, and nothing is stored.
       </p>
       <p className="note">
         There is no removal or reconfiguration: once added, it stays in the
@@ -138,7 +135,7 @@ function Confirmation({
         Success changes the graph revision, so every outstanding plan ID becomes
         stale
         {operations > 0
-          ? `: your draft of ${plural(operations, "operation", "operations")} will need Replan.`
+          ? `: your draft of ${counted(operations, "operation")} will need Replan.`
           : ", and a draft with operations would need Replan."}
       </p>
       <div className="row">
@@ -152,10 +149,6 @@ function Confirmation({
     </div>
   );
 }
-
-const NOT_AT_HEAD = (
-  <span className="badge not-emitted">not emitted at the head</span>
-);
 
 function Outcome({
   outcome,
@@ -209,8 +202,7 @@ function Outcome({
       return (
         <div className="banner problem" role="alert" data-testid="add-rejected">
           <strong>Not added.</strong> Replaying the history under the extended
-          suite emitted{" "}
-          {`${plural(inconsistencies.length, "inconsistency", "inconsistencies")};`}{" "}
+          suite emitted {`${counted(inconsistencies.length, "inconsistency")};`}{" "}
           nothing was stored.
           <ul className="findings" data-testid="add-inconsistencies">
             {inconsistencies.map((observation, index) => (
@@ -229,8 +221,8 @@ function Outcome({
           </ul>
           <p className="note" data-testid="add-other-findings">
             Other findings of the replay, not listed:{" "}
-            {plural(total.warning, "warning", "warnings")},{" "}
-            {plural(total.suggestion, "suggestion", "suggestions")}.
+            {counted(total.warning, "warning")},{" "}
+            {counted(total.suggestion, "suggestion")}.
           </p>
           {dismiss}
         </div>

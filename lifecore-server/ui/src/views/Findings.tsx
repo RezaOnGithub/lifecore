@@ -9,7 +9,7 @@ import type { DraftState } from "../draft/model.ts";
 import { requestOf } from "../draft/model.ts";
 import { IdLink, OperationLink } from "../links.tsx";
 import { sameId } from "../model/labels.ts";
-import { FindingRow } from "./FindingRow.tsx";
+import { FindingRow, NOT_AT_HEAD } from "./FindingRow.tsx";
 
 // The findings of the last check, as the views need them: per operation by
 // its current name, whether they judged the draft as it is now, and the
@@ -101,14 +101,6 @@ export function OperationStatus({ name }: { name: string }) {
     <CheckStatus counts={countFindings(findings)} current={judgment.current} />
   );
 }
-
-// What a range that ended before the candidate's head says: only that the
-// head does not emit it (SPEC §8.3).
-const NOT_AT_HEAD = (
-  <span className="badge not-emitted" data-testid="not-at-head">
-    not emitted at the candidate's head
-  </span>
-);
 
 function sameTarget(a: Target, b: Target): boolean {
   if (a.kind === "operation") {

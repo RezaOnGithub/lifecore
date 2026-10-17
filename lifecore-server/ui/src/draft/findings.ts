@@ -6,6 +6,7 @@ import type {
   ProposalReport,
 } from "../contract.ts";
 import { sameId } from "../model/labels.ts";
+import { counted } from "../model/words.ts";
 
 // A subject or focus of a finding, with provisional ids mapped back to the
 // index of the operation that would create them.
@@ -166,22 +167,18 @@ export function reportCounts(report: ProposalReport): {
 export function statusWords(counts: Counts): string {
   const words: string[] = [];
   if (counts.inconsistency > 0) {
-    words.push(
-      `${counts.inconsistency} inconsistenc${counts.inconsistency === 1 ? "y" : "ies"}`,
-    );
+    words.push(counted(counts.inconsistency, "inconsistency"));
   }
   if (counts.warning > 0) {
-    words.push(`${counts.warning} warning${counts.warning === 1 ? "" : "s"}`);
+    words.push(counted(counts.warning, "warning"));
   }
   return words.length === 0 ? "ok" : words.join(", ");
 }
 
 export function countWords(counts: Counts): string {
-  const plural = (n: number, one: string, many: string) =>
-    `${n} ${n === 1 ? one : many}`;
   return [
-    plural(counts.inconsistency, "inconsistency", "inconsistencies"),
-    plural(counts.warning, "warning", "warnings"),
-    plural(counts.suggestion, "suggestion", "suggestions"),
+    counted(counts.inconsistency, "inconsistency"),
+    counted(counts.warning, "warning"),
+    counted(counts.suggestion, "suggestion"),
   ].join(", ");
 }

@@ -27,6 +27,7 @@ import {
 } from "../model/findings.ts";
 import { entryKey, rowLabel, sameId, typeName } from "../model/labels.ts";
 import { formatBody } from "../model/payload.ts";
+import { counted } from "../model/words.ts";
 import type { AnalysisRuns, Bulk, Ran } from "./analysisRuns.ts";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 import { useAnalysisRuns } from "./useAnalysisRuns.ts";
@@ -185,6 +186,14 @@ export function labelOf(nodes: Map<string, NodeRecord>) {
 const ENDED = (
   <span className="ended" data-testid="ended">
     (ended)
+  </span>
+);
+
+// What a range that ended before the head of a check or a replay says: only
+// that the head does not emit it (SPEC §8.3).
+export const NOT_AT_HEAD = (
+  <span className="badge not-emitted" data-testid="not-at-head">
+    not emitted at the head
   </span>
 );
 
@@ -474,7 +483,7 @@ function SuggestedActions({
             title={title}
             onConfirm={add}
           >
-            added ({added.length} operation{added.length === 1 ? "" : "s"})
+            added ({counted(added.length, "operation")})
           </ConfirmButton>
         )}
         {added !== null && (

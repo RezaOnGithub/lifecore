@@ -1,6 +1,7 @@
 import type { EdgeEntry, EntryId, NodeEntry } from "../contract.ts";
 import { compareStrings } from "./columns.ts";
 import { entryKey, sameId, typeName } from "./labels.ts";
+import { counted } from "./words.ts";
 
 // One kind of relationship seen from a node: an edge type, and whether the
 // node is the edge's `from` (outgoing) or its `to` (incoming).
@@ -51,24 +52,10 @@ export function countByType(
     .sort((a, b) => b.count - a.count || compareStrings(a.ty_name, b.ty_name));
 }
 
-// An English plural good enough for type names: Tasks, Addresses, Stories.
-export function plural(name: string, count: number): string {
-  if (count === 1) {
-    return name;
-  }
-  if (/(s|x|z|ch|sh)$/.test(name)) {
-    return `${name}es`;
-  }
-  if (/[^aeiou]y$/.test(name)) {
-    return `${name.slice(0, -1)}ies`;
-  }
-  return `${name}s`;
-}
-
 // `460 Tasks` or `455 Tasks, 5 Notes`, as a relationship cell opens.
 export function countWords(counts: readonly TypeCount[]): string {
   return counts
-    .map(({ ty_name, count }) => `${count} ${plural(typeName(ty_name), count)}`)
+    .map(({ ty_name, count }) => counted(count, typeName(ty_name)))
     .join(", ");
 }
 

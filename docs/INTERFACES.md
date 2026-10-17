@@ -706,8 +706,8 @@ them; none is a server contract.
   first prefix it was emitted at, matched by position against the report's
   operations and kept by operation index, so renames keep it. Findings from a
   check of other content are dimmed. Each shows its range against the
-  candidate's head, with "not emitted at the candidate's head" when it ended
-  before; nothing reads as resolved. Initialization findings are suite-level;
+  candidate's head, with "not emitted at the head" when it ended before;
+  nothing reads as resolved. Initialization findings are suite-level;
   provisional subjects link to their operations.
 - "Already in history" covers findings first emitted in the committed base. Its
   inconsistencies are always listed, those the base no longer emits included;

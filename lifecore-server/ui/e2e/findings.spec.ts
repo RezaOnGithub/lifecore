@@ -446,10 +446,8 @@ test("the tray folds the findings already in history into one line", async () =>
   await history.click();
   await expect(report.getByTestId("findings")).toHaveCount(1);
   await expect(
-    report
-      .getByTestId("findings")
-      .getByText("not emitted at the candidate's head"),
-  ).toHaveCount(1);
+    report.getByTestId("findings").getByTestId("not-at-head"),
+  ).toHaveText("not emitted at the head");
   await tray.getByRole("button", { name: "Clear", exact: true }).click();
   await tray
     .getByRole("button", { name: "Clear the whole draft?", exact: true })

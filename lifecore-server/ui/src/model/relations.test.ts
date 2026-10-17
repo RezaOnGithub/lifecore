@@ -8,7 +8,6 @@ import {
   directionAt,
   edgeWords,
   groupByRelation,
-  plural,
   relationCells,
   relationKey,
   relationLabel,
@@ -126,7 +125,6 @@ test("neighbours count by type, most first, in words and as tags", () => {
     ]),
     "2 Addresses, 4 Stories",
   );
-  assert.equal(plural("Day", 2), "Days");
   assert.equal(typeTags([{ ty_name: "Task", count: 460 }]), "Task");
   assert.equal(typeTags(counts.slice(0, 2)), "3 Task, 1 Address");
   assert.equal(typeTags([{ ty_name: "", count: 1 }]), "(unnamed)");

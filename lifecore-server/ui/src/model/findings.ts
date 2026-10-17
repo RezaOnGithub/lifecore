@@ -10,6 +10,7 @@ import type {
   Observation,
 } from "../contract.ts";
 import { sameId } from "./labels.ts";
+import { counted } from "./words.ts";
 
 // Report presentation of a stored-database analysis (SPEC §8.3), mirroring
 // core `AnalysisOutput::groups`: findings are grouped by complete key and
@@ -311,20 +312,12 @@ export function shownSubjects<T>(
   return subjects;
 }
 
-const KIND_WORDS: { [K in MessageType]: [string, string] } = {
-  inconsistency: ["inconsistency", "inconsistencies"],
-  warning: ["warning", "warnings"],
-  suggestion: ["suggestion", "suggestions"],
-};
-
 // "12 warnings" or "1 inconsistency, 2 suggestions": only the kinds present.
 export function kindWords(counts: { [K in MessageType]: number }): string {
   const words: string[] = [];
   for (const kind of ["inconsistency", "warning", "suggestion"] as const) {
-    const n = counts[kind];
-    if (n > 0) {
-      const [one, many] = KIND_WORDS[kind];
-      words.push(`${n} ${n === 1 ? one : many}`);
+    if (counts[kind] > 0) {
+      words.push(counted(counts[kind], kind));
     }
   }
   return words.length === 0 ? "none" : words.join(", ");
