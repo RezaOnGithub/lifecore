@@ -275,10 +275,11 @@ export function pickUse(
 // ends must be current immediately before the append (FILES §2.4, SPEC
 // §7.1); a branch may start from any revision. Under an as-of boundary
 // `current` describes that view, not the current state drafts apply to, so
-// those uses wait until the boundary is cleared.
+// those uses wait until the boundary is cleared. `current` is null while the
+// answer on show is an earlier read, which may describe another boundary.
 export function currentRefusal(
   use: NodeUse,
-  current: boolean,
+  current: boolean | null,
   bounded: boolean,
 ): string | null {
   if (use === "branch") {
@@ -286,6 +287,9 @@ export function currentRefusal(
   }
   if (bounded) {
     return `drafts apply to the current state; clear the as-of boundary (current) to ${use === "revise" ? "revise" : "connect"} this node`;
+  }
+  if (current === null) {
+    return "the current state is still loading";
   }
   if (!current) {
     return use === "revise"

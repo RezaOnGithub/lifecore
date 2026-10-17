@@ -697,7 +697,7 @@ them; none is a server contract.
   predecessor picked for an operation without an intent makes it a revise)
   are off for a superseded node and, under an as-of boundary, for every node,
   since a bounded read does not say what is current in the state drafts apply
-  to. Branch and a branch's predecessor pick stay: a branch may start from
+  to; they also wait while an earlier answer stands in for a reload. Branch and a branch's predecessor pick stay: a branch may start from
   any revision, whose payload is the same at every boundary. Reconnection
   lists the predecessor's current edges, read without `as_of`, by direction
   and type, collapsed beyond 10. Revise keeps all of them by default, also

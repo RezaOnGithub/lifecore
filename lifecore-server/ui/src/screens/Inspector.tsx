@@ -176,6 +176,7 @@ export function InspectorScreen({
       {result.kind === "node" ? (
         <NodeInspection
           inspection={result}
+          settled={load.status === "ready"}
           view={view}
           setView={setView}
           onExplore={onExplore}
@@ -214,7 +215,13 @@ function TypeNote({ type }: { type: TypeResolution }) {
 // unless the operation needs a current node and this one is not known to be
 // current in the state drafts apply to; an edge inspection says it cannot be
 // picked.
-function PickBanner({ node }: { node: NodeRecord | null }) {
+function PickBanner({
+  node,
+  current = null,
+}: {
+  node: NodeRecord | null;
+  current?: boolean | null;
+}) {
   const { state, actions } = useDraft();
   const { asOf } = useData();
   const open = useOpen();
@@ -227,7 +234,7 @@ function PickBanner({ node }: { node: NodeRecord | null }) {
       ? null
       : currentRefusal(
           pickUse(picking, state.proposal.entries),
-          node.current,
+          current,
           asOf !== null,
         );
   return (
@@ -265,11 +272,15 @@ function PickBanner({ node }: { node: NodeRecord | null }) {
 
 function NodeInspection({
   inspection,
+  settled,
   view: { raw, outline },
   setView,
   onExplore,
 }: {
   inspection: Extract<EntryInspection, { kind: "node" }>;
+  // Whether `inspection` answers the read on show, rather than standing in
+  // for it, read at another boundary, until it answers.
+  settled: boolean;
   view: InspectorView;
   setView: (update: (view: InspectorView) => InspectorView) => void;
   onExplore: (id: EntryId) => void;
@@ -290,8 +301,9 @@ function NodeInspection({
   // Branch does not: it copies this revision's own payload, which no
   // boundary changes.
   const bounded = asOf !== null;
-  const unrevisable = currentRefusal("revise", entry.current, bounded);
-  const unconnectable = currentRefusal("endpoint", entry.current, bounded);
+  const current = settled ? entry.current : null;
+  const unrevisable = currentRefusal("revise", current, bounded);
+  const unconnectable = currentRefusal("endpoint", current, bounded);
   const declaration = useMemo(
     () =>
       entry.ty_name === "Type"
@@ -307,7 +319,7 @@ function NodeInspection({
   };
   return (
     <article data-testid="inspector">
-      <PickBanner node={entry} />
+      <PickBanner node={entry} current={current} />
       <h2>
         <PinButton inspection={inspection} /> {rowLabel(entry)}{" "}
         <Position id={entry.id} />
@@ -333,9 +345,9 @@ function NodeInspection({
           title={
             unrevisable === null
               ? "a new revision with this payload; current edges are kept"
-              : bounded
-                ? unrevisable
-                : `${unrevisable}; Branch instead`
+              : current === false && !bounded
+                ? `${unrevisable}; Branch instead`
+                : unrevisable
           }
           onClick={() => revise("revise")}
         >

@@ -230,7 +230,7 @@ test("a pick puts its node to the use of the operation's role and intent", () =>
 });
 
 test("only a branch takes a node not known to be current in the current state", () => {
-  for (const current of [true, false]) {
+  for (const current of [true, false, null]) {
     for (const bounded of [true, false]) {
       assert.equal(currentRefusal("branch", current, bounded), null);
     }
@@ -245,8 +245,16 @@ test("only a branch takes a node not known to be current in the current state", 
     currentRefusal("endpoint", false, false),
     "only a current node can be an end of an edge",
   );
+  // An earlier answer, still on show while the read reloads, may describe
+  // another boundary.
+  for (const use of ["revise", "endpoint"] as const) {
+    assert.equal(
+      currentRefusal(use, null, false),
+      "the current state is still loading",
+    );
+  }
   // A bounded read says what was current at the boundary, current or not.
-  for (const current of [true, false]) {
+  for (const current of [true, false, null]) {
     assert.match(
       currentRefusal("revise", current, true) ?? "",
       /^drafts apply to the current state; clear the as-of boundary/,
