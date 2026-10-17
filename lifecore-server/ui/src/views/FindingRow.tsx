@@ -12,7 +12,7 @@ import type {
 } from "../contract.ts";
 import { useData } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
-import { frozen } from "../draft/model.ts";
+import { frozen, frozenReason } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
 import { IdLink, NodeLink, OperationLink } from "../links.tsx";
 import {
@@ -481,9 +481,8 @@ function SuggestedActions({
   const locked = frozen(state);
   const title =
     blocker ??
-    (locked
-      ? "an apply is in flight"
-      : "appends these operations to the draft, without acknowledging the finding");
+    frozenReason(state) ??
+    "appends these operations to the draft, without acknowledging the finding";
   const add = () => {
     const names = draft.addSuggested(actions);
     if (names.length > 0) {

@@ -5,6 +5,8 @@ import {
   applicable,
   applyParams,
   type DraftState,
+  detachedDraft,
+  frozenReason,
   initialDraft,
   isUnset,
   proposalOf,
@@ -179,4 +181,23 @@ test("apply sends the evaluation time the check reported, never a new now", () =
   const none = checked(state([task]));
   assert.ok(none.outcome !== null);
   assert.deepEqual(applyParams(none.outcome), {});
+});
+
+test("a frozen draft says why it takes no edit", () => {
+  const inFlight = {
+    plan_id: null,
+    request: "{}",
+    base_revision: null,
+    base_end: "0",
+  };
+  assert.equal(frozenReason(initialDraft), null);
+  assert.equal(frozenReason(detachedDraft), "the draft waits for the database");
+  assert.equal(
+    frozenReason({ ...initialDraft, inFlight, pending: "apply" }),
+    "an apply is in flight",
+  );
+  assert.equal(
+    frozenReason({ ...initialDraft, inFlight }),
+    "an apply is in flight in another tab",
+  );
 });

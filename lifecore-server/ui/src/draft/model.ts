@@ -238,6 +238,18 @@ export function frozen(state: DraftState): boolean {
   return state.detached || state.inFlight !== null || state.pending === "apply";
 }
 
+// Why a frozen draft takes no edit, for the title of a disabled control;
+// null when it is not frozen.
+export function frozenReason(state: DraftState): string | null {
+  if (state.detached) {
+    return "the draft waits for the database";
+  }
+  if (applyingElsewhere(state)) {
+    return "an apply is in flight in another tab";
+  }
+  return frozen(state) ? "an apply is in flight" : null;
+}
+
 export function applyingElsewhere(state: DraftState): boolean {
   return state.inFlight !== null && state.pending !== "apply";
 }
