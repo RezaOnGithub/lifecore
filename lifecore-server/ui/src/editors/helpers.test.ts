@@ -14,7 +14,6 @@ import {
   fieldRows,
   fitKeys,
   initialShape,
-  isUnpicked,
   lineCount,
   liveDraft,
   moveItem,
@@ -24,7 +23,6 @@ import {
   parseTags,
   renameField,
   renameKey,
-  sameReference,
   shapeOfKind,
   typeNames,
   withField,
@@ -168,21 +166,6 @@ test("edge type suggestions intersect what the known ends permit", () => {
     labels: [],
     note: "Wall permits no incoming edges",
   });
-});
-
-test("references: unpicked placeholders and equal ends", () => {
-  const unset = { existing: { origin: "", position: "" } };
-  assert.equal(isUnpicked(unset), true);
-  assert.equal(isUnpicked({ existing: id }), false);
-  assert.equal(isUnpicked({ added: "x" }), false);
-  assert.equal(sameReference({ added: "a" }, { added: "a" }), true);
-  assert.equal(sameReference({ added: "a" }, { added: "b" }), false);
-  assert.equal(sameReference({ existing: id }, { existing: { ...id } }), true);
-  assert.equal(
-    sameReference({ existing: id }, { existing: { ...id, position: "4" } }),
-    false,
-  );
-  assert.equal(sameReference({ existing: id }, { added: "3" }), false);
 });
 
 test("type names keep the server's order and always include Type", () => {

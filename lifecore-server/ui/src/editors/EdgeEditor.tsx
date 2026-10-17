@@ -1,14 +1,13 @@
 import { useId, useState } from "react";
 import type { ProposalReference } from "../contract.ts";
 import { schemaOf } from "../data.tsx";
+import { isUnset, sameReference } from "../draft/model.ts";
 import {
   addedNodeType,
   type EdgeOperation,
   earlierNodes,
   edgeTypeSuggestions,
-  isUnpicked,
   type NodeOperation,
-  sameReference,
 } from "./helpers.ts";
 import type { OperationEditorProps, PickRole } from "./OperationEditor.tsx";
 import { ReferenceChip } from "./ReferenceChip.tsx";
@@ -116,7 +115,7 @@ export function EdgeEditor({
     toType === null ? null : schemaOf(types, toType),
     types,
   );
-  const loop = !isUnpicked(entry.from) && sameReference(entry.from, entry.to);
+  const loop = !isUnset(entry.from) && sameReference(entry.from, entry.to);
   return (
     <>
       <div className="row">

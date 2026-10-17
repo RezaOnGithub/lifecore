@@ -62,25 +62,6 @@ export function addedNodeType(
   return target === undefined ? null : target.ty_name;
 }
 
-// The draft's placeholder for an endpoint or predecessor still to be picked.
-export function isUnpicked(reference: ProposalReference): boolean {
-  return "existing" in reference && reference.existing.origin === "";
-}
-
-export function sameReference(
-  a: ProposalReference,
-  b: ProposalReference,
-): boolean {
-  if ("added" in a) {
-    return "added" in b && a.added === b.added;
-  }
-  return (
-    "existing" in b &&
-    a.existing.origin === b.existing.origin &&
-    a.existing.position === b.existing.position
-  );
-}
-
 export function allEdgeLabels(types: TypeSummary[] | null): string[] {
   const labels = new Set<string>();
   for (const type of types ?? []) {

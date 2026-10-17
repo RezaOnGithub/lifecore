@@ -64,13 +64,20 @@ function checked(
 
 test("the unset placeholder is an existing reference that is never real", () => {
   assert.equal(isUnset(UNSET), true);
+  assert.equal(isUnset({ existing: { origin: "", position: "" } }), true);
   assert.equal(isUnset({ existing: id("1") }), false);
   assert.equal(isUnset({ added: "" }), false);
   assert.equal(sameReference({ added: "a" }, { added: "a" }), true);
+  assert.equal(sameReference({ added: "a" }, { added: "b" }), false);
   assert.equal(sameReference({ added: "a" }, { existing: id("1") }), false);
+  assert.equal(sameReference({ existing: id("1") }, { added: "1" }), false);
   assert.equal(
-    sameReference({ existing: id("1") }, { existing: id("1") }),
+    sameReference({ existing: id("1") }, { existing: { ...id("1") } }),
     true,
+  );
+  assert.equal(
+    sameReference({ existing: id("1") }, { existing: id("4") }),
+    false,
   );
 });
 
