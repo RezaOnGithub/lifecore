@@ -10,12 +10,9 @@ import {
   groupFindings,
 } from "../model/findings.ts";
 import { type Ran, runKey, shownRun } from "./analysisRuns.ts";
-import {
-  AnalyzerName,
-  GroupRow,
-  MAY_BE_STORED,
-  PREVIOUS,
-} from "./FindingRow.tsx";
+import { MAY_BE_STORED } from "./Dismissal.tsx";
+import { GroupRow, PREVIOUS } from "./FindingGroups.tsx";
+import { AnalyzerName } from "./FindingRow.tsx";
 import { useAnalysisRuns } from "./useAnalysisRuns.ts";
 
 // How long a changed boundary or reload waits before the open section runs

@@ -21,14 +21,14 @@ import {
   type ScreenMemo,
   shownRun,
 } from "../views/analysisRuns.ts";
+import { MAY_BE_STORED } from "../views/Dismissal.tsx";
 import {
   BulkProgress,
   ClusterRow,
   GroupRow,
-  labelOf,
-  MAY_BE_STORED,
   PREVIOUS,
-} from "../views/FindingRow.tsx";
+} from "../views/FindingGroups.tsx";
+import { labelOf } from "../views/FindingRow.tsx";
 import { EvaluationChoice } from "../views/TrayHeader.tsx";
 import { useAnalysisRuns } from "../views/useAnalysisRuns.ts";
 
