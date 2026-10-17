@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Body, SchemaError, TypeSchema } from "../contract.ts";
+import { declarations } from "../fixtures/codec.ts";
+import {
+  response as listed,
+  unresolvedResponse,
+} from "../fixtures/types.list.ts";
 import {
   declarationBody,
   declarationForForm,
@@ -10,6 +15,7 @@ import {
   parseDeclaration,
   readDeclaration,
   schemaErrorText,
+  serverReadings,
   shapeDepth,
 } from "./schema.ts";
 
@@ -669,4 +675,42 @@ test("the Type table summarizes what the server would reject as unreadable", () 
     declarationSummary(readDeclaration({ name: "X", other: "", more: "" })),
     "unreadable declaration: more, other are not keys",
   );
+});
+
+// The fixture test records each payload with `Type::from_body`'s reading.
+test("readDeclaration reads every recorded payload as the server does", () => {
+  for (const fixture of declarations) {
+    const reading = readDeclaration(fixture.payload);
+    const label = JSON.stringify(fixture.payload);
+    if ("schema" in fixture) {
+      assert.deepEqual(reading, { kind: "ok", schema: fixture.schema }, label);
+    } else if (reading.kind === "unknown_keys") {
+      // The client names every unknown key; the server reports the first.
+      assert.deepEqual(
+        fixture.error,
+        { path: reading.keys.slice(0, 1), kind: "unknown_field" },
+        label,
+      );
+    } else {
+      assert.deepEqual(
+        reading,
+        { kind: "malformed", error: fixture.error },
+        label,
+      );
+    }
+  }
+});
+
+test("the server's readings cover each claimant of a listed name", () => {
+  const kinds = (types: Parameters<typeof serverReadings>[0]) =>
+    [...serverReadings(types).values()].map((reading) => reading.kind).sort();
+  assert.deepEqual(kinds(listed.result.types), ["ok"]);
+  // Three `Note` claimants, one malformed, and a malformed `Tag`.
+  assert.deepEqual(kinds(unresolvedResponse.result.types), [
+    "malformed",
+    "malformed",
+    "ok",
+    "ok",
+  ]);
+  assert.deepEqual(kinds(null), []);
 });

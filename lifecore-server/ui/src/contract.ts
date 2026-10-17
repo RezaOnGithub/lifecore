@@ -659,3 +659,17 @@ export type HttpRejectionFixtures = {
     body: HttpRejection & { kind: K };
   }[];
 };
+// A declaration payload with the server's reading of it.
+export type DeclarationFixture = { payload: Body } & (
+  | { schema: TypeSchema }
+  | { error: SchemaError }
+);
+// A node payload text with the codec's canonical reading, null where it
+// rejects the text, and how the raw payload editor relates to the codec:
+// it agrees, refuses a bare integer the codec reads as shorthand, or keeps
+// timestamp text verbatim for Jiff to judge (FILES §2.1).
+export interface PayloadTextFixture {
+  text: string;
+  codec: Body | null;
+  client: "agrees" | "refuses_shorthand" | "defers_timestamp";
+}

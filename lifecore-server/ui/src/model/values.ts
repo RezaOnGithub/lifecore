@@ -294,9 +294,23 @@ export function findRepeatedKey(text: string): RepeatedKey | null {
   return null;
 }
 
+// `JSON.parse` turns an escape such as `\ud800` into a lone surrogate, which
+// no UTF-8 text holds, so the codec refuses it in a key or a string.
+const LONE_SURROGATE =
+  /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+function wellFormed(text: string, path: string): string {
+  if (LONE_SURROGATE.test(text)) {
+    throw new Malformed(
+      `${path}: holds a lone surrogate, which is not Unicode text`,
+    );
+  }
+  return text;
+}
+
 function canonicalValue(json: unknown, path: string): Payload {
   if (typeof json === "string") {
-    return json;
+    return wellFormed(json, path);
   }
   if (typeof json === "number") {
     throw new Malformed(
@@ -356,7 +370,7 @@ function canonicalValue(json: unknown, path: string): Payload {
       if (problem !== null) {
         throw new Malformed(`${path}: ${problem}`);
       }
-      return timestamp(value);
+      return timestamp(wellFormed(value, path));
     }
     case "record":
       if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -375,7 +389,8 @@ function canonicalValue(json: unknown, path: string): Payload {
 function canonicalBody(json: object, path: string): Body {
   const body: Body = {};
   for (const [field, value] of Object.entries(json)) {
-    setOwn(body, field, canonicalValue(value, join(path, field)));
+    const at = join(path, field);
+    setOwn(body, wellFormed(field, at), canonicalValue(value, at));
   }
   return body;
 }

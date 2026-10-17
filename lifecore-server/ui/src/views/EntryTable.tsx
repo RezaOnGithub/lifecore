@@ -1,5 +1,6 @@
 import { memo, type ReactNode, useCallback, useMemo } from "react";
 import type { NodeRecord, Payload, TypeSchema } from "../contract.ts";
+import { useTypes } from "../data.tsx";
 import { CurrentBadge, NodeLink, Position } from "../links.tsx";
 import {
   type FieldColumn,
@@ -8,7 +9,11 @@ import {
   toggleSort,
 } from "../model/columns.ts";
 import { commonLabelField, entryKey, rowLabel } from "../model/labels.ts";
-import { declarationSummary, readDeclaration } from "../model/schema.ts";
+import {
+  declarationSummary,
+  readDeclaration,
+  serverReadings,
+} from "../model/schema.ts";
 import { ROW_PAGE, type TableView } from "../navigation.ts";
 import { ValueCell } from "./Payload.tsx";
 
@@ -56,6 +61,19 @@ function EntryTableOf<R extends NodeRecord>({
   onView: Update;
 }) {
   const typeTable = ty_name === "Type";
+  const types = useTypes();
+  // A declaration `types.list` resolved reads as the server parsed it; the
+  // client's parser reads the rest, stale or nameless ones.
+  const declaration = useMemo(() => {
+    if (!typeTable) {
+      return null;
+    }
+    const server = serverReadings(types);
+    return (row: R) =>
+      declarationSummary(
+        server.get(entryKey(row.id)) ?? readDeclaration(row.payload),
+      );
+  }, [typeTable, types]);
   const fields = useMemo(() => {
     if (typeTable) {
       return [];
@@ -84,7 +102,7 @@ function EntryTableOf<R extends NodeRecord>({
         return row.current ? "current" : "superseded";
       }
       if (column === "declaration") {
-        return declarationSummary(readDeclaration(row.payload));
+        return declaration?.(row);
       }
       if (column.startsWith("field:")) {
         return row.payload[column.slice("field:".length)];
@@ -95,7 +113,7 @@ function EntryTableOf<R extends NodeRecord>({
       return found?.sortValue?.(row);
     };
     return sortedBy(rows, value, sort.descending);
-  }, [rows, sort, lead, extra]);
+  }, [rows, sort, lead, extra, declaration]);
   const opened = useMemo(() => {
     const byRow = new Map<string, string[]>();
     for (const key of view.open) {
@@ -206,7 +224,7 @@ function EntryTableOf<R extends NodeRecord>({
                 lead={lead}
                 extra={extra}
                 fields={fields}
-                typeTable={typeTable}
+                declaration={declaration?.(row) ?? null}
                 showCurrent={showCurrent}
                 open={opened.get(key)?.join(JOIN) ?? ""}
                 toggle={toggle}
@@ -252,7 +270,7 @@ function RowOf<R extends NodeRecord>({
   lead,
   extra,
   fields,
-  typeTable,
+  declaration,
   showCurrent,
   open,
   toggle,
@@ -261,7 +279,8 @@ function RowOf<R extends NodeRecord>({
   lead: readonly ExtraColumn<R>[];
   extra: readonly ExtraColumn<R>[];
   fields: readonly FieldColumn[];
-  typeTable: boolean;
+  // The `Type` table's summary of the row's declaration.
+  declaration: string | null;
   showCurrent: boolean;
   open: string;
   toggle: (row: string, column: string, open: boolean) => void;
@@ -290,11 +309,7 @@ function RowOf<R extends NodeRecord>({
           <CurrentBadge current={row.current} kind="node" />
         </td>
       )}
-      {typeTable && (
-        <td className="cell">
-          {declarationSummary(readDeclaration(row.payload))}
-        </td>
-      )}
+      {declaration !== null && <td className="cell">{declaration}</td>}
       {extra.map((column) => (
         <td key={column.key} className={column.className}>
           {cell(column)}

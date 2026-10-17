@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { payloadTexts } from "../fixtures/codec.ts";
 import {
   compareCodePoints,
   decimalError,
@@ -422,4 +423,29 @@ test("code point order matches the server's UTF-8 byte order", () => {
     ["", "a", "ab", "b", "\uff61", "\u{1f600}"],
   );
   assert.equal(compareCodePoints("same", "same"), 0);
+});
+
+// The fixture test records each text with the Rust codec's reading.
+test("the raw payload editor reads every recorded text as the codec does", () => {
+  for (const { text, codec, client } of payloadTexts) {
+    const result = validateCanonicalPayload(text);
+    switch (client) {
+      case "agrees":
+        if (codec === null) {
+          assert.ok("error" in result, text);
+        } else {
+          assert.deepEqual(result, { payload: codec }, text);
+        }
+        break;
+      case "refuses_shorthand":
+        assert.notEqual(codec, null, text);
+        assert.ok("error" in result, text);
+        break;
+      case "defers_timestamp":
+        // The text is kept as typed; Jiff judges and respells it on Check.
+        assert.deepEqual(result, { payload: JSON.parse(text) }, text);
+        assert.notDeepEqual(codec, JSON.parse(text), text);
+        break;
+    }
+  }
 });

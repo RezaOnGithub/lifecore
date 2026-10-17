@@ -393,7 +393,13 @@ dispatcher's single method list (`rpc::Method::ALL`) to its fixture, so a method
 the contract declares without a fixture, or the reverse, also fails `tsc`.
 HTTP rejection statuses are pinned per kind as literal types. Random UUIDs and
 scratch paths are replaced by stable stand-ins, so an unchanged shape rewrites
-nothing.
+nothing. The same test pins the client's own readers of Rust formats: it
+records declaration payloads with `Type::from_body`'s reading, covering every
+schema error kind and the depth limit, and node payload texts with the codec's
+canonical reading or refusal, and `npm test` asserts that the client reads them
+alike. Each payload text records where the raw payload editor differs by
+design: it refuses the bare integer shorthand, and it keeps timestamp text as
+typed for Jiff to judge.
 
 Canonical integer payloads are
 `{"kind":"integer","value":"9223372036854775807"}`-shaped objects. Keep the decimal
@@ -559,9 +565,10 @@ them; none is a server contract.
   relationship columns, the declared fields by status (mandatory, encouraged,
   optional, deprecated) and name, then undeclared fields present in the rows,
   marked. The field that labels every row has no column. The `Type` table
-  shows a declaration summary instead of field columns. The client words
-  schema errors itself, from their path and kind, for its own parse and the
-  server's alike.
+  shows a declaration summary instead of field columns, from the server's
+  parse of each declaration `types.list` resolves, else from the client's.
+  The client words schema errors itself, from their path and kind, for its
+  own parse and the server's alike.
 - A table renders 500 rows, then "show next 500" and "show all" with the count
   of the rest. Cells render on one line (`[a, b]`, `{owner: me}`, `true`), cut
   at 80 characters with the full text as a tooltip. Integers sort by value,

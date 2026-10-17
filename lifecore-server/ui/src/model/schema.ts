@@ -10,7 +10,9 @@ import type {
   SchemaErrorKind,
   Shape,
   TypeSchema,
+  TypeSummary,
 } from "../contract.ts";
+import { entryKey } from "./labels.ts";
 import { compareCodePoints, kindOf, setOwn } from "./values.ts";
 
 // The presence words of FILES §2.6, in the order fields are listed.
@@ -307,6 +309,45 @@ export function schemaErrorText(error: SchemaError): string {
   const path = schemaPathText(error.path);
   const message = schemaErrorMessage(error);
   return path === "" ? message : `${path}: ${message}`;
+}
+
+// The server's reading of each current declaration `types.list` resolved,
+// by entry key: a declared or ambiguous name's parsed claimants and its
+// malformed ones. A stale declaration, or one without a text `name`, claims
+// no name and is not covered.
+export function serverReadings(
+  types: readonly TypeSummary[] | null,
+): Map<string, DeclarationReading> {
+  const readings = new Map<string, DeclarationReading>();
+  for (const { resolution } of types ?? []) {
+    switch (resolution.kind) {
+      case "declared":
+        readings.set(entryKey(resolution.declaration), {
+          kind: "ok",
+          schema: resolution.schema,
+        });
+        break;
+      case "malformed":
+        readings.set(entryKey(resolution.declaration), {
+          kind: "malformed",
+          error: resolution.error,
+        });
+        break;
+      case "ambiguous":
+        for (const claimant of resolution.claimants) {
+          readings.set(
+            entryKey(claimant.declaration),
+            claimant.kind === "parsed"
+              ? { kind: "ok", schema: claimant.schema }
+              : { kind: "malformed", error: claimant.error },
+          );
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return readings;
 }
 
 // The deepest run of nested `list` and `record` words in a shape.

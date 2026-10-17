@@ -16,6 +16,7 @@ use lifecore::{
         presentation::{AdvisoryFilter, Dismissals, ReportOptions, ReportSelection},
     },
     transaction::{EntryChange, NewEdge, NewNode, Reference, RevisionIntent},
+    typing::{SchemaErrorKind, Type},
 };
 use lifecore_app::{
     AppError, Service,
@@ -1626,6 +1627,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
     modules.push(protocol_errors(&mut recorder));
     modules.push(http_rejections(scratch, &mut recorder.normalizer).await);
     modules.push(grouping(&mut recorder, scratch));
+    modules.push(codec_cases());
     modules
 }
 
@@ -2175,6 +2177,244 @@ fn grouping(recorder: &mut Recorder, scratch: &Scratch) -> Module {
                 "reports",
                 "{ selection: \"current\" | \"history\"; advisories: \"all\" | \"warnings\" | \"suggestions\" | \"none\"; include_dismissed: boolean; groups: { observations: number[]; selected: number[]; dismissal: number | null }[] }[]".into(),
                 Value::Array(reports),
+            ),
+        ],
+    )
+}
+
+// The wire tag of each schema error kind. It has no wildcard, so a new kind
+// fails to compile here; add it to `SCHEMA_ERROR_KINDS`, which then requires
+// a declaration case that produces it.
+fn schema_error_tag(kind: &SchemaErrorKind) -> &'static str {
+    match kind {
+    SchemaErrorKind::MissingField => "missing_field",
+    SchemaErrorKind::UnknownField => "unknown_field",
+    SchemaErrorKind::WrongShape { .. } => "wrong_shape",
+    SchemaErrorKind::MissingPresence => "missing_presence",
+    SchemaErrorKind::UnknownPresence { .. } => "unknown_presence",
+    SchemaErrorKind::MissingShape => "missing_shape",
+    SchemaErrorKind::UnknownShape { .. } => "unknown_shape",
+    SchemaErrorKind::MissingRecordFields => "missing_record_fields",
+    SchemaErrorKind::TrailingElements => "trailing_elements",
+    SchemaErrorKind::TooDeep => "too_deep",
+    SchemaErrorKind::DuplicatePermission { .. } => "duplicate_permission",
+    }
+}
+
+const SCHEMA_ERROR_KINDS: [&str; 11] = [
+    "missing_field",
+    "unknown_field",
+    "wrong_shape",
+    "missing_presence",
+    "unknown_presence",
+    "missing_shape",
+    "unknown_shape",
+    "missing_record_fields",
+    "trailing_elements",
+    "too_deep",
+    "duplicate_permission",
+];
+
+// Declaration payloads with `Type::from_body`'s reading of each (FILES 2.6):
+// valid ones, every schema error kind including the depth limit, and the
+// orders in which the client must find the same first error.
+fn declaration_cases() -> Value {
+    let fields = |value: Value| json!({"name": "X", "fields": {"kind": "record", "value": value}});
+    let lists = |count: usize| {
+        let mut words = vec!["optional"];
+        words.extend(std::iter::repeat_n("list", count));
+        words.push("text");
+        json!(words)
+    };
+    let mut through_record = vec![json!("optional")];
+    through_record.extend(std::iter::repeat_n(json!("list"), 63));
+    through_record.push(json!("record"));
+    through_record.push(json!({"kind": "record", "value": {"g": ["mandatory", "list", "text"]}}));
+    let payloads = [
+        task_declaration(),
+        json!({"name": "Bare"}),
+        json!({"name": ""}),
+        json!({"name": "X", "outgoing": ["\u{1f600}", "\u{ff61}", "b"], "incoming": [],
+            "successors": ["X"]}),
+        fields(json!({"rows": ["mandatory", "list", "record",
+            {"kind": "record", "value": {"owner": ["mandatory", "text"]}}]})),
+        fields(
+            json!({"9": ["optional", "text"], "10": ["optional", "integer"],
+            "a.b": ["deprecated", "boolean"], "\u{1f600}": ["encouraged", "timestamp"]}),
+        ),
+        json!({}),
+        json!({"fields": {"kind": "record", "value": {}}}),
+        json!({"name": "X", "colour": "red"}),
+        // Keys are checked first, and the first unknown key in code point
+        // order is reported.
+        json!({"name": 1, "zeta": "", "alpha": ""}),
+        json!({"name": 1}),
+        json!({"name": ["X"]}),
+        json!({"name": "X", "fields": []}),
+        json!({"name": "X", "fields": {"kind": "integer", "value": "1"}}),
+        json!({"name": "X", "outgoing": "A"}),
+        json!({"name": "X", "incoming": ["A", 1]}),
+        json!({"name": "X", "successors": ["A", "B", "A"]}),
+        fields(json!({"a": "text"})),
+        fields(json!({"a": {"kind": "record", "value": {}}})),
+        fields(json!({"a": []})),
+        fields(json!({"a": [1, "text"]})),
+        fields(json!({"a": ["required", "text"]})),
+        fields(json!({"a": ["text", "optional"]})),
+        fields(json!({"a": ["optional"]})),
+        fields(json!({"a": ["optional", "list"]})),
+        fields(json!({"a": ["optional", {"kind": "boolean", "value": true}]})),
+        fields(json!({"a": ["optional", "float"]})),
+        fields(json!({"a": ["optional", "record"]})),
+        fields(json!({"a": ["optional", "record", "text"]})),
+        fields(json!({"a": ["optional", "record", ["mandatory", "text"]]})),
+        fields(json!({"a": ["optional", "text", "text"]})),
+        fields(json!({"a": ["optional", "record", {"kind": "record", "value": {}}, "text"]})),
+        fields(json!({"a": ["optional", "list", "record",
+            {"kind": "record", "value": {"b": ["mandatory", "lst"]}}]})),
+        // The index of the refused word pins the limit: 64 nested words
+        // parse, the 65th does not, and records count toward it.
+        fields(json!({"a": lists(65)})),
+        fields(json!({"a": Value::Array(through_record)})),
+        // With two malformed fields, the first in code point order is
+        // reported: "10" before "9", and U+FF61 before U+1F600.
+        fields(json!({"9": "x", "10": "x"})),
+        fields(json!({"\u{1f600}": "x", "\u{ff61}": "x"})),
+    ];
+    let mut kinds = BTreeSet::new();
+    let cases = payloads
+        .into_iter()
+        .map(|payload| {
+            let body: lifecore::Body = serde_json::from_value(payload).unwrap();
+            match Type::from_body(&body) {
+            Ok(schema) => json!({"payload": body, "schema": schema}),
+            Err(error) => {
+                kinds.insert(schema_error_tag(&error.kind));
+                json!({"payload": body, "error": error})
+            }
+            }
+        })
+        .collect();
+    assert_eq!(kinds, BTreeSet::from(SCHEMA_ERROR_KINDS));
+    cases
+}
+
+// How the raw payload editor relates to the codec on a text: it agrees
+// exactly; it refuses a bare integer, which the codec accepts as shorthand
+// but `JSON.parse` would round; or it keeps a timestamp's text for Jiff to
+// judge and normalize (FILES 2.1).
+const AGREES: &str = "agrees";
+const REFUSES_SHORTHAND: &str = "refuses_shorthand";
+const DEFERS_TIMESTAMP: &str = "defers_timestamp";
+
+// Node payload texts with the codec's reading: the canonical payload, or null
+// when it rejects the text.
+fn payload_text_cases() -> Value {
+    let cases = [
+        ("{}", AGREES),
+        (
+            r#"{"title":"x","tags":["a","b"],"n":{"kind":"integer","value":"-9223372036854775808"},"done":{"kind":"boolean","value":false},"at":{"kind":"timestamp","value":"2026-10-15T08:30:00.123456789Z"},"details":{"kind":"record","value":{"owner":"Teto","more":{"kind":"record","value":{}}}}}"#,
+            AGREES,
+        ),
+        (
+            r#"{"n":{"kind":"integer","value":"9223372036854775807"}}"#,
+            AGREES,
+        ),
+        (r#"{"n":{"value":"0","kind":"integer"}}"#, AGREES),
+        (
+            r#"{"l":[],"r":{"kind":"record","value":{}},"t":""}"#,
+            AGREES,
+        ),
+        (r#"{"a":"x","kind":"integer","value":["é","😀"]}"#, AGREES),
+        (r#"{"a.b":"x","":["y"]}"#, AGREES),
+        (r#"[]"#, AGREES),
+        (r#""text""#, AGREES),
+        (r#"{"a":"#, AGREES),
+        (r#"{"a":null}"#, AGREES),
+        (r#"{"a":1.5}"#, AGREES),
+        (r#"{"a":true}"#, AGREES),
+        (r#"{"a":"x","a":"y"}"#, AGREES),
+        (r#"{"\u0061":"x","a":"y"}"#, AGREES),
+        (r#"{"a":"\ud800"}"#, AGREES),
+        (r#"{"\udc00":"x"}"#, AGREES),
+        (
+            r#"{"r":{"kind":"record","value":{"k":"1","k":"2"}}}"#,
+            AGREES,
+        ),
+        (
+            r#"{"n":{"kind":"integer","kind":"integer","value":"1"}}"#,
+            AGREES,
+        ),
+        (r#"{"n":{"kind":"integer","value":"01"}}"#, AGREES),
+        (r#"{"n":{"kind":"integer","value":"-0"}}"#, AGREES),
+        (r#"{"n":{"kind":"integer","value":"+1"}}"#, AGREES),
+        (
+            r#"{"n":{"kind":"integer","value":"9223372036854775808"}}"#,
+            AGREES,
+        ),
+        (r#"{"n":{"kind":"integer","value":1}}"#, AGREES),
+        (r#"{"n":{"kind":"float","value":"1"}}"#, AGREES),
+        (r#"{"n":{"kind":"integer"}}"#, AGREES),
+        (r#"{"n":{"value":"1"}}"#, AGREES),
+        (r#"{"n":{"kind":"integer","value":"1","unit":"m"}}"#, AGREES),
+        (r#"{"b":{"kind":"boolean","value":"true"}}"#, AGREES),
+        (r#"{"r":{"kind":"record","value":[]}}"#, AGREES),
+        (r#"{"r":{"kind":"record","value":{"x":null}}}"#, AGREES),
+        (r#"{"t":{"kind":"timestamp","value":""}}"#, AGREES),
+        (r#"{"t":{"kind":"timestamp","value":true}}"#, AGREES),
+        (r#"{"n":42}"#, REFUSES_SHORTHAND),
+        (r#"{"l":["a",[-9223372036854775808]]}"#, REFUSES_SHORTHAND),
+        (
+            r#"{"t":{"kind":"timestamp","value":"yesterday"}}"#,
+            DEFERS_TIMESTAMP,
+        ),
+        (
+            r#"{"t":{"kind":"timestamp","value":"2026-10-15T10:30:00+02:00"}}"#,
+            DEFERS_TIMESTAMP,
+        ),
+    ];
+    cases
+        .into_iter()
+        .map(|(text, client)| {
+            let codec = serde_json::from_str::<lifecore::Body>(text)
+                .ok()
+                .map(|body| serde_json::to_value(body).unwrap());
+            match client {
+            // The shorthand is accepted, so canonical output spells it
+            // differently.
+            REFUSES_SHORTHAND => assert!(
+                codec
+                    .as_ref()
+                    .is_some_and(|value| *value != serde_json::from_str::<Value>(text).unwrap()),
+                "{text}"
+            ),
+            // Jiff rejects or respells the text the client keeps.
+            DEFERS_TIMESTAMP => assert_ne!(
+                codec,
+                Some(serde_json::from_str::<Value>(text).unwrap()),
+                "{text}"
+            ),
+            _ => {}
+            }
+            json!({"text": text, "codec": codec, "client": client})
+        })
+        .collect()
+}
+
+fn codec_cases() -> Module {
+    module(
+        "codec.ts".into(),
+        &["DeclarationFixture", "PayloadTextFixture"],
+        vec![
+            (
+                "declarations",
+                "DeclarationFixture[]".into(),
+                declaration_cases(),
+            ),
+            (
+                "payloadTexts",
+                "PayloadTextFixture[]".into(),
+                payload_text_cases(),
             ),
         ],
     )
