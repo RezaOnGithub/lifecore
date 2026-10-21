@@ -328,8 +328,8 @@ export function schemaOf(
 
 // `latestAliases` reads the names as last rendered and keeps its identity,
 // for the draft's default names. Naming an entry is refused, leaving the
-// names as they are, when the name breaks the grammar or names another
-// entry; so is a rename.
+// names as they are, when the name breaks the grammar or already names an
+// entry, this one included; so is a rename.
 export interface PlacesApi {
   places: Places;
   visit: (place: Place) => void;

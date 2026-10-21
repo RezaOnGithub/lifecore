@@ -123,6 +123,17 @@ export function withoutKept(
   );
 }
 
+// The provenance of the kept edges among `entries`.
+export function keptAmong(
+  kept: Record<string, KeptEdge>,
+  entries: readonly ProposalEntry[],
+): Record<string, KeptEdge> {
+  const names = new Set(entries.map((entry) => entry.name));
+  return Object.fromEntries(
+    Object.entries(kept).filter(([name]) => names.has(name)),
+  );
+}
+
 function withoutReads(
   reads: Record<number, string>,
   removed: ReadonlySet<string>,

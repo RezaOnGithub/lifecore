@@ -109,12 +109,15 @@ export type Problem =
 
 // The apply being sent, persisted before the request leaves so a reload in
 // the middle restores the draft as uncertain. The base comes from the check
-// it used, to look for the entries afterwards.
+// it used, to look for the entries afterwards. `kept` is the provenance of
+// the request's kept edges as sent: an uncertain apply leaves the draft
+// open to edits, which must not change what its decision records.
 export interface InFlight {
   plan_id: PlanId | null;
   request: string;
   base_revision: Uuid | null;
   base_end: DecimalString;
+  kept: Record<string, KeptEdge>;
 }
 
 // What a look at the graph after an uncertain apply found.

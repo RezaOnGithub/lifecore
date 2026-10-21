@@ -7,6 +7,7 @@ import {
   appliedNames,
   canonicalJson,
   defaultName,
+  derivedKept,
   endpointWarnings,
   findApplied,
   forwardReferences,
@@ -123,6 +124,43 @@ test("an applied request passes names along revises and kept edges only", () => 
     null,
     false,
   ]);
+});
+
+test("a kept edge is derived only while its revision still revises its node", () => {
+  const plants: ProposalEntry = {
+    name: "plants",
+    kind: "node",
+    ty_name: "Task",
+    predecessor: { existing: id("1") },
+    intent: "revise",
+    payload: {},
+  };
+  const keep: ProposalEntry = {
+    name: "plants_keep_2",
+    kind: "edge",
+    ty_name: "DependsOn",
+    from: { added: "plants" },
+    to: { existing: id("3") },
+  };
+  const provenance = {
+    revision: "plants",
+    predecessor: id("1"),
+    edge: id("2"),
+  };
+  const kept = { plants_keep_2: provenance };
+  assert.equal(derivedKept([plants, keep], kept, "plants_keep_2"), provenance);
+  // Not a kept edge, its revision gone, or revising another node: the
+  // operation's name names its entry.
+  assert.equal(derivedKept([plants, keep], kept, "plants"), null);
+  assert.equal(derivedKept([keep], kept, "plants_keep_2"), null);
+  assert.equal(
+    derivedKept(
+      [{ ...plants, predecessor: { existing: id("9") } }, keep],
+      kept,
+      "plants_keep_2",
+    ),
+    null,
+  );
 });
 
 test("removing a predecessor leaves it unset with its intent, not a root", () => {

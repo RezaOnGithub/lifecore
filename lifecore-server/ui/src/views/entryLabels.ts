@@ -49,25 +49,26 @@ export function namedIds(run: AnalysisRun): EntryId[] {
   return ids;
 }
 
-// The nodes among `ids` in the view [0, as_of), for labels; edges and
-// anything else stay positions. A few are read one by one; more with one
-// `views.query`, which seeds only nodes, though nothing tells an edge apart
-// beforehand. Its refusal names every id that is not a node, so one retry
-// without them reads the rest.
+// The nodes among `ids` in the view [0, as_of), or the whole history
+// without `as_of`, for labels; edges and anything else stay positions. A few
+// are read one by one; more with one `views.query`, which seeds only nodes,
+// though nothing tells an edge apart beforehand. Its refusal names every id
+// that is not a node, so one retry without them reads the rest.
 export async function readLabels(
   call: Call,
   ids: readonly EntryId[],
-  as_of: DecimalString,
+  as_of?: DecimalString,
 ): Promise<{ nodes: Map<string, NodeRecord>; failure: unknown }> {
   const wanted = new Map<string, EntryId>();
   for (const id of ids) {
     wanted.set(entryKey(id), id);
   }
+  const bound = as_of === undefined ? {} : { as_of };
   const nodes = new Map<string, NodeRecord>();
   if (wanted.size < FEW) {
     let failure: unknown = null;
     const answers = await Promise.allSettled(
-      [...wanted.values()].map((id) => call("entries.get", { id, as_of })),
+      [...wanted.values()].map((id) => call("entries.get", { id, ...bound })),
     );
     for (const answer of answers) {
       if (answer.status === "rejected") {
@@ -79,7 +80,7 @@ export async function readLabels(
     return { nodes, failure };
   }
   const ask = (seeds: EntryId[]) =>
-    call("views.query", { seeds: [{ kind: "ids", ids: seeds }], as_of });
+    call("views.query", { seeds: [{ kind: "ids", ids: seeds }], ...bound });
   let answer: ViewQuery;
   try {
     answer = await ask([...wanted.values()]);

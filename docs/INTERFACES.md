@@ -571,11 +571,12 @@ them; none is a server contract.
   `@position` is followed by the entry's names, except past the as-of
   boundary. The sidebar's Names open their entry and × forgets one; past the
   boundary a name stays, dimmed, with its position and no type. The inspector
-  renames, forgets, and adds names, refusing one another entry holds. A
-  superseded node with names, read without a boundary, offers to move them to
-  one of its current descendants. Follow revisions, in the sidebar, reads each
-  named node of the current state and moves the names of each superseded one
-  with a single current descendant, listing those with several.
+  renames, forgets, and adds names, refusing a name already held, by this
+  entry or another. A superseded node with names, read without a boundary,
+  offers to move them to one of its current descendants. Follow revisions, in
+  the sidebar, reads each named node of the current state and moves the names
+  of each superseded one with a single current descendant, listing those with
+  several.
 
 #### Tables and relationships
 
@@ -757,13 +758,15 @@ them; none is a server contract.
   `rejected` shows the apply's report in place of the check, `stale_base` keeps
   Apply off until Replan, and `busy` offers a retry.
 - Any other apply failure spends the check and stores an uncertain record with
-  the draft: plan ID, request JSON, the check's base revision and end, error
-  kind and message, and `data.outcome` when present. An apply still in flight
-  when the page went away restores as uncertain. A banner then stays above the
+  the draft: plan ID, request JSON, the request's kept-edge provenance as sent,
+  the check's base revision and end, error kind and message, and
+  `data.outcome` when present. An apply still in flight when the page went
+  away restores as uncertain. A banner then stays above the
   others, with Apply and Replan off, until the user decides that the entries
   are present (offered when the outcome, or a look at the positions the request
   would have taken, shows them), which removes the operations the request
-  carried as a successful Apply does, or that the draft was verified not
+  carried as a successful Apply does, recording names by the provenance sent
+  rather than the draft's as edited since, or that the draft was verified not
   applied, or clears the draft. A stale base does not show that an earlier apply was
   published: any writer moves the revision.
 - The tray is a column: a fixed header with the status, Check, Apply and the

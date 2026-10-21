@@ -15,7 +15,7 @@ import type { PickRole } from "../editors/OperationEditor.tsx";
 import { type Alias, namesFor } from "../model/aliases.ts";
 import { RpcError } from "../rpc.ts";
 import { type Classified, classify, message } from "./classify.ts";
-import { namesOf } from "./edits.ts";
+import { keptAmong, namesOf } from "./edits.ts";
 import {
   applicable,
   applyParams,
@@ -381,6 +381,7 @@ export class DraftActions {
       request,
       base_revision: outcome.report.base_revision ?? null,
       base_end: outcome.report.base.end_exclusive,
+      kept: keptAmong(state.kept, proposal.entries),
     };
     this.#dispatch({ kind: "apply_started", flight });
     // Another tab's marker was stored first and has been adopted instead.
@@ -400,7 +401,7 @@ export class DraftActions {
       });
       return;
     }
-    this.#dispatch({ kind: "applied", result, request });
+    this.#dispatch({ kind: "applied", result, request, kept: flight.kept });
     this.#refresh();
     // Operations the request did not carry stay and need a new plan ID.
     void this.ensurePlanId();

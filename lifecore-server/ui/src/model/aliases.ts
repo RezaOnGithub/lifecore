@@ -71,8 +71,9 @@ export function aliasIndex(
   return index;
 }
 
-// Why `name` cannot name the entry `id`: its grammar, or another entry
-// holding it. Null when it can, as when it already names `id`.
+// Why `name` cannot be given to the entry `id`: its grammar, or any entry
+// holding it. One `id` already holds is refused too, so that a rename onto
+// it does not silently forget the name renamed.
 export function aliasNameError(
   aliases: readonly Alias[],
   name: string,
@@ -83,8 +84,11 @@ export function aliasNameError(
     return syntax;
   }
   const holder = aliases.find((alias) => alias.name === name);
-  return holder === undefined || sameId(holder.id, id)
-    ? null
+  if (holder === undefined) {
+    return null;
+  }
+  return sameId(holder.id, id)
+    ? `${name} already names this entry`
     : `${name} already names @${holder.id.position}`;
 }
 
@@ -125,7 +129,7 @@ export function withoutAlias(aliases: readonly Alias[], name: string): Alias[] {
 }
 
 // Refused, leaving the list as it was, when `to` breaks the grammar or
-// names another entry.
+// is held, by this entry or another.
 export function renameAlias(
   aliases: readonly Alias[],
   from: string,

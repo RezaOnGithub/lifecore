@@ -384,6 +384,20 @@ export function keptWarning(
   return null;
 }
 
+// The provenance of the kept edge `name` while it still keeps its edge, by
+// which applying it passes that edge's names on and names nothing itself;
+// null for any other operation, which names its entry.
+export function derivedKept(
+  entries: readonly ProposalEntry[],
+  kept: Readonly<Record<string, KeptEdge>>,
+  name: string,
+): KeptEdge | null {
+  const provenance = kept[name];
+  return provenance !== undefined && keptWarning(entries, provenance) === null
+    ? provenance
+    : null;
+}
+
 // ---- Content comparison ----
 
 // JSON with object keys sorted, so equal content compares equal whatever
@@ -470,11 +484,8 @@ export function appliedNames(
         follows = resolve(entry.predecessor);
       }
     } else {
-      const provenance = kept[entry.name];
-      if (
-        provenance !== undefined &&
-        keptWarning(request, provenance) === null
-      ) {
+      const provenance = derivedKept(request, kept, entry.name);
+      if (provenance !== null) {
         follows = provenance.edge;
         derived = true;
       }

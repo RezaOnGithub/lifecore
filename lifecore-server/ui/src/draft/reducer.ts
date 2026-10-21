@@ -77,7 +77,13 @@ export type DraftAction =
       evaluation: Evaluation;
     }
   | { kind: "apply_started"; flight: InFlight }
-  | { kind: "applied"; result: ApplyResult; request: string }
+  // `request` and `kept` are what the flight sent.
+  | {
+      kind: "applied";
+      result: ApplyResult;
+      request: string;
+      kept: Record<string, KeptEdge>;
+    }
   | {
       kind: "rejected";
       report: ProposalReport;
@@ -318,7 +324,7 @@ export function draftReducer(
           graph_revision: action.result.graph_revision,
           operations,
           report: action.result.report,
-          names: appliedNames(sentOf(action.request), operations, state.kept),
+          names: appliedNames(sentOf(action.request), operations, action.kept),
         },
       };
     }
@@ -386,6 +392,8 @@ export function draftReducer(
         (uncertain.verdict?.kind === "present"
           ? uncertain.verdict.operations
           : null);
+      // The draft may have been edited since the apply; its names follow
+      // the kept edges as sent, not as the draft now has them.
       return {
         ...published(state, uncertain.request, operations),
         uncertain: null,
@@ -399,7 +407,7 @@ export function draftReducer(
                 names: appliedNames(
                   sentOf(uncertain.request),
                   operations,
-                  state.kept,
+                  uncertain.kept,
                 ),
               },
       };

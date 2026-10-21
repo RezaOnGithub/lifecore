@@ -186,6 +186,7 @@ test("the in-flight marker is saved before the apply request leaves", async () =
     request: sent?.state.outcome?.request,
     base_revision: "r",
     base_end: "1",
+    kept: {},
   });
   // The save before the call carried the marker, the one after cleared it.
   const marked = h.saved.findIndex((s) => s.in_flight !== null);
@@ -398,6 +399,31 @@ test("revise keeps the node's current edges right after it; branch reads none", 
   h.actions.revise(n, "branch");
   await settle();
   assert.equal(h.count("entries.inspect"), 1);
+});
+
+test("an apply's marker, and the uncertain record after it, carry its kept edges' provenance", async () => {
+  const n = node("1");
+  const h = harness(
+    answers({
+      ...minted,
+      "entries.inspect": () => inspection(n, [node("2")]),
+      "proposal.check": () => ({ accepted: true, report: report() }),
+      "proposal.apply": () => {
+        throw new TransportError("lost");
+      },
+    }),
+  );
+  h.actions.revise(n, "revise");
+  await settle();
+  const { kept } = h.state();
+  assert.deepEqual(kept, {
+    task_1_keep_40: { revision: "task_1", predecessor: n.id, edge: id("40") },
+  });
+  await h.actions.check();
+  await h.actions.apply();
+  const sent = h.calls.find((c) => c.method === "proposal.apply");
+  assert.deepEqual(sent?.state.inFlight?.kept, kept);
+  assert.deepEqual(h.state().uncertain?.kept, kept);
 });
 
 test("default names skip kept names, and a revise takes its node's free kept name", async () => {

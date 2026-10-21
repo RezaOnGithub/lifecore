@@ -163,6 +163,7 @@ test("Apply is gated on an accepted, unspent check of identical content and eval
         request: "{}",
         base_revision: "r",
         base_end: "4",
+        kept: {},
         error: "transport",
         message: "lost",
         outcome: null,
@@ -191,6 +192,7 @@ test("a frozen draft says why it takes no edit", () => {
     request: "{}",
     base_revision: null,
     base_end: "0",
+    kept: {},
   };
   assert.equal(frozenReason(initialDraft), null);
   assert.equal(frozenReason(detachedDraft), "the draft waits for the database");

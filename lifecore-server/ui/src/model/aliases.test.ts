@@ -55,10 +55,13 @@ test("a name names one entry, kept in name order, and an entry may have several"
   assert.equal(withoutAlias(moved, "absent"), moved);
 });
 
-test("a name must follow the grammar and be free or already this entry's", () => {
+test("a name must follow the grammar and be free", () => {
   const aliases = [alias("kitchen", "2")];
-  assert.equal(aliasNameError(aliases, "kitchen", id("2")), null);
   assert.equal(aliasNameError(aliases, "pantry", id("2")), null);
+  assert.equal(
+    aliasNameError(aliases, "kitchen", id("2")),
+    "kitchen already names this entry",
+  );
   assert.equal(
     aliasNameError(aliases, "kitchen", id("3")),
     "kitchen already names @2",
@@ -80,6 +83,12 @@ test("a rename keeps the entry and is refused onto a taken or malformed name", (
   assert.equal(renameAlias(aliases, "kitchen", "pantry"), aliases);
   assert.equal(renameAlias(aliases, "kitchen", "no good"), aliases);
   assert.equal(renameAlias(aliases, "absent", "galley"), aliases);
+  assert.equal(renameAlias(aliases, "kitchen", "kitchen"), aliases);
+  // Onto another name of the same entry: refused, not a silent forget of
+  // the name renamed.
+  const both = withAlias(aliases, alias("cooking", "2"));
+  assert.equal(renameAlias(both, "kitchen", "cooking"), both);
+  assert.deepEqual(namesFor(both, id("2")), ["cooking", "kitchen"]);
 });
 
 test("moving passes every name of an entry to another", () => {

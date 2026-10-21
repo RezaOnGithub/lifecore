@@ -265,6 +265,7 @@ test("nothing edits the draft while an apply is in flight here or in another tab
     request: requestOf(state([task])),
     base_revision: "r",
     base_end: "4",
+    kept: {},
   };
   const applying = draftReducer(state([task]), {
     kind: "apply_started",
@@ -327,6 +328,7 @@ test("applied removes only the operations of the request, by name and content", 
     {
       kind: "applied",
       request,
+      kept: {},
       result: {
         graph_revision: "r2",
         report: {
@@ -356,6 +358,7 @@ test("applied removes only the operations of the request, by name and content", 
   const all = draftReducer(sent, {
     kind: "applied",
     request,
+    kept: {},
     result: { graph_revision: "r2", report },
   });
   assert.deepEqual(all.proposal, { entries: [] });
@@ -375,6 +378,7 @@ test("an uncertain apply spends the check and waits for the user's decision", ()
     request,
     base_revision: "r",
     base_end: "4",
+    kept: {},
     error: "transport",
     message: "lost",
     outcome: null,
@@ -422,6 +426,92 @@ test("an uncertain apply spends the check and waits for the user's decision", ()
     present.applied?.names.map((n) => [n.name, n.id]),
     [["task_1", id("4")]],
   );
+});
+
+test("an uncertain apply's names follow its kept edges as sent, whatever the draft became", () => {
+  const plants: ProposalEntry = {
+    name: "plants",
+    kind: "node",
+    ty_name: "Task",
+    predecessor: { existing: id("1") },
+    intent: "revise",
+    payload: {},
+  };
+  const keep: ProposalEntry = {
+    name: "plants_keep_5",
+    kind: "edge",
+    ty_name: "DependsOn",
+    from: { added: "plants" },
+    to: { existing: id("3") },
+  };
+  const provenance = {
+    revision: "plants",
+    predecessor: id("1"),
+    edge: id("5"),
+  };
+  const draft = state([plants, keep], {
+    kept: { plants_keep_5: provenance },
+  });
+  const flight = {
+    plan_id: "p",
+    request: requestOf(draft),
+    base_revision: "r",
+    base_end: "10",
+    kept: { plants_keep_5: provenance },
+  };
+  const operations = [
+    { name: "plants", entry: id("10") },
+    { name: "plants_keep_5", entry: id("11") },
+  ];
+  const sent = draftReducer(draft, { kind: "apply_started", flight });
+  const named = (s: DraftState) =>
+    s.applied?.names.map((n) => [n.name, n.id, n.follows, n.derived]);
+  const expected = [
+    ["plants", id("10"), id("1"), false],
+    ["plants_keep_5", id("11"), id("5"), true],
+  ];
+  assert.deepEqual(
+    named(
+      draftReducer(sent, {
+        kind: "applied",
+        request: flight.request,
+        kept: flight.kept,
+        result: { graph_revision: "r2", report: { ...report, operations } },
+      }),
+    ),
+    expected,
+  );
+  const waiting = draftReducer(
+    draftReducer(sent, {
+      kind: "uncertain",
+      uncertain: {
+        ...flight,
+        error: "transport",
+        message: "lost",
+        outcome: null,
+        verdict: null,
+      },
+    }),
+    { kind: "verdict", verdict: { kind: "present", operations } },
+  );
+  // The draft is open while the user decides: the revision is renamed, so
+  // its kept edge's provenance now names shrubs, or the kept edge goes.
+  const renamed = draftReducer(waiting, {
+    kind: "replace",
+    name: "plants",
+    entry: { ...plants, name: "shrubs" },
+  });
+  assert.equal(renamed.kept.plants_keep_5?.revision, "shrubs");
+  const removed = draftReducer(waiting, {
+    kind: "remove",
+    names: ["plants_keep_5"],
+  });
+  assert.equal(removed.kept.plants_keep_5, undefined);
+  for (const edited of [renamed, removed]) {
+    const decided = draftReducer(edited, { kind: "decide", present: true });
+    assert.equal(decided.uncertain, null);
+    assert.deepEqual(named(decided), expected);
+  }
 });
 
 test("kept edges land only while the operation still revises the node", () => {
@@ -609,6 +699,7 @@ test("clear empties the draft, kept provenance, notices, and an uncertain record
         request: "{}",
         base_revision: null,
         base_end: "1",
+        kept: {},
         error: "transport",
         message: "",
         outcome: null,

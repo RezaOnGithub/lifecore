@@ -56,6 +56,7 @@ const flight = {
   request: JSON.stringify(proposal),
   base_revision: "b",
   base_end: "4",
+  kept: {},
 };
 
 test("a saved draft is restored under the database's own key only", () => {
@@ -116,6 +117,48 @@ test("the in-flight marker is part of what a dispatch saves", () => {
   assert.deepEqual(storedOf(after).in_flight, flight);
   const selected = draftReducer(after, { kind: "select", name: "t" });
   assert.equal(storedChanged(after, selected), false);
+});
+
+test("the marker and the uncertain record keep the provenance of the kept edges sent", () => {
+  const kept = {
+    e: {
+      revision: "t",
+      predecessor: { origin: "o", position: "1" },
+      edge: { origin: "o", position: "2" },
+    },
+  };
+  const sending = { ...flight, kept };
+  const store = memory();
+  const saved = saveDraft(store, "db", stored({ in_flight: sending }));
+  assert.deepEqual(loadDraft(store, "db")?.in_flight, sending);
+  // Read back, the record is the same text, so a tab knows its own marker.
+  assert.deepEqual(saved, {
+    kind: "written",
+    text: JSON.stringify(loadDraft(store, "db")),
+  });
+  const restored = restoredState(loadDraft(store, "db"));
+  assert.deepEqual(restored.uncertain?.kept, kept);
+  saveDraft(store, "db", storedOf(restored));
+  assert.deepEqual(loadDraft(store, "db")?.uncertain?.kept, kept);
+  // Malformed provenance drops the draft, as any malformed record does.
+  const load = (value: unknown) =>
+    loadDraft(memory({ [storageKey("db")]: JSON.stringify(value) }), "db");
+  for (const bad of [undefined, null, [], { e: { revision: "t" } }]) {
+    const record = { ...flight, kept: bad };
+    assert.equal(load({ ...stored(), in_flight: record }), null);
+    assert.equal(
+      load({
+        ...stored(),
+        uncertain: {
+          ...record,
+          error: "transport",
+          message: "m",
+          outcome: null,
+        },
+      }),
+      null,
+    );
+  }
 });
 
 test("garbage, wrong shapes, and duplicate names are ignored", () => {

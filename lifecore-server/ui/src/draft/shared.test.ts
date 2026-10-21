@@ -76,6 +76,7 @@ function flightOf(tab: SharedDraft): InFlight {
     request: requestOf(tab.state),
     base_revision: "r",
     base_end: "4",
+    kept: {},
   };
 }
 
@@ -174,6 +175,7 @@ test("the applying tab writes its marker again over a write that raced past it",
       },
     },
     request: flight.request,
+    kept: flight.kept,
   });
   assert.equal(store.items.size, 0);
 });
@@ -205,6 +207,7 @@ test("the end of another tab's apply unfreezes the draft with a note", () => {
       },
     },
     request: flight.request,
+    kept: flight.kept,
   });
   assert.equal(b.sync(), true);
   assert.equal(frozen(b.state), false);

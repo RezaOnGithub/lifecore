@@ -140,11 +140,16 @@ function readFlight(value: unknown): InFlight | null {
   ) {
     return null;
   }
+  const kept = readKept(value.kept);
+  if (kept === null) {
+    return null;
+  }
   return {
     plan_id: value.plan_id,
     request: value.request,
     base_revision: value.base_revision,
     base_end: value.base_end,
+    kept,
   };
 }
 
@@ -237,6 +242,7 @@ export function storedOf(state: DraftState): Stored {
             request: uncertain.request,
             base_revision: uncertain.base_revision,
             base_end: uncertain.base_end,
+            kept: uncertain.kept,
             error: uncertain.error,
             message: uncertain.message,
             outcome: uncertain.outcome,

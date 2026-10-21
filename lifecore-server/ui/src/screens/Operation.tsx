@@ -3,6 +3,7 @@ import type { ProposalEntry } from "../contract.ts";
 import { usePlaces, useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen, isUnset, type Problem } from "../draft/model.ts";
+import { derivedKept } from "../draft/operations.ts";
 import { OperationEditor, type PickRole } from "../editors/OperationEditor.tsx";
 import { useOpen, useReplace } from "../links.tsx";
 import { takenName } from "../model/aliases.ts";
@@ -73,9 +74,11 @@ export function OperationScreen({
   const findings = judgment?.findings(name) ?? [];
   const invalid = problemFor(state.problem, name);
   const warnings = operationWarnings(entries, index, state.kept);
-  // A kept edge's own name names nothing when applied.
+  // A kept edge that still keeps its edge names nothing when applied.
   const taken =
-    state.kept[name] === undefined ? takenName(places.aliases, entry) : null;
+    derivedKept(entries, state.kept, name) === null
+      ? takenName(places.aliases, entry)
+      : null;
   const onChange = (changed: ProposalEntry) => {
     if (locked) {
       return;
