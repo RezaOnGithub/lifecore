@@ -155,7 +155,7 @@ macro_rules! methods {
     };
 }
 
-// Method names are provisional; the UI stages reshape them (PLAN 4.3).
+// Method names are provisional; the UI stages reshape them (INTERFACES §3).
 // `init` and filesystem path selection are deliberately absent.
 methods! {
     DatabaseDescribe => "database.describe",

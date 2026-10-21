@@ -728,7 +728,7 @@ impl Service {
         let inputs = evaluation_inputs(request.evaluation_time, request.now)?;
         let snapshot = storage::read(&self.state)?;
         let view = as_of(&snapshot.graph, request.as_of)?;
-        // The ordered suite is not versioned by history (INTERFACES 4), so a
+        // The ordered suite is not versioned by history (STORAGE §3), so a
         // prefix replays under the suite stored now, whatever was in force
         // when its entries were appended.
         let analysis = self
@@ -755,7 +755,7 @@ impl Service {
     }
 
     // Dismissal edits reread under writer exclusion and publish with the
-    // graph untouched, so the revision stays (INTERFACES 4).
+    // graph untouched, so the revision stays (STORAGE §3).
     pub fn dismiss_finding(&self, request: DismissRequest) -> Result<DismissalList, AppError> {
         if request.key.kind == MessageType::Inconsistency {
             return Err(AppError::CannotDismissInconsistency {
@@ -835,7 +835,7 @@ impl Service {
     // Always checks anew under writer exclusion, from reload through
     // publication, so the concrete base cannot change underneath it.
     pub fn apply(&self, request: ProposalRequest) -> Result<ApplyResult, AppError> {
-        // TODO: verify `acknowledges` by replay (PLAN 4.4). Until then it is
+        // TODO: verify `acknowledges` by replay (PLAN §2.2). Until then it is
         // rejected rather than silently ignored.
         if request.proposal.acknowledges.is_some() {
             return Err(AppError::AcknowledgmentUnsupported);

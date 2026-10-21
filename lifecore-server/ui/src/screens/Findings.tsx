@@ -32,7 +32,7 @@ import { labelOf } from "../views/FindingRow.tsx";
 import { EvaluationChoice } from "../views/TrayHeader.tsx";
 import { useAnalysisRuns } from "../views/useAnalysisRuns.ts";
 
-// The evaluation context every displayed analysis names (INTERFACES §5).
+// The evaluation context every displayed analysis names (CLIENT §4).
 function Context({ ran }: { ran: Ran }) {
   const { view, inputs, implementations } = ran.run.analysis;
   return (
@@ -271,7 +271,7 @@ function moved(
 }
 
 // Findings of the stored database: the stored suite replayed over the
-// selected history on request, grouped by finding (SPEC §8.3). Running is
+// selected history on request, grouped by finding (ANALYZERS §3). Running is
 // explicit because replay can take seconds; the last run stays on show,
 // labeled with its own view and inputs, until the next one.
 export function FindingsScreen() {

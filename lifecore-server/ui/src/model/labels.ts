@@ -37,7 +37,7 @@ export function typeName(name: string): string {
 }
 
 // Labels longer than this are cut on screen, with the full text as a tooltip
-// (INTERFACES §5.2).
+// (UI §1).
 export const LABEL_LIMIT = 60;
 
 function isLabelText(value: unknown): value is string {
@@ -45,7 +45,7 @@ function isLabelText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-// The payload field a row is labeled by (INTERFACES §5.2): `title` when text,
+// The payload field a row is labeled by (UI §1): `title` when text,
 // else `name` when text, else the top-level text field whose name sorts first
 // by code point, the byte order `views.render` labels its drawing by; null
 // when the row has none.

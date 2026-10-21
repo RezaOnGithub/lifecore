@@ -1,7 +1,7 @@
 // The shared RPC contract, written by hand to match the Rust Serde shapes.
 // Rust-emitted fixtures under ./fixtures check it: each one `satisfies` the type
-// declared here, so a changed Rust shape fails `tsc`. INTERFACES §3 and §5 own
-// the semantics; FILES §2 owns the value encoding.
+// declared here, so a changed Rust shape fails `tsc`. INTERFACES, RPC, and
+// CLIENT own the semantics; FILES §2 owns the value encoding.
 
 // Lowercase hyphenated UUID.
 export type Uuid = string;
@@ -283,7 +283,7 @@ export interface ExecutionFailure {
   evaluated_view: EvaluatedView;
   message: string;
 }
-// A stored dismissal record (INTERFACES §6), keyed by the complete finding
+// A stored dismissal record (INTERFACES §5), keyed by the complete finding
 // key; an inconsistency can never have one.
 export type DismissalReason =
   | "acknowledged"
@@ -407,7 +407,7 @@ export type Published =
   | ({ kind: "dismissed" } & DismissalList)
   | ({ kind: "restored" } & RestoreResult);
 
-// ---- Requests (INTERFACES §3.1) ----
+// ---- Requests (RPC §2) ----
 
 // Parameters never accept null: omit an optional one instead.
 export type NoParams = { [name: string]: never };
@@ -489,7 +489,7 @@ export type Method = keyof Methods;
 export type Params<M extends Method> = Methods[M]["params"];
 export type Result<M extends Method> = Methods[M]["result"];
 
-// ---- Errors (INTERFACES §3.1) ----
+// ---- Errors (RPC §3) ----
 
 export interface DecodeError {
   format: Format;
@@ -621,7 +621,7 @@ export interface RpcFailure<E extends ErrorObject = ErrorObject> {
 }
 export type RpcResponse<M extends Method = Method> = RpcSuccess<M> | RpcFailure;
 
-// ---- HTTP access (INTERFACES §3.2) ----
+// ---- HTTP access (INTERFACES §4) ----
 
 // The JSON body of a request the server refused before dispatch.
 export type HttpRejectionKind =

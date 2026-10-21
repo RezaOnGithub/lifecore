@@ -11,7 +11,7 @@ import { rangeWords, shownSubjects, unconfirmed } from "../model/findings.ts";
 import { entryKey, rowLabel } from "../model/labels.ts";
 
 // What the sticky flag and the historical label do and do not say
-// (SPEC §8.3), each in its own tooltip.
+// (ANALYZERS §3), each in its own tooltip.
 const STICKY =
   "sticky: current reports keep this advisory after the analyzer stops emitting it, until it is dismissed; that does not mean it still applies";
 const UNCONFIRMED =
@@ -49,7 +49,7 @@ export function AnalyzerName({
 // The prefix boundaries an observation was emitted at, worded alike
 // everywhere against the boundary of its report (`rangeWords`). A range that
 // ended before it carries `ended`, the place's own words for "not emitted
-// there", or, for a sticky advisory, the historical label (SPEC §8.3).
+// there", or, for a sticky advisory, the historical label (ANALYZERS §3).
 function ObservedRange({
   observation,
   boundary,
@@ -194,7 +194,7 @@ export const ENDED = (
 );
 
 // What a range that ended before the head of a check or a replay says: only
-// that the head does not emit it (SPEC §8.3).
+// that the head does not emit it (ANALYZERS §3).
 export const NOT_AT_HEAD = (
   <span className="badge not-emitted" data-testid="not-at-head">
     not emitted at the head

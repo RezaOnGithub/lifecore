@@ -1,5 +1,5 @@
 // The launch token arrives once, in the URL fragment printed by
-// `lifecore serve` (INTERFACES §3.2). It is kept in session storage, so a
+// `lifecore serve` (INTERFACES §4). It is kept in session storage, so a
 // refresh keeps working, and removed from the address bar.
 
 export const TOKEN_KEY = "lifecore.launchToken";

@@ -12,7 +12,7 @@ import type {
 import { sameId } from "./labels.ts";
 import { counted } from "./words.ts";
 
-// Report presentation of a stored-database analysis (SPEC §8.3), mirroring
+// Report presentation of a stored-database analysis (ANALYZERS §3), mirroring
 // core `AnalysisOutput::groups`: findings are grouped by complete key and
 // filtered for display; nothing here changes what the analysis found.
 
@@ -189,7 +189,7 @@ export function aboutEntry(
 // boundary of its report: "since 3" when the range runs up to that boundary,
 // "3–7" or "at 5" when it ended before, and "initialization". A range is
 // contiguous, so "since" leaves nothing out; `ended` says only that it was
-// not emitted at the boundary, never that anything was resolved (SPEC §8.3).
+// not emitted at the boundary, never that anything was resolved (ANALYZERS §3).
 export function rangeWords(
   evaluated: EvaluatedView,
   boundary: DecimalString,

@@ -42,7 +42,7 @@ export interface ExploreForm {
   edges: EdgeFilterForm;
 }
 
-// Client-side bounds on a query (INTERFACES §5.2); the server imposes none.
+// Client-side bounds on a query (UI §4); the server imposes none.
 export const MAX_STEPS = 3;
 export const MAX_HOPS = 3;
 

@@ -259,7 +259,7 @@ export class DraftActions {
   }
 
   // A suggestion's actions appended as ordinary operations, never with
-  // `acknowledges` (PLAN §4.4). The names they landed under; none while an
+  // `acknowledges` (PLAN §2.2). The names they landed under; none while an
   // apply is in flight.
   addSuggested(actions: readonly EntryChange[]): string[] {
     const { entries } = this.#state().proposal;

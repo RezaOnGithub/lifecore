@@ -1,10 +1,10 @@
 # Suggestions and acknowledgment
 
-Status: selected application design, pending implementation. This document is
-the single home for how applying a suggestion dismisses its finding; other
-documents link here. [MESSAGES.md](MESSAGES.md) describes the current library
-flow; [FILES.md](FILES.md) and [INTERFACES.md](INTERFACES.md) define the shared
-proposal, storage, and transport contracts.
+Status: selected application design, pending implementation
+([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)). This document is the
+single home for how applying a suggestion dismisses its finding; other
+documents link here. [FILES](FILES.md) defines the shared proposal and
+[STORAGE](STORAGE.md) its publication.
 
 ## 1. Identities
 
@@ -53,11 +53,16 @@ a ready-made `Proposal`:
 }
 ```
 
+These application result types stay outside the core `Observation` and
+`AnalysisOutput`. Diagnostics of an uncommitted check candidate carry no
+ready-made proposals; analyze the committed result again after apply.
+
 The export is a convenience, not a credential: nothing in it is secret or signed,
 and a client could write the same object by hand. Its JSON form is an ordinary
 change file; TOML uses the same type, and format conversion preserves both
-fields. Exporting changes nothing. Exported proposals from one analysis share a
-base; applying one that changes the graph makes the others' tokens stale.
+fields. Exporting changes nothing. Exported proposals from one analysis are
+alternatives against one base, not an apply batch: applying one that changes
+the graph makes the others' tokens stale.
 
 ## 3. Verification by replay
 
@@ -131,7 +136,7 @@ base is stale; that rejection cannot distinguish a completed retry from an
 intervening write, and an existing dismissal is not evidence of prior
 application. An empty suggestion publishes only its acknowledgment without
 changing the graph revision, so restoring and reapplying it acknowledges again.
-Durable receipts remain [backlogged](BACKLOG.md#7-deferred-receipts-and-retry-recovery).
+Durable receipts remain [backlogged](backlog/RECEIPTS.md).
 
 ## 6. Why replay rather than a signature
 

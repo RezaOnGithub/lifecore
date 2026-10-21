@@ -6,9 +6,10 @@ This document specifies a typed graph with explicit replacement history. Every e
 prefix must be valid and inspectable; an ordered plan commits atomically.
 Type checking remains a configured analyzer. Its rules below apply when
 TypeCheck is configured. Application initialization enables it by default, with
-an explicit `init --no-typecheck` opt-out. Application and authoring contracts
-are in [INTERFACES.md](INTERFACES.md) and [FILES.md](FILES.md). Appendix A records
-the transaction tradeoffs behind prefix validity.
+an explicit `init --no-typecheck` opt-out. [ANALYZERS](ANALYZERS.md) details
+analyzer execution, finding identity, and dismissal;
+[PREFIX-VALIDITY](PREFIX-VALIDITY.md) records the transaction tradeoffs behind
+prefix validity.
 
 ## 1. Purpose
 
@@ -265,8 +266,8 @@ regardless of when the node was created. Current edges must likewise satisfy the
 resulting endpoint permissions.
 
 Earlier committed views resolve names using their own declarations. Inspecting
-an earlier view must not use today's declaration or today's Python class merely
-because it has the same name.
+an earlier view must not use today's declaration merely because it has the same
+name.
 
 Replacing a declaration with one having a different logical name is possible
 only if the resulting view remains valid. Splitting a declaration into multiple
@@ -340,11 +341,11 @@ earlier replacement.
 
 TypeCheck judges each transition once, at the prefix whose newest entry is the
 successor, against the view immediately before it; later prefixes do not repeat
-the judgment. Full replay ([section 8.1](#81-execution-and-normalization))
+the judgment. Full replay ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization))
 evaluates every prefix, so every transition in history is still judged and its
 inconsistency still rejects any plan whose replay includes it. The finding key
 omits the evaluated boundary, and reports select inconsistencies at any boundary
-([section 8.3](#83-presentation-and-dismissal)).
+([ANALYZERS §3](ANALYZERS.md#3-presentation-and-dismissal)).
 
 Append ordering must make the declaration needed for each transition available
 before that transition occurs.
@@ -404,13 +405,12 @@ preparing any transaction still requires the configured analyzers and full repla
 Deserializing a report does not certify a new transaction.
 
 Filesystem envelopes, locking, and publication belong to the application service
-shared by HTTP and CLI ([FILES §8](FILES.md#8-atomic-publication)); the
-graph/analyzer libraries remain independent of storage and HTTP. Proposals, plan
-IDs, and the snapshot are application contracts
-([FILES §2](FILES.md#2-json-and-toml-change-files),
-[INTERFACES §4](INTERFACES.md#4-database-selection-and-concurrency)). They do
-not replace the core's exact commit comparisons: a plan ID matches a stored
-revision, while commit compares the entries and the suite themselves.
+shared by HTTP and CLI ([STORAGE](STORAGE.md)); the graph/analyzer libraries
+remain independent of storage and HTTP. Proposals, plan IDs, and the snapshot
+are application contracts ([FILES §2](FILES.md#2-json-and-toml-change-files),
+[STORAGE §3](STORAGE.md#3-graph-revision)). They do not replace the core's
+exact commit comparisons: a plan ID matches a stored revision, while commit
+compares the entries and the suite themselves.
 
 ## 8. Analyzers
 
@@ -419,8 +419,9 @@ diagnostics. It may inspect that view's history as well as its current graph,
 but may not inspect entries beyond the supplied boundary.
 
 Analyzers express application rules such as dependency acyclicity, missing
-justification, overdue work, or suggested restructuring. TypeCheck implements the type rules above as a configured analyzer. Analyzers
-do not mutate history or implicitly apply repairs.
+justification, overdue work, or suggested restructuring. TypeCheck implements
+the type rules above as a configured analyzer. Analyzers do not mutate history
+or implicitly apply repairs.
 
 Diagnostics distinguish:
 
@@ -435,186 +436,8 @@ explicit evaluation time and return an error when it is absent. Neither an analy
 nor the runner may implicitly read the clock. Missing configured
 analyzers or analyzer execution failures are errors, not successful checks.
 
-### 8.1 Execution and normalization
-
-See [Analyzer message flow](MESSAGES.md) for diagrams of field ownership,
-normalization, group selection, dismissal and transaction checks in the current
-implementation, including when a sticky advisory's certificate reaches a returned
-`FindingGroup`.
-
-`TypedAnalyzer` returns analyzer-specific typed findings as `Vec<Self::MSG>` from
-initialization and analysis. The shared adapter converts each finding with the
-implementation's `convert_message(&self, message)` and returns `Vec<Message>`,
-preserving order and duplicates for runner normalization. Conversion can use the
-analyzer's state and configuration. Direct third-party `dyn Analyzer`
-implementations return `Vec<Message>` and are also supported. There is no shared
-`Output` wrapper, `InnerOutput` trait, or associated output container.
-
-Keep domain findings structured and assert their variants and details in analyzer
-tests; presentation text cannot substitute for that evidence. Factories and
-domain findings remain in their analyzer packages. Shared `Message` output pairs
-an opaque `analyzer_certificate: AnalyzerCertificate` with a `Diagnostic`: the
-exact subject set, an optional focus entry, text, `MessageKind`, and
-`sticky: bool`. The same `Diagnostic` is carried unchanged into the observation.
-`AnalyzerCertificate` is a String newtype, serialized transparently as a string.
-
-Both analyzer traits return `version() -> semver::Version`. The runner constructs
-`AnalyzerIdentity` from the registered name, returned version, and original
-configuration string supplied to the factory unchanged. Version equality is
-exact, including prerelease and build metadata; it is not version-requirement
-matching. TypeCheck and DAG Check parse their own `CARGO_PKG_VERSION`. Semantic
-or encoding changes intended to invalidate earlier dismissals require a version
-change.
-
-`AnalysisRunner::new(EvaluationInputs)` freezes one input value for initialization
-and every replayed prefix. Its complete shape is:
-
-```rust
-pub struct EvaluationInputs {
-    pub evaluation_time: Option<jiff::Timestamp>,
-}
-```
-
-The default is `None`. No clock is read implicitly; a time-dependent analyzer
-must error when the required time is absent. All configured implementations are
-constructed first, initialized in suite order, then each replays boundaries
-`0..=end_exclusive` in suite order. Empty histories execute both initialization
-and prefix zero. Missing factories, invalid configuration, execution failures,
-and malformed subject/focus output are errors.
-
-An observation records `evaluated_view: EvaluatedView`:
-`EvaluatedView::Initialization`, or `EvaluatedView::Prefixes { first, last }`,
-the contiguous range of exact prefixes, including zero, at which the analyzer
-emitted the same diagnostic under the same key ([section 8.2](#82-finding-identity-and-observations)).
-An execution failure records the single evaluated view it failed at, with
-analyzer identity and frozen inputs. Subjects and the focus entry must be
-visible in the evaluated prefix. Initialization has no graph access, so an
-initialization message has no focus and no subjects.
-
-### 8.2 Finding identity and observations
-
-`FindingKey` has four fields: database identity, `AnalyzerIdentity`, message
-category, and `analyzer_certificate: AnalyzerCertificate`. The wrapped string is
-the complete analyzer-owned finding identity, opaque to shared orchestration.
-There is no shared `Fact`, nested `Finding`, versioned key envelope, or digest helper.
-Grouping and dismissal
-compare complete keys, including the entire string; hashes are only collection
-implementation details and collisions do not establish equality.
-
-Configuration identity preserves exact original spelling. TypeCheck may accept
-empty text and empty JSON objects as equivalent behavior, but `""`, `" "`, and
-`"{}"` identify different configurations. DAG Check may normalize its parsed sets
-and empty filter/range records internally; order, duplicate, or whitespace
-changes in the original string still produce distinct analyzer identities.
-
-Built-ins deterministically JSON-encode their typed findings. TypeCheck's
-certificate names the variant, the typed path/issue or schema details, and the
-exact subject entry, and nothing about the boundary. DAG Check's names the
-cyclic-component variant with sorted exact node/edge identities. Typed domain
-data stays inside each analyzer; presentation wording is not a key.
-
-Ordinary evaluation boundaries, evaluation time, wording, and suggested
-actions do not by themselves change finding identity. When a time
-threshold or transition distinguishes an issue, the analyzer must deliberately
-include that detail in its certificate. Different subjects, distinguishing details,
-versions, original configuration strings, categories, or databases stay distinct.
-Repeated observations of a dismissed key remain dismissed.
-
-The runner consumes each `Message`, moves its certificate into the `FindingKey`,
-and keeps the `Diagnostic` beside that key and the evaluated view. The
-certificate lives only in the key, and the frozen inputs only on the output.
-Recording merges re-emission: a diagnostic equal in key and content to one
-recorded at the immediately preceding prefix extends that observation's `last`;
-one already covered by a recorded range is dropped; anything else starts a new
-observation. An advisory that holds from prefix 10 to 50 is one observation with
-that range, and one that holds again from 70 is a second, so the first prefix at
-which a finding appeared is always retained. Wording that names the boundary
-defeats merging, so analyzers keep boundaries out of message text. Grouping by
-finding key is separate and retains distinct ranges and presentation. Duplicate suite entries still
-execute in full and add nothing. The runner returns `AnalysisOutput`, retaining
-the selected view, inputs, and ordered implementation identities even when no
-messages were emitted. It supports Serde round trips. Outputs are ephemeral;
-[INTERFACES §6](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence)
-owns their lifetime and the independent persistence of dismissals.
-
-Serialized, a finding key's `kind` is its category in lowercase:
-`inconsistency`, `warning`, or `suggestion`. A diagnostic is flat and tagged by
-the same word in its own `kind`; a suggestion also carries its ordered
-`actions`, possibly empty, and nothing else does. An evaluated view is
-`{"kind": "initialization"}` or `{"kind": "prefixes", "first": …, "last": …}`.
-These encodings follow the shared vocabulary of
-[FILES §2.1](FILES.md#21-syntax-and-values); they do not change what a key or
-diagnostic contains.
-
-### 8.3 Presentation and dismissal
-
-The default report selects initialization output, observations whose range
-ends at the selected boundary, and advisories with `sticky = true`. A sticky advisory stays
-visible at later prefixes until dismissed or filtered; it has no automatic expiry.
-With fixed implementation, configuration, and inputs, replay recovers the earlier
-observation even if the analyzer emits nothing at the selected head. Sticky
-advisories whose range ends before the selected boundary are labeled historical
-with current applicability unconfirmed. The flag does not mean that a finding still applies, has been resolved,
-or should be automatically repaired.
-
-An analyzer chooses the flag by what an advisory describes. Mark sticky an advisory
-about an event that the analyzer judges once, at the prefix that event ends, and
-that later prefixes do not re-emit; otherwise it would leave current reports as
-soon as history grows. Keep nonsticky an advisory about current state: it is
-emitted again at every prefix where it still holds, so it leaves current reports
-once resolved or superseded. Re-emission costs nothing in output size, since the
-runner merges it into one range; sticky exists for conditions too costly to
-re-judge at every prefix, where report selection keeps the single observation
-visible instead.
-TypeCheck's warnings (`UnknownSuccessorType`, and
-encouraged or deprecated field issues) describe current declarations and current
-nodes, so they are nonsticky. Its once-judged transition findings are
-inconsistencies, which reports select at any boundary
-([section 7.2](#72-successor-type-permission)).
-
-History mode admits all replayed observations, including nonsticky advisories,
-subject to category and dismissal filters. Grouping first collects all observations
-by complete finding key, then selects occurrences for display. Only groups with a
-nonempty selected subset are returned; each exposes all its observations as well
-as that subset, in deterministic first-emission order.
-
-No generic resolution status is inferred. Non-emission, subject supersession,
-or reconnecting only one split branch cannot establish resolution. Historical
-observations remain available. An analyzer requiring a current-applicability
-assessment must express that assessment through its own domain semantics.
-
-`analysis::presentation` groups, filters, and renders reports. `Dismissals` is
-serializable display state, with exact-key listing, lookup, dismissal, and restore
-even when the finding is not currently emitted. Each record has a
-`DismissalReason` (`Acknowledged`, `FalsePositive`, or `NoLongerRelevant`,
-serialized `acknowledged`, `false_positive`, and `no_longer_relevant`) and
-`note: Option<String>`. Updating a record replaces its reason and note. No reason
-establishes resolution. Dismissal loading, writer exclusion, and atomic
-publication belong to the shared application service used by HTTP and CLI.
-
-A proposal may name the suggestion it implements; applying it acknowledges the
-finding without asserting resolution ([SUGGESTIONS.md](SUGGESTIONS.md)).
-
-All inconsistencies remain visible across history regardless of advisory filters,
-report selection, or imported dismissal records. Dismiss operations reject
-inconsistency keys. Transaction acceptance uses the unfiltered report and execution
-errors, independently of dismissal reasons, notes, or presentation.
-
-### 8.4 Explicit suggestions
-
-`analysis::suggestion::prepare_suggestion(graph, observation, runner)` returns
-`Result<Checked, Error>` for an explicitly selected suggestion.
-It checks only that the observation source matches the supplied history and
-that the observation is a suggestion; its ordered actions, `EntryChange` values
-like a lowered proposal's, are then checked anew with `transaction::prepare`
-under the runner's frozen evaluation inputs, including historical and
-intermediate prefixes and the revision-intent rules of section 7.4. Exact
-existing references and earlier-operation references retain their meaning.
-An accepted candidate and its prefixes can be inspected before explicit commit;
-a rejection carries only its analysis and operation mapping.
-Preparation neither applies the suggestion nor dismisses a finding or infers
-reconnections. Exporting suggestions as proposals and verifying their
-acknowledgment are application contracts in [SUGGESTIONS.md](SUGGESTIONS.md).
+[ANALYZERS](ANALYZERS.md) specifies execution and normalization, finding
+identity, presentation and dismissal, and explicit suggestions.
 
 ## 9. Inspection and queries
 
@@ -686,7 +509,7 @@ earlier boundary. Resolved types are not cached.
 
 Inspection requires neither a valid draft nor installed analyzers. Graphviz
 drawings of a view are an application method, `views.render`
-([INTERFACES §3.1](INTERFACES.md#31-provisional-first-slice-methods)).
+([RPC §2](RPC.md#2-methods)).
 
 ## 10. Examples
 
@@ -760,13 +583,10 @@ invalidate the already recorded transition.
 
 ## 11. Implementation scope
 
-The application uses a Rust HTTP adapter and React client, plus CLI initialization,
-one-shot RPC, and change-file conveniences. Shared application operations and
-core graph/analyzer APIs remain synchronous. Async execution belongs at the
-HTTP boundary. See [INTERFACES.md](INTERFACES.md) for ownership and execution.
-
-The payload and control-integer encoding shared by files, RPC, and the snapshot
-is specified in [FILES §2.1](FILES.md#21-syntax-and-values).
+Core graph and analyzer APIs remain synchronous; the application built on them
+is specified from [INTERFACES](INTERFACES.md). The payload and control-integer
+encoding shared by files, RPC, and the snapshot is specified in
+[FILES §2.1](FILES.md#21-syntax-and-values).
 
 A custom storage engine, interning, general query language, schema hashing, or
 generic storage-backend interface is not required. Physical storage may differ
@@ -776,105 +596,3 @@ versioned sufficiently to avoid silently changing their meaning.
 
 The defining contract is: **immutable revisions, tree-shaped replacement,
 explicit relationships, contextual type names, and validity at every prefix.**
-
-## Appendix A. Transaction granularity and prefix validity
-
-This appendix records the design discussion and alternatives. Sections 2 and 7
-define the selected contract: atomic plans and validation at every prefix.
-
-### A.1 Validation and atomic persistence are separate choices
-
-| Model                              | Full validation                                    | Persistence             | Status                      |
-| ---------------------------------- | -------------------------------------------------- | ----------------------- | --------------------------- |
-| Single-entry transactions          | Every entry prefix                                 | One entry at a time     | Not selected                |
-| Batches with prefix validation     | Every entry prefix                                 | Entire batch or nothing | Selected                    |
-| Batches with final-view validation | Only the final view, plus structural append checks | Entire batch or nothing | Excluded from this contract |
-
-The first two permit the same entry sequences when evaluated with the same
-analyzers, configuration, and explicit inputs. They differ in what is saved if a
-later append fails. Prefix-valid batches expose every entry boundary
-for historical inspection, even if those entries were persisted together.
-
-Final-view validation permits additional sequences with invalid intermediate
-states. That is a semantic change, not just a storage optimization.
-
-### A.2 Why final-view validation was rejected
-
-The earlier draft allowed a transaction to append an invalid revision `B` and
-then append a valid successor `C`. At the transaction boundary only `C` was
-current, so `B` could remain in history without ever passing payload validation.
-Similarly, an edge with an impermissible label could evade type checking if a
-later replacement made it historical before the final check.
-
-Checking every newly introduced object separately would require selecting a
-schema context for each object and deciding which intermediate changes count.
-Every-prefix validation answers those questions directly: each entry must be
-valid in the view immediately following its append, and predecessor-type
-permission is checked in the preceding view.
-
-This gives every stored revision an inspectable view in which it was current and
-validated. A later repair cannot legitimize an invalid earlier append.
-
-### A.3 Costs for graph operations and analyzer design
-
-Some apparently reasonable invariants admit no valid single-entry construction
-sequence. Suppose an analyzer blocks any current Task without a current outgoing
-`Supports` edge:
-
-- Appending the Task first fails because the edge is absent.
-- Appending the edge first fails because the Task does not yet exist.
-- Revising a connected Task fails because replacement makes its old edges
-  historical before new edges can be appended.
-
-Such a rule must allow an explicit incomplete state, remain advisory, or be
-reformulated to admit the intended construction sequence. Permission to use an
-edge label is different from requiring that an edge already exist; ordinary
-payload validation and allowed-label checks do not create this construction
-problem.
-
-Splits and connection redistribution likewise proceed through valid partial
-states. Analyzer authors must consider those states. Atomic persistence with
-prefix validation would not remove this requirement.
-
-### A.4 Schema evolution uses field policies
-
-`encouraged` and `deprecated` are intentional tools for gradual migration, not
-merely presentation annotations. They let the type checker direct users toward a
-new schema while keeping every prefix valid:
-
-```text
-Introduce: undeclared -> encouraged -> mandatory
-Retire:    declared   -> deprecated -> undeclared
-```
-
-Data revisions occur between the declaration changes. Present values always
-remain typechecked. Encouraged warns about missing data; deprecated warns about
-data that should be removed or replaced. Optional accepts absence without that
-pressure. Section 10.3 specifies examples and the role of additional-field
-policies.
-
-This incurs extra declaration and node revisions, and node revisions require
-explicit reconnection where relationships should remain current. It provides
-visible migration progress without admitting invalid history. It does not make
-every possible schema change constructible; other constraints must also permit
-the migration path.
-
-### A.5 Failure handling and cost
-
-A plan stages the entire sequence, validates every prefix, and persists none of
-it if any check fails. Atomic publication does not repair the construction
-problem in A.3.
-
-Validating after every append may cost more than checking one final graph. The
-prototype should favor the simpler invariant; caching or incremental checks must
-preserve the result of full prefix validation.
-
-Prefix validity concerns structural and contextual type rules. Analyzer
-acceptance additionally depends on the configured suite and explicit evaluation
-inputs used for a check. Introducing a new analyzer or advancing evaluation time
-does not imply that historical commits satisfied that different evaluation.
-
-The decision can be revisited if a concrete essential workflow has no acceptable
-valid-prefix formulation. Any proposal to allow invalid intermediate states must
-explicitly replace this contract and settle historical inspection, schema
-context, and transition-checking semantics.

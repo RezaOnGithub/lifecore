@@ -34,7 +34,7 @@ function ActionReference({
 
 // A suggestion's operations, read-only, and a way to start a draft from
 // them. Added operations are ordinary ones: the proposal does not
-// acknowledge the finding (PLAN §4.4). The draft applies to the current
+// acknowledge the finding (PLAN §2.2). The draft applies to the current
 // history, so only actions judged at the boundary of a whole-history run of
 // this reload can be added; a second addition asks first.
 export function SuggestedActions({

@@ -1,7 +1,7 @@
 # Analyzer message flow
 
 This describes the current library implementation. For the contract, see
-[SPEC §8](SPEC.md#8-analyzers). The diagrams follow owned values into
+[ANALYZERS](ANALYZERS.md). The diagrams follow owned values into
 `AnalysisOutput`, then borrowed references into presentation groups.
 
 The planned application exports suggestions as proposals and, after verifying
@@ -65,7 +65,7 @@ Initialization and prefix zero are separate invocations, even for an empty graph
 The same inputs are passed to every invocation; no clock is read implicitly.
 Because every prefix is evaluated, an analyzer can report an event once, at the
 prefix whose newest entry it concerns.
-[SPEC §8.3](SPEC.md#83-presentation-and-dismissal) states when such an advisory
+[ANALYZERS §3](ANALYZERS.md#3-presentation-and-dismissal) states when such an advisory
 must be sticky, and [SPEC §7.2](SPEC.md#72-successor-type-permission) how
 TypeCheck judges revision transitions this way.
 
@@ -155,8 +155,9 @@ ends before the selected view is labeled “historical advisory; current
 applicability unconfirmed”.
 
 For example, suppose a warning is emitted only at prefix 4, so its range is
-`[4, 4]`, and the selected view is prefix 8. Its normalized observation remains in the output in every row below.
-Assuming it is the key's **only occurrence**, these are the grouping outcomes:
+`[4, 4]`, and the selected view is prefix 8. Its normalized observation remains
+in the output in every row below. Assuming it is the key's **only occurrence**,
+these are the grouping outcomes:
 
 | Sticky | Selection | Advisory filter | Matching dismissal | Include dismissed | Selected and group returned? |
 | --- | --- | --- | --- | --- | --- |
@@ -172,8 +173,9 @@ Defaults are `Current`, `All`, and `include_dismissed = false`. Initialization
 observations and observations whose range ends at the selected view pass the
 boundary test without `sticky`. A nonsticky warning that still holds at the head
 has been re-emitted at every prefix since it appeared, so its range ends at the
-view and it is selected; its `first` prefix tells when it appeared. Inconsistencies are always selected, regardless of boundary,
-sticky flag, advisory filter or even an imported dismissal record.
+view and it is selected; its `first` prefix tells when it appeared.
+Inconsistencies are always selected, regardless of boundary, sticky flag,
+advisory filter or even an imported dismissal record.
 
 Sticky is a property of an occurrence, not its finding key. It has no automatic
 expiry and does not require re-emission at the selected head. With fixed analyzer
@@ -224,13 +226,14 @@ flowchart TD
 ```
 
 This diagram follows the suggestion path; direct `transaction::prepare` behaves
-the same after staging, including the intent check. Preparation uses the supplied runner's frozen
-inputs, not automatically the selected observation's original inputs. Source
-checking uses `Observation.key.database` and, for a prefix observation, both
-ends of its `evaluated_view` range. The opaque certificate is not an action or a commit receipt.
-`sticky`, `ReportOptions` and `Dismissals` are not inputs to transaction acceptance.
-Warnings and suggestions do not block it. Commit checks the original database,
-entry count/content and ordered analyzer suite before replacing the graph.
+the same after staging, including the intent check. Preparation uses the
+supplied runner's frozen inputs, not automatically the selected observation's
+original inputs. Source checking uses `Observation.key.database` and, for a
+prefix observation, both ends of its `evaluated_view` range. The opaque
+certificate is not an action or a commit receipt. `sticky`, `ReportOptions` and
+`Dismissals` are not inputs to transaction acceptance. Warnings and suggestions
+do not block it. Commit checks the original database, entry count/content and
+ordered analyzer suite before replacing the graph.
 
 Implementation: [runner and normalization](../src/analysis/mod.rs),
 [identity types](../src/analysis/identity.rs),

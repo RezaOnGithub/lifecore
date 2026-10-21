@@ -24,7 +24,7 @@ export interface Attached {
   // The candidate's head, the boundary its range is read against.
   boundary: DecimalString;
   // Last emitted before the candidate's head. Not emitted is all it says:
-  // nothing infers that the draft resolved it (SPEC §8.3).
+  // nothing infers that the draft resolved it (ANALYZERS §3).
   notAtHead: boolean;
 }
 

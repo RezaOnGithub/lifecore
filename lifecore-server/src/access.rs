@@ -36,7 +36,7 @@ impl fmt::Debug for Token {
     }
 }
 
-// What the adapter accepts before dispatch (INTERFACES 3.2): the bound
+// What the adapter accepts before dispatch (INTERFACES §4): the bound
 // loopback authority under either name, and the launch token.
 #[derive(Debug)]
 pub(crate) struct Access {

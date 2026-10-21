@@ -1,24 +1,10 @@
 # LifeCore Lite Authoring Files
 
-Status: proposed shared authoring contract for JSON/TOML change files, the React
-client, and the synchronous application service. [INTERFACES.md](INTERFACES.md)
-defines CLI/HTTP routing; [PLAN.md](PLAN.md) lists remaining implementation work.
-Section 8 fixes the application-owned snapshot and lock layout; section 2.2
-fixes the plan-ID encoding. Analysis outputs remain ephemeral.
-[SUGGESTIONS.md](SUGGESTIONS.md) defines suggestion export and the replay-verified
-acknowledgment of findings. Exact encodings here are provisional until the
-[first slice](PLAN.md#41-first-slice-change-files-storage-and-cli) exercises them;
-update this document with the implementation when they change.
-
-Change-file commands, browser authoring, atomic persistence, and bounded history
-inspection are in scope. Markdown document collections and durable application
-receipts are [backlogged](PLAN.md#6-backlog); their contracts are retained in
-[BACKLOG.md](BACKLOG.md) without making collection planning or retry recovery a
-prerequisite for the web application.
-
-This document complements [SPEC.md](SPEC.md), which takes precedence for graph
-identity, history, typing, and transaction validity. Command option spellings
-beyond those fixed in INTERFACES remain illustrative.
+Status: shared authoring contract for JSON/TOML change files, browser drafts,
+and the application service: the value encoding, proposals, plan IDs,
+references, and operations. [SPEC](SPEC.md) takes precedence for graph
+identity, history, typing, and transaction validity. Encodings follow the
+implementation; when one changes, update this document with it.
 
 ## 1. Purpose and model
 
@@ -32,9 +18,8 @@ one stores complete immutable entries. Later edits to a source file must not
 change stored payloads or reinterpret committed entries. Local operation names
 are authoring handles, not substitutes for exact identities in stored edges.
 
-A future [document-collection planner](BACKLOG.md#1-document-collections) can
-produce this same proposal type from intended document content and
-relationships.
+A future [document-collection planner](backlog/COLLECTIONS.md) can produce
+this same proposal type from intended document content and relationships.
 
 ## 2. JSON and TOML change files
 
@@ -92,12 +77,13 @@ details = { kind = "record", value = { owner = "Teto" } }
 }
 ```
 
-Every enumeration that the snapshot, analysis output, RPC, or change files
-carry spells its names in lowercase snake case, such as `node`, `revise`,
+Every enumeration that the snapshot, analysis output, RPC, or change files carry
+spells its names in lowercase snake case, such as `node`, `revise`,
 `suggestion`, or `false_positive`, and one whose alternatives carry members is
 tagged by a `kind` member beside them, as payload envelopes are. Section 2.5
-gives the entry shapes and [SPEC §8.2](SPEC.md#82-finding-identity-and-observations)
-the finding shapes.
+gives the entry shapes and
+[ANALYZERS §2](ANALYZERS.md#2-finding-identity-and-observations) the finding
+shapes.
 
 Empty lists and records retain their distinct kinds. Floats and null are not
 payload variants. Absent optional control fields are omitted when exporting
@@ -141,11 +127,11 @@ number parsing; otherwise a bare large integer may already have been rounded.
 Known potentially large control integers, including `EntryId.position`,
 `ViewId.end_exclusive`, and entry counts, use decimal strings directly, without
 payload wrappers. Their statically known types define range validation. Small
-bounded control values such as protocol error codes, source lines and
-columns, and operation indexes within one plan remain numbers. This applies consistently to application requests/results and files;
-it does not change the integer types used by the in-memory graph. These fields
-accept only decimal strings, with the same syntax as integer envelopes; bare
-numbers are not shorthand for them.
+bounded control values such as protocol error codes, source lines and columns,
+and operation indexes within one plan remain numbers. This applies consistently
+to application requests/results and files; it does not change the integer types
+used by the in-memory graph. These fields accept only decimal strings, with the
+same syntax as integer envelopes; bare numbers are not shorthand for them.
 
 #### Timestamp representation
 
@@ -164,7 +150,7 @@ static type and use the Serde string directly, without a payload wrapper.
 Export must preserve each represented core instant and its nanoseconds when
 read back by the same shared codec. The React client must retain full timestamp
 strings and decimal-string integers for the entire `i64` domain; see
-[the client contract](INTERFACES.md#5-react-client). Jiff documents its
+[the client contract](CLIENT.md#3-values). Jiff documents its
 [default timestamp serialization](https://docs.rs/jiff/latest/jiff/fmt/serde/timestamp/index.html).
 
 ### 2.2 Envelope and ordered entries
@@ -178,10 +164,10 @@ strings and decimal-string integers for the entire `i64` domain; see
 | `entries` | Yes | Ordered array of proposed entries; may be empty. |
 
 There is one value representation, with no separate value-profile selector.
-Optional fields are omitted when absent; JSON `null` is rejected rather than read
-as absence. There are no separate `database` or `base` fields. The host selects the database
-through the [path rule](INTERFACES.md#4-database-selection-and-concurrency).
-A supplied token asserts that this database and its current base match.
+Optional fields are omitted when absent; JSON `null` is rejected rather than
+read as absence. There are no separate `database` or `base` fields. The host
+selects the database through the [path rule](STORAGE.md#1-database-selection). A
+supplied token asserts that this database and its current base match.
 `acknowledges` is verified by replay and, on success, dismisses that finding
 atomically with the graph changes. There is no general `dismissals` list.
 
@@ -228,23 +214,16 @@ form, and `lc1` is the token version. Callers obtain a complete token from the
 shared mint operation and carry it verbatim.
 
 - The database UUID is the graph's persistent identity, independent of filename.
-- The graph revision UUID is stored in the snapshot envelope. Generate a fresh
-  UUID whenever graph contents or the exact ordered analyzer suite changes and
-  publish it atomically with that state. Equal-count divergent histories and
-  suite-only changes therefore invalidate old tokens. Dismissal edits, no-op
-  writes, and token minting leave this UUID unchanged.
+- The graph revision UUID names the stored graph/suite generation
+  ([STORAGE §3](STORAGE.md#3-graph-revision)). Any graph or suite change
+  rotates it, including equal-count divergence and suite-only changes, so old
+  tokens go stale; dismissal edits, no-op writes, and minting do not.
 - The proposal UUID distinguishes proposals against the same database/base.
   Mint a fresh identity for changed operations.
 
-The revision is an application-maintained generation identifier, not a content
-hash or a graph boundary. Verify the token's database/revision against the loaded
-snapshot, then retain the core's exact database, entry count/content, and ordered
-suite comparisons for prepared commit and publication. Moving or copying an
-entire snapshot preserves its identities; a subsequent graph/suite mutation
-allocates a fresh revision. Never combine a revision with unrelated graph state.
-Direct edits of the stored snapshot that retain its revision are outside this
-guarantee; use change files and application operations to mutate it. The revision
-cannot detect arbitrary manual content changes that leave its metadata intact.
+Verify the token's database/revision against the loaded snapshot, then retain
+the core's exact database, entry count/content, and ordered suite comparisons
+for prepared commit and publication.
 
 Minting is available through HTTP/CLI RPC and the `plan-id` convenience command.
 Browser-generated proposals, including exported suggestions, include a token;
@@ -272,7 +251,7 @@ payload = { title = "Buy groceries", status = "open" }
 All forms receive complete validation. Each application has a concrete base
 protected through publication. A token does not certify an earlier check, freeze
 analyzer versions or evaluation time, or recognize a completed retry. Durable
-retry recognition is [deferred](BACKLOG.md#7-deferred-receipts-and-retry-recovery).
+retry recognition is [deferred](backlog/RECEIPTS.md).
 
 ### 2.3 References and names
 
@@ -290,7 +269,8 @@ Proposal references use the same Serde enum representation in both formats:
 
 Search/selection helpers must materialize exact identities. There is no implicit
 lookup by title, root, path, or latest descendant. Collection URI spellings and
-context are a separate [backlogged](BACKLOG.md#14-destinations) authoring concern.
+context are a separate [backlogged](backlog/COLLECTIONS.md#4-destinations)
+authoring concern.
 
 ### 2.4 Node and edge operations
 
@@ -306,7 +286,9 @@ It may also have `predecessor` and `intent`:
 
 Omitting a field removes it from the successor payload, subject to schema rules.
 Patch/default/connection-preservation helpers must expand to complete nodes and
-explicit edges before checking. The format has no implicit reconnection.
+explicit edges before checking. The format has no implicit reconnection. Draft
+helpers preserve exact endpoints, require explicit split selection, and expose
+intermediate views.
 
 An edge requires `name`, `kind = "edge"`, `ty_name`, `from`, and `to`, with no payload
 or predecessor. Endpoint permissions and freshness are checked at its position.
@@ -384,54 +366,28 @@ nothing is declared. Forms in the React client generate exactly this encoding,
 so a declaration written by hand and one built in the browser are the same
 declaration.
 
-## 3. Planning, checking, and applying
+## 3. Checking and applying
 
-The synchronous application service owns proposal parsing/export, plan-ID
-minting, checking, graph/suite and dismissal persistence, and publication. CLI
-convenience commands, CLI RPC, and HTTP call the same operations. Revision intent
-is validated by `transaction::prepare` for every plan; source validation for
-explicit suggestions must remain consistent with
-`analysis::suggestion::prepare_suggestion`; exports use the shared `Proposal` type.
-No compatibility reader or migration is required.
-
-Keep dedicated change-file commands:
-
-```sh
-lifecore plan-id
-lifecore check changes.toml
-lifecore apply changes.toml
-lifecore check changes.json
-lifecore apply changes.json
-lifecore export changes.json --format toml
-```
-
-Analysis results pair each suggestion observation with a ready-made proposal, as
-described in [SUGGESTIONS](SUGGESTIONS.md#2-export). `export` converts any
-proposal between JSON and TOML, preserving `plan_id` and `acknowledges` verbatim;
-it neither refreshes a base nor checks acceptance. The collection planner remains
-deferred. `rpc` is independently the one-line request/response adapter specified
-in [INTERFACES](INTERFACES.md#2-cli-surface); it has no method
-argument or change-file option.
+The application service owns proposal decoding and export, plan-ID minting,
+checking, and application; the CLI commands
+([INTERFACES §2](INTERFACES.md#2-cli-surface)), CLI `rpc`, and HTTP call the
+same operations. Revision intent is validated by `transaction::prepare` for
+every plan; source validation for explicit suggestions must remain consistent
+with `analysis::suggestion::prepare_suggestion`. `export` converts any proposal
+between JSON and TOML, preserving `plan_id` and `acknowledges` verbatim; it
+neither refreshes a base nor checks acceptance.
 
 `check` does not append, rewrite the source, or mint a missing token. It freezes
-the decoded proposal, verifies any token/base, and evaluates every
-historical and proposed prefix under the selected suite and inputs. Reports
-include the selected database and exact
-base, ordered operations, exact references, provisional mappings, differences,
-relevant operation/field locations, and complete analysis context. Structurally
+the decoded proposal, verifies any token/base, and evaluates every historical
+and proposed prefix under the selected suite and inputs. Reports include the
+selected database and exact base, ordered operations, exact references,
+provisional mappings, differences, relevant operation/field locations, and
+complete analysis context. Structurally
 valid proposals with inconsistencies should retain their full analysis output
 for preview, including advisories, but must not be committable. Structural and
 analyzer execution errors remain distinct from emitted findings.
 Include the verified prospective acknowledgment, if any, while saving neither
 effect.
-
-Analysis outputs are ephemeral, and in-memory caching is deferred. The snapshot
-stores no report archive.
-After restart, analysis replays the requested history; history-mode selection
-is across prefixes within that run, not past runs at earlier evaluation times.
-Changed time or implementations may yield different findings. Persist dismissal
-records independently, including keys with no currently emitted observation.
-See [analysis lifetime](INTERFACES.md#6-analysis-lifetime-and-dismissal-persistence).
 
 `EvaluationInputs` defaults to absent time. If a user explicitly chooses current
 time, the host captures one instant before replay and reports it. Neither runner
@@ -450,85 +406,20 @@ When the proposal carries `acknowledges`, verify it against the same replay and
 publish the acknowledgment in the same snapshot as the graph changes, following
 [SUGGESTIONS](SUGGESTIONS.md#4-atomic-application).
 
-The complete plan publishes atomically after every prefix passes. Preserve writer
-exclusion from exact base verification through publication and synchronization.
-Intermediate committed boundaries remain inspectable. Never silently refresh a
+The complete plan publishes atomically after every prefix passes, under writer
+exclusion from exact base verification through synchronization
+([STORAGE §4](STORAGE.md#4-writers)). Intermediate committed boundaries remain
+inspectable. Never silently refresh a
 token, reconnect edges, or resume a partially committed suffix. After uncertain
 acknowledgment, support inspection without automatically retrying the mutation.
 
-## 8. Atomic publication
-
-These requirements belong to the shared synchronous application service used
-by HTTP and CLI; graph/analyzer libraries do not own filesystem publication.
-
-Store one JSON snapshot at the selected state path, defaulting to
-`./LifeCoreState.json`. Its envelope contains:
-
-| Field | Stored content |
-| --- | --- |
-| `graph_revision` | UUID identifying this graph/suite generation, as specified in section 2.2. |
-| `graph` | The complete graph: database identity (`id`), ordered `entries` in the vocabulary of [section 2.5](#25-entry-shaped-types), and the exact ordered analyzer `suite`, each a `name` and its verbatim `configuration`. |
-| `dismissals` | Exact finding keys, dismissal reasons, and optional notes. |
-
-Graph, revision, and dismissals form one atomic publication unit. There is no
-stored `AnalysisOutput` or report directory. Rewriting the full snapshot is an
-accepted initial cost. Reject malformed envelopes and structurally invalid
-graphs on load; ordinary inspection does not require installed analyzers.
-
-Append `.lock` to the state path for the stable lock file, defaulting to
-`./LifeCoreState.json.lock`. Keep this file across publications; do not lock the
-replaceable snapshot inode or delete/recreate the lock file on release. All
-cooperating writers use this target, including initialization and dismiss/restore.
-
-A mutation acquires writer exclusion, reloads the current snapshot, verifies
-the expected base, checks/prepares the change, and stages any verified
-acknowledgment alongside concurrent dismissal records.
-Allocate a fresh graph revision only if graph/suite state changes.
-Write the complete candidate to a temporary file in the same directory, with
-the published snapshot's permissions applied before any content, flush and
-synchronize it, then atomically replace the published snapshot. Synchronize
-the containing directory before releasing the lock and acknowledging success.
-Initialization uses no-clobber atomic publication and never replaces an existing
-state path: it hard-links the synchronized temporary file into place, so it
-requires a filesystem with hard links. No publication step may expose a partly
-written snapshot.
-
-Readers open one snapshot and read it completely; replacement leaves that open
-snapshot immutable. No shared read lock is needed. A read concurrent with a
-publication may return the complete old or new snapshot. Current-state reloads
-reopen the selected path; retaining an old open handle cannot observe replacement.
-
-- Exclude cooperating writers from exact base verification through publication;
-  two candidates prepared against one base cannot both replace it.
-- Initialize a new empty database without clobbering an existing one.
-- Publish a whole checked plan atomically. Failures before publication preserve
-  the previous stored state. Flush/synchronize required data before publication
-  and synchronize the containing storage after publication.
-- Distinguish post-publication synchronization failure from rollback: the new
-  state may already be visible, so acknowledgment can be uncertain.
-- Reload graph/suite, graph revision, and dismissal data without changing identities.
-  Dismiss/restore survives reload and absent current emission. Concurrent dismissal
-  edits reread under writer exclusion and preserve other writers' records.
-- Validate a supplied token's database/base expectation before preparation and
-  preserve the chosen concrete base through publication even when no token was
-  supplied. Persist the base identity consistently with the graph/suite state.
-- Publish graph changes and any acknowledgment as one unit. Invalid proposals
-  and pre-publication failures preserve both. A post-publication failure never
-  justifies claiming that one half rolled back.
-
-A failure before publication leaves the previous graph intact. After publication,
-failed synchronization or acknowledgment may leave the caller uncertain. Report
-that uncertainty together with the outcome the call would have returned,
-including the new graph revision and operation-to-entry mapping, and support
-inspection of the stored state; do not automatically repeat the changes. Token
-minting alone supplies no durable application receipt. Retry recovery is
-[deferred](BACKLOG.md#7-deferred-receipts-and-retry-recovery).
-
-## 9. Robustness scenarios to verify
+## 4. Acceptance scenarios
 
 These are behavioral acceptance scenarios for an implementation, not additional
-exceptions to the core contract. Collection and receipt-recovery scenarios are in
-[BACKLOG §8](BACKLOG.md#8-acceptance-scenarios).
+exceptions to the core contract. [STORAGE §6](STORAGE.md#6-acceptance-scenarios)
+lists those for storage and publication,
+[SUGGESTIONS §7](SUGGESTIONS.md#7-acceptance-scenarios) those for export and
+acknowledgment, and the [backlog](backlog/) those for collections and receipts.
 
 | Scenario | Required outcome |
 | --- | --- |
@@ -545,37 +436,11 @@ exceptions to the core contract. Collection and receipt-recovery scenarios are i
 | A minted token is supplied and database identity differs despite matching IDs/count | Reject before mutation. |
 | A token is malformed or uses an unknown version | Reject; do not fall back to applying without a token. |
 | Two proposals are minted against one database/base | Tokens share that database/base and have distinct proposal identities; minting leaves graph history unchanged. |
-| Supported writes change entries/suite, including equal-count divergence | Publish a fresh graph revision atomically and reject old tokens; require deliberate refresh/replanning. |
-| A dismissal changes, a no-op is written, or a token is minted | Preserve graph revision; existing plan bases remain valid. |
 | No token is supplied and the database changes between standalone check and apply | Check anew against the current state and apply only if valid; leave the source file unchanged. |
 | A token is supplied without a previous standalone check | Apply verifies its database/base and performs the full check itself. |
 | A standalone check used an earlier evaluation time or analyzer implementation | Apply checks using its selected context and reports the actual result. |
-| Initialization targets an existing database | Refuse without clobbering it. |
-| Publication fails before replacement | Leave prior state intact. |
-| Synchronization fails after publication | Report possible publication; permit state inspection and do not automatically retry. Receipt recovery is deferred. |
-| Dismissal is saved, reloaded, restored, or edited by concurrent frontends | Retain exact keys/reasons/notes and preserve each writer's update; never affect acceptance. |
-| A reader opens the snapshot during publication | Return one complete old/new snapshot, never mixed graph/revision/dismissal data. |
-| The application restarts | Reload graph/suite and dismissals; recompute analysis without a persisted report registry. |
 | History mode is requested after evaluation time or implementations change | Show replayed observations under the displayed new context, not an archive of prior runs. |
-| Writer advances the base during checking | Reject under writer exclusion before publishing any operation. |
 | Analyzer changes, disappears, fails, or receives a new evaluation time | Check anew; changed inputs may change diagnostics, and missing or failed analyzers reject application. |
 | Schema migration is valid only at the final view | Reject the first invalid prefix. |
 | Payloads of independent new roots are identical | Apply the core duplicate rule; do not invent identity fields. |
 | Check is run twice with identical view/context/inputs | Produce equivalent operations, ordering, and findings, accounting for independently allocated provisional IDs. |
-
-See [SUGGESTIONS acceptance scenarios](SUGGESTIONS.md#7-acceptance-scenarios)
-for export, acknowledgment verification, edits, empty actions, and restoration.
-
-## 10. Implementation boundaries
-
-One shared proposal representation, codec, checker, and application service
-serve the React client, HTTP RPC, CLI RPC, and change-file commands. Format and
-transport adapters cannot introduce unchecked writes or different domain rules.
-The application owns filesystem envelopes and publication; the graph and analyzer
-libraries remain synchronous and independent of HTTP and storage.
-
-The current round includes JSON/TOML change files, proposal export, optional plan
-IDs and minting, full check/apply, durable storage, and the React interface.
-Document checkout, link extraction, authority reconciliation, and durable receipt
-recovery remain [backlogged](BACKLOG.md). Future draft helpers must preserve
-exact endpoints, require explicit split selection, and expose intermediate views.

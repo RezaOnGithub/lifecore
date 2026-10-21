@@ -40,7 +40,7 @@ export function sameReference(
   );
 }
 
-// The evaluation-time choice of Check (INTERFACES §5): absent by default.
+// The evaluation-time choice of Check (CLIENT §4): absent by default.
 export type Evaluation =
   | { kind: "none" }
   | { kind: "now" }

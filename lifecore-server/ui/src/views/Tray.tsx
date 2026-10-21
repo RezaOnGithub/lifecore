@@ -15,7 +15,7 @@ import { OperationRows, rowsOf } from "./OperationRow.tsx";
 import { statusWord, TrayHeader } from "./TrayHeader.tsx";
 
 // Findings first emitted in the committed history: often many, and not
-// this draft's doing. Inconsistencies are never folded (SPEC §8.3), so they
+// this draft's doing. Inconsistencies are never folded (ANALYZERS §3), so they
 // are listed, those the base no longer emits included; the advisories still
 // at the base fold into one line with their counts until expanded, and
 // those no longer emitted there are only counted.

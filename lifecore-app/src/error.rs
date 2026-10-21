@@ -33,7 +33,7 @@ pub enum AppError {
     )]
     PublicationFailed { message: String },
     // The new state is already visible, so the caller gets the result it would
-    // have had and can inspect whether its write is there; see FILES 8.1.
+    // have had and can inspect whether its write is there; see STORAGE §5.
     #[error(
         "the new state was published, but synchronization failed, so it may or may not persist: {message}"
     )]

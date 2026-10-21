@@ -92,7 +92,7 @@ impl Limits {
     };
 }
 
-// The client's row label limit (INTERFACES 5.2), so a rendered node reads
+// The client's row label limit (UI §1), so a rendered node reads
 // like its table row.
 const LABEL_LIMIT: usize = 60;
 const GRAPHVIZ: &str = "dot";
@@ -109,13 +109,13 @@ pub(crate) fn render(query: &ViewQuery, format: RenderFormat) -> Result<Rendered
     Ok(Rendered { format, text })
 }
 
-// The empty type name is legal and reads as on screen (INTERFACES 5.2).
+// The empty type name is legal and reads as on screen (UI §1).
 fn type_name(name: &str) -> &str {
     if name.is_empty() { "(unnamed)" } else { name }
 }
 
-// The payload text a row is labeled by, as the client labels it (INTERFACES
-// 5.2): `title`, then `name`, then the top-level text field whose name sorts
+// The payload text a row is labeled by, as the client labels it (UI §1):
+// `title`, then `name`, then the top-level text field whose name sorts
 // first by bytes, which is the client's code point order; blank text does not
 // count.
 fn label_text(node: &Node) -> Option<&str> {

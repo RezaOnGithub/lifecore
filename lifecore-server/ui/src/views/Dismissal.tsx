@@ -111,7 +111,7 @@ function sameRecord(a: Dismissal | null, b: Dismissal | null): boolean {
     : a.reason === b.reason && a.note === b.note;
 }
 
-// Dismissal is display state only (SPEC §8.3): it hides an advisory from
+// Dismissal is display state only (ANALYZERS §3): it hides an advisory from
 // reports and never changes what blocks a change.
 export function DismissalBar({
   group,

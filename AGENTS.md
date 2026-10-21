@@ -1,15 +1,24 @@
 # AGENTS.md
 
 LifeCore is an experimental Rust database with an append-only, typed graph.
-Remaining work is in [docs/PLAN.md](docs/PLAN.md). [docs/SPEC.md](docs/SPEC.md)
-defines graph semantics, and [docs/MESSAGES.md](docs/MESSAGES.md) traces the
-current analyzer message flow. The proposed application is specified in
-[docs/INTERFACES.md](docs/INTERFACES.md) (commands, RPC, database selection,
-React), [docs/FILES.md](docs/FILES.md) (proposal encoding, plan IDs, snapshot
-publication), and [docs/SUGGESTIONS.md](docs/SUGGESTIONS.md) (suggestion export
-and acknowledgment); [docs/BACKLOG.md](docs/BACKLOG.md) keeps the backlogged
-collection and receipt contracts. Read the relevant document before implementing
-that behavior.
+Remaining work is in [PLAN](docs/PLAN.md). Read the document that owns a
+behavior before implementing it:
+
+- Core: [SPEC](docs/SPEC.md) (graph semantics, validation, inspection),
+  [ANALYZERS](docs/ANALYZERS.md) (execution, finding identity, dismissal), and
+  [MESSAGES](docs/MESSAGES.md), which traces the current analyzer message flow.
+  [PREFIX-VALIDITY](docs/PREFIX-VALIDITY.md) records why every prefix is
+  validated, and [PERFORMANCE](docs/PERFORMANCE.md) what checking costs.
+- Application: [INTERFACES](docs/INTERFACES.md) (architecture, CLI, RPC
+  envelope, server access, analysis lifetime), [RPC](docs/RPC.md) (methods and
+  errors), [FILES](docs/FILES.md) (proposal encoding and plan IDs),
+  [STORAGE](docs/STORAGE.md) (database selection, snapshot, locking,
+  publication), and [SUGGESTIONS](docs/SUGGESTIONS.md) (suggestion export and
+  acknowledgment).
+- Browser client: [CLIENT](docs/CLIENT.md) (contract, values, build, tests)
+  and [UI](docs/UI.md) (presentation decisions).
+- [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
+  contracts.
 
 Keep the graph/analyzer libraries and the application service synchronous.
 Persistence belongs to the shared application layer; async HTTP belongs to the
@@ -59,9 +68,8 @@ Clippy with `-D warnings`. Keep checks and formatting scoped to the change.
 
 ## Invariants
 
-[SPEC](docs/SPEC.md) owns the graph and analyzer contracts and
-[FILES](docs/FILES.md) the application ones; this list names the hazards an edit
-is most likely to trip, with the owning section.
+The documents above own the contracts; this list names the hazards an edit is
+most likely to trip, with the owning section.
 
 - Views are bounded. `View::prefix(end_exclusive)` only narrows `[0, end_exclusive)`;
   lookups require an `EntryId`, not a position; a prefix-bounded value reveals
@@ -90,7 +98,7 @@ is most likely to trip, with the owning section.
   ([SPEC §7.4](docs/SPEC.md#74-failure-and-persistence)).
 - Only a `LockedSnapshot`, read under the writer lock for its own state path,
   can replace a published snapshot; unlocked reads are previews
-  ([FILES §8](docs/FILES.md#8-atomic-publication)).
+  ([STORAGE §4](docs/STORAGE.md#4-writers)).
 - Structural validation failures stay distinct from analyzer diagnostics.
   TypeCheck is a configured analyzer with a fixed built-in metatype and no
   bootstrap node. Empty, correctly shaped collections are present
@@ -100,16 +108,16 @@ is most likely to trip, with the owning section.
   implicitly, and missing factories are errors. Keep full-prefix replay, typed
   findings asserted structurally in tests, and third-party `dyn Analyzer`
   implementations ([SPEC §8](docs/SPEC.md#8-analyzers),
-  [§8.1](docs/SPEC.md#81-execution-and-normalization)).
+  [ANALYZERS §1](docs/ANALYZERS.md#1-execution-and-normalization)).
 - Finding identity is the complete `FindingKey`: database, registered name, exact
   version, verbatim configuration string, category, and the opaque certificate.
   Shared code never parses certificates or substitutes digests. Boundaries,
   wording, and actions belong to the observation, which records the contiguous
   prefix range over which its content was emitted
-  ([SPEC §8.2](docs/SPEC.md#82-finding-identity-and-observations)).
+  ([ANALYZERS §2](docs/ANALYZERS.md#2-finding-identity-and-observations)).
 - Dismissal, `sticky`, and display filtering never affect the inconsistency
   gate; non-emission or supersession never establishes resolution
-  ([SPEC §8.3](docs/SPEC.md#83-presentation-and-dismissal)).
+  ([ANALYZERS §3](docs/ANALYZERS.md#3-presentation-and-dismissal)).
 - Test history-sensitive changes at several boundaries, including before and
   after the relevant append.
 

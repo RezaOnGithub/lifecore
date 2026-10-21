@@ -1,22 +1,18 @@
-# Backlogged authoring contracts
+# Markdown document collections
 
-Status: contracts for Markdown document collections and durable application
-receipts, retained for a later round. [PLAN §6](PLAN.md#6-backlog) lists them as
-backlog; nothing here is a prerequisite for the web application. They build on
-the shared proposal encoding in [FILES](FILES.md), which takes precedence where
-the two overlap, and [SPEC](SPEC.md) governs graph semantics. Compatibility is
-not a concern, so these sections will be revised together with their
-implementation rather than treated as fixed.
+Status: backlogged contract, retained for a later round; nothing here is a
+prerequisite for the web application. It builds on the shared proposal
+encoding in [FILES](../FILES.md), which takes precedence where the two overlap,
+and [SPEC](../SPEC.md) governs graph semantics. These sections will be revised
+together with their implementation rather than treated as fixed.
 
-Sections 1–4 describe collections: checkout state, the Markdown format with
-embedded TOML metadata, links as relationship annotations, relationship
-authority, compiling a collection to a change file, and ordering. Sections 5 and
-6 cover source writeback and historical rendering. Section 7 covers durable
-receipts and retry recovery. Section 8 lists the acceptance scenarios.
+The selected format embeds TOML in a YAML frontmatter `lifecore` string and
+uses CommonMark body links, reusing the shared payload encoding. The contract
+covers checkout and reconciliation, document identities, relationship
+authority, manifests, retained historical link resolution, and recoverable
+source-file writeback, which depends on [durable receipts](RECEIPTS.md).
 
-## 1. Document collections
-
-### 1.1 Checkout state and document identity
+## 1. Checkout state and document identity
 
 A collection is a declared set of Markdown files plus workspace metadata. The
 metadata records a collection identity, database identity, fixed base boundary,
@@ -37,7 +33,7 @@ Missing tracked files are unresolved removals, not instructions to delete nodes.
 An explicit untrack action only removes collection membership. Archiving, if
 desired, is a typed payload revision with application-defined meaning.
 
-### 1.2 Markdown with TOML embedded in YAML frontmatter
+## 2. Markdown with TOML embedded in YAML frontmatter
 
 Managed documents begin with a YAML frontmatter mapping delimited by unindented
 `---` lines. The opening delimiter is the first line; the next unindented closing
@@ -84,9 +80,10 @@ Compare [the experiment](./experiment.md).
 [underlying-concept]: lifecore:entry/96
 ```
 
-Inside the decoded TOML, `document_id`, `ty_name`, and `body_field` are required. `payload` is a table, empty if omitted. For an existing document,
-`revision` must agree with checkout metadata. For a new root it is absent.
-Split metadata is described in section 4.3.
+Inside the decoded TOML, `document_id`, `ty_name`, and `body_field` are
+required. `payload` is a table, empty if omitted. For an existing document,
+`revision` must agree with checkout metadata. For a new root it is absent. Split
+metadata is described in section 7.3.
 
 Other YAML fields, such as `tags` in the example, belong to other tools or the
 user. Preserve them during LifeCore writeback; they do not implicitly become
@@ -94,7 +91,7 @@ graph payload or control metadata. Unknown control fields inside the embedded
 TOML remain errors. Its payload uses the same shared Serde value representation
 as JSON/TOML change files, including explicit timestamp and record wrappers.
 YAML only carries that TOML text; it does not decode graph values.
-YAML-native LifeCore metadata is [backlogged](PLAN.md#further-collection-format-and-tooling-work).
+YAML-native LifeCore metadata is [deferred](#10-deferred-format-and-tooling-work).
 
 An indented delimiter-looking line inside the YAML scalar belongs to its TOML
 text and does not close the frontmatter. TOML multiline values retain their
@@ -115,7 +112,7 @@ TOML without changing the decoded TOML metadata values does not change the graph
 payload. Reformatting the Markdown body can change its stored string even when
 rendering looks the same. No formatter runs implicitly.
 
-### 1.3 Links and relationship annotations
+## 3. Links and relationship annotations
 
 The body uses standard CommonMark inline links and reference links, with ordinary
 reference definitions. Relationship annotations live in the embedded TOML;
@@ -161,7 +158,7 @@ Syntax that CommonMark treats as plain text, such as an undefined unannotated
 reference label, is not a graph link. A linter may warn about likely unfinished
 links, but must not invent relationships from bracket-shaped text.
 
-### 1.4 Destinations
+## 4. Destinations
 
 | Destination | Interpretation |
 | --- | --- |
@@ -217,7 +214,7 @@ post-writeback checkout text. Only recorded writeback substitutions receive this
 treatment; arbitrary body edits remain revisions. A subsequent real revision
 stores its complete then-current body, including the resolved URI spelling.
 
-## 2. Relationship authority and database agreement
+## 5. Relationship authority and database agreement
 
 Authoring authority concerns who may interpret removing a declaration as a
 request to retire a relationship. It does not determine whether an edge exists:
@@ -259,7 +256,7 @@ not claim that a document lists all its connections when it lists only some.
 Database publication and collection writeback are separate. The frontend must
 display when the graph has committed but document synchronization is incomplete.
 
-## 3. Compiling a collection to a change file
+## 6. Compiling a collection to a change file
 
 The planner must:
 
@@ -306,9 +303,9 @@ links requires regenerating or explicitly reconciling the source correspondence.
 There is no hidden second source of mutations in the manifest: all core appends
 appear in the TOML `entries` array.
 
-## 4. Ordering and graph changes
+## 7. Ordering and graph changes
 
-### 4.1 Editing both ends of a link
+### 7.1 Editing both ends of a link
 
 Suppose current A links to current B. The collection edits B and removes A's
 link to it. A possible plan is:
@@ -343,7 +340,7 @@ modification time must not be treated as user intent. The proposed order must be
 visible and editable; the planner must not silently reorder a checked plan to
 make validation succeed.
 
-### 4.2 Retaining links and removing edges
+### 7.2 Retaining links and removing edges
 
 When only B changes, an unchanged file link from A to B requests a new edge to
 B's selected successor. This can leave A's payload revision unchanged. The
@@ -360,7 +357,7 @@ external source. Revising the containing document makes the old edge historical
 and permits recreation of its other desired incident edges. Any chosen endpoint
 revision and resulting reconnections must appear explicitly in the plan.
 
-### 4.3 Splits
+### 7.3 Splits
 
 A split is explicit. New successor documents receive new `document_id` values,
 omit `revision`, and specify `predecessor` as an exact existing reference with
@@ -378,7 +375,7 @@ After success, writeback records each new revision and removes the draft split
 fields. Core transition permissions still apply to every successor, including
 branches from historical predecessors.
 
-## 5. Source edits and file writeback
+## 8. Source edits and file writeback
 
 Before starting collection application, input files must match the frozen source
 digests. A user edit after planning requires regenerating the collection plan.
@@ -399,7 +396,7 @@ meaning of unchanged TOML values. If a file changed concurrently, present the
 frozen, committed, and working versions for reconciliation instead of overwriting
 it.
 
-## 6. Historical rendering and integrity
+## 9. Historical rendering and integrity
 
 Retain the source and resolution information needed to interpret links at each
 committed boundary, including intermediate prefixes. A relative path or alias
@@ -420,36 +417,15 @@ Export/backup must include retained authoring records to preserve full collectio
 and historical-link behavior. Importing history still requires all-prefix core
 integrity checks, not merely checking the final documents.
 
-## 7. Deferred receipts and retry recovery
+## 10. Deferred format and tooling work
 
-This future application-service work is outside the current round. It preserves
-the recovery requirements for a later implementation; the
-[optional token](FILES.md#optional-structured-plan-identity) does not claim to
-implement them. Plans participating in retry recovery would
-carry `plan_id`; omitted tokens carry no retry identity guarantee.
+YAML-native LifeCore metadata, custom-scheme clickability in external
+renderers, and installation of desktop URI handlers remain deferred beyond the
+first collection implementation.
 
-- Persist the frozen plan identity/content, actual base, check context, and
-  assigned operation IDs in the same atomic publication as the graph. A
-  workspace-only journal written afterward cannot close the crash window.
-- Retrying an identical completed plan returns its receipt without appending
-  again. Reusing its identity with different content is an error.
-- Verify identity/content and look up the receipt before checking the original
-  expected base, since a successful application has itself advanced that base.
-- Recover uncertain acknowledgment and any backlogged collection writeback
-  without repeating graph appends. Receipts are auxiliary persistence metadata,
-  not graph entries.
+## 11. Acceptance scenarios
 
-The future design must cover empty plans as well as plans that change the graph.
-Replay-verified acknowledgment records nothing about prior use. An empty
-suggestion can acknowledge a finding without changing graph revision; restoring
-and reapplying it may acknowledge again. A dismissal record is not a receipt.
-Future recovery must include the combined graph/dismissal result and avoid
-silently reapplying either effect after a later restore.
-Receipt retention, encoding, and storage layout remain decisions for that work.
-
-## 8. Acceptance scenarios
-
-Deferred collection scenarios:
+Collection behavior:
 
 | Scenario | Required outcome when collections are implemented |
 | --- | --- |
@@ -469,7 +445,7 @@ Deferred collection scenarios:
 | Old document contains a renamed path or plan-local alias | Resolve from retained view-specific information, never today's files. |
 | Authoring metadata is lost or incompatible | Preserve core readability; block unsafe collection reconciliation. |
 
-Deferred collection-format acceptance scenarios:
+Collection format:
 
 | Scenario | Required outcome when collections are implemented |
 | --- | --- |
@@ -479,12 +455,3 @@ Deferred collection-format acceptance scenarios:
 | The `lifecore` field is missing, duplicated, a YAML mapping, or invalid TOML text | Reject managed-document metadata; YAML-native LifeCore fields remain backlogged. |
 | Revision writeback encounters unrelated YAML fields | Preserve those fields without importing them into the graph payload. |
 | A renderer does not make a valid `lifecore:` link clickable | Collection parsing and graph-link validation still work; renderer integration and URI-handler installation remain separate future work. |
-
-Deferred receipt acceptance scenarios:
-
-| Scenario | Required outcome when receipt recovery is implemented |
-| --- | --- |
-| Crash occurs after commit but before client acknowledgment | Recover the operation receipt; do not append twice. |
-| A completed plan is retried after its base has advanced | Verify plan identity/content and return the receipt before stale-base rejection. |
-| Plan identity is reused with changed content | Reject the conflicting identity, even if the earlier plan committed. |
-| An empty plan is retried | Recognize its completed application through its receipt even if the graph/suite state did not change. |

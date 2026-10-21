@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Firefox is the tested browser; others are backlogged (PLAN §6).
+// Firefox is the tested browser; others are backlogged (PLAN §3).
 export default defineConfig({
   testDir: "e2e",
   globalSetup: "./e2e/global-setup.ts",
