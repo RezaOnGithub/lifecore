@@ -11,6 +11,7 @@ import type {
   ProposalReport,
   Result,
 } from "../contract.ts";
+import type { Alias } from "../model/aliases.ts";
 import { RpcError, TransportError } from "../rpc.ts";
 import { type Call, DraftActions } from "./actions.ts";
 import { applicable, type DraftState, initialDraft } from "./model.ts";
@@ -57,6 +58,7 @@ function harness(
     method: M,
     params: Params<M>,
   ) => Promise<Result<M>> | Result<M>,
+  aliases: readonly Alias[] = [],
 ) {
   let state: DraftState = initialDraft;
   const calls: { method: Method; params: unknown; state: DraftState }[] = [];
@@ -80,6 +82,7 @@ function harness(
     () => {
       refreshed += 1;
     },
+    () => aliases,
   );
   return {
     actions,
@@ -395,6 +398,32 @@ test("revise keeps the node's current edges right after it; branch reads none", 
   h.actions.revise(n, "branch");
   await settle();
   assert.equal(h.count("entries.inspect"), 1);
+});
+
+test("default names skip kept names, and a revise takes its node's free kept name", async () => {
+  const n = node("1");
+  const kept = (name: string, position: string): Alias => ({
+    name,
+    id: id(position),
+    kind: "node",
+    ty_name: "Task",
+  });
+  const h = harness(
+    answers({
+      ...minted,
+      "entries.inspect": () => inspection(n, []),
+    }),
+    [kept("chores", "1"), kept("errands", "1"), kept("task_1", "7")],
+  );
+  assert.equal(h.actions.addNode("Task"), "task_2");
+  assert.equal(h.actions.revise(n, "revise"), "chores");
+  // The first free kept name: chores is now the draft's.
+  assert.equal(h.actions.revise(n, "revise"), "errands");
+  assert.equal(h.actions.revise(n, "revise"), "task_3");
+  // A branch passes no name on, so it takes a default one.
+  assert.equal(h.actions.revise(n, "branch"), "task_4");
+  assert.equal(h.actions.connect(n.id), "edge_1");
+  await settle();
 });
 
 test("a late edge answer for a removed revision lands nowhere, even under the same name", async () => {

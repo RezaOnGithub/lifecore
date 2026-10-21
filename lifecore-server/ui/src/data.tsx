@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type {
@@ -17,6 +18,18 @@ import type {
   TypeSchema,
   TypeSummary,
 } from "./contract.ts";
+import {
+  type Alias,
+  type AppliedName,
+  aliasIndex,
+  aliasNameError,
+  moveAliases,
+  recordApplied,
+  renameAlias,
+  type Target,
+  withAlias,
+  withoutAlias,
+} from "./model/aliases.ts";
 import { entryKey, pastBoundary, rowLabel } from "./model/labels.ts";
 import {
   emptyPlaces,
@@ -313,6 +326,10 @@ export function schemaOf(
     : null;
 }
 
+// `latestAliases` reads the names as last rendered and keeps its identity,
+// for the draft's default names. Naming an entry is refused, leaving the
+// names as they are, when the name breaks the grammar or names another
+// entry; so is a rename.
 export interface PlacesApi {
   places: Places;
   visit: (place: Place) => void;
@@ -320,9 +337,27 @@ export interface PlacesApi {
   unpin: (id: EntryId) => void;
   saveView: (name: string, form: ExploreForm) => void;
   removeView: (name: string) => void;
+  latestAliases: () => readonly Alias[];
+  recordApplied: (names: readonly AppliedName[]) => void;
+  nameEntry: (alias: Alias) => void;
+  renameAlias: (from: string, to: string) => void;
+  removeAlias: (name: string) => void;
+  moveAliases: (from: EntryId, to: Target) => void;
 }
 
 const PlacesContext = createContext<PlacesApi | null>(null);
+
+// The names shown beside each entry's position, by entry key; empty outside
+// a PlacesProvider.
+const AliasContext = createContext<ReadonlyMap<string, readonly string[]>>(
+  new Map(),
+);
+
+const noNames: readonly string[] = [];
+
+export function useEntryNames(id: EntryId): readonly string[] {
+  return useContext(AliasContext).get(entryKey(id)) ?? noNames;
+}
 
 export function usePlaces(): PlacesApi {
   const places = useContext(PlacesContext);
@@ -368,10 +403,19 @@ export function PlacesProvider({
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [database]);
+  const latest = useRef(places.aliases);
+  useEffect(() => {
+    latest.current = places.aliases;
+  }, [places.aliases]);
   // The actions keep their identity across changes, so an effect that
   // records a visit does not run again because the places changed.
-  const actions = useMemo(
-    () => ({
+  const actions = useMemo(() => {
+    const names = (change: (aliases: Alias[]) => Alias[]) =>
+      setPlaces((current) => {
+        const aliases = change(current.aliases);
+        return aliases === current.aliases ? current : { ...current, aliases };
+      });
+    return {
       visit: (place: Place) => setPlaces((current) => visit(current, place)),
       togglePin: (place: Place) =>
         setPlaces((current) => togglePin(current, place)),
@@ -380,9 +424,32 @@ export function PlacesProvider({
         setPlaces((current) => saveView(current, name, form)),
       removeView: (name: string) =>
         setPlaces((current) => removeView(current, name)),
-    }),
-    [],
-  );
+      latestAliases: () => latest.current,
+      recordApplied: (applied: readonly AppliedName[]) =>
+        names((aliases) => recordApplied(aliases, applied)),
+      nameEntry: (alias: Alias) =>
+        names((aliases) =>
+          aliasNameError(aliases, alias.name, alias.id) === null
+            ? withAlias(aliases, alias)
+            : aliases,
+        ),
+      renameAlias: (from: string, to: string) =>
+        names((aliases) => renameAlias(aliases, from, to)),
+      removeAlias: (name: string) =>
+        names((aliases) => withoutAlias(aliases, name)),
+      moveAliases: (from: EntryId, to: Target) =>
+        names((aliases) => moveAliases(aliases, from, to)),
+    };
+  }, []);
   const value = useMemo(() => ({ places, ...actions }), [places, actions]);
-  return <PlacesContext value={value}>{children}</PlacesContext>;
+  const { asOf } = useData();
+  const index = useMemo(
+    () => aliasIndex(places.aliases, asOf),
+    [places.aliases, asOf],
+  );
+  return (
+    <PlacesContext value={value}>
+      <AliasContext value={index}>{children}</AliasContext>
+    </PlacesContext>
+  );
 }

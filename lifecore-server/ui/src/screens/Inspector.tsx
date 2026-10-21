@@ -48,6 +48,7 @@ import {
 } from "../model/schema.ts";
 import { defaultInspectorView, type InspectorView } from "../navigation.ts";
 import { EntryFindings } from "../views/EntryFindings.tsx";
+import { EntryNames } from "../views/Names.tsx";
 import { PayloadTable, RawJson, SchemaView } from "../views/Payload.tsx";
 import { RelationshipOutline } from "../views/RelationshipOutline.tsx";
 import { ResolutionBadge } from "../views/widgets.tsx";
@@ -335,6 +336,7 @@ function NodeInspection({
         )}
         <ViewNote id={entry.id} view={view} />
       </div>
+      <EntryNames entry={entry} lineage={lineage} settled={settled} />
       <div className="row">
         <button type="button" onClick={() => onExplore(entry.id)}>
           Explore from here
@@ -521,6 +523,7 @@ function EdgeInspection({
         <CurrentBadge current={entry.current} kind="edge" />
         <ViewNote id={entry.id} view={view} />
       </div>
+      <EntryNames entry={entry} settled />
       <table className="payload">
         <tbody>
           <tr>

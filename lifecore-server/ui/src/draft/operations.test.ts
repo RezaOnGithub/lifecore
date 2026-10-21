@@ -4,6 +4,7 @@ import type { EntryChange, EntryRecord, ProposalEntry } from "../contract.ts";
 import { isUnset } from "./model.ts";
 import {
   appendOperations,
+  appliedNames,
   canonicalJson,
   defaultName,
   endpointWarnings,
@@ -56,6 +57,72 @@ test("default names lower the type name and take the first free number", () => {
   assert.equal(defaultName([], ""), "op_1");
   assert.equal(uniqueName([task], "task_1"), "task_1_2");
   assert.equal(uniqueName([task], "other"), "other");
+  // Names kept for entries are skipped too.
+  assert.equal(defaultName([task], "Task", new Set(["task_2"])), "task_3");
+  assert.equal(
+    suggestedOperations(
+      [],
+      [{ kind: "node", ty_name: "Task", payload: {} }],
+      new Set(["task_1"]),
+    )[0]?.name,
+    "task_2",
+  );
+});
+
+test("an applied request passes names along revises and kept edges only", () => {
+  const branch: ProposalEntry = {
+    name: "task_3",
+    kind: "node",
+    ty_name: "Task",
+    predecessor: { existing: id("1") },
+    intent: "branch",
+    payload: {},
+  };
+  const existingRevise: ProposalEntry = {
+    ...branch,
+    name: "task_4",
+    intent: "revise",
+  };
+  const kept: ProposalEntry = {
+    name: "task_4_keep_2",
+    kind: "edge",
+    ty_name: "DependsOn",
+    from: { added: "task_4" },
+    to: { existing: id("3") },
+  };
+  const request = [task, revision, branch, existingRevise, kept, edge];
+  const operations = request
+    .filter((entry) => entry !== edge)
+    .map((entry, index) => ({
+      name: entry.name,
+      entry: id(String(10 + index)),
+    }));
+  const names = appliedNames(request, operations, {
+    task_4_keep_2: { revision: "task_4", predecessor: id("1"), edge: id("2") },
+  });
+  assert.deepEqual(
+    names.map((n) => [n.name, n.id.position, n.follows?.position, n.derived]),
+    [
+      ["task_1", "10", undefined, false],
+      // A revise of an earlier operation follows its assigned id.
+      ["task_2", "11", "10", false],
+      // A branch passes nothing on.
+      ["task_3", "12", undefined, false],
+      ["task_4", "13", "1", false],
+      ["task_4_keep_2", "14", "2", true],
+      // An operation without an assigned id is left out.
+    ],
+  );
+  // A kept edge whose revision no longer revises its node is an ordinary
+  // edge: it passes nothing on and its name names it.
+  const moved = appliedNames(request, operations, {
+    task_4_keep_2: { revision: "task_4", predecessor: id("9"), edge: id("2") },
+  });
+  assert.deepEqual(moved.map((n) => [n.name, n.follows, n.derived]).at(-1), [
+    "task_4_keep_2",
+    null,
+    false,
+  ]);
 });
 
 test("removing a predecessor leaves it unset with its intent, not a root", () => {

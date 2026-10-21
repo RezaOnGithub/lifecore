@@ -126,6 +126,12 @@ export function AppliedBanner({ applied }: { applied: Applied }) {
       )}
       . Assigned ids:
       <AssignedIds operations={applied.operations} />
+      {applied.names.some((name) => !name.derived) && (
+        <p className="note">
+          Their names stay beside their positions and under Names in the
+          sidebar.
+        </p>
+      )}
       {counts !== null && (
         <p className="note" data-testid="applied-findings">
           Findings: {countWords(counts.total)}; introduced by this change:{" "}

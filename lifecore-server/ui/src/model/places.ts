@@ -1,4 +1,5 @@
 import type { EntryId, EntryKind } from "../contract.ts";
+import { type Alias, readAliases } from "./aliases.ts";
 import { isRecord } from "./guards.ts";
 import { sameId } from "./labels.ts";
 import { type ExploreForm, readEntryId, readForm } from "./query.ts";
@@ -18,16 +19,23 @@ export interface SavedView {
 }
 
 // Per database: recently inspected entries, most recent first; pinned
-// entries and saved Explore forms in the order they were added.
+// entries and saved Explore forms in the order they were added; and the
+// names kept for entries, in name order.
 export interface Places {
   recent: Place[];
   pinned: Place[];
   views: SavedView[];
+  aliases: Alias[];
 }
 
 export const RECENT_LIMIT = 15;
 
-export const emptyPlaces: Places = { recent: [], pinned: [], views: [] };
+export const emptyPlaces: Places = {
+  recent: [],
+  pinned: [],
+  views: [],
+  aliases: [],
+};
 
 export function placesKey(database: string): string {
   return `lifecore.places.${database}`;
@@ -154,6 +162,7 @@ export function readPlaces(value: unknown): Places {
     recent: readList(value.recent, readPlace).slice(0, RECENT_LIMIT),
     pinned: readList(value.pinned, readPlace),
     views: readList(value.views, readView),
+    aliases: readAliases(value.aliases),
   };
 }
 

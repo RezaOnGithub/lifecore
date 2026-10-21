@@ -343,6 +343,15 @@ test("applied removes only the operations of the request, by name and content", 
     entries: [{ ...extra, from: { existing: id("5") } }],
   });
   assert.equal(applied.applied?.graph_revision, "r2");
+  // The names the request's operations carry on, the revision following
+  // the entry assigned to the operation it revises.
+  assert.deepEqual(
+    applied.applied?.names.map((n) => [n.name, n.id, n.follows]),
+    [
+      ["task_1", id("4"), null],
+      ["task_2", id("5"), id("4")],
+    ],
+  );
   assert.match(applied.notices[0]?.text ?? "", /kept 1 operation/);
   const all = draftReducer(sent, {
     kind: "applied",
@@ -409,6 +418,10 @@ test("an uncertain apply spends the check and waits for the user's decision", ()
   assert.deepEqual(present.applied?.operations, [
     { name: "task_1", entry: id("4") },
   ]);
+  assert.deepEqual(
+    present.applied?.names.map((n) => [n.name, n.id]),
+    [["task_1", id("4")]],
+  );
 });
 
 test("kept edges land only while the operation still revises the node", () => {

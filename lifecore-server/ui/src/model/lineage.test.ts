@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { NodeEntry } from "../contract.ts";
-import { lineageRows } from "./lineage.ts";
+import { currentDescendants, lineageRows } from "./lineage.ts";
 
 function node(position: string, predecessor?: string): NodeEntry {
   const entry: NodeEntry = {
@@ -47,4 +47,28 @@ test("a node whose predecessor is not listed is shown as a root", () => {
       ["6", 1],
     ],
   );
+});
+
+test("current descendants follow chains and splits below the node only", () => {
+  const record = (position: string, predecessor?: string) => {
+    const entry = node(position, predecessor);
+    return { ...entry, current: true };
+  };
+  // 1 ← 2 ← 4, 2 ← 5 (a split), and 1 ← 3, whose subtree is not below 2.
+  const lineage = [
+    { ...record("1"), current: false },
+    { ...record("2", "1"), current: false },
+    { ...record("3", "1"), current: false },
+    record("4", "2"),
+    record("5", "2"),
+    record("6", "3"),
+  ];
+  const positions = (start: string) =>
+    currentDescendants(lineage, { origin: "o", position: start }).map(
+      (n) => n.id.position,
+    );
+  assert.deepEqual(positions("1"), ["4", "5", "6"]);
+  assert.deepEqual(positions("2"), ["4", "5"]);
+  assert.deepEqual(positions("3"), ["6"]);
+  assert.deepEqual(positions("4"), []);
 });

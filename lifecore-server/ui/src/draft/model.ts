@@ -14,6 +14,7 @@ import type {
   Uuid,
 } from "../contract.ts";
 import type { PickRole } from "../editors/OperationEditor.tsx";
+import type { AppliedName } from "../model/aliases.ts";
 
 // An endpoint the user has yet to pick. The contract has no "absent" edge
 // endpoint or predecessor, so an empty identity stands in; it is never sent
@@ -150,10 +151,13 @@ export interface Notice {
   offer: { label: string; remove: string[] } | null;
 }
 
+// `names` is what the apply means for the names kept for entries; the
+// provider hands it on once, when the record is made.
 export interface Applied {
   graph_revision: Uuid | null;
   operations: OperationEntry[];
   report: ProposalReport | null;
+  names: AppliedName[];
 }
 
 export interface Picking {

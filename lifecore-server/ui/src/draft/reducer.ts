@@ -36,6 +36,7 @@ import {
 } from "./model.ts";
 import {
   appendOperations,
+  appliedNames,
   forwardReferences,
   renameReferences,
   uniqueName,
@@ -99,6 +100,10 @@ export type DraftAction =
   // Another tab's stored record of this draft; `refused` when this tab's
   // last change was not saved over it.
   | { kind: "adopt"; stored: Stored | null; refused?: boolean };
+
+function sentOf(request: string): ProposalEntry[] {
+  return (JSON.parse(request) as Proposal).entries;
+}
 
 // The actions that change the operations; none lands while the draft is
 // frozen, so it stays what was sent. Kept edges and Replan say why they
@@ -305,15 +310,18 @@ export function draftReducer(
         pending: "apply",
         problem: null,
       };
-    case "applied":
+    case "applied": {
+      const { operations } = action.result.report;
       return {
-        ...published(state, action.request, action.result.report.operations),
+        ...published(state, action.request, operations),
         applied: {
           graph_revision: action.result.graph_revision,
-          operations: action.result.report.operations,
+          operations,
           report: action.result.report,
+          names: appliedNames(sentOf(action.request), operations, state.kept),
         },
       };
+    }
     case "rejected":
       return {
         ...state,
@@ -388,6 +396,11 @@ export function draftReducer(
                 graph_revision: outcome?.graph_revision ?? null,
                 operations,
                 report: outcome?.report ?? null,
+                names: appliedNames(
+                  sentOf(uncertain.request),
+                  operations,
+                  state.kept,
+                ),
               },
       };
     }

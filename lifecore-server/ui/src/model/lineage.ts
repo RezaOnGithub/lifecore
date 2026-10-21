@@ -1,4 +1,4 @@
-import type { NodeEntry } from "../contract.ts";
+import type { EntryId, NodeEntry } from "../contract.ts";
 import { entryKey } from "./labels.ts";
 
 export interface LineageRow<N extends NodeEntry> {
@@ -40,4 +40,29 @@ export function lineageRows<N extends NodeEntry>(
     visit(root, 0);
   }
   return rows;
+}
+
+// The current nodes descending from `id` in `lineage` (append order, so a
+// predecessor comes before its successors), in append order. A superseded
+// node has at least one, and a split tree several, none of them the latest
+// (SPEC §5).
+export function currentDescendants<N extends NodeEntry & { current: boolean }>(
+  lineage: readonly N[],
+  id: EntryId,
+): N[] {
+  const below = new Set([entryKey(id)]);
+  const found: N[] = [];
+  for (const node of lineage) {
+    if (
+      node.predecessor === undefined ||
+      !below.has(entryKey(node.predecessor))
+    ) {
+      continue;
+    }
+    below.add(entryKey(node.id));
+    if (node.current) {
+      found.push(node);
+    }
+  }
+  return found;
 }

@@ -12,6 +12,7 @@ import type {
   RevisionIntent,
 } from "../contract.ts";
 import type { PickRole } from "../editors/OperationEditor.tsx";
+import { type Alias, namesFor } from "../model/aliases.ts";
 import { RpcError } from "../rpc.ts";
 import { type Classified, classify, message } from "./classify.ts";
 import { namesOf } from "./edits.ts";
@@ -61,12 +62,14 @@ let lastRead = 0;
 // `dispatch`; nothing here is keyed or retried. `refresh` reloads every
 // screen after a write that was, or may have been, published. The dispatch
 // persists the stored parts of the draft synchronously, so the in-flight
-// marker is saved before an apply request leaves.
+// marker is saved before an apply request leaves. `aliases` reads the names
+// kept for entries at the moment, which default names skip.
 export class DraftActions {
   readonly #call: Call;
   readonly #dispatch: (action: DraftAction) => void;
   readonly #state: () => DraftState;
   readonly #refresh: () => void;
+  readonly #aliases: () => readonly Alias[];
   #minting: Promise<void> | null = null;
 
   constructor(
@@ -74,11 +77,25 @@ export class DraftActions {
     dispatch: (action: DraftAction) => void,
     state: () => DraftState,
     refresh: () => void = () => {},
+    aliases: () => readonly Alias[] = () => [],
   ) {
     this.#call = (method, params) => client.call(method, params);
     this.#dispatch = dispatch;
     this.#state = state;
     this.#refresh = refresh;
+    this.#aliases = aliases;
+  }
+
+  #reserved(): Set<string> {
+    return new Set(this.#aliases().map((alias) => alias.name));
+  }
+
+  #defaultName(ty_name: string): string {
+    return defaultName(
+      this.#state().proposal.entries,
+      ty_name,
+      this.#reserved(),
+    );
   }
 
   #notice(text: string) {
@@ -103,9 +120,8 @@ export class DraftActions {
   }
 
   addNode(ty_name: string): string | null {
-    const { entries } = this.#state().proposal;
     return this.add({
-      name: defaultName(entries, ty_name),
+      name: this.#defaultName(ty_name),
       kind: "node",
       ty_name,
       payload: {},
@@ -113,9 +129,8 @@ export class DraftActions {
   }
 
   addEdge(ty_name = ""): string | null {
-    const { entries } = this.#state().proposal;
     return this.add({
-      name: defaultName(entries, ty_name === "" ? "edge" : ty_name),
+      name: this.#defaultName(ty_name === "" ? "edge" : ty_name),
       kind: "edge",
       ty_name,
       from: UNSET,
@@ -125,9 +140,8 @@ export class DraftActions {
 
   // "Connect": an edge from this node whose other end is picked next.
   connect(from: EntryId): string | null {
-    const { entries } = this.#state().proposal;
     const name = this.add({
-      name: defaultName(entries, "edge"),
+      name: this.#defaultName("edge"),
       kind: "edge",
       ty_name: "",
       from: { existing: from },
@@ -143,11 +157,19 @@ export class DraftActions {
   }
 
   // A revision with the payload copied. For revise, the kept edges follow
-  // once the node's current relationships are read.
+  // once the node's current relationships are read. A revise is named after
+  // the first name kept for the node that the draft does not use, so that
+  // applying it moves that name on with no other name beside it; a branch
+  // takes a default name.
   revise(node: NodeRecord, intent: RevisionIntent): string | null {
     const { entries } = this.#state().proposal;
+    const used = new Set(entries.map((entry) => entry.name));
+    const carried =
+      intent === "revise"
+        ? namesFor(this.#aliases(), node.id).find((name) => !used.has(name))
+        : undefined;
     const name = this.add({
-      name: defaultName(entries, node.ty_name),
+      name: carried ?? this.#defaultName(node.ty_name),
       kind: "node",
       ty_name: node.ty_name,
       predecessor: { existing: node.id },
@@ -245,7 +267,7 @@ export class DraftActions {
       return [];
     }
     this.importProposal(
-      { entries: suggestedOperations(entries, actions) },
+      { entries: suggestedOperations(entries, actions, this.#reserved()) },
       "append",
     );
     return this.#state()

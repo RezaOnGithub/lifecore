@@ -551,13 +551,31 @@ them; none is a server contract.
   reads nothing, and on return it reads again at the boundary then selected.
 - Places, per database in `localStorage` under `lifecore.places.<database>`,
   are listed in the sidebar below Views: Pinned entries (☆/★ in the inspector
-  header), Saved views (the Explore form under a name, replacing one of that
-  name; opening one restores the form and runs it), and Recent (the last 15
-  inspected entries, most recent first, without repeats). An entry keeps the
-  label and type of its last inspection; an edge reads `from —Type→ to`.
+  header), Names (below), Saved views (the Explore form under a name,
+  replacing one of that name; opening one restores the form and runs it), and
+  Recent (the last 15 inspected entries, most recent first, without repeats).
+  An entry keeps the label and type of its last inspection; an edge reads
+  `from —Type→ to`.
   Entries past the as-of boundary are dimmed and named by `@position` alone,
   without their type. Another tab's change arrives through the `storage`
   event. Malformed stored items are dropped one by one.
+- Names are kept with the places, in name order. Each follows the operation
+  name grammar and names one entry; an entry may have several. The tab whose
+  Apply succeeds, or whose user decides an uncertain apply's entries are
+  present, records them in operation order: a revise passes its
+  predecessor's names on, since it is that node's only successor; a branch
+  passes none, since its predecessor may have other current descendants; a
+  kept edge that still keeps its edge passes that edge's names on and has
+  none of its own; then every other operation's name names its entry, taken
+  from any entry that held it, which the operation screen warns of. Every
+  `@position` is followed by the entry's names, except past the as-of
+  boundary. The sidebar's Names open their entry and × forgets one; past the
+  boundary a name stays, dimmed, with its position and no type. The inspector
+  renames, forgets, and adds names, refusing one another entry holds. A
+  superseded node with names, read without a boundary, offers to move them to
+  one of its current descendants. Follow revisions, in the sidebar, reads each
+  named node of the current state and moves the names of each superseded one
+  with a single current descendant, listing those with several.
 
 #### Tables and relationships
 
@@ -674,8 +692,9 @@ them; none is a server contract.
   behind. Otherwise only an explicit Replan mints one, clearing the check. A
   replacing import takes the file's plan ID or a fresh one; an appending import
   keeps the draft's.
-- Operation names default to `<ty_name lowercased>_<n>` with the smallest free
-  `n`, characters outside the name grammar replaced by `_`. Names identify
+- Operation names default to `<ty_name lowercased>_<n>` with the smallest `n`
+  free among the draft's operations and the kept names, characters outside
+  the name grammar replaced by `_`. Names identify
   operations in the client, so a rename to a name in use is refused; renames
   update `added` references, kept-edge provenance, and the last check's
   findings. Imported operations get a `_<n>` suffix on a name collision; a
@@ -691,8 +710,9 @@ them; none is a server contract.
   an `existing` reference and returns to the operation; edges cannot be picked.
   Connect starts an edge from the inspected node and picks its `to`. A draft
   with an endpoint or predecessor unpicked is neither sent nor exported.
-- Revise and Branch copy the node's payload. A revise's predecessor and an
-  edge's ends must be current ([FILES §2.4](FILES.md#24-node-and-edge-operations)),
+- Revise and Branch copy the node's payload. A revise is named after the
+  node's first kept name that the draft does not use. A revise's predecessor
+  and an edge's ends must be current ([FILES §2.4](FILES.md#24-node-and-edge-operations)),
   so Revise, Connect, and "Use as" an edge's end or a revise's predecessor (a
   predecessor picked for an operation without an intent makes it a revise)
   are off for a superseded node and, under an as-of boundary, for every node,
@@ -719,8 +739,9 @@ them; none is a server contract.
   is frozen: no edit, pick, import, or Clear lands. Drafts always apply to
   the current state; under an as-of boundary the tray says so.
 - A successful Apply removes the operations it carried, matched by name and
-  content, turns references to them into the assigned IDs, lists those IDs and
-  the report's finding counts until dismissed, and reloads every screen.
+  content, turns references to them into the assigned IDs, records their
+  names, lists those IDs and the report's finding counts until dismissed, and
+  reloads every screen.
 - Write failures (apply, analyzer add, dismissal edit): envelope errors,
   structured HTTP rejections, and the kinds a method reports before publishing
   change nothing. Those kinds are `invalid_params`, `busy`, `lock_failed`,

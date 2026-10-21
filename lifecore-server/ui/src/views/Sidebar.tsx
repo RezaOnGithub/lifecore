@@ -7,6 +7,7 @@ import { entryKey, sameId, typeName } from "../model/labels.ts";
 import { truncate } from "../model/payload.ts";
 import { beyondBoundary, type Place } from "../model/places.ts";
 import type { ExploreScreen, Screen } from "../navigation.ts";
+import { NameList } from "./Names.tsx";
 import { ResolutionBadge } from "./widgets.tsx";
 
 // Sidebar labels are cut shorter than the main pane's.
@@ -35,9 +36,10 @@ function Section({
 }
 
 // The sidebar: the types of the view, the Explore and Findings screens,
-// and the places kept for this database. The type list on show is the last
-// one loaded: a reload only adds a hint, so the entries, and the active
-// one, stay where they are. `explore` is the Explore step the link reopens.
+// and the places and names kept for this database. The type list on show
+// is the last one loaded: a reload only adds a hint, so the entries, and
+// the active one, stay where they are. `explore` is the Explore step the
+// link reopens.
 export const Sidebar = memo(function Sidebar({
   types,
   screen,
@@ -125,6 +127,9 @@ export const Sidebar = memo(function Sidebar({
           empty="☆ in the inspector pins an entry here"
           onRemove={(place) => unpin(place.id)}
         />
+      </Section>
+      <Section id="names" title="Names">
+        <NameList screen={screen} />
       </Section>
       <Section id="saved" title="Saved views">
         {places.views.length === 0 ? (

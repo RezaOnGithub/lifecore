@@ -133,6 +133,10 @@ const tray = () => page.getByTestId("tray");
 const table = () => page.getByTestId("table");
 const status = () => page.getByTestId("draft-status");
 const count = () => page.getByTestId("draft-count");
+// The operation editor's name, which default names number past the names
+// kept from earlier applies.
+const nameField = () => main().getByLabel("name", { exact: true });
+const operationName = () => nameField().inputValue();
 const trayButton = (name: string) =>
   tray().getByRole("button", { name, exact: true });
 const operation = (name: string) =>
@@ -263,8 +267,10 @@ test("revising a Job keeps the chosen edge and leaves the old ones historical", 
   await expect(page.getByTestId("reconnect-count")).toHaveText(
     "1 of 2 current edges kept",
   );
+  // job_1 names the Job the first test applied, so the default skips it.
+  await expect(nameField()).toHaveValue("job_2");
   // The kept edge sits under its revision, collapsed until asked for.
-  const kept = `job_1_keep_${ids.invites_after_agenda?.position}`;
+  const kept = `job_2_keep_${ids.invites_after_agenda?.position}`;
   const group = tray().getByTestId("kept-group");
   await expect(group).toContainText("1 kept edge");
   await expect(operation(kept)).toHaveCount(0);
@@ -336,6 +342,7 @@ test("a stale base on Check keeps the draft until Replan", async () => {
 test("a stale base on Apply keeps the draft until Replan and a new check", async () => {
   await fresh();
   await newJob();
+  const name = await operationName();
   await setField("title", "Later job");
   await checkAccepted();
   await writeElsewhere("Sneaked in again");
@@ -351,13 +358,14 @@ test("a stale base on Apply keeps the draft until Replan and a new check", async
   await expect(status()).toHaveText("not checked");
   await checkAccepted();
   await trayButton("Apply").click();
-  await expect(page.getByTestId("applied")).toContainText("job_1 → @");
+  await expect(page.getByTestId("applied")).toContainText(`${name} → @`);
   await expect(count()).toHaveText("0 operations");
 });
 
 test("a lost apply answer leaves the draft uncertain until the user decides", async () => {
   await fresh();
   await newJob();
+  const name = await operationName();
   await setField("title", "Maybe applied");
   await checkAccepted();
   // The apply request never reaches the server; the page only sees a lost
@@ -396,7 +404,7 @@ test("a lost apply answer leaves the draft uncertain until the user decides", as
   await expect(trayButton("Apply")).toBeDisabled();
   await checkAccepted();
   await trayButton("Apply").click();
-  await expect(page.getByTestId("applied")).toContainText("job_1 → @");
+  await expect(page.getByTestId("applied")).toContainText(`${name} → @`);
 });
 
 test("another tab's apply freezes the draft, and that tab closing mid-apply leaves it uncertain", async () => {
@@ -487,6 +495,7 @@ test("Keep none and Remove ask first, Remove goes Back, and an explicit time is 
     main().getByRole("heading", { name: "Send invites" }),
   ).toBeVisible();
   await main().getByRole("button", { name: "Revise", exact: true }).click();
+  const name = await operationName();
   const reconnect = page.getByTestId("reconnect");
   await expect(reconnect.getByRole("checkbox", { checked: true })).toHaveCount(
     1,
@@ -521,7 +530,9 @@ test("Keep none and Remove ask first, Remove goes Back, and an explicit time is 
   // Remove leaves for the step before, the inspector Revise was used in.
   await main().getByRole("button", { name: "Remove", exact: true }).click();
   await expect(count()).toHaveText("1 operation");
-  await main().getByRole("button", { name: "Remove job_1?" }).click();
+  await main()
+    .getByRole("button", { name: `Remove ${name}?` })
+    .click();
   await expect(
     main().getByRole("heading", { name: "Send invites" }),
   ).toBeVisible();
@@ -620,7 +631,8 @@ test("under an as-of boundary only a branch's predecessor is picked", async () =
   await expect(pick).toHaveCount(0);
   // A branch may start from any revision.
   await main().getByRole("button", { name: "Branch", exact: true }).click();
-  await expect(main().getByLabel("name", { exact: true })).toHaveValue("job_1");
+  await expect(nameField()).toHaveValue(/^job_\d+$/);
+  const branch = await operationName();
   await main().getByRole("button", { name: "pick predecessor" }).click();
   await table()
     .locator("td.label-cell")
@@ -628,7 +640,7 @@ test("under an as-of boundary only a branch's predecessor is picked", async () =
     .click();
   await expect(useAs("predecessor")).toBeEnabled();
   // The same pick for a revise waits for the boundary to be cleared.
-  await trayButton("job_1").click();
+  await trayButton(branch).click();
   await main().getByRole("radio", { name: "revise" }).check();
   await main().getByRole("button", { name: "pick predecessor" }).click();
   await table()
@@ -643,6 +655,140 @@ test("under an as-of boundary only a branch's predecessor is picked", async () =
   await expect(page.getByTestId("as-of")).toHaveCount(0);
   await expect(useAs("predecessor")).toBeEnabled();
   await useAs("predecessor").click();
-  await expect(main().getByLabel("name", { exact: true })).toHaveValue("job_1");
+  await expect(nameField()).toHaveValue(branch);
   await expect(main().getByRole("radio", { name: "revise" })).toBeChecked();
+});
+
+test("applied names stay beside their entries, follow revisions, and can be renamed and forgotten", async () => {
+  await fresh();
+  await newJob();
+  await nameField().fill("plants");
+  await setField("title", "Repot the plants");
+  await checkAccepted();
+  await trayButton("Apply").click();
+  const applied = page.getByTestId("applied");
+  await expect(applied).toContainText("plants → @");
+  await applied.getByRole("button", { name: "Dismiss" }).click();
+  // The sidebar keeps the name and opens its entry.
+  const names = page.getByTestId("names");
+  const named = (name: string) =>
+    names.getByRole("button", { name, exact: true });
+  const nameRow = (name: string) =>
+    names
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("button", { name, exact: true }) });
+  await named("plants").click();
+  await expect(
+    main().getByRole("heading", { name: "Repot the plants" }),
+  ).toBeVisible();
+  const entryNames = main().getByTestId("entry-names");
+  await expect(entryNames.locator(".alias")).toHaveText(["plants"]);
+  // A revise is named after the node's name and takes it over on apply,
+  // without a warning.
+  await main().getByRole("button", { name: "Revise", exact: true }).click();
+  await expect(nameField()).toHaveValue("plants");
+  await expect(main().getByTestId("name-warning")).toHaveCount(0);
+  await setField("title", "Repot the plants again");
+  await checkAccepted();
+  await trayButton("Apply").click();
+  await expect(applied).toContainText("plants → @");
+  await applied.getByRole("button", { name: "Dismiss" }).click();
+  await named("plants").click();
+  await expect(
+    main().getByRole("heading", { name: "Repot the plants again" }),
+  ).toBeVisible();
+  const lineage = page.getByTestId("lineage").getByRole("listitem");
+  await expect(lineage).toHaveCount(2);
+  await expect(lineage.nth(0).locator(".alias")).toHaveCount(0);
+  await expect(lineage.nth(1).locator(".alias")).toHaveText("plants");
+  // Another writer revises it: the inspector offers its current revision.
+  // Origins differ between applies, so the node is found by its title.
+  const reviseElsewhere = async (from: string, title: string) => {
+    const { entries: found } = await call("entries.list", {
+      kind: "node",
+      ty_name: "Job",
+      text: from,
+    });
+    const node = found.find(
+      (entry) => entry.kind === "node" && entry.payload.title === from,
+    );
+    if (node === undefined) {
+      throw new Error(`no current Job titled ${from}`);
+    }
+    await call("proposal.apply", {
+      proposal: {
+        entries: [
+          {
+            name: "elsewhere",
+            kind: "node",
+            ty_name: "Job",
+            predecessor: { existing: node.id },
+            intent: "revise",
+            payload: { title },
+          },
+        ],
+      },
+    });
+  };
+  await reviseElsewhere("Repot the plants again", "Repot elsewhere");
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: "Refresh" })
+    .click();
+  const follow = main().getByTestId("names-follow");
+  await expect(follow).toContainText("This node is superseded");
+  await follow
+    .getByRole("button", { name: /^Move to Repot elsewhere/ })
+    .click();
+  await expect(follow).toHaveCount(0);
+  await expect(entryNames.locator(".alias")).toHaveCount(0);
+  await named("plants").click();
+  await expect(
+    main().getByRole("heading", { name: "Repot elsewhere" }),
+  ).toBeVisible();
+  // Follow revisions does the same for every name, from the sidebar.
+  await reviseElsewhere("Repot elsewhere", "Repot once more");
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: "Follow revisions" })
+    .click();
+  await expect(page.getByTestId("follow-report")).toContainText(
+    "Moved plants.",
+  );
+  await named("plants").click();
+  await expect(
+    main().getByRole("heading", { name: "Repot once more" }),
+  ).toBeVisible();
+  // A rename keeps the entry; a name another entry holds is refused.
+  await entryNames.getByRole("button", { name: "rename plants" }).click();
+  const field = entryNames.getByLabel("entry name");
+  await field.fill("job_1");
+  await expect(entryNames).toContainText("job_1 already names @");
+  await expect(entryNames.getByRole("button", { name: "Save" })).toBeDisabled();
+  await field.fill("repotting");
+  await field.press("Enter");
+  await expect(entryNames.locator(".alias")).toHaveText(["repotting"]);
+  await expect(named("plants")).toHaveCount(0);
+  // A new operation of a name in use is warned of before it is applied.
+  await newJob();
+  await nameField().fill("repotting");
+  await expect(main().getByTestId("name-warning")).toContainText(
+    "repotting names @",
+  );
+  // Under an as-of boundary before it, the name is dimmed in the sidebar.
+  await named("job_2").click();
+  await expect(
+    main().getByRole("heading", { name: "Draft the agenda" }),
+  ).toBeVisible();
+  await main().getByRole("button", { name: "As of here" }).click();
+  await expect(nameRow("repotting")).toHaveClass(/beyond/);
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: "current" })
+    .click();
+  // Forgetting a name takes it off every list.
+  await names
+    .getByRole("button", { name: "forget the name repotting" })
+    .click();
+  await expect(named("repotting")).toHaveCount(0);
 });

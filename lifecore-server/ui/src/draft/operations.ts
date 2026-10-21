@@ -8,6 +8,7 @@ import type {
   ProposalReference,
   Reference,
 } from "../contract.ts";
+import type { AppliedName } from "../model/aliases.ts";
 import { sameId } from "../model/labels.ts";
 import { isUnset, type KeptEdge, sameReference, UNSET } from "./model.ts";
 
@@ -27,16 +28,19 @@ function taken(entries: readonly ProposalEntry[]): Set<string> {
   return new Set(entries.map((entry) => entry.name));
 }
 
-// `<ty_name lowercased>_<n>` with the smallest n that is free.
+// `<ty_name lowercased>_<n>` with the smallest n that is free. `reserved`
+// are the names kept for entries, which a default skips so that applying
+// it does not take a name from another entry.
 export function defaultName(
   entries: readonly ProposalEntry[],
   ty_name: string,
+  reserved: ReadonlySet<string> = new Set(),
 ): string {
   const used = taken(entries);
   const base = nameBase(ty_name);
   for (let n = 1; ; n++) {
     const candidate = `${base}_${n}`;
-    if (!used.has(candidate)) {
+    if (!used.has(candidate) && !reserved.has(candidate)) {
       return candidate;
     }
   }
@@ -235,13 +239,14 @@ export function appendOperations(
 export function suggestedOperations(
   entries: readonly ProposalEntry[],
   actions: readonly EntryChange[],
+  reserved: ReadonlySet<string> = new Set(),
 ): ProposalEntry[] {
   const combined = [...entries];
   const names: string[] = [];
   for (const action of actions) {
     const base =
       action.kind === "edge" && action.ty_name === "" ? "edge" : action.ty_name;
-    const name = defaultName(combined, base);
+    const name = defaultName(combined, base, reserved);
     names.push(name);
     // A placeholder that only reserves the name.
     combined.push({ name, kind: "node", ty_name: "", payload: {} });
@@ -430,6 +435,61 @@ export function withoutApplied(
       }),
     );
   return { entries: rest, removed };
+}
+
+// What a published request means for the names kept for entries, by
+// operation in request order. A revise passes on the names of its
+// predecessor, which was current just before it and has it as its only
+// successor; a branch passes none, since what it starts from may have other
+// current descendants. A kept edge that still keeps its edge passes on that
+// edge's names, and its own name, derived from its revision's, names
+// nothing. Operations without an assigned id are left out.
+export function appliedNames(
+  request: readonly ProposalEntry[],
+  operations: readonly OperationEntry[],
+  kept: Readonly<Record<string, KeptEdge>>,
+): AppliedName[] {
+  const assigned = new Map(
+    operations.map((operation) => [operation.name, operation.entry]),
+  );
+  const resolve = (reference: ProposalReference): EntryId | null =>
+    "added" in reference
+      ? (assigned.get(reference.added) ?? null)
+      : isUnset(reference)
+        ? null
+        : reference.existing;
+  return request.flatMap((entry): AppliedName[] => {
+    const id = assigned.get(entry.name);
+    if (id === undefined) {
+      return [];
+    }
+    let follows: EntryId | null = null;
+    let derived = false;
+    if (entry.kind === "node") {
+      if (entry.intent === "revise" && entry.predecessor !== undefined) {
+        follows = resolve(entry.predecessor);
+      }
+    } else {
+      const provenance = kept[entry.name];
+      if (
+        provenance !== undefined &&
+        keptWarning(request, provenance) === null
+      ) {
+        follows = provenance.edge;
+        derived = true;
+      }
+    }
+    return [
+      {
+        name: entry.name,
+        id,
+        kind: entry.kind,
+        ty_name: entry.ty_name,
+        follows,
+        derived,
+      },
+    ];
+  });
 }
 
 // The stored entries a request would have become, matched at the positions

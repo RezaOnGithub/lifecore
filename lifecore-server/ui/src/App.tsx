@@ -1,5 +1,6 @@
 import {
   memo,
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -20,6 +21,7 @@ import {
   TypesContext,
   useAsOf,
   useCall,
+  usePlaces,
 } from "./data.tsx";
 import { DraftProvider } from "./draft/context.tsx";
 import { FailureView } from "./failure.tsx";
@@ -55,6 +57,28 @@ import { Sidebar } from "./views/Sidebar.tsx";
 import { TopBar } from "./views/TopBar.tsx";
 import { Trail } from "./views/Trail.tsx";
 import { Tray } from "./views/Tray.tsx";
+
+// The draft of the places' database, which skips the names kept there in
+// its default names and records there what its applies name. It mounts
+// with the places, keyed by the same database.
+function NamedDraftProvider({
+  database,
+  children,
+}: {
+  database: string | null;
+  children: ReactNode;
+}) {
+  const { latestAliases, recordApplied } = usePlaces();
+  return (
+    <DraftProvider
+      database={database}
+      aliases={latestAliases}
+      onApplied={recordApplied}
+    >
+      {children}
+    </DraftProvider>
+  );
+}
 
 export function App({ client }: { client: RpcClient }) {
   const [asOf, setAsOf] = useState<DecimalString | null>(null);
@@ -282,8 +306,8 @@ function Shell({
       <ReplaceContext value={replace}>
         <ExploreContext value={explore}>
           <TypesContext value={latest(types)?.types ?? null}>
-            <DraftProvider key={database ?? "unknown"} database={database}>
-              <PlacesProvider key={database ?? "unknown"} database={database}>
+            <PlacesProvider key={database ?? "unknown"} database={database}>
+              <NamedDraftProvider database={database}>
                 <div className="app">
                   <TopBar
                     description={description}
@@ -359,8 +383,8 @@ function Shell({
                     </>
                   )}
                 </div>
-              </PlacesProvider>
-            </DraftProvider>
+              </NamedDraftProvider>
+            </PlacesProvider>
           </TypesContext>
         </ExploreContext>
       </ReplaceContext>

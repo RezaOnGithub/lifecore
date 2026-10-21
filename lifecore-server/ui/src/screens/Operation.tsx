@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import type { ProposalEntry } from "../contract.ts";
-import { useTypes } from "../data.tsx";
+import { usePlaces, useTypes } from "../data.tsx";
 import { useDraft } from "../draft/context.tsx";
 import { frozen, isUnset, type Problem } from "../draft/model.ts";
 import { OperationEditor, type PickRole } from "../editors/OperationEditor.tsx";
 import { useOpen, useReplace } from "../links.tsx";
+import { takenName } from "../model/aliases.ts";
 import { ConfirmButton } from "../views/ConfirmButton.tsx";
 import { FindingList, judged, OperationStatus } from "../views/Findings.tsx";
 import { operationWarnings } from "../views/OperationRow.tsx";
@@ -36,6 +37,7 @@ export function OperationScreen({
 }) {
   const { state, dispatch, actions } = useDraft();
   const types = useTypes();
+  const { places } = usePlaces();
   const open = useOpen();
   const replace = useReplace();
   // The editor keeps its local state, and the name input its focus, across
@@ -71,6 +73,9 @@ export function OperationScreen({
   const findings = judgment?.findings(name) ?? [];
   const invalid = problemFor(state.problem, name);
   const warnings = operationWarnings(entries, index, state.kept);
+  // A kept edge's own name names nothing when applied.
+  const taken =
+    state.kept[name] === undefined ? takenName(places.aliases, entry) : null;
   const onChange = (changed: ProposalEntry) => {
     if (locked) {
       return;
@@ -128,6 +133,12 @@ export function OperationScreen({
           {warning}
         </p>
       ))}
+      {taken !== null && (
+        <p className="op-warn" data-testid="name-warning">
+          {taken.name} names @{taken.id.position} in this browser; applying this
+          operation gives the name to its entry instead.
+        </p>
+      )}
       {judgment !== null && findings.length > 0 && (
         <section>
           <h3>Findings</h3>

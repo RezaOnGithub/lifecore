@@ -105,8 +105,32 @@ test("places are stored per database and malformed items are dropped", () => {
       pinned: "nope",
       views: [{ name: "broken", form: {} }],
     }),
-    { recent: [place("1")], pinned: [], views: [] },
+    { recent: [place("1")], pinned: [], views: [], aliases: [] },
   );
+});
+
+test("names are stored with the places, in name order", () => {
+  const items = new Map<string, string>();
+  const store = {
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      items.set(key, value);
+    },
+  };
+  const kitchen = {
+    name: "kitchen",
+    id: { origin: "o", position: "2" },
+    kind: "node" as const,
+    ty_name: "Room",
+  };
+  const galley = { ...kitchen, name: "galley" };
+  storePlaces(store, "db-a", { ...emptyPlaces, aliases: [galley, kitchen] });
+  assert.deepEqual(loadPlaces(store, "db-a").aliases, [galley, kitchen]);
+  assert.deepEqual(loadPlaces(store, "db-b").aliases, []);
+  assert.deepEqual(readPlaces({ aliases: [kitchen, galley, 3] }).aliases, [
+    galley,
+    kitchen,
+  ]);
 });
 
 test("under an as-of boundary, places at or past it are dimmed", () => {

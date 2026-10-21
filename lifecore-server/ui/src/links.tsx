@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { EntryId, NodeEntry } from "./contract.ts";
+import { useEntryNames } from "./data.tsx";
 import { LABEL_LIMIT, labelField, rowLabel, typeName } from "./model/labels.ts";
 import { truncate } from "./model/payload.ts";
 import type { ExploreForm } from "./model/query.ts";
@@ -49,8 +50,23 @@ export function useExplore(): (form: ExploreForm) => void {
   return useContext(ExploreContext);
 }
 
+// `@position`, then the names kept for the entry in this browser, if any;
+// none is shown for an entry past the as-of boundary.
 export function Position({ id }: { id: EntryId }) {
-  return <code className="pos">@{id.position}</code>;
+  const names = useEntryNames(id);
+  return (
+    <>
+      <code className="pos">@{id.position}</code>
+      {names.length > 0 && (
+        <>
+          {" "}
+          <span className="alias" title="names kept in this browser">
+            {names.join(", ")}
+          </span>
+        </>
+      )}
+    </>
+  );
 }
 
 // A node's label linking to its inspector. `@position` follows it unless the
