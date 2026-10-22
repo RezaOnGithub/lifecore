@@ -19,6 +19,11 @@ behavior before implementing it:
   and [UI](docs/UI.md) (presentation decisions).
 - [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
   contracts.
+- Proposed, not implemented: [PLANNING](docs/PLANNING.md) specifies the
+  planning analyzer for `lifecore-prod`,
+  [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) walks through it, and
+  [RECONNECT](docs/RECONNECT.md) specifies the general reconnection analyzer
+  it relies on. Write or revise a proposal with the `proposal` skill.
 
 Keep the graph/analyzer libraries and the application service synchronous.
 Persistence belongs to the shared application layer; async HTTP belongs to the
