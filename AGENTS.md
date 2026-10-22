@@ -132,11 +132,9 @@ most likely to trip, with the owning section.
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` for Claude, naming the
   model, e.g. `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Add agent-authored tests only in a module matching `*::test::test2`.
-- Write `//` line comments that explain non-obvious invariants, boundary
-  choices, and ordering constraints, not self-explanatory code. Mark concrete
-  deferred work `// TODO:` and necessary workarounds `// HACK:`, and note
-  material ones in the handoff. Add no block comments, doc comments, or
-  doctests unless requested.
+- Comment non-obvious invariants, boundary choices, and ordering constraints,
+  not self-explanatory code. Mark concrete deferred work `// TODO:` and
+  necessary workarounds `// HACK:`, and note material ones in the handoff.
 - Treat every way a value can be observed as part of its contract, not only its
   intended accessors: trait implementations (`Debug`, `Display`, `Serialize`,
   `Hash`, `PartialEq`), error and panic messages, and ordering. A prefix-bounded

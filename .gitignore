@@ -3,3 +3,4 @@ node_modules/
 /lifecore-server/ui/dist/
 /lifecore-server/ui/test-results/
 /lifecore-server/ui/playwright-report/
+/.claude/worktrees/
