@@ -15,8 +15,11 @@ appending a new edge on the successor ([SPEC §5](SPEC.md#5-current-and-historic
 Reconnect watches each supersession and offers, as suggestions, the edges that
 would carry the predecessor's current connections to the new revision, so that a
 revision made through the CLI, a change file, or a draft that kept no edges does
-not silently lose relationships. It infers nothing: every suggestion is an
-explicit edge the user applies or dismisses.
+not silently lose relationships. When the predecessor already has other
+current revisions, a new branch is offered only the connections none of them
+carries, so that a split distributes the predecessor's connections instead of
+duplicating them. It infers nothing: every suggestion is an explicit edge the
+user applies or dismisses.
 
 ## 2. Vocabulary
 
@@ -35,8 +38,10 @@ What it reads:
 | `e`, an edge of `D` | Any edge, of any label, that has `D` as its `from` or its `to` endpoint. |
 | `O`, the other endpoint | The endpoint of `e` that is not `D`. |
 | Current, superseded | As [SPEC §5](SPEC.md#5-current-and-historical-data) defines them, always evaluated in `before`. |
-| Eligible edge | An edge `e` of `D` that is present in `before` and whose other endpoint `O` is current in `before`. Section 3 gives the full rule. |
-| Equivalent edge | The edge with `e`'s `ty_name`, `e`'s direction, `O` as the same exact endpoint, and `S` in `D`'s place. |
+| `X`, a sibling | A node that is current in `before` and has `D` among its ancestors. Descent is transitive, so a revision of `D`'s other successor is a sibling. `S` is not in `before`, so it is never its own sibling. |
+| Equivalent edge, on a node `N` | The edge with `e`'s `ty_name`, `e`'s direction, `O` as the same exact endpoint, and `N` in `D`'s place. Unqualified, `N` is `S`. |
+| Claimed edge | An edge `e` of `D` whose equivalent edge on some sibling `X` is present in `before`. Because `X` and `O` are both current there, that equivalent edge is current. |
+| Eligible edge | An edge `e` of `D` that is present in `before`, whose other endpoint `O` is current in `before`, and that is not claimed. Section 3 gives the full rule. |
 
 What it emits:
 
@@ -55,12 +60,14 @@ suggestion, and every suggestion is sticky (section 4).
 Reconnect emits only at a prefix whose newest entry is a node `S` with a
 predecessor `D`; every other prefix, including initialization, yields nothing.
 Let `before` be the view ending immediately before `S`. An edge `e` of `D` is
-**eligible** when it is present in `before`, has `D` as one endpoint, and its
-other endpoint `O` is current in `before`. `D`'s own currentness in `before` is
-deliberately not required: the second successor of a split necessarily follows
-the first, so `D` is already superseded when it is judged, and it must be
-treated like the first. For the same reason a late branch from a long-superseded
-predecessor is judged like a consecutive split successor ([decision 2](#9-design-decisions)).
+**eligible** when it is present in `before`, has `D` as one endpoint, its
+other endpoint `O` is current in `before`, and no sibling `X` carries its
+equivalent in `before`. `D`'s own currentness in `before` is deliberately not
+required: the second successor of a split necessarily follows the first, so
+`D` is already superseded when it is judged, and it is judged like the first.
+For the same reason a late branch from a long-superseded predecessor is judged
+like a consecutive split successor; what distinguishes the two is only which
+sibling edges exist by then ([decision 2](#9-design-decisions)).
 
 For each eligible edge, Reconnect emits one suggestion whose single action adds
 the **equivalent edge**: the same `ty_name`, the same exact other endpoint `O`,
@@ -70,18 +77,32 @@ the same direction, with `S` in `D`'s place. A suggestion is suppressed when
   endpoint check of [SPEC §7.1](SPEC.md#71-append-checks) and choosing among
   `O`'s successors would resolve a connection through a revision tree, which
   the model never does ([decision 3](#9-design-decisions)); or
-- the equivalent edge is already present at the judging prefix. This cannot
-  hold there, because an edge's endpoints are older than it and `S` is the
-  newest entry; the condition is stated so that the rule is complete, and it
-  is what the display filter of section 4 evaluates later against the current
-  graph.
+- `e` is claimed: some sibling `X`, a current descendant of `D` in `before`,
+  already has the equivalent edge on `X`, with the same label, the same
+  direction, and `O` exactly ([decision 11](#9-design-decisions)). The
+  connection has been carried forward on another branch, and `S` is offered
+  the rest. The match is exact: a sibling's edge to a revision of `O` claims
+  nothing, consistent with decision 3. How the sibling came by its edge is
+  irrelevant: an edge it was created with claims `e` as much as an applied
+  suggestion does. Only current siblings count, so an edge that a superseded
+  revision once carried and its own successor dropped claims nothing
+  ([decision 12](#9-design-decisions)). Order decides: a sibling edge appended
+  after `S` is outside `before` and never affects `S`'s suggestions
+  ([decision 13](#9-design-decisions)); or
+- the equivalent edge on `S` is already present at the judging prefix. This
+  cannot hold there, because an edge's endpoints are older than it and `S` is
+  the newest entry; the condition is stated so that the rule is complete, and
+  it is what the display filter of section 4 evaluates later against the
+  current graph.
 
 Consequences of the rule, each worked through in the explainer:
 
 | Case | Behavior |
 | --- | --- |
-| Split | Each successor is judged at its own prefix against the same eligible edges of `D` and gets its own suggestions. Reconnecting one branch says nothing about the other. |
-| Chain `D`, `S1`, `S2` | `S2` copies from `S1` only: edges `S1` acquired, not edges `D` lost. If `S1` never reconnected, `S2` gets nothing for `D`'s edges; the open suggestions for `S1` remain the record of the loss ([decision 4](#9-design-decisions)). |
+| Consecutive split | `S1` and `S2` succeed `D` with no edge between them. Each is judged at its own prefix against the same eligible edges of `D`, since at `S2`'s prefix `S1` has no edges yet, and each gets its own suggestions. Reconnecting one branch afterwards says nothing about the other. |
+| Late branch | `S2` succeeds `D` after `S1` has reconnected some of `D`'s edges. Those edges are claimed and `S2` is offered the rest. If `S1` reconnected everything, `S2` gets nothing; if nothing, `S2` is judged like a consecutive split successor. |
+| Chain then branch `D`, `S1`, `S1'`, then `S2` from `D` | `S1'` is a sibling of `S2` and `S1` is not, being superseded. The edges `S1'` carries are claimed; the edges `S1` once carried and `S1'` did not reconnect are not, and are offered to `S2` while the open suggestions for `S1'` remain the record of their loss. |
+| Chain `D`, `S1`, `S2` | `S2` copies from `S1` only: edges `S1` acquired, not edges `D` lost. If `S1` never reconnected, `S2` gets nothing for `D`'s edges; the open suggestions for `S1` remain the record of the loss ([decision 4](#9-design-decisions)). `S2` has no siblings unless `S1` was split. |
 | `O` revised in the same plan | At `S`'s prefix the suggestion targets `O`, the endpoint current immediately before `S`; the analyzer cannot see `O'` without reading past its boundary. This is acceptable: the finding is correct for its prefix, and once `O'` exists the action is no longer appliable and the filter of section 4 hides it. If the plan also adds `S`-`O'`, as the browser's Reconnection step does, that edge is the intended repair and is not the equivalent edge; no suggestion is emitted for `D`-`O` at `O'`'s prefix because `D` is superseded there. |
 | Both endpoints superseded, neither reconnected | No live suggestion after the second supersession. Reconnect follows one supersession at a time; domain analyzers such as planning's dropped-connection warning cover their own cases ([decision 5](#9-design-decisions)). |
 | `O` is `D` | Impossible, since endpoints differ ([SPEC §7.1](SPEC.md#71-append-checks)). Were a self-loop ever admitted, `O` would be superseded at the judging prefix and the first suppression applies without a special case. |
@@ -98,9 +119,10 @@ that event ends, and for conditions too costly to re-judge at every prefix.
 Both apply:
 
 - The supersession is an event. Judging it once at `S`'s prefix costs one scan
-  of `before` for `D`'s edges; full replay judges every supersession exactly
-  once, so Reconnect adds a cost linear in history length per prefix, the same
-  shape as TypeCheck's transition findings
+  of `before` for `D`'s edges, one query for `D`'s current descendants, and
+  one scan for each descendant's edges; full replay judges every supersession
+  exactly once, so Reconnect adds a cost linear in history length per prefix,
+  the same shape as TypeCheck's transition findings
   ([PERFORMANCE §1](PERFORMANCE.md#1-measurements)).
 - A nonsticky version would re-emit at every prefix for every current node
   with a predecessor, scanning the predecessor's edges each time. `edges_of`
@@ -120,6 +142,14 @@ when the equivalent edge exists and `inapplicable` when either endpoint is
 superseded, both as application result types outside the core observation. The
 client hides or labels those by default; history mode still shows them. The
 analyzer never re-judges and the finding key is unchanged.
+
+The export check does not look at siblings ([decision 13](#9-design-decisions)).
+When `S1` and `S2` are consecutive and the user then reconnects `S1`, the
+suggestion for `S2` stays live, since the equivalent edge on `S2` does not
+exist and its endpoints are current. The sibling rule of section 3 redistributes
+only at the analyzer's judging prefix; afterwards the user applies or dismisses
+`S2`'s suggestion. Whether a `claimed` export result should close that gap is
+open question 1.
 
 Memory: one retained observation per eligible edge per supersession for the
 life of the database, each a few exact identities and one action. The total is
@@ -141,7 +171,9 @@ distinct keys for the same lost edge, and two edges of the same label between
 the same nodes cannot both exist. Re-asserting a connection and losing it again
 later yields a distinct key, because the re-asserted edge is a new entry and the
 later loss comes with a new successor; a dismissal of the first loss therefore
-does not hide the second.
+does not hide the second. The sibling rule of section 3 decides whether a
+finding exists, not what its key is: a claimed edge yields no observation at
+all, and an unclaimed one yields the same key it would have without siblings.
 
 ## 6. Suggestion shape
 
@@ -172,7 +204,9 @@ The configuration is the empty string or a strict JSON object with
 
 `filter` is a `SubgraphFilter` like DAG Check's: `edge_types` restricts the
 lost edges considered by label, and `node_types` restricts the successors
-judged by `ty_name`. Absent sets mean no restriction. There are no other knobs
+judged by `ty_name`. Neither restricts which siblings can claim an edge: a
+sibling of any type counts, and a claiming edge has the lost edge's label by
+definition. Absent sets mean no restriction. There are no other knobs
 ([decision 10](#9-design-decisions)). `""` and `"{}"` behave alike but are
 distinct analyzer identities
 ([ANALYZERS §2](ANALYZERS.md#2-finding-identity-and-observations)). The version
@@ -208,8 +242,10 @@ above link here by number.
    `D` to be current, so that only the first successor of a split is judged.
    Reason: the second successor of a split necessarily follows the first, so
    `D` is already superseded when the second is judged; a late branch from a
-   long-superseded predecessor is in the same position. Both must get the
-   same suggestions as the first successor (section 3).
+   long-superseded predecessor is in the same position. Both must be judged
+   like the first successor, or splitting would silently lose every
+   connection on every branch but the first. What they are offered is then
+   narrowed by decision 11 (section 3).
 3. **A suggestion is suppressed when the other endpoint `O` is superseded in
    `before`.** Rejected: suggesting an edge to one of `O`'s successors.
    Reason: the equivalent edge to `O` would fail the endpoint check of
@@ -262,10 +298,43 @@ above link here by number.
     analyzer, and the shape already exists in DAG Check; the configuration
     string is part of finding identity, so every extra knob is another way
     to invalidate dismissals (section 7).
+11. **An edge a current sibling already carries is not offered to a new
+    branch.** Rejected: offering every branch every edge of `D`, so that a
+    late branch is offered connections its siblings already carry forward.
+    Reason: in a split the predecessor's connections usually belong to one
+    branch or the other, and the analyzer should help distribute them rather
+    than duplicate them; a sibling's equivalent edge is the only evidence in
+    `before` of where a connection went, and matching it exactly, on label,
+    direction, and `O`, keeps decision 3 intact. [SPEC §5](SPEC.md#5-current-and-historical-data)
+    treats both branches keeping a connection as ordinary, so this is a bias
+    of the suggestion, not a rule of the model: the user can still write the
+    duplicate edge by hand. Raised in review; the rule as first written
+    offered every branch the same edges (section 3).
+12. **Only current siblings claim an edge.** Rejected: letting any descendant
+    of `D` in `before`, superseded or not, claim it. Reason: a superseded
+    sibling's edge is historical, so the connection is not carried forward in
+    the current graph; offering it to the new branch is right, and the open
+    suggestion for the sibling's own successor remains the record of that
+    loss, exactly as in a chain. The rule also uses the current-descendants
+    query [SPEC §9](SPEC.md#9-inspection-and-queries) already defines
+    (section 3).
+13. **A sibling edge appended after `S` does not affect `S`'s suggestion.**
+    Rejected: extending the export check of decision 7 with a `claimed`
+    result when a current sibling of the successor carries the equivalent
+    edge. Reason: the analyzer is prefix-bounded and judges once, so a
+    consecutive split offers both branches every edge, and reconnecting one
+    branch afterwards leaves the other's suggestions live; closing that gap
+    at export would put Reconnect's notion of siblings into the application,
+    which decision 7 keeps to a comparison of the action against the current
+    graph. Deferred rather than refused: open question 1 (section 4).
 
 ## 10. Open questions
 
-None recorded.
+1. Whether the export check should gain a `claimed` result, marked when a
+   current sibling of the successor carries the equivalent edge, so that a
+   consecutive split redistributes at export time as a late branch does at
+   judging time. Decision 13 leaves the export check as decision 7 describes
+   it until the consecutive case proves to need more than a dismissal.
 
 ## 11. Acceptance tests
 
@@ -277,10 +346,12 @@ the relevant append.
    two suggestions, each with one `NewEdge` action with exact references and
    `S` in `D`'s position; later prefixes emit nothing, and each observation's
    range is exactly `S`'s prefix.
-2. Split: `S1` and `S2` succeed `D`, with other entries between them. `S1`'s
-   prefix suggests `S1`'s edges; `S2`'s prefix suggests `S2`'s edges although
-   `D` is already superseded; the keys differ by successor only. A branch from
-   `D` appended much later behaves like `S2`.
+2. Consecutive split: `S1` and `S2` succeed `D`, with other entries but no
+   edges of `S1` between them. `S1`'s prefix suggests `S1`'s edges; `S2`'s
+   prefix suggests the same edges with `S2` although `D` is already
+   superseded; the keys differ by successor only. Reconnecting `S1` after
+   `S2`'s prefix leaves `S2`'s observations unchanged and its export neither
+   `satisfied` nor `inapplicable`.
 3. Chain: `S1` revises `D` and reconnects edge `e` as `e1`, then `S2` revises
    `S1`: `S2`'s prefix suggests the equivalent of `e1` only, with certificate
    `(e1, S2)`. Without `e1`, `S2`'s prefix emits nothing and the `(e, S1)`
@@ -308,3 +379,21 @@ the relevant append.
 10. Full-prefix replay: appending nodes, edges, or further revisions never
     changes observations at earlier prefixes, and a candidate with two
     supersessions in one plan yields two independent sets of suggestions.
+11. Late branch: `D` with edges `e1` and `e2`, `S1` revises `D` and
+    reconnects `e1` only, then `S2` branches from `D`. `S2`'s prefix suggests
+    the equivalent of `e2` with certificate `(e2, S2)` and nothing for `e1`;
+    with `S2` appended before `S1`'s reconnection instead, both are
+    suggested. With `S1` reconnecting both, `S2`'s prefix emits nothing.
+12. Claim is exact: `S1` carries an edge of `e1`'s label to `O'`, a revision
+    of `O`, or an edge of another label to `O`, or `e1`'s label in the other
+    direction. None claims `e1`, and `S2`'s prefix suggests it. An edge `S1`
+    was created with, in the same proposal as `S1`, claims it like an applied
+    suggestion does.
+13. Chain then branch: `S1` revises `D` and reconnects `e1` and `e2`, `S1'`
+    revises `S1` and reconnects `e1` only, then `S2` branches from `D`.
+    `S2`'s prefix suggests `e2`, since `S1`'s equivalent is historical and
+    `S1'` carries none, and not `e1`, which `S1'`, a transitive descendant,
+    claims. The `(e2', S1')` observation remains.
+14. Siblings and the filter: under `node_types` excluding the sibling's type,
+    the sibling still claims; under `edge_types` excluding `e1`'s label, `e1`
+    is not considered at all, claimed or not.

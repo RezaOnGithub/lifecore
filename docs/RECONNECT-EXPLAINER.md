@@ -9,13 +9,14 @@ edges, bounded views, configured analyzers with full-prefix replay, finding
 keys, observations, and dismissal.
 
 Every entry below is shown as the TOML change file the user writes and
-applies with `lifecore apply FILE` ([FILES](FILES.md)). The files were applied
-in order to a scratch database, and the positions and `origin` values in them
-are the ones that run assigned. A reader repeating the walk gets different
-origins, since each applied plan mints its own, and must copy them from each
-`apply` result's `operations` list. The analyzer itself is not implemented,
-so the suggestions shown are what the contract says it emits, not captured
-output.
+applies with `lifecore apply FILE` ([FILES](FILES.md)). The files of sections
+1 to 9 were applied in order to a scratch database, and the positions and
+`origin` values in them are the ones that run assigned; section 10 was added
+in review, and its origins are made up in the same shape. A reader repeating
+the walk gets different origins, since each applied plan mints its own, and
+must copy them from each `apply` result's `operations` list. The analyzer
+itself is not implemented, so the suggestions shown are what the contract
+says it emits, not captured output.
 
 ## 1. A database with two types
 
@@ -313,20 +314,25 @@ Reconnect judges each successor at its own prefix:
   and says nothing about `D`. Suggestions: 16 Cites 4 and 16 About 2,
   certificates `(13, 16)` and `(14, 16)`.
 
-The four keys are distinct, because each names its successor. Had the second
-branch been appended a year later, with a thousand entries in between, it
-would be judged exactly the same way.
+The four keys are distinct, because each names its successor. Both branches
+are offered both edges because, at position 16, note 15 has no edges yet:
+nothing in `before` says where 12's connections went. Had the second branch
+been appended a year later, after the user reconnected 15, it would be judged
+by the same rule with a different `before`, and the edges 15 carried by then
+would not be offered again. Section 10 shows that case.
 
 > **Why not require the predecessor to be current?** The second successor
 > of a split always finds its predecessor superseded, and so does a late
-> branch. Both must get the same suggestions as the first successor, or
-> splitting would silently lose connections on every branch but the first.
-> [Decision 2](RECONNECT.md#9-design-decisions).
+> branch. Both must be judged like the first successor, or splitting would
+> silently lose connections on every branch but the first. What a later
+> branch is offered is then narrowed by what its siblings already carry.
+> [Decisions 2 and 11](RECONNECT.md#9-design-decisions).
 
 The user accepts both suggestions for `exact_edges`, edges 17 (15 Cites 4)
 and 18 (15 About 2), and only the topic for `exact_roots`, edge 19 (16 About
 2). The suggestion `(13, 16)`, the root note citing `supersession`, stays
-open. Reconnecting one branch said nothing about the other.
+open. Reconnecting one branch said nothing about the other, because 16 was
+judged before edge 17 existed.
 
 ```mermaid
 flowchart LR
@@ -492,21 +498,150 @@ The user can dismiss it:
 > result types outside the core observation.
 > [Decision 7](RECONNECT.md#9-design-decisions).
 
-## 10. Why the certificate is just two identities
+## 10. A late branch
+
+The split of section 6 offered both branches everything, because at the
+second branch's prefix the first had no edges yet. A branch appended after
+its sibling has been reconnected is judged with more in `before`. To show
+it, the user first gives the reading list the citation it has lacked since
+section 3, to the current revision of the note:
+
+```toml
+[[entries]]
+name = "reading_cites_edges_v2"
+kind = "edge"
+ty_name = "Cites"
+from = { existing = { origin = "dd25176a-39c6-4c2c-b2f6-41523c063542", position = "5" } }
+to = { existing = { origin = "2e297507-9635-42d6-b0dd-6a35dc46cf51", position = "21" } }
+```
+
+Position 26, origin `33ac7e25-d351-4bef-9d54-bcdb372c5f26`. The newest entry
+is an edge, so Reconnect says nothing. Note 21 now has two edges, 25 (21
+Cites 4) and 26 (5 Cites 21). The user revises it:
+
+```toml
+[[entries]]
+name = "exact_edges_v3"
+kind = "node"
+ty_name = "Note"
+predecessor = { existing = { origin = "2e297507-9635-42d6-b0dd-6a35dc46cf51", position = "21" } }
+intent = "revise"
+payload = { title = "Edges hold exact revisions at both ends, always" }
+```
+
+Position 27, origin `8b50c1da-aafd-4498-8fba-c4fdff909d0f`. `S` is 27, `D`
+is 21, and 21's edges in `before` are 25 and 26, both with current other
+endpoints. Note 21 has no other current descendant, so nothing is claimed.
+Suggestions: 27 Cites 4, certificate `(25, 27)`, and 5 Cites 27, certificate
+`(26, 27)`. The user applies the first export only:
+
+```toml
+[[entries]]
+name = "action_0"
+kind = "edge"
+ty_name = "Cites"
+from = { existing = { origin = "8b50c1da-aafd-4498-8fba-c4fdff909d0f", position = "27" } }
+to = { existing = { origin = "dd25176a-39c6-4c2c-b2f6-41523c063542", position = "4" } }
+```
+
+Position 28, with its `acknowledges` table naming `(25, 27)`, which records
+an `Acknowledged` dismissal. `(26, 27)` stays open.
+
+Later the user decides note 21 also deserves a second, different successor,
+a separate claim that the reading list was really citing. Note 21 is
+superseded, so the file must say `branch`:
+
+```toml
+[[entries]]
+name = "exact_edges_alt"
+kind = "node"
+ty_name = "Note"
+predecessor = { existing = { origin = "2e297507-9635-42d6-b0dd-6a35dc46cf51", position = "21" } }
+intent = "branch"
+payload = { title = "Exactness is structural, not a convention" }
+```
+
+Position 29, origin `07f4b6e8-e453-4ae4-b82f-8a5ad138b8fc`. `S` is 29 and
+`D` is 21 again, and `before` is the view ending with position 28. The
+edges of 21 are still 25 and 26, and both other endpoints, notes 4 and 5,
+are current. What differs from position 27 is that 21 now has a current
+descendant other than `S`: note 27, a **sibling** of 29. Reconnect reads
+27's edges in `before` and asks, for each edge of 21, whether 27 carries its
+equivalent, same label, same direction, same exact other endpoint:
+
+| Edge of 21 | Equivalent on 27 | Present in `before`? | Verdict |
+| --- | --- | --- | --- |
+| 25, 21 Cites 4 | 27 Cites 4 | Yes, edge 28 | **Claimed.** Suppressed. |
+| 26, 5 Cites 21 | 5 Cites 27 | No | Eligible. Suggested: 5 Cites 29, certificate `(26, 29)`. |
+
+One suggestion, not two. The citation of note 4 went to 27 and is not
+offered again; the reading list's citation, which 27 never took, is offered
+to the new branch. The split distributes 21's connections instead of
+duplicating them.
+
+```mermaid
+flowchart LR
+    V2["21 Note (superseded)"] -.-> A["27 Note: ... at both ends, always"]
+    V2 -.-> B["29 Note: Exactness is structural"]
+    A -- "28 Cites" --> S["4 Note: Supersession keeps history"]
+    R["5 Note: Reading list"] -- "26 Cites (historical)" --> V2
+    R -. "suggested (26, 29)" .-> B
+```
+
+> **Why not offer 29 Cites 4 as well?** Nothing in the model forbids both
+> branches citing note 4; [SPEC §5](SPEC.md#5-current-and-historical-data)
+> gives exactly that as its example of keeping a connection on two
+> successors. But a suggestion is a guess about what the user meant, and in
+> a split the predecessor's connections usually belong to one branch or the
+> other. Edge 28 is the only evidence in `before` of where the citation
+> went, so Reconnect takes it as the answer and offers 29 the rest. A user
+> who wants both writes the second edge by hand, as in section 9.
+> [Decision 11](RECONNECT.md#9-design-decisions).
+
+> **Why does 27 count, and not 15?** Note 15 is also a descendant of 21's
+> tree, and it once carried 17, 15 Cites 4. But 15 is superseded, so 17 is
+> historical: nothing current carries that connection through 15. Only
+> current siblings claim. Had the user not applied `(25, 27)`, no current
+> node would cite note 4 on this branch, edge 25 would be unclaimed, and 29
+> would be offered 29 Cites 4 while `(25, 27)` stayed open as the record of
+> 27's loss, exactly as a chain behaves.
+> [Decision 12](RECONNECT.md#9-design-decisions).
+
+> **What if 29 had come before 28?** Then `before` would not contain edge 28,
+> nothing would be claimed, and 29 would be offered both edges like the
+> second branch of section 6. Applying `(25, 27)` afterwards would not touch
+> `(25, 29)`: the analyzer judged 29 once, and the export check compares the
+> action, 29 Cites 4, with the current graph, where it is absent and both
+> endpoints are current. The user dismisses it, or applies it if both
+> branches should cite note 4. Whether the export should instead be marked
+> `claimed` is [open question 1](RECONNECT.md#10-open-questions).
+> [Decision 13](RECONNECT.md#9-design-decisions).
+
+In the browser, a draft of `exact_edges_alt` checked before apply shows the
+same thing: one suggestion under the branch's operation, labeled sticky, and
+nothing about note 4. The tray lists every observation of the check,
+including those emitted at prefixes inside the draft, so the user sees what
+the branch will and will not be offered before committing it
+([UI §5](UI.md#5-drafts-and-writes)).
+
+## 11. Why the certificate is just two identities
 
 Every key in this walk has had the form `LostEdge { edge, successor }`.
-Suppose the user now revises note 21 again as 26. Edge 25 is current with a
-current other endpoint, so the new suggestion is `(25, 26)`. It is a
-different key from `(17, 21)`, because the re-asserted edge is a new entry
-and the loss comes with a new successor. Dismissing `(17, 21)` in section 9
-therefore hides nothing about this later loss.
+Section 10 showed a connection re-asserted and lost again: edge 25 carried
+to note 21 the citation that 17 had carried to note 15, and revising 21 lost
+it with key `(25, 27)`. That is a different key from `(17, 21)`, because the
+re-asserted edge is a new entry and the loss comes with a new successor.
+Dismissing `(17, 21)` in section 9 therefore hid nothing about the later
+loss.
 
 The key carries no boundary, so replay produces equal keys every time, and no
 label or other endpoint, since the edge identity already determines both.
 The split in section 6 showed the other half: one lost edge, two successors,
-two keys. [Decision 8](RECONNECT.md#9-design-decisions).
+two keys. The sibling rule of section 10 changes none of this: a claimed
+edge produces no observation, and an unclaimed one produces the key it would
+have had without siblings. [Decision 8](RECONNECT.md#9-design-decisions).
 
-## 11. Narrowing the analyzer
+## 12. Narrowing the analyzer
 
 A database may want Reconnect for some labels or some successor types only.
 The configuration is a `SubgraphFilter` like DAG Check's
@@ -525,7 +660,7 @@ is part of the analyzer's identity, so this suite entry and a plain
 one do not carry to the other. An unknown field such as `"filters"` is an
 `InvalidAnalyzerConfiguration` error, not an ignored key.
 
-## 12. Where planning comes in
+## 13. Where planning comes in
 
 [PLANNING](PLANNING.md) revises items, stances, and events the same way this
 walk revised notes, and its `About` edge from a stance or `Did` to a revised
