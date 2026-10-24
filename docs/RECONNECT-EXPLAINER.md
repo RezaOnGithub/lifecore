@@ -9,16 +9,20 @@ edges, bounded views, configured analyzers with full-prefix replay, finding
 keys, observations, and dismissal.
 
 Every entry below is shown as the TOML change file the user writes and
-applies with `lifecore apply FILE` ([FILES](FILES.md)). The files of sections
-1 to 9 were applied in order to a scratch database, and the positions and
-`origin` values in them are the ones that run assigned; section 10 was added
-in review, and its origins are made up in the same shape. A reader repeating
-the walk gets different origins, since each applied plan mints its own, and
-must copy them from each `apply` result's `operations` list. The application
-does not register the analyzer yet, so `lifecore add-analyzer Reconnect` and
-the exports of section 4 do not work today. A test in `lifecore-reconnect`
-replays sections 1 to 10 through the analyzer and checks every suggestion
-shown at its position.
+applies with `lifecore apply FILE` ([FILES](FILES.md)). The positions are
+the ones the walk produces: a test in `lifecore-reconnect` replays sections
+1 to 10 through the analyzer and checks every position and suggestion shown.
+The `origin` values of sections 1 to 9 come from a scratch run, and those of
+section 10, added in review, are made up in the same shape. A reader
+repeating the walk gets different origins, since each applied plan mints its
+own, and must copy them from each `apply` result's `operations` list.
+
+Two steps cannot run today. `lifecore add-analyzer Reconnect` fails because
+the application does not register the analyzer yet. Applying an exported
+proposal with its `acknowledges` table, in sections 4 and 10, fails because
+suggestion export and acknowledgment are not implemented for any analyzer
+([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)). The same edges
+applied without `acknowledges` land at the same positions.
 
 ## 1. A database with two types
 

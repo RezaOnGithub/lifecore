@@ -824,6 +824,45 @@ fn only_an_exact_equivalent_edge_claims() {
     assert!(judged(&graph, s2).is_empty());
 }
 
+// The mirror of the late-branch and exact-claim tests for an edge that ends
+// at the predecessor: only a sibling's edge from `o` to it claims.
+#[test]
+fn an_incoming_edge_is_claimed_only_by_an_incoming_equivalent() {
+    let mut base = database();
+    let [d, o, e] = append(
+        &mut base,
+        &[
+            root("Note", "d"),
+            root("Note", "o"),
+            edge("Cites", Added(1), Added(0)),
+        ],
+    )
+    .try_into()
+    .unwrap();
+    let s1 = append_one(&mut base, revise("Note", "s1", Existing(d)));
+    assert_eq!(judged(&base, s1), vec![lost(e, "Cites", d, s1, o, false)]);
+
+    let mut graph = base.clone();
+    append_one(&mut graph, link("Cites", o, s1));
+    let s2 = append_one(&mut graph, branch("Note", "s2", Existing(d)));
+    assert!(judged(&graph, s2).is_empty());
+
+    for near_miss in [link("About", o, s1), link("Cites", s1, o)] {
+        let mut graph = base.clone();
+        append_one(&mut graph, near_miss);
+        let s2 = append_one(&mut graph, branch("Note", "s2", Existing(d)));
+        assert_eq!(judged(&graph, s2), vec![lost(e, "Cites", d, s2, o, false)]);
+    }
+
+    // A reconnection appended after the branch never reaches its prefix.
+    let mut graph = base;
+    let s2 = append_one(&mut graph, branch("Note", "s2", Existing(d)));
+    let offered = vec![lost(e, "Cites", d, s2, o, false)];
+    assert_eq!(judged(&graph, s2), offered);
+    append_one(&mut graph, link("Cites", o, s1));
+    assert_eq!(judged(&graph, s2), offered);
+}
+
 #[test]
 fn only_current_siblings_claim_through_a_chain() {
     let mut graph = database();

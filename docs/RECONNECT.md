@@ -110,7 +110,7 @@ Consequences of the rule, each worked through in the explainer:
 | Chain `D`, `S1`, `S2` | `S2` copies from `S1` only: edges `S1` acquired, not edges `D` lost. If `S1` never reconnected, `S2` gets nothing for `D`'s edges; the open suggestions for `S1` remain the record of the loss ([decision 4](#9-design-decisions)). `S2` has no siblings unless `S1` was split. |
 | `O` revised in the same plan | At `S`'s prefix the suggestion targets `O`, the endpoint current immediately before `S`; the analyzer cannot see `O'` without reading past its boundary. This is acceptable: the finding is correct for its prefix, and once `O'` exists the action is no longer appliable and the filter of section 4 hides it. If the plan also adds `S`-`O'`, as the browser's Reconnection step does, that edge is the intended repair and is not the equivalent edge; no suggestion is emitted for `D`-`O` at `O'`'s prefix because `D` is superseded there. |
 | Both endpoints superseded, neither reconnected | No live suggestion after the second supersession. Reconnect follows one supersession at a time; domain analyzers such as planning's dropped-connection warning cover their own cases ([decision 5](#9-design-decisions)). |
-| `O` is `D` | Impossible, since endpoints differ ([SPEC §7.1](SPEC.md#71-append-checks)). Were a self-loop ever admitted, `O` would be superseded at the judging prefix and the first suppression applies without a special case. |
+| `O` is `D` | Impossible, since endpoints differ ([SPEC §7.1](SPEC.md#71-append-checks)). |
 
 Subjects are `e`, `D`, `S`, and `O`; the focus is `S`. The text names the label
 and direction and no boundary.
