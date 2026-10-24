@@ -1,9 +1,11 @@
 # Reconnect analyzer
 
-Status: proposal, not implemented. This document owns the contract of a
-general-purpose analyzer, provisionally named Reconnect, packaged as
-`lifecore-reconnect` and registered as `Reconnect`. It relies on
-[SPEC](SPEC.md), [ANALYZERS](ANALYZERS.md), and [SUGGESTIONS](SUGGESTIONS.md),
+Status: the analyzer is implemented in `lifecore-reconnect`, but the
+application does not register it yet, and neither the export marks of
+section 4 nor the planning changes of section 8 are implemented. This
+document owns the contract of a general-purpose analyzer, provisionally named
+Reconnect, packaged as `lifecore-reconnect` and registered as `Reconnect`. It
+relies on [SPEC](SPEC.md), [ANALYZERS](ANALYZERS.md), and [SUGGESTIONS](SUGGESTIONS.md),
 and replaces the Re-point suggestion of [PLANNING §8.6](PLANNING.md#86-suggestions).
 [RECONNECT-EXPLAINER](RECONNECT-EXPLAINER.md) walks through the same rules
 with one running example written as change files.
@@ -81,8 +83,11 @@ the same direction, with `S` in `D`'s place. A suggestion is suppressed when
   already has the equivalent edge on `X`, with the same label, the same
   direction, and `O` exactly ([decision 11](#9-design-decisions)). The
   connection has been carried forward on another branch, and `S` is offered
-  the rest. The match is exact: a sibling's edge to a revision of `O` claims
-  nothing, consistent with decision 3. How the sibling came by its edge is
+  the rest. The match is exact on label and direction: a sibling's edge with
+  another label to `O`, or with `e`'s label in the other direction, claims
+  nothing. A sibling's edge to a revision of `O` never comes into question,
+  because that revision supersedes `O` and the first suppression already
+  applies. How the sibling came by its edge is
   irrelevant: an edge it was created with claims `e` as much as an applied
   suggestion does. Only current siblings count, so an edge that a superseded
   revision once carried and its own successor dropped claims nothing
@@ -119,8 +124,9 @@ that event ends, and for conditions too costly to re-judge at every prefix.
 Both apply:
 
 - The supersession is an event. Judging it once at `S`'s prefix costs one scan
-  of `before` for `D`'s edges, one query for `D`'s current descendants, and
-  one scan for each descendant's edges; full replay judges every supersession
+  of `before` for `D`'s current descendants and one scan of the edges in
+  `before`, which finds both `D`'s edges and those its descendants carry,
+  however many descendants there are; full replay judges every supersession
   exactly once, so Reconnect adds a cost linear in history length per prefix,
   the same shape as TypeCheck's transition findings
   ([PERFORMANCE §1](PERFORMANCE.md#1-measurements)).
@@ -196,7 +202,9 @@ rejected export leaves the finding unacknowledged; the user dismisses it.
 ## 7. Configuration
 
 The configuration is the empty string or a strict JSON object with
-`deny_unknown_fields`:
+`deny_unknown_fields`. `filter`, when present, is an object, and each of its
+sets an array of type names; `null` or an array in place of an object is an
+error, not a spelling of absence:
 
 ```json
 { "filter": { "edge_types": ["Supports"], "node_types": ["Task"] } }
@@ -375,7 +383,9 @@ the relevant append.
    rejects the candidate with `BadEdgeEndpoint` and nothing is dismissed.
 9. Configuration: `edge_types` excludes other labels and `node_types` excludes
    other successor types; `""` and `"{}"` emit the same findings under distinct
-   identities; an unknown field is `InvalidAnalyzerConfiguration`.
+   identities; an unknown or repeated field, `null` for `filter` or a set, and
+   an array for the configuration or `filter` are each
+   `InvalidAnalyzerConfiguration`.
 10. Full-prefix replay: appending nodes, edges, or further revisions never
     changes observations at earlier prefixes, and a candidate with two
     supersessions in one plan yields two independent sets of suggestions.
@@ -384,11 +394,12 @@ the relevant append.
     the equivalent of `e2` with certificate `(e2, S2)` and nothing for `e1`;
     with `S2` appended before `S1`'s reconnection instead, both are
     suggested. With `S1` reconnecting both, `S2`'s prefix emits nothing.
-12. Claim is exact: `S1` carries an edge of `e1`'s label to `O'`, a revision
-    of `O`, or an edge of another label to `O`, or `e1`'s label in the other
-    direction. None claims `e1`, and `S2`'s prefix suggests it. An edge `S1`
-    was created with, in the same proposal as `S1`, claims it like an applied
-    suggestion does.
+12. Claim is exact: `S1` carries an edge of another label to `O`, or of
+    `e1`'s label in the other direction. Neither claims `e1`, and `S2`'s
+    prefix suggests it. An edge `S1` was created with, in the same proposal as
+    `S1`, claims it like an applied suggestion does. With `O'` revising `O`
+    and `S1` carrying `e1`'s label to `O'`, `S2`'s prefix suggests nothing,
+    since `O` is superseded.
 13. Chain then branch: `S1` revises `D` and reconnects `e1` and `e2`, `S1'`
     revises `S1` and reconnects `e1` only, then `S2` branches from `D`.
     `S2`'s prefix suggests `e2`, since `S1`'s equivalent is historical and

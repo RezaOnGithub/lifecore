@@ -49,6 +49,14 @@ Follow [SUGGESTIONS](SUGGESTIONS.md).
 - [ ] Pair each suggestion observation in analysis results with a ready-made
   proposal: a plan ID for the analyzed base, `acknowledges`, and the ordered
   actions. Do not produce them for uncommitted check candidates.
+- [ ] Register Reconnect (`lifecore-reconnect`, [RECONNECT](RECONNECT.md))
+  beside TypeCheck and DAG Check. Mark an exported edge action `satisfied`
+  when the edge exists in the current graph and `inapplicable` when an
+  endpoint is superseded, as application results outside the observation
+  ([RECONNECT §4](RECONNECT.md#4-sticky)). Specify the marks in SUGGESTIONS,
+  which owns export, and link to them from RECONNECT. Then add Reconnect where
+  ANALYZERS and PERFORMANCE describe the built-in analyzers, and update the
+  Reconnect status lines here, in AGENTS.md, and in both RECONNECT documents.
 - [ ] Verify `acknowledges` in `check`/`apply` against observations whose range
   begins within the committed base, from the same replay, comparing lowered
   operations exactly and ignoring operation names. Reject unverified

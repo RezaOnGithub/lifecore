@@ -14,9 +14,11 @@ applies with `lifecore apply FILE` ([FILES](FILES.md)). The files of sections
 `origin` values in them are the ones that run assigned; section 10 was added
 in review, and its origins are made up in the same shape. A reader repeating
 the walk gets different origins, since each applied plan mints its own, and
-must copy them from each `apply` result's `operations` list. The analyzer
-itself is not implemented, so the suggestions shown are what the contract
-says it emits, not captured output.
+must copy them from each `apply` result's `operations` list. The application
+does not register the analyzer yet, so `lifecore add-analyzer Reconnect` and
+the exports of section 4 do not work today. A test in `lifecore-reconnect`
+replays sections 1 to 10 through the analyzer and checks every suggestion
+shown at its position.
 
 ## 1. A database with two types
 
@@ -357,10 +359,9 @@ intent = "revise"
 payload = { title = "Append-only typed graphs" }
 ```
 
-Position 20, origin `6fc86157-f1b9-406f-ae41-f9008b032ccd`. The topic has
-no predecessor-bearing edges of its own to worry about, but it is the other
-endpoint of edges 18 and 19, which are now historical. Reconnect says nothing
-at position 20 about them: `S` is 20 and `D` is topic 2, whose edges in
+Position 20, origin `6fc86157-f1b9-406f-ae41-f9008b032ccd`. Edges 18 and
+19 end at the topic, so they are now historical, and Reconnect judges the
+topic's revision like a note's: `S` is 20 and `D` is topic 2, whose edges in
 `before` are 7 (historical, `O` = 3 superseded), 11 (historical, `O` = 9
 superseded), 14 (`O` = 12 superseded), 18 (`O` = 15 current), and 19 (`O` =
 16 current). So two suggestions are emitted here, 15 About 20 and 16 About
@@ -598,13 +599,15 @@ flowchart LR
 > who wants both writes the second edge by hand, as in section 9.
 > [Decision 11](RECONNECT.md#9-design-decisions).
 
-> **Why does 27 count, and not 15?** Note 15 is also a descendant of 21's
-> tree, and it once carried 17, 15 Cites 4. But 15 is superseded, so 17 is
-> historical: nothing current carries that connection through 15. Only
-> current siblings claim. Had the user not applied `(25, 27)`, no current
-> node would cite note 4 on this branch, edge 25 would be unclaimed, and 29
-> would be offered 29 Cites 4 while `(25, 27)` stayed open as the record of
-> 27's loss, exactly as a chain behaves.
+> **Which other successors of 21 count?** Any node below 21, at any depth,
+> that is current in `before`, and nothing else. Had the user revised 27
+> into a note 27' without reconnecting the citation, 27 would be superseded
+> and edge 28 historical, so nothing current below 21 would cite note 4: edge 25
+> would be unclaimed, and 29 would be offered 29 Cites 4 while the open
+> suggestion `(28, 27')` recorded the loss, exactly as a chain behaves. Had
+> 27' reconnected the citation, 27' would claim edge 25 in 27's place. A
+> node outside 21's subtree never claims: note 15 once carried 17, 15 Cites
+> 4, but 15 is 21's predecessor, not its descendant.
 > [Decision 12](RECONNECT.md#9-design-decisions).
 
 > **What if 29 had come before 28?** Then `before` would not contain edge 28,
@@ -653,8 +656,8 @@ lifecore add-analyzer Reconnect '{ "filter": { "edge_types": ["Cites"] } }'
 
 Under that suite entry, section 3 would have produced the two `Cites`
 suggestions and not the `About` one. `node_types` restricts by the
-successor's `ty_name` instead; `{ "node_types": ["Note"] }` would have
-skipped the topic's prefix in section 7 entirely. The configuration string
+successor's `ty_name` instead; `{ "filter": { "node_types": ["Note"] } }`
+would have skipped the topic's prefix in section 7 entirely. The configuration string
 is part of the analyzer's identity, so this suite entry and a plain
 `Reconnect` entry produce findings with different keys, and dismissals under
 one do not carry to the other. An unknown field such as `"filters"` is an

@@ -20,11 +20,13 @@ behavior before implementing it:
 - [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
   contracts.
 - Proposed, not implemented: [PLANNING](docs/PLANNING.md) specifies the
-  planning analyzer for `lifecore-prod`,
-  [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) walks through it, and
+  planning analyzer for `lifecore-prod`, and
+  [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) walks through it. Write or
+  revise a proposal with the `proposal` skill.
+- Implemented, not yet registered by the application:
   [RECONNECT](docs/RECONNECT.md) specifies the general reconnection analyzer
-  it relies on, with [RECONNECT-EXPLAINER](docs/RECONNECT-EXPLAINER.md) as
-  its walkthrough. Write or revise a proposal with the `proposal` skill.
+  planning relies on, in `lifecore-reconnect`, with
+  [RECONNECT-EXPLAINER](docs/RECONNECT-EXPLAINER.md) as its walkthrough.
 
 Keep the graph/analyzer libraries and the application service synchronous.
 Persistence belongs to the shared application layer; async HTTP belongs to the
@@ -45,9 +47,9 @@ Preserve historical correctness under the chosen model and unrelated user work.
 ## Checks
 
 Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-`lifecore-app`, `lifecore-cli`, and `lifecore-server` (the Axum adapter behind
-`lifecore serve`; its `build.rs` embeds the React client in
-`lifecore-server/ui`). Shared checking and atomic in-memory commits
+`lifecore-reconnect`, `lifecore-app`, `lifecore-cli`, and `lifecore-server`
+(the Axum adapter behind `lifecore serve`; its `build.rs` embeds the React
+client in `lifecore-server/ui`). Shared checking and atomic in-memory commits
 live in `lifecore::transaction`; persistence belongs to the synchronous
 application service `lifecore_app::service::Service`, shared by HTTP and CLI.
 

@@ -510,6 +510,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifecore-reconnect"
+version = "0.1.0"
+dependencies = [
+ "lifecore",
+ "lifecore-typecheck",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "lifecore-server"
 version = "0.1.0"
 dependencies = [
