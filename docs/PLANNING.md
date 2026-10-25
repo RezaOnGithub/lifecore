@@ -1,7 +1,8 @@
 # Planning analyzer
 
-Status: implemented in `lifecore-prod`, whose factory registers as
-`Planning`, but the application does not register it yet, and the planning
+Status: implemented in `lifecore-prod`, whose factory the application
+registers as `Planning`, beside Reconnect; `lifecore init --default-analyzers`
+configures both ([INTERFACES §2](INTERFACES.md#2-cli-surface)). The planning
 executable of section 12 is not built. This document owns the contract of
 the planning analyzer and its valuation.
 [PLANNING-EXPLAINER](PLANNING-EXPLAINER.md) walks through the same design by

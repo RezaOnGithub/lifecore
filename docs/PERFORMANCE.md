@@ -3,8 +3,10 @@
 Status: measurements and remaining work. Checking replays every prefix of a
 candidate under the configured suite
 ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)), so its cost grows
-with history length; it is now roughly quadratic. The writer's busy-retry
-window ([STORAGE §4](STORAGE.md#4-writers)) is sized against it.
+with history length; it is now roughly quadratic under TypeCheck and
+Reconnect, and roughly cubic once Planning is configured. The writer's
+busy-retry window ([STORAGE §4](STORAGE.md#4-writers)) is sized against the
+quadratic case.
 
 ## 1. Measurements
 
@@ -42,6 +44,29 @@ appends two more nodes is rejected by both: the baseline reports three
 the new code one at 502, under the same key apart from the provisional entry
 origin.
 
+The domain analyzers were measured the same way, on snapshots shaped like a
+plan: the ten planning declarations, then windows of seven entries each, a
+task, its revision, a `committed` stance about the revision with its `About`
+edge, a review, and, in the next window, a `Done` about the revision with its
+`About` edge. Each cell is the median of three `check` runs of a one-node
+proposal.
+
+| Entries | TypeCheck | + Reconnect | + Planning | all three |
+| ---: | ---: | ---: | ---: | ---: |
+| 498 | 0.035 s | 0.036 s | 0.056 s | 0.057 s |
+| 995 | 0.14 s | 0.13 s | 0.22 s | 0.20 s |
+| 1,996 | 0.44 s | 0.44 s | 1.4 s | 1.4 s |
+| 3,998 | 1.7 s | 1.8 s | 10.8 s | 11.1 s |
+
+Reconnect adds almost nothing: it judges a prefix only when its newest entry
+supersedes a node, with one scan of the view
+([RECONNECT §4](RECONNECT.md#4-sticky)). Planning grows with the cube of
+history length. Each seal rebuilds the planning graph of its prefix, and its
+per-item questions (what an item serves, its `Enables` sources, readiness,
+strict subgraphs) each scan every current edge of the view, so a seal costs
+items times edges, and replay judges every seal. At 4,000 entries a check
+under `lifecore init --default-analyzers` exceeds the 10-second busy window.
+
 ## 2. Output size
 
 A nonsticky warning about current state is re-emitted at every prefix where it
@@ -65,6 +90,10 @@ Not scheduled:
   `fresh_successors` still scan the view.
 - TypeCheck type-table or parse caching: every prefix re-parses each current
   declaration and rebuilds its type table.
+- Planning's seal judging: index the current `Enables`, `Helps`, `About`, and
+  `Until` edges by endpoint once per seal instead of scanning the view for
+  each item, so that a seal costs time linear in its prefix and replay under
+  Planning becomes quadratic ([section 1](#1-measurements)).
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
 - A repeatable benchmark in the repository, replacing these ad hoc measurements.

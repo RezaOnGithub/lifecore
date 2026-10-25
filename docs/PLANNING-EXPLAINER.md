@@ -19,11 +19,13 @@ in `lifecore-prod` replays the walk under TypeCheck and the planning analyzer,
 with the default configuration of PLANNING §11, and checks every position
 shown and what each seal, and each file checked but not applied, reports.
 
-One step cannot run today: `lifecore add-analyzer Planning` fails, because
-the application does not register the analyzer yet
-([PLAN §2.3](PLAN.md#23-planning)). The scratch run therefore applied the
-files under TypeCheck alone, and what the planning analyzer says about them
-below is what the test checks.
+The scratch run applied the files under TypeCheck alone, before the
+application registered the analyzer, and what the planning analyzer says
+about them below is what the test checks. A reader starts the walk with
+`lifecore init --default-analyzers`, which configures the planning analyzer
+and Reconnect after TypeCheck
+([INTERFACES §2](INTERFACES.md#2-cli-surface)); neither analyzer adds an
+entry, so the positions are the same.
 
 Diagram conventions: solid labeled arrows are edges, dashed arrows are
 predecessor links, and the number on a node is its position in the scratch

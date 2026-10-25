@@ -1,10 +1,12 @@
 # Reconnect analyzer
 
-Status: the analyzer is implemented in `lifecore-reconnect`, but the
-application does not register it yet, and the export marks of section 4 are
-not implemented. Planning's side of section 8 is: PLANNING has no Re-point
-suggestion and keeps Dropped connection; registering both analyzers and
-configuring them together remain ([PLAN §2.3](PLAN.md#23-planning)). This
+Status: the analyzer is implemented in `lifecore-reconnect` and registered
+by the application, but the export marks of section 4 are not implemented
+([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)). Section 8 is
+implemented: PLANNING has no Re-point suggestion and keeps Dropped
+connection, the application registers both analyzers, and
+`lifecore init --default-analyzers` configures them together
+([INTERFACES §2](INTERFACES.md#2-cli-surface)). This
 document owns the contract of a general-purpose analyzer, provisionally named
 Reconnect, packaged as `lifecore-reconnect` and registered as `Reconnect`. It
 relies on [SPEC](SPEC.md), [ANALYZERS](ANALYZERS.md), and [SUGGESTIONS](SUGGESTIONS.md),

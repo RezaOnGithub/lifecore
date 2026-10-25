@@ -492,6 +492,8 @@ dependencies = [
  "lifecore",
  "lifecore-app",
  "lifecore-dag-check",
+ "lifecore-prod",
+ "lifecore-reconnect",
  "lifecore-server",
  "lifecore-typecheck",
  "serde",

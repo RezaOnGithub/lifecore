@@ -22,7 +22,9 @@ behavior before implementing it:
 - Proposed, not implemented: none at present. A proposal gets its own
   directory under `docs/proposals/`; write or revise one with the `proposal`
   skill.
-- Implemented, not yet registered by the application:
+- Domain analyzers, registered by the application beside TypeCheck and
+  DAG Check (the `lifecore` binary's factories), and configured together by
+  `lifecore init --default-analyzers`:
   [PLANNING](docs/PLANNING.md) specifies the planning analyzer and its
   valuation, in `lifecore-prod`, with
   [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) as its walkthrough; and

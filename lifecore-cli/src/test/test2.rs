@@ -1,5 +1,11 @@
-use super::super::{factories, run_rpc};
-use lifecore_app::{AppError, Service, storage::StatePath};
+use super::super::{Cli, factories, initial_suite, run_rpc};
+use clap::Parser;
+use lifecore::analysis::{Config, MessageType};
+use lifecore_app::{
+    AppError, Service,
+    service::{AnalysisRunRequest, NoParams},
+    storage::StatePath,
+};
 use serde_json::Value;
 use std::{fs, io::Cursor, path::PathBuf};
 
@@ -103,4 +109,51 @@ fn rpc_reports_malformed_input_and_selection_failures_as_one_error_line() {
     let response: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(response["error"]["data"]["kind"], "database_missing");
     assert!(!missing.0.join("LifeCoreState.json").exists());
+}
+
+fn names(suite: &[Config]) -> Vec<&str> {
+    suite.iter().map(|config| config.name.as_str()).collect()
+}
+
+#[test]
+fn the_host_registers_every_analyzer_and_init_can_configure_the_defaults() {
+    assert_eq!(names(&initial_suite(false, false)), ["Type_Check"]);
+    assert_eq!(names(&initial_suite(true, false)), Vec::<&str>::new());
+    assert_eq!(
+        names(&initial_suite(false, true)),
+        ["Type_Check", "Reconnect", "Planning"]
+    );
+    // Planning assumes TypeCheck in its suite, so the defaults need it.
+    assert!(
+        Cli::try_parse_from(["lifecore", "init", "--default-analyzers", "--no-typecheck"]).is_err()
+    );
+    assert!(Cli::try_parse_from(["lifecore", "init", "--default-analyzers"]).is_ok());
+
+    let scratch = Scratch::new();
+    let initialized = scratch.service().init(&initial_suite(false, true)).unwrap();
+    assert_eq!(initialized.suite.0, initial_suite(false, true));
+    assert!(
+        initialized
+            .suite
+            .0
+            .iter()
+            .all(|config| config.configuration == "{}")
+    );
+    let described = scratch.service().describe(NoParams {}).unwrap();
+    assert_eq!(
+        described.registered,
+        ["DAG_Check", "Planning", "Reconnect", "Type_Check"]
+    );
+    // An empty database holds no inconsistency under the defaults; Planning
+    // suggests each of its ten canonical declarations.
+    let run = scratch
+        .service()
+        .run_analysis(AnalysisRunRequest::default())
+        .unwrap();
+    let observations = run.analysis.observations().collect::<Vec<_>>();
+    assert_eq!(observations.len(), 10);
+    assert!(observations.iter().all(|observation| {
+        observation.key.analyzer.name == "Planning"
+            && observation.key.kind == MessageType::Suggestion
+    }));
 }

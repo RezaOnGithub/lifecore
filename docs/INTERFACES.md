@@ -65,7 +65,7 @@ inconsistency gate ([SPEC §7](SPEC.md#7-mandatory-validation),
 
 | Command | Responsibility |
 | --- | --- |
-| `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out. This operation is outside RPC. |
+| `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out, and `--default-analyzers` also appends Reconnect and Planning. This operation is outside RPC. |
 | `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database, which must already be readable; otherwise print the error object and exit nonzero. Print the client URL as the only line on stdout ([section 4](#4-server-access)). `--port <port>` selects the loopback port, default 0 for one the system chooses; port 80 is refused at startup, because browsers omit it from `Host` and `Origin`, which the access checks require. `--ui-dir <dir>` serves the client from disk instead ([CLIENT §6](CLIENT.md#6-build-and-tests)). |
 | `lifecore rpc` | Read one request line from stdin, execute it locally, print one response line, exit. |
 | `lifecore check FILE` | Decode a JSON/TOML proposal and call shared proposal checking. |
@@ -97,6 +97,13 @@ invalidates outstanding plan IDs. There is no removal or reconfiguration.
 Default initialization stores the registered `Type_Check` analyzer with the
 original configuration string `"{}"`. The opt-out omits that suite entry; it does
 not weaken structural validation or silently skip other configured analyzers.
+`--default-analyzers` stores `Reconnect` and then `Planning` after it, each with
+`"{}"`, which a planning database needs together
+([RECONNECT §8](RECONNECT.md#8-planning-analyzer)). Planning assumes TypeCheck
+in its suite ([PLANNING §8](PLANNING.md#8-findings)), so the flag cannot be
+combined with `--no-typecheck`. A database adopting Planning later appends
+Reconnect with `add-analyzer` as well; the host registers TypeCheck, DAG Check,
+Reconnect, and Planning.
 The core remains configurable. Missing configured implementations remain errors
 when checking or applying changes.
 

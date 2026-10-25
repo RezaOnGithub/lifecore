@@ -11,6 +11,8 @@ use lifecore_app::{
     storage::StatePath,
 };
 use lifecore_dag_check::DagCheckFactory;
+use lifecore_prod::PlanningFactory;
+use lifecore_reconnect::ReconnectFactory;
 use lifecore_server::{Options, Ui};
 use lifecore_typecheck::TypeCheckFactory;
 use serde::Serialize;
@@ -32,8 +34,17 @@ struct Cli {
 enum Command {
     #[command(about = "Create the selected database without replacing an existing one")]
     Init {
-        #[arg(long, help = "Do not configure the Type_Check analyzer")]
+        #[arg(
+            long,
+            conflicts_with = "default_analyzers",
+            help = "Do not configure the Type_Check analyzer"
+        )]
         no_typecheck: bool,
+        #[arg(
+            long,
+            help = "Also configure Reconnect and Planning after Type_Check, each with configuration {}"
+        )]
+        default_analyzers: bool,
     },
     #[command(about = "Serve the browser client and HTTP RPC for the selected database")]
     Serve {
@@ -111,7 +122,33 @@ impl From<FormatArg> for Format {
 }
 
 fn factories() -> Vec<Box<dyn AnalyzerFactory>> {
-    vec![Box::new(TypeCheckFactory), Box::new(DagCheckFactory)]
+    vec![
+        Box::new(TypeCheckFactory),
+        Box::new(DagCheckFactory),
+        Box::new(ReconnectFactory),
+        Box::new(PlanningFactory),
+    ]
+}
+
+// The suite `init` stores. Planning assumes TypeCheck in the same suite
+// (PLANNING §8), which is why `--default-analyzers` conflicts with
+// `--no-typecheck`, and Reconnect comes with it, because Planning names a
+// connection a revision dropped only at the seal and never suggests
+// re-pointing it (RECONNECT §8). DAG Check has no default configuration.
+fn initial_suite(no_typecheck: bool, default_analyzers: bool) -> Vec<Config> {
+    let configured = |name: &str| Config {
+        name: name.into(),
+        configuration: "{}".into(),
+    };
+    let mut suite = vec![];
+    if !no_typecheck {
+        suite.push(configured(TypeCheckFactory::name()));
+    }
+    if default_analyzers {
+        suite.push(configured(ReconnectFactory::name()));
+        suite.push(configured(PlanningFactory::name()));
+    }
+    suite
 }
 
 fn service() -> Result<Service, AppError> {
@@ -263,15 +300,11 @@ fn write_response(output: &mut impl Write, response: &rpc::Response) -> io::Resu
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-    Command::Init { no_typecheck } => {
-        let suite = if no_typecheck {
-            vec![]
-        } else {
-            vec![Config {
-                name: TypeCheckFactory::name().into(),
-                configuration: "{}".into(),
-            }]
-        };
+    Command::Init {
+        no_typecheck,
+        default_analyzers,
+    } => {
+        let suite = initial_suite(no_typecheck, default_analyzers);
         emit(service().and_then(|service| service.init(&suite)))
     }
     Command::Serve { port, ui_dir } => serve(port, ui_dir),

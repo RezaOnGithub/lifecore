@@ -96,9 +96,9 @@ const WARNING = '{ "on_cycle": "warning" }';
 
 let page: Page;
 let ids: Record<string, EntryId>;
-// The registered cycle checker: whatever the host registers besides
-// TypeCheck.
-let checker: string;
+// The registered cycle checker, which takes the configuration this file
+// sends; the host also registers Reconnect and Planning.
+const checker = "DAG_Check";
 
 test.beforeAll(async ({ browser }) => {
   const applied = await call("proposal.apply", { proposal: { entries } });
@@ -109,9 +109,7 @@ test.beforeAll(async ({ browser }) => {
     ]),
   );
   const { registered, suite } = await call("database.describe", {});
-  const others = registered.filter((name) => name !== "Type_Check");
-  expect(others).toHaveLength(1);
-  checker = others[0] ?? "";
+  expect(registered).toEqual([checker, "Planning", "Reconnect", "Type_Check"]);
   expect(suite.map((config) => config.name)).toEqual(["Type_Check"]);
   page = await browser.newPage();
   await page.goto(launched().page);

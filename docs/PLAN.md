@@ -25,6 +25,10 @@ working around the document.
   ([CLIENT §5](CLIENT.md#5-prototype-scope)).
 - Checking cost reduced from worse than cubic to roughly quadratic in history
   length ([PERFORMANCE](PERFORMANCE.md)).
+- Domain analyzers: Reconnect ([RECONNECT](RECONNECT.md)) and Planning
+  ([PLANNING](PLANNING.md)) registered beside TypeCheck and DAG Check, and
+  configured together after TypeCheck by `lifecore init --default-analyzers`
+  ([INTERFACES §2](INTERFACES.md#2-cli-surface)).
 
 ## 2. Remaining work
 
@@ -49,13 +53,11 @@ Follow [SUGGESTIONS](SUGGESTIONS.md).
 - [ ] Pair each suggestion observation in analysis results with a ready-made
   proposal: a plan ID for the analyzed base, `acknowledges`, and the ordered
   actions. Do not produce them for uncommitted check candidates.
-- [ ] Register Reconnect (`lifecore-reconnect`, [RECONNECT](RECONNECT.md))
-  beside TypeCheck and DAG Check. Mark an exported edge action `satisfied`
-  when the edge exists in the current graph and `inapplicable` when an
-  endpoint is superseded, as application results outside the observation
+- [ ] Mark an exported Reconnect edge action `satisfied` when the edge exists
+  in the current graph and `inapplicable` when an endpoint is superseded, as
+  application results outside the observation
   ([RECONNECT §4](RECONNECT.md#4-sticky)). Specify the marks in SUGGESTIONS,
-  which owns export, and link to them from RECONNECT. Then add Reconnect where
-  ANALYZERS and PERFORMANCE describe the built-in analyzers, and update the
+  which owns export, and link to them from RECONNECT. Then update the
   Reconnect status lines here, in AGENTS.md, and in both RECONNECT documents.
 - [ ] Verify `acknowledges` in `check`/`apply` against observations whose range
   begins within the committed base, from the same replay, comparing lowered
@@ -74,14 +76,8 @@ Follow [SUGGESTIONS](SUGGESTIONS.md).
 ### 2.3 Planning
 
 Follow [PLANNING](PLANNING.md). The analyzer and the `valuation` function are
-built in `lifecore-prod`; nothing outside the crate uses them yet.
+built in `lifecore-prod`, and the application registers the analyzer.
 
-- [ ] Register Planning beside TypeCheck, DAG Check, and Reconnect, so that
-  `lifecore add-analyzer Planning` works, and configure Reconnect wherever
-  Planning is ([RECONNECT §8](RECONNECT.md#8-planning-analyzer)). Then add
-  Planning where ANALYZERS and PERFORMANCE describe the built-in analyzers,
-  and update the Planning status lines here, in AGENTS.md, and in both
-  PLANNING documents.
 - [ ] Build the executable of
   [PLANNING §12](PLANNING.md#12-delivery-without-a-core-change): a
   `lifecore-plan` binary or a CLI subcommand that opens the selected database

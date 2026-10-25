@@ -27,7 +27,8 @@ Both analyzer traits return `version() -> semver::Version`. The runner construct
 `AnalyzerIdentity` from the registered name, returned version, and original
 configuration string supplied to the factory unchanged. Version equality is
 exact, including prerelease and build metadata; it is not version-requirement
-matching. TypeCheck and DAG Check parse their own `CARGO_PKG_VERSION`. Semantic
+matching. The built-in analyzers, TypeCheck, DAG Check, Reconnect, and Planning,
+parse their own `CARGO_PKG_VERSION`. Semantic
 or encoding changes intended to invalidate earlier dismissals require a version
 change.
 
@@ -67,16 +68,20 @@ Grouping and dismissal
 compare complete keys, including the entire string; hashes are only collection
 implementation details and collisions do not establish equality.
 
-Configuration identity preserves exact original spelling. TypeCheck may accept
-empty text and empty JSON objects as equivalent behavior, but `""`, `" "`, and
-`"{}"` identify different configurations. DAG Check may normalize its parsed sets
+Configuration identity preserves exact original spelling. TypeCheck, Reconnect,
+and Planning may accept empty text and empty JSON objects as equivalent
+behavior, but `""`, `" "`, and `"{}"` identify different configurations. DAG Check may normalize its parsed sets
 and empty filter/range records internally; order, duplicate, or whitespace
 changes in the original string still produce distinct analyzer identities.
 
 Built-ins deterministically JSON-encode their typed findings. TypeCheck's
 certificate names the variant, the typed path/issue or schema details, and the
 exact subject entry, and nothing about the boundary. DAG Check's names the
-cyclic-component variant with sorted exact node/edge identities. Typed domain
+cyclic-component variant with sorted exact node/edge identities. Reconnect's
+names the lost edge and the successor
+([RECONNECT §5](RECONNECT.md#5-finding-identity)). Planning's names the
+rule's variant and its exact subject entries, and at a seal also the review
+([PLANNING §8](PLANNING.md#8-findings)). Typed domain
 data stays inside each analyzer; presentation wording is not a key.
 
 Ordinary evaluation boundaries, evaluation time, wording, and suggested
@@ -138,7 +143,13 @@ TypeCheck's warnings (`UnknownSuccessorType`, and
 encouraged or deprecated field issues) describe current declarations and current
 nodes, so they are nonsticky. Its once-judged transition findings are
 inconsistencies, which reports select at any boundary
-([SPEC §7.2](SPEC.md#72-successor-type-permission)).
+([SPEC §7.2](SPEC.md#72-successor-type-permission)). Reconnect's suggestions
+and Planning's seal warnings each judge an event once, a supersession or a
+closed window, so they are sticky
+([RECONNECT §4](RECONNECT.md#4-sticky),
+[PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings)); Planning's
+bootstrap suggestions and stale-review nudge describe current state and are
+nonsticky.
 
 History mode admits all replayed observations, including nonsticky advisories,
 subject to category and dismissal filters. Grouping first collects all observations

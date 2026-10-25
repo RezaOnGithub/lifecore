@@ -17,10 +17,9 @@ section 10, added in review, are made up in the same shape. A reader
 repeating the walk gets different origins, since each applied plan mints its
 own, and must copy them from each `apply` result's `operations` list.
 
-Two steps cannot run today. `lifecore add-analyzer Reconnect` fails because
-the application does not register the analyzer yet. Applying an exported
-proposal with its `acknowledges` table, in sections 4 and 10, fails because
-suggestion export and acknowledgment are not implemented for any analyzer
+One step cannot run today. Applying an exported proposal with its
+`acknowledges` table, in sections 4 and 10, fails because suggestion export
+and acknowledgment are not implemented for any analyzer
 ([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)). The same edges
 applied without `acknowledges` land at the same positions.
 
