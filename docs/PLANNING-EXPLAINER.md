@@ -22,7 +22,8 @@ PLANNING §11. The files pass the structural checks and TypeCheck as written.
 Diagram conventions: solid labeled arrows are edges, dashed arrows are
 predecessor links, and the number on a node is its position in the scratch
 run. Each stance and event is followed by its `About` edge, which is an entry
-of its own with the next position but is not drawn.
+of its own with the next position; the diagrams draw it as an arrow without
+its position.
 
 ## 1. The ask
 
@@ -451,12 +452,12 @@ intent = "branch"
 payload = { title = "Four private lessons" }
 ```
 
-Positions 27 and 28. Reconnect now offers each successor the four edges and
-the stance, exactly as in section 5. Reza applies the four `Enables` edges and
-re-points the old commitment to the club block, then writes a deferral for the
-private lessons. Written as one hand-made file instead of five exports, the
-edges are the same entries; the suggestions they satisfy are simply marked
-satisfied rather than acknowledged.
+Positions 27 and 28. Reconnect now offers each successor both `Enables` edges
+and the stance's `About` edge, exactly as in section 5. Reza applies the four
+`Enables` edges and re-points the old commitment to the club block, then
+writes a deferral for the private lessons. Written as one hand-made file
+instead of five exports, the edges are the same entries; the suggestions they
+satisfy are simply marked satisfied rather than acknowledged.
 
 ```toml
 [[entries]]
@@ -529,9 +530,11 @@ says exactly what that covers). A `Done` about one successor leaves the other
 open. The only thing the two share is their age, because the analyzer measures
 how long an item has existed from the root of its revision tree. The
 re-pointed edge, 33, passes the check of section 5 with no finding: the club
-block descends from 23 and 12, the stance's earlier targets. Those are the
-analyzer's two history queries: `root_of` for age, and `ancestors` for where a
-stance or `Did` may be re-pointed.
+block descends from 23 and 12, the stance's earlier targets. Those are two of
+the analyzer's three history queries: `root_of` for age, and `ancestors` for
+where a stance or `Did` may be re-pointed. The third, for the Dropped
+connection warning of section 5, finds the current successors of a superseded
+revision.
 
 ## 7. Too much on the plate
 
@@ -845,21 +848,22 @@ That one decision quiets both tasks.
 
 > An open item is **dormant** when its own current stance is a deferral that
 > is still a decision, or when it serves at least one item and every item it
-> serves is dormant or finished. An item **serves** the targets of its
-> `Enables` edges, and of its `Helps` edges into items that are not finished
-> or abandoned. A `committed` or `waiting` decision keeps an item in play
-> whatever it serves. Every open item that is not dormant is
+> serves is dormant, finished, or abandoned. An item **serves** the targets
+> of its `Enables` edges, and of its `Helps` edges into items that are not
+> finished or abandoned. A `committed` or `waiting` decision keeps an item in
+> play whatever it serves. Every open item that is not dormant is
 > **in play**. [PLANNING §7](PLANNING.md#7-in-play-ready-and-the-frontier).
 
 The trip is dormant by its own stance, 55. `Renew passport` and `Fix the bike`
-serve only the trip, so they are dormant too, whatever their own stances say.
-At the next seal, 70, the bike's own deferral has lapsed, since it stood
-through Review 4, yet the seal asks nothing about the bike and does not judge
-the trip's plan. When the trip's deferral lapses after Review 8, or sooner if
-Reza ends it with a `resumed` stance (section 11), both tasks return to play
-with it, and each needs a decision at the next seal. Had Reza committed to the
-bike instead, the commitment would keep the bike in play under the dormant
-goal, and its cost would count toward the budget.
+serve only the trip, and neither has a commitment, so they are dormant too,
+whatever their own deferrals say. At the next seal, 70, the bike's own
+deferral has lapsed, since it stood through Review 4, yet the seal asks
+nothing about the bike and does not judge the trip's plan. When the trip's
+deferral lapses after Review 8, or sooner if Reza ends it with a `resumed`
+stance (section 11), both tasks return to play with it, and each needs a
+decision at the next seal. Had Reza committed to the bike instead, the
+commitment would keep the bike in play under the dormant goal, and its cost
+would count toward the budget.
 
 > **Why does deferring a goal quiet its tasks?** Otherwise deferring a goal
 > would quiet only the goal, and each of its tasks would need its own
@@ -915,10 +919,33 @@ flowchart BT
 The two edge kinds still draw a line. `Enables` is strict, so the sabbatical
 cannot be done before its prerequisites; `Helps` blocks nothing, so the
 sabbatical can be done without the certificate. But both edges say what their
-source serves, and both put the source in play. The goal serves nothing, so
-it is in play; the sabbatical serves the goal, and the certificate serves the
-sabbatical, so both are in play too. The certificate has no prerequisites, so
-it is ready, and at the next seal it needs a decision like any other task.
+source serves, and a source that serves something in play is in play itself.
+The goal serves nothing, so it is in play; the sabbatical serves the goal, and
+the certificate serves the sabbatical, so both are in play too. The
+certificate has no prerequisites, so it is ready, and at the next seal it
+needs a decision like any other task. For now the sabbatical has no
+prerequisites either, so it is ready too; section 10 gives it one before the
+next seal.
+
+A year abroad would also be the best language course there is, and Reza is
+tempted to record that the sabbatical helps the certificate as well:
+
+```toml
+[[entries]]
+name = "sabbatical_helps_certificate"
+kind = "edge"
+ty_name = "Helps"
+from = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
+to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "59" } }
+```
+
+This file passes the structural checks and TypeCheck, which is all the scratch
+database runs, so it was checked and not applied. The planning analyzer would
+reject it at its only operation: the union of current `Enables` and `Helps`
+edges must be acyclic, and this edge closes a cycle with the certificate's
+`Helps` edge, 61. The inconsistency names the cycle's members, and it is
+judged at the edge that closes the cycle, not at the earlier one
+([decision 34](PLANNING.md#13-design-decisions)).
 
 Reza does not want it now, and defers it with a reason:
 
@@ -1401,8 +1428,10 @@ another matter. It has a prerequisite, and all of its prerequisites are done,
 so the goal is now *ready*. A ready goal is in the frontier like a ready task
 or project, and only leaving the frontier decides it: `sufficient`, a
 deferral, `abandoned`, or a new prerequisite. Had Reza sealed now, the goal
-would be an **Undecided item**, and the seal would fail until one of them was
-appended.
+would be an **Undecided item** until one of them was appended. It would not
+be that seal's only one: the private lessons' deferral stood through Review 7
+and has lapsed, and Run and Parents have no `Did` in this window, so each of
+them would be undecided too.
 
 > **Why is a finished plan undecided rather than broken?** Its plan is not
 > broken; it is done, and the goal is waiting to be called good enough or
@@ -1447,14 +1476,14 @@ payload = { title = "Learn to cook" }
 ```
 
 From that moment the goal is in play: it serves nothing, and nothing defers
-it. A goal never needs a stance at a seal, but it is judged by whether its
-plan can advance, and this one has no plan at all: no `Enables` source and no
-helping habit. So it goes straight to the top tier of the ranking, with the
-reason `BrokenPlan`, and at the next seal it would be a **Broken plan**
-inconsistency. Reza can give it a first ready task, defer it, or abandon it.
-A deferred goal comes back when its horizon lapses, like any other deferred
-item, and the cap means it comes back after twelve windows at most. Awareness
-has a cost, and the cost is one decision, not action.
+it. Until a goal is ready it needs no stance at a seal, but it is judged by
+whether its plan can advance, and this one has no plan at all: no `Enables`
+source and no helping habit. So it goes straight to the top tier of the
+ranking, with the reason `BrokenPlan`, and at the next seal it would be a
+**Broken plan** inconsistency. Reza can give it a first ready task, defer it,
+or abandon it. A deferred goal comes back when its horizon lapses, like any
+other deferred item, and the cap means it comes back after twelve windows at
+most. Awareness has a cost, and the cost is one decision, not action.
 
 > **Why is a new goal judged as broken rather than undecided?** No stance
 > kind keeps a goal in play and decides it, so a goal with no prerequisites
@@ -1516,16 +1545,17 @@ each row with structured reasons and rendered text.
 > It never affects transaction acceptance. Every change in rank has exactly
 > one cause: an appended entry.
 
-Taking the examples a few windows further, with the project of section 12
-still waiting on its hand-over, the ranking at the head might read, abridged
-to rows that illustrate each tier:
+Take the examples a few windows further, to a boundary in window 10, with
+the project of section 12 still waiting on its hand-over and the cooking goal
+of section 13 already recorded. The ranking there might read, abridged to
+rows that illustrate each tier:
 
 | Tier | Item | Reasons |
 | --- | --- | --- |
 | 0 | Goal: Learn to cook | `BrokenPlan` |
 | 0 | Task: Hand over at work | `Undecided` |
-| 1 | Task: Four private lessons | `OpenFor { seals: 5 }`, `DeadlineIn { reviews: 2 }` |
-| 2 | Concern: Parents | `Shortfall { have: 0, quota: 1 }` |
+| 1 | Task: Four private lessons | `OpenFor { seals: 10 }`, `DeadlineIn { reviews: 2 }` |
+| 2 | Habit: Run | `Shortfall { have: 1, quota: 3 }` |
 | 3 | Task: Language certificate | `Standing { kind: deferred, seals_left: 1 }`, `LapsesAtNextSeal`, `OpenFor { seals: 6 }` |
 | 4 | Goal: Live abroad a year | `Starved { seals: 2 }` |
 
@@ -1535,11 +1565,13 @@ The tiers, in order of pressure:
    goals among them, and goals and projects whose plan is broken. Sinks
    first, then by how many goals in play the item reaches.
 1. **Standing commitments** still open, by how long the item has existed,
-   then by nearest deadline. The private lessons have been open five windows
-   and committed for several of them. That is the honest shape of "the easy
-   tasks got done and this one did not", and it rises without an escalation
-   rule.
-2. **Habits and concerns below quota** so far this window.
+   then by nearest deadline. The private lessons have been open for ten
+   seals, counted from the root of their revision tree, and committed for
+   several of those windows. That is the honest shape of "the easy tasks got
+   done and this one did not", and it rises without an escalation rule.
+2. **Habits and concerns below quota** so far this window, once they have a
+   `Did` in it; one with none is undecided and ranks in tier 0. Reza has run
+   once this window, so Run is decided and short of its quota of three.
 3. **Deferred or waiting**, those lapsing at the next seal first, then by age.
    `seals_left` counts the seals, from the next one on, at which the stance
    still decides. The certificate's deferral decides at the next seal and no
@@ -1594,8 +1626,8 @@ increases, at most the last six, which is the default of the valuation's
 the median window is seven days; the latest review was 35 days before the
 deadline; so `DeadlineIn { reviews: 5 }`. A task inherits the nearest
 deadline of the goals and projects in play it enables, directly or through
-other items; a deferred or finished one sets no deadline, since a deferral
-means "not now". Everything in the estimate is graph data, so it is
+other items; a dormant, finished, or abandoned one sets no deadline, since a
+deferral means "not now". Everything in the estimate is graph data, so it is
 reproducible at any historical boundary.
 
 **A stale review.** If the configuration sets `stale_review_after_days`, the

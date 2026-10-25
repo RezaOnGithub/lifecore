@@ -59,9 +59,9 @@ use them begin in section 4.
    or a `Stance`, one decision about one revision, sets it aside: `deferred`
    for a while, `abandoned` for good, or `sufficient` when a goal is good
    enough. A deferral makes the item **dormant**, and with it everything
-   that serves only dormant or finished items, so one decision quiets a
-   whole branch. Only a `committed` stance owes action (decisions 7, 40, 41,
-   and 42).
+   that serves only dormant, finished, or abandoned items, so one decision
+   quiets a whole branch. Only a `committed` stance owes action (decisions
+   7, 40, 41, and 42).
 5. **Status changes are events, not revisions.** Completion appends a `Done`
    about the revision, which stays current, so its edges stay current and a
    bypassed prerequisite is a plain check. A finished revision is final, and
@@ -249,16 +249,21 @@ or `sufficient` if its current stance is `sufficient`; else `open`. Every
 state but `open` is **terminal**; only `done` satisfies an `Enables` edge.
 
 A terminal revision is final: a successor of a terminal revision is an
-inconsistency at the successor's own prefix. New work is a new item. A split
-is ordinary: each current revision carries its own connections, decisions,
-and state.
+inconsistency at the successor's own prefix. Whether the predecessor is
+terminal is judged in the view immediately before the successor, as
+TypeCheck judges a type transition: at the successor's own prefix the
+predecessor is superseded, its `About` edges are historical, and its state
+reads `open`. New work is a new item. A split is ordinary: each current
+revision carries its own connections, decisions, and state.
 
-The analyzer makes two history queries over revision trees. `root_of`
+The analyzer makes three history queries over revision trees. `root_of`
 measures how long an item has existed and whether a habit or concern is new at
 a seal (section 7); all revisions of a tree share that age. `ancestors` checks
 that a re-pointed `About` edge targets a descendant of an earlier target
-(section 8.3; decision 57). Both measure or validate; neither resolves a
-connection through a revision tree, so decision 3 holds.
+(section 8.3; decision 57). The Dropped connection warning looks up the
+current successors of a revision superseded in the window (section 8.5). Each
+measures, validates, or reports; none resolves a connection through a
+revision tree, so decision 3 holds.
 
 ## 5. Windows and seals
 
@@ -268,13 +273,17 @@ connection through a revision tree, so decision 3 holds.
 ```
 
 - **Window k** is the run of positions after `Review k` up to and including
-  `Review k+1`. Positions before the first review form window 0. Every
-  `Review` entry is its own seal, including several in one plan; a second
-  review in one plan seals an empty window.
+  `Review k+1`. Positions up to and including the first review form window 0.
+  Every `Review` entry is its own seal, including several in one plan; a
+  second review in one plan seals an empty window.
 - **Sealing** happens at the prefix whose newest entry is a `Review`. The
-  protocol rules of section 8.4 and 8.5 are judged at exactly those prefixes,
-  the way TypeCheck judges a type transition only at the successor's prefix
-  (decision 2).
+  protocol rules of sections 8.4 and 8.5 are judged at exactly those
+  prefixes, the way TypeCheck judges a type transition only at the
+  successor's prefix (decision 2).
+- An entry's **sealing review** is the first review after it, and an entry
+  with one is **sealed**. A stance's lifetime counts from its sealing review
+  (section 6), and the valuation reads the sealing review of an item's root
+  (section 9).
 - Stances appended in window k and sealed by `Review k+1` are the plan for
   window k+1. `Review k+1`'s `budget` bounds its sealed commitments.
 - At a non-seal boundary, the **open window** is the run since the latest
@@ -288,7 +297,7 @@ reviewed.
 ## 6. Lifetimes
 
 Lifetimes count seals from a stance's position; no lineage is involved
-(decision 6). The **sealing review** of a stance is the first review after it.
+(decision 6). The count starts at the stance's sealing review (section 5).
 
 - `committed` stands through the window its sealing review opens and lapses at
   the next seal.
@@ -302,7 +311,9 @@ Lifetimes count seals from a stance's position; no lineage is involved
 Relative to a seal, a stance appended in the window being sealed is
 **fresh**; one sealed earlier and still within its lifetime is **standing**.
 Relative to a non-seal boundary, fresh means appended in the open window.
-Fresh or standing stances are **decisions**; lapsed ones are history.
+Fresh or standing stances are **decisions**; lapsed ones are history. A
+`resumed` stance is the exception: it has no lifetime and is never a
+decision, even while fresh (section 3.3; decision 54).
 
 A lapsed stance stays the item's current stance until superseded, but it no
 longer decides anything. When a deferral lapses, the item returns to play by
@@ -351,7 +362,8 @@ to that boundary as section 6 defines them.
      and asked about like any item;
    - an open prerequisite, an `Enables` source, of an abandoned item still
      serves it and stays dormant for good, as the abandonment implies, unless
-     it also serves something in play;
+     it also serves something in play or its own `committed` or `waiting`
+     decision keeps it in play;
    - an open `Enables` source of a done or sufficient item cannot exist:
      section 8.3 rejects the `Done` or `sufficient` while a source is open,
      and section 8.2 rejects an `Enables` edge into a terminal target.
@@ -396,8 +408,11 @@ until the seal after the one that finds it new (section 8.5).
 Every rule names its judging prefix: the node's own prefix, the prefix of a
 particular edge, or a seal. Judging once at a fixed prefix keeps replay
 stable. Certificates name exact subject entries and never a boundary; seal
-certificates also name the sealing review, so a condition that persists into
-the next window is a distinct finding because the world holds a new review.
+certificates also name the review at the seal, so a condition that persists
+into the next window is a distinct finding because the world holds a new
+review. Where a rule does not list its subjects, they are the judged entry,
+for a rule of sections 8.1 to 8.3, and the judged revision and the review,
+for a rule at a seal.
 
 **Activation.** The analyzer acts only at entries of its vocabulary and at
 declarations of its types. An **entry of its vocabulary** is a node of one of
@@ -445,9 +460,10 @@ Inconsistencies: unknown `kind`; `committed` without `cost`; `deferred` or
 negative `cost`, `horizon` below 1, negative `budget` or `quota`; a
 `deferred` stance whose `horizon` exceeds `max_deferral_horizon`, unless the
 key is `null` (section 11; decisions 43 and 44); a `Review`, `Done`, or `Did`
-with a predecessor; a successor of a terminal revision; a successor of an
-`abandoned` or `sufficient` stance, whatever its kind, so that abandoning an
-item or calling a goal sufficient is as final as a `Done` (decision 56).
+with a predecessor; a successor of a revision that is terminal in the view
+immediately before it (section 4); a successor of an `abandoned` or
+`sufficient` stance, whatever its kind, so that abandoning an item or calling
+a goal sufficient is as final as a `Done` (decision 56).
 
 At the prefix of a declaration of its types that parses: one inconsistency
 per requirement of section 3.4 it does not meet, naming the declaration and
@@ -461,13 +477,16 @@ sorted member identities.
 
 ### 8.3 At an `About` or `Until` edge's prefix
 
-Inconsistencies: source not a stance or event, or target not an item; a kind
-that does not apply to the target's type; `Until` from anything but a
-`deferred` stance, or a second `Until`; a second `About` from a `Done`; any
-`About` to a terminal revision; `Done` whose target has an `Enables` source
-that is not done; `sufficient` whose target has an `Enables` source that is
-not done. The last two are judged immediately because events cannot be taken
-back (decision 10).
+Inconsistencies: endpoint types outside section 3.2, such as a source that is
+not a stance or event or a target that is not an item; a kind that does not
+apply to the target's type; `Until` from anything but a `deferred` stance, or
+a second `Until`; a second `About` from a `Done`; any `About` to a revision
+that is terminal in the view immediately before the edge, since the `About`
+edge of a `Done`, or of an `abandoned` or `sufficient` stance, makes its own
+target terminal; `Done` whose target has an `Enables` source that is not
+done; `sufficient` whose target has an `Enables` source that is not done.
+The last two are judged immediately because events cannot be taken back
+(decision 10).
 
 Two more inconsistencies concern re-pointing and the one current stance:
 
@@ -488,17 +507,18 @@ Two more inconsistencies concern re-pointing and the one current stance:
 ### 8.4 At a seal: inconsistencies
 
 - **Undecided item.** A frontier revision that is undecided. One finding per
-  revision; focus the revision.
+  revision; subjects are the revision and the review; focus the revision.
 - **Budget overrun.** The sum of `cost`, counted once per fresh `committed`
   stance that is the current stance of at least one open task, exceeds the
   review's `budget` (decision 60). A stance re-pointed to both halves of a
-  split counts once. A `committed` decision keeps its task in play
+  split counts once. Subjects are the review and every counted stance. Every
+  open task counts, and a `committed` decision keeps its task in play
   (section 7), so no commitment escapes the budget (decision 48).
 - **Broken plan.** A `Goal` or `Project` in play whose strict subgraph holds
   no ready item and no open `External` with a fresh or standing `waiting`
   stance, and into which (the item or its strict subgraph) no `Habit` in play
   currently `Helps`. No other helping work rescues a plan (decisions 45 and
-  49).
+  49). Subjects are the goal or project and the review.
 
 A dormant goal or project is not judged, and a done project is not open, so
 neither is ever broken. A ready goal or project is never broken either: its
@@ -520,8 +540,10 @@ a deferral before the next seal (decisions 45 and 61).
 - **Dropped connection.** One per connection, whether an `Enables`, `Helps`,
   `About`, or `Until` edge, that touched a revision superseded in the window
   and has no equivalent current connection involving a current successor.
-  A warning, not a gate, because dropping a connection is sometimes what the
-  edit meant (decision 17).
+  Subjects are the connection, each revision it touched that was superseded
+  in the window together with that revision's current successors, and the
+  review. A warning, not a gate, because dropping a connection is sometimes
+  what the edit meant (decision 17).
 
 Sticky because each judges a closed window once; the next window gets its
 own finding (decision 18).
@@ -546,11 +568,12 @@ events.
 Between reviews the valuation ranks revisions at the requested boundary,
 with the terms of section 7 judged at that boundary. The ranking covers the
 revisions in play and, in tier 3 only, the revisions whose own current stance
-is a standing `deferred`. A revision that is dormant only because what it
-serves is dormant is not ranked (decision 51). Each revision appears once, in
-the first tier whose members include it. Rows are ordered by tier, then the
-tier's keys, then root position ascending, then the revision's own position
-ascending, which orders split siblings that share a root (decision 70).
+is a standing `deferred`. A revision that is dormant only through what it
+serves, everything it serves being dormant or terminal, is not ranked
+(decision 51). Each revision appears once, in the first tier whose members
+include it. Rows are ordered by tier, then the tier's keys, then root
+position ascending, then the revision's own position ascending, which orders
+split siblings that share a root (decision 70).
 
 | Tier | Members | Keys |
 | --- | --- | --- |
@@ -584,8 +607,9 @@ structured value; clients show the text.
   (decisions 52 and 67).
 - `Shortfall { have, quota }`: a habit or concern below quota so far in the
   open window.
-- `New`: a habit or concern in its grace period (section 7), which ranks in
-  tier 5 (decision 69).
+- `New`: a new habit or concern (section 7), which ranks in tier 5; a seal
+  would give it the Grace period warning instead of judging it (decision
+  69).
 
 `seals_left` is the number of seals after the boundary at which the stance
 is still a decision, counting the next seal. A standing `deferred` or
@@ -593,9 +617,11 @@ is still a decision, counting the next seal. A standing `deferred` or
 window *k*, has `seals_left` = *j* + *n* − *k*, which is at least 1, because
 after its last seal it has lapsed and is no longer standing.
 `LapsesAtNextSeal` is given exactly when `seals_left` is 1: the next seal is
-the last one the stance decides, and the item returns to play in the window
-that seal opens (section 6). The two reasons overlap: `LapsesAtNextSeal`
-repeats `seals_left: 1`, and it is what tier 3's first key sorts on.
+the last one the stance decides. In the window that seal opens, a deferred
+item returns to play unless it is dormant through what it serves, and a
+waited-on external, already in play, needs a new decision (section 6). The
+two reasons overlap: `LapsesAtNextSeal` repeats `seals_left: 1`, and it is
+what tier 3's first key sorts on.
 
 The valuation has no identity, no dismissal, and no persistence; it never
 affects transaction acceptance; it is computed only at the requested
@@ -736,9 +762,10 @@ traits, the runner, or [ANALYZERS](ANALYZERS.md).
    the client renders tiers and reason text with links into the inspector.
    Fixtures and the client contract then carry the `Valuation` shape.
 
-Nothing else is needed: `root_of`, `ancestors`, the all-edges selection for
-the dropped-connection rule and the re-pointing check, newest-entry
-inspection, timestamp fields, and suggestion actions exist.
+Nothing else is needed: `root_of`, `ancestors`, current descendants for the
+dropped-connection rule, the all-edges selection for that rule, the
+re-pointing check, and `Starved`, newest-entry inspection, timestamp fields,
+and suggestion actions exist.
 
 ## 13. Design decisions
 
@@ -835,8 +862,8 @@ callouts here.
     differently (sections 8.5 and 8.6).
 17. **Dropped connection is a warning, not a gate.** Rejected: an
     inconsistency that fails the seal. Reason: dropping a connection is
-    sometimes what the edit meant (section 8.5; open question 4 revisits
-    this once re-pointing is one click).
+    sometimes what the edit meant (section 8.5; decision 64 keeps it a
+    warning once re-pointing is one click).
 18. **Seal warnings are sticky.** Rejected: nonsticky warnings re-emitted
     while the condition holds. Reason: each judges a closed window once, and
     the next window gets its own finding because its certificate names the
@@ -874,7 +901,7 @@ callouts here.
     rules. Reason: adopting the analyzer on a database that already holds
     reviews, or upgrading to stricter seal rules, must not lock the database
     behind a historical seal inconsistency. It covers seals only; sections
-    8.1 to 8.3 still judge all history (section 11, open question 7).
+    8.1 to 8.3 still judge all history (section 11; decision 66).
 26. **A `Done` has exactly one `About` edge and is never re-pointed.**
     Rejected: re-pointing a `Done` like a stance or `Did`. Reason: its
     target is final, so there is never a successor to point at (section 4).
@@ -1003,10 +1030,10 @@ callouts here.
     consequences follow. The configuration string is part of finding
     identity (decision 15) and an analyzer is never reconfigured
     ([INTERFACES §2](INTERFACES.md#2-cli-surface)), so changing the cap means
-    adding a new planning instance, the same concern open question 13 raises
-    for `horizon_windows`. And section 8.1 judges all history, so adopting
-    the analyzer on a database whose history holds longer deferrals is
-    rejected (open question 7) (sections 3.3, 8.1, and 11).
+    adding a new planning instance, the concern that led decision 62 to move
+    `horizon_windows` out of the configuration. And section 8.1 judges all
+    history, so adopting the analyzer on a database whose history holds
+    longer deferrals is rejected (decision 66) (sections 3.3, 8.1, and 11).
 44. **The cap is `max_deferral_horizon`, 12 by default and `null` for none;
     it caps `deferred` stances only, and is an inconsistency at the stance's
     own prefix.** Rejected: no cap by default; capping `waiting` as well;
@@ -1093,7 +1120,6 @@ callouts here.
     differs: the error text replaces TypeCheck's finding. If TypeCheck
     rejects a field planning does not read, planning runs normally
     (section 8; decision 39).
-
 54. **A `resumed` stance ends a deferral at once.** It applies to any item,
     carries only `at` and an optional `reason`, and is never a decision: it
     decides no frontier revision and has no lifetime. Superseding a
@@ -1310,7 +1336,11 @@ history-sensitive cases checked before and after the relevant append.
    the closing edge's prefix, not earlier.
 4. `Done` with an open `Enables` source rejected at the `About` prefix;
    accepted after the source's `Done`; the edge stays current throughout. A
-   successor of a done revision is rejected at its own prefix.
+   successor of a done revision is rejected at its own prefix. A `Done`'s
+   `About` edge to an open task is accepted although it makes the task done,
+   and a second `Done` about that task is rejected at its `About` edge's
+   prefix and not at the prefix before; likewise an `abandoned` stance about
+   a habit is accepted, and a `Did` about the abandoned habit is rejected.
 5. A split task yields two frontier revisions; a `Done` about one leaves the
    other open; both share `OpenFor`.
 6. Revising a task makes its stance's `About` historical; without a new
@@ -1337,10 +1367,11 @@ history-sensitive cases checked before and after the relevant append.
     contributions.
 11. Shortfall counts the window's `Did` events, is sticky, and a single `Did`
     decides a habit in play. Record a habit and seal: one Grace period
-    warning, and neither Undecided item nor Shortfall about it; revising the
-    habit in that window does not extend the grace. Seal again: judged.
-    Defer it and seal: neither in the frontier nor short. Let the deferral
-    lapse and seal: judged again. Check before and after each append.
+    warning, and neither Undecided item nor Shortfall about it. Revise the
+    habit in the next window and seal again: judged, because the revision
+    does not restart the grace. Defer it and seal: neither in the frontier
+    nor short. Let the deferral lapse and seal: judged again. Check before
+    and after each append.
 12. Broken plan for a goal in play with nothing ready and nothing waited on,
     and for a new goal with no `Enables` source; none for a deferred goal;
     not rescued by a helping task; rescued by a `waiting` external or by a
@@ -1379,19 +1410,20 @@ history-sensitive cases checked before and after the relevant append.
     finding at their prefixes; a `Note` with an `About` edge to a `Task` is
     an inconsistency at the edge's prefix.
 18. With TypeCheck in the suite, a plan appending a `Review` with a text
-    `budget` is rejected, and the planning analyzer emits no finding about
-    that review.
+    `budget` is rejected, whether the planning analyzer returns an error at
+    that prefix or not (decision 53), and the planning analyzer emits no
+    finding of its own about the budget's type.
 19. Dormancy: defer a goal, and every task and habit that serves only it is
-    dormant at the deferral's sealing review and at the boundaries before
-    it, so none is in the frontier and the goal is not judged for Broken
-    plan. A task that also serves a goal in play stays in play. A task under
-    the deferred goal with a fresh `committed` stays in play, keeps its
-    prerequisites in play, and counts toward the budget. When the deferral
-    lapses, all of them are in play again at the next seal. A habit that
-    helps only an abandoned goal serves nothing and is in play; an open
-    `Enables` source of an abandoned goal is dormant. Check before and after
-    the deferral, at the seal where it stands for the last time, and at the
-    one after.
+    dormant at every boundary from the prefix of the deferral's `About` edge
+    through the deferral's sealing review, so none is in the frontier and the
+    goal is not judged for Broken plan. A task that also serves a goal in
+    play stays in play. A task under the deferred goal with a fresh
+    `committed` stays in play, keeps its prerequisites in play, and counts
+    toward the budget. When the deferral lapses, all of them are in play
+    again at the next seal. A habit that helps only an abandoned goal serves
+    nothing and is in play; an open `Enables` source of an abandoned goal is
+    dormant. Check before and after the deferral, at the seal where it stands
+    for the last time, and at the one after.
 20. Deferral cap: a `deferred` stance whose `horizon` equals
     `max_deferral_horizon` is accepted; one above it is an inconsistency at
     the stance's own prefix and not at the prefix before; with the key
@@ -1418,3 +1450,11 @@ history-sensitive cases checked before and after the relevant append.
 25. Valuation options: a `deadline_sample_windows` other than 6 changes
     `DeadlineIn` and no finding; an analyzer configuration with
     `horizon_windows` is rejected as an unknown field.
+26. Field and kind rules: an unknown `kind`, `committed` without `cost`,
+    `deferred` or `waiting` without `horizon`, `cost` or `horizon` on a kind
+    that forbids it, a negative `cost`, `budget`, or `quota`, a `horizon` of
+    0, and a `Review`, `Done`, or `Did` with a predecessor are each an
+    inconsistency at the node's own prefix and not at the prefix before. A
+    kind about a type it does not apply to, an `Until` from a stance that is
+    not `deferred`, and `sufficient` about a goal with an open `Enables`
+    source are each an inconsistency at the edge's prefix.
