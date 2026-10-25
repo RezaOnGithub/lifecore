@@ -35,11 +35,11 @@ function Section({
   );
 }
 
-// The sidebar: the types of the view, the Explore and Findings screens,
-// and the places and names kept for this database. The type list on show
-// is the last one loaded: a reload only adds a hint, so the entries, and
-// the active one, stay where they are. `explore` is the Explore step the
-// link reopens.
+// The sidebar: the types of the view, the Explore, Findings, and Plan
+// screens, and the places and names kept for this database. The type list
+// on show is the last one loaded: a reload only adds a hint, so the
+// entries, and the active one, stay where they are. `explore` is the
+// Explore step the link reopens.
 export const Sidebar = memo(function Sidebar({
   types,
   screen,
@@ -115,6 +115,18 @@ export const Sidebar = memo(function Sidebar({
               onClick={() => open({ kind: "findings" })}
             >
               Findings
+            </button>
+          </li>
+          {/* Under Findings, though not a finding: the planning ranking has
+              no identity and nothing to run or dismiss. */}
+          <li className={screen.kind === "valuation" ? "sub active" : "sub"}>
+            <button
+              type="button"
+              className="link"
+              title="the planning valuation: what presses between reviews"
+              onClick={() => open({ kind: "valuation" })}
+            >
+              Plan
             </button>
           </li>
         </ul>

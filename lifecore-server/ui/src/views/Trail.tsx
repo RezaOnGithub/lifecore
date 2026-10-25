@@ -35,6 +35,8 @@ function stepName(
     }
     case "findings":
       return "Findings";
+    case "valuation":
+      return "Plan";
     case "operation":
       return `+${screen.name}`;
     case "import":

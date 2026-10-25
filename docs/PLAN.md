@@ -29,7 +29,8 @@ working around the document.
   ([PLANNING](PLANNING.md)) registered beside TypeCheck and DAG Check, and
   configured together after TypeCheck by `lifecore init --default-analyzers`
   ([INTERFACES §2](INTERFACES.md#2-cli-surface)). The planning valuation is
-  printed by `lifecore valuation` and served by `planning.valuation`.
+  printed by `lifecore valuation`, served by `planning.valuation`, and shown
+  by the client's Plan screen ([UI §7](UI.md#7-planning-valuation)).
 
 ## 2. Remaining work
 
@@ -80,9 +81,6 @@ Follow [PLANNING](PLANNING.md). The analyzer and the `valuation` function are
 built in `lifecore-prod`, the application registers the analyzer, and
 `lifecore valuation` and `planning.valuation` deliver the ranking
 ([PLANNING §12](PLANNING.md#12-delivery-without-a-core-change)).
-
-- [ ] A browser screen for the ranking, under Findings: its tiers in order,
-  each row's reason text, and links into the inspector.
 
 ### 2.4 Final verification
 

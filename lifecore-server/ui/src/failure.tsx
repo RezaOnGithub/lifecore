@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import type { ApplicationErrorData, ErrorKind } from "./contract.ts";
+import { IdLink } from "./links.tsx";
+import { typeName } from "./model/labels.ts";
 import { HttpRejectionError, RpcError, TransportError } from "./rpc.ts";
 
 // Headings for the kinds a reader is likely to meet. Any other kind,
@@ -16,6 +18,7 @@ const HEADINGS: Partial<Record<ErrorKind, string>> = {
   graphviz_unavailable: "Graphviz is not available",
   graphviz_failed: "Graphviz could not draw this view",
   invalid_seeds: "Query seeds refused",
+  valuation_failed: "The plan cannot be ranked",
   invalid_params: "The server did not accept the request",
   backend_failure: "The server failed while answering",
   internal: "Internal server error",
@@ -24,7 +27,7 @@ const HEADINGS: Partial<Record<ErrorKind, string>> = {
 // A sentence in place of a server message that names entries the way the
 // screens do not, as `EntryId { position: …, origin: … }`; null keeps the
 // server's message.
-function sentence(data: ApplicationErrorData): string | null {
+function sentence(data: ApplicationErrorData): ReactNode | null {
   switch (data.kind) {
     case "entry_not_found":
       return `Entry @${data.id.position} is not in this view: the view ends before it, or the database holds another entry at that position.`;
@@ -37,6 +40,16 @@ function sentence(data: ApplicationErrorData): string | null {
             `@${id.position} ${reason === "absent" ? "is not in this view" : "is an edge"}`,
         )
         .join(", ")}.`;
+    // The entry is in the view the valuation read, so it links; the
+    // problem reads "is missing" or "should be <kind>, found <kind>".
+    case "valuation_failed":
+      return (
+        <>
+          Field <code>{data.field}</code> of {typeName(data.ty_name)}{" "}
+          <IdLink id={data.entry} /> {data.problem}, and the ranking reads that
+          field.
+        </>
+      );
     default:
       return null;
   }
@@ -44,7 +57,7 @@ function sentence(data: ApplicationErrorData): string | null {
 
 function describe(failure: unknown): {
   heading: ReactNode;
-  message: string;
+  message: ReactNode;
   details: ReactNode;
 } {
   if (failure instanceof HttpRejectionError) {

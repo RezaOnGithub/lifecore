@@ -6,7 +6,7 @@ import type {
 import { useData } from "../data.tsx";
 import { evaluationParams } from "../draft/model.ts";
 import { FailureView } from "../failure.tsx";
-import { IdLink } from "../links.tsx";
+import { IdLink, useOpen } from "../links.tsx";
 import {
   categoryCounts,
   clusterGroups,
@@ -276,6 +276,7 @@ function moved(
 // labeled with its own view and inputs, until the next one.
 export function FindingsScreen() {
   const store = useAnalysisRuns();
+  const open = useOpen();
   const { asOf, refresh } = useData();
   const memo = store.screen();
   const { evaluation, last } = memo;
@@ -321,7 +322,16 @@ export function FindingsScreen() {
         <p className="muted">
           Run replays the stored suite of analyzers over every prefix of the
           selected history; on a large database it takes a while. Each Run reads
-          the stored state afresh, including writes by other clients.
+          the stored state afresh, including writes by other clients. What
+          presses between reviews is not a finding: the planning ranking is on{" "}
+          <button
+            type="button"
+            className="link"
+            onClick={() => open({ kind: "valuation" })}
+          >
+            Plan
+          </button>
+          , with nothing to run.
         </p>
       )}
       {state?.status === "failed" && <FailureView failure={state.failure} />}

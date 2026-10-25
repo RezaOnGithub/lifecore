@@ -88,9 +88,10 @@ The prototype covers browsing types, entries, lineage, and relationships at any
 boundary; Explore queries shown as tables, threads, or Graphviz drawings; drafts
 built by form, raw JSON, or import, with check, explicit apply, and
 reconnection after revisions; findings with current/history selection, sticky
-historical labels, dismissal reasons and notes, and restore; and appending
-analyzers. Suggestion selection, comparison between boundaries, and refine
-steps are not built ([PLAN §2](PLAN.md#2-remaining-work)).
+historical labels, dismissal reasons and notes, and restore; the planning
+valuation by tier; and appending analyzers. Suggestion selection, comparison
+between boundaries, and refine steps are not built
+([PLAN §2](PLAN.md#2-remaining-work)).
 
 ## 6. Build and tests
 

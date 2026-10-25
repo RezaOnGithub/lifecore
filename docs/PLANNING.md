@@ -844,8 +844,9 @@ traits, the runner, or [ANALYZERS](ANALYZERS.md).
 3. **Application.** The application service's one RPC method,
    `planning.valuation` ([RPC §2](RPC.md#2-methods)), calls the same
    function. Fixtures and the client contract carry the `Valuation` shape.
-   A browser screen that renders tiers and reason text with links into the
-   inspector remains ([PLAN §2.3](PLAN.md#23-planning)).
+   The browser client's Plan screen, under Findings, renders the tiers and
+   each reason's text with links into the inspector
+   ([UI §7](UI.md#7-planning-valuation)).
 
 Nothing else is needed: `ancestors`, for planning roots and the re-pointing
 checks; current descendants and the all-edges selection, for the
