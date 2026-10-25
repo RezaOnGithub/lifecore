@@ -130,3 +130,34 @@ workflows.
   publication, including dismissal edits. For a single user, a page refresh
   re-reads everything; revisit if dismissals grow large or a server cache is
   added, which could otherwise check file metadata.
+- One more pass over DagCheck (`lifecore-dag-check`), tightening its public
+  API and its JSON configuration (`filter`, `on_cycle`, `range`).
+- A concrete metatype for `Type` in place of the built-in one
+  ([SPEC §6.1](SPEC.md#61-built-in-metatype)). The built-in metatype fixes the
+  declaration payload and gives `Type` no edge permissions, so a user cannot
+  annotate declarations with fields of their own or link them to other nodes:
+  the same customization problem
+  [PLANNING §3.4](PLANNING.md#34-amending-the-declarations) addresses for
+  planning's types. This revisits the AGENTS.md invariant that TypeCheck has a
+  fixed built-in metatype and no bootstrap node.
+- Pooled failure reporting. Analyzer inconsistencies are already collected in
+  full, but two paths report only the first failure: `transaction::prepare`
+  returns at the first structural or intent failure, before any analyzer
+  runs, and the analysis runner aborts on the first analyzer error, discarding
+  every observation already recorded, TypeCheck's included
+  ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)). Pool every
+  failure a check can find instead.
+- An `info` message kind beside `inconsistency`, `warning`, and `suggestion`
+  ([ANALYZERS §2](ANALYZERS.md#2-finding-identity-and-observations)), for
+  notices that need no action. Planning's Grace period notice
+  ([PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings)) is a sticky
+  warning until then. It touches ANALYZERS, [MESSAGES](MESSAGES.md),
+  [RPC](RPC.md), the client contract and its fixtures
+  ([CLIENT §2](CLIENT.md#2-contract-and-fixtures)), and [UI](UI.md).
+- State in [ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization) that an
+  analyzer reports failure by returning `Err` and never panics. A panic
+  crashes the CLI, or the server request on its blocking task, and the rule
+  applies to every analyzer, not only to planning.
+- Namespacing in the type system, so that two vocabularies can share a type
+  name or an edge label. Planning owns its names outright until then
+  ([PLANNING](PLANNING.md#13-design-decisions), decision 35).

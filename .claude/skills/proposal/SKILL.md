@@ -29,6 +29,15 @@ rule, a vocabulary section with two tables:
 Every term used in a rule is defined before the rule uses it. Each rule names
 its judging prefix and the exact entries its certificate carries.
 
+State the analyzer's **activation conditions** in one place before its
+findings: the kinds of prefix at which it can emit a new finding, such as one
+whose newest entry is a node with a predecessor, an entry of the proposal's
+own types or labels, or a declaration of one of its types, and that every
+other prefix yields nothing. Say so plainly even when the answer is every
+prefix. Name any nonsticky message re-emitted at other prefixes while its
+condition holds. Name the analyzers the proposal relies on, such as
+TypeCheck, and the checks it leaves to them.
+
 Keep a **Design decisions** section and append to it whenever a choice is
 made, including choices made in a review conversation. One entry per
 decision: the decision in a sentence, the alternative it rejected, and the
@@ -37,7 +46,8 @@ without one, the next writer inherits the rule as a principle and loses the
 reason, which is how rules drift past what was meant.
 
 Keep an **Open questions** section and an **Acceptance tests** section with
-structural assertions, checked before and after the relevant append.
+structural assertions, checked before and after the relevant append. Include
+a prefix outside the activation conditions that yields nothing.
 
 ## The explainer
 
