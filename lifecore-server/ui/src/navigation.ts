@@ -75,12 +75,19 @@ export const defaultExploreView: ExploreView = {
 };
 
 // The planning valuation's screen remembers the deadline sample as typed,
-// empty for the server's default.
+// empty for the server's default, and the sample its ranking was last read
+// with, null for the default. They differ while typing pauses and while
+// what is typed is not a number, so a step returned to reads with the
+// sample it showed.
 export interface ValuationView {
   windows: string;
+  applied: number | null;
 }
 
-export const defaultValuationView: ValuationView = { windows: "" };
+export const defaultValuationView: ValuationView = {
+  windows: "",
+  applied: null,
+};
 
 export type ExploreScreen = {
   kind: "explore";

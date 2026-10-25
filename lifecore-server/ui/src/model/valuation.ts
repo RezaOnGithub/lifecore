@@ -1,13 +1,16 @@
 import type {
   AnalyzerConfig,
   AsOfParams,
-  EntryId,
+  NodeEntry,
+  PayloadProblem,
   Ranked,
   Reason,
   ValuationParams,
 } from "../contract.ts";
+import { labelField, rowLabel } from "./labels.ts";
+import { kindWord } from "./schema.ts";
 
-export type Tier = Ranked["tier"];
+type Tier = Ranked["tier"];
 
 // The tiers in order of pressure, named by what their members have in
 // common (PLANNING §9); the summary says how a tier's rows are ordered,
@@ -101,7 +104,7 @@ export function tierList(tiers: readonly Tier[]): string {
 // How a reason stands out, read from its structured value; its words are
 // always the server's text. Urgent: what the next seal would reject, and a
 // deadline already passed. Soon: a deferral or wait that the next seal ends.
-export type Emphasis = "urgent" | "soon" | null;
+type Emphasis = "urgent" | "soon" | null;
 
 export function emphasis(reason: Reason): Emphasis {
   switch (reason.name) {
@@ -116,8 +119,23 @@ export function emphasis(reason: Reason): Emphasis {
   }
 }
 
-export function rankedIds(ranked: readonly Ranked[]): EntryId[] {
-  return ranked.map((row) => row.revision);
+// What a row shows of its revision: the row label (UI §1), the type, and
+// whether a field labels it, else the label already reads `<type>
+// @<position>`. Nothing else is kept of a label read, so nothing that
+// depends on the boundary it was read at, such as `current`, can show for
+// a row of another valuation.
+export interface RowName {
+  label: string;
+  ty_name: string;
+  labeled: boolean;
+}
+
+export function rowName(node: NodeEntry): RowName {
+  return {
+    label: rowLabel(node),
+    ty_name: node.ty_name,
+    labeled: labelField(node) !== null,
+  };
 }
 
 // The deadline sample as typed: empty for the server's default, else a
@@ -144,6 +162,24 @@ export function sampleChoice(text: string): SampleChoice {
     : { kind: "invalid", problem: "too many windows" };
 }
 
+// The sample a step applies once typing pauses: what is typed when it is
+// the default or a whole number, else the one applied before, so text that
+// is not a number never changes the ranking.
+export function appliedSample(
+  text: string,
+  applied: number | null,
+): number | null {
+  const choice = sampleChoice(text);
+  switch (choice.kind) {
+    case "default":
+      return null;
+    case "windows":
+      return choice.windows;
+    case "invalid":
+      return applied;
+  }
+}
+
 // The request: the top bar's boundary, and the sample only when one is
 // chosen, so the default is the server's.
 export function valuationParams(
@@ -157,8 +193,16 @@ export function valuationParams(
 
 // The registered name of the planning analyzer. The ranking never reads
 // the suite; whether it holds Planning only says whether seals are judged.
-export const PLANNING = "Planning";
+const PLANNING = "Planning";
 
 export function configuresPlanning(suite: readonly AnalyzerConfig[]): boolean {
   return suite.some((analyzer) => analyzer.name === PLANNING);
+}
+
+// The end of the sentence for `valuation_failed`, after "Field <f> of <T>
+// @<n>", with the payload kinds worded as in declaration errors.
+export function problemWords(problem: PayloadProblem): string {
+  return problem.kind === "missing"
+    ? "is missing"
+    : `should be ${kindWord(problem.expected)}, found ${kindWord(problem.found)}`;
 }

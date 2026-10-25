@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Ranked, Reason, Valuation } from "../contract.ts";
+import type { NodeEntry, Ranked, Reason, Valuation } from "../contract.ts";
 import * as recorded from "../fixtures/planning.valuation.ts";
 import {
+  appliedSample,
   configuresPlanning,
   emphasis,
-  rankedIds,
+  problemWords,
+  rowName,
   sampleChoice,
   TIERS,
   tierGroups,
@@ -15,6 +17,7 @@ import {
 
 const head: Valuation = recorded.response.result;
 const asOf: Valuation = recorded.asOfResponse.result;
+const unsampled: Valuation = recorded.unsampledResponse.result;
 
 const positions = (rows: readonly Ranked[]) =>
   rows.map((row) => row.revision.position);
@@ -72,6 +75,24 @@ test("tiers without rows are listed apart, in order", () => {
   });
 });
 
+test("the deadline sample may reorder a tier, and the screen follows the server", () => {
+  const tier1 = (valuation: Valuation) =>
+    positions(
+      tierGroups(valuation.ranked).shown.find(({ tier }) => tier === 1)?.rows ??
+        [],
+    );
+  // With a sample, the passed deadline sorts first; without one, neither
+  // task has a deadline reason, and they keep their roots' order.
+  assert.deepEqual(tier1(head), ["20", "11"]);
+  assert.deepEqual(tier1(unsampled), ["11", "20"]);
+  const names = unsampled.ranked.flatMap(({ reasons }) =>
+    reasons.map(({ reason }) => reason.name),
+  );
+  assert.equal(names.includes("deadline_in"), false);
+  assert.equal(names.includes("deadline_passed"), false);
+  assert.deepEqual(valuationParams({}, 0), recorded.unsampledRequest.params);
+});
+
 test("a tier out of the server's order keeps the order within it", () => {
   const row = (position: string, tier: Ranked["tier"]): Ranked => ({
     revision: { origin: "o", position },
@@ -112,32 +133,50 @@ test("emphasis reads the structured reason, never its text", () => {
 
 test("decimal reasons stay strings", () => {
   const reasons = head.ranked.flatMap((row) => row.reasons);
-  const shortfall = reasons.find(({ reason }) => reason.name === "shortfall");
-  const deadline = reasons.find(({ reason }) => reason.name === "deadline_in");
-  assert.deepEqual(shortfall?.reason, {
+  const find = (name: Reason["name"]) =>
+    reasons.find(({ reason }) => reason.name === name)?.reason;
+  assert.deepEqual(find("shortfall"), {
     name: "shortfall",
     have: 1,
     quota: "3",
   });
-  assert.deepEqual(deadline?.reason, { name: "deadline_in", reviews: "7" });
+  assert.deepEqual(find("deadline_in"), { name: "deadline_in", reviews: "7" });
+  assert.deepEqual(find("standing"), {
+    name: "standing",
+    kind: "deferred",
+    seals_left: "1",
+  });
 });
 
-test("the rows' revisions are the entries to label, in order", () => {
-  assert.deepEqual(positions(head.ranked), [
-    "15",
-    "17",
-    "20",
-    "11",
-    "13",
-    "27",
-    "16",
-    "10",
-    "19",
-    "37",
-  ]);
+test("a row keeps its label, type, and whether a field labels it", () => {
+  const node = (payload: NodeEntry["payload"]): NodeEntry => ({
+    kind: "node",
+    id: { origin: "o", position: "12" },
+    ty_name: "Goal",
+    payload,
+  });
+  assert.deepEqual(rowName(node({ title: "Learn to cook" })), {
+    label: "Learn to cook",
+    ty_name: "Goal",
+    labeled: true,
+  });
   assert.deepEqual(
-    rankedIds(head.ranked),
-    head.ranked.map(({ revision }) => revision),
+    rowName(
+      node({ deadline: { kind: "timestamp", value: "2026-03-01T09:00:00Z" } }),
+    ),
+    {
+      label: "Goal @12",
+      ty_name: "Goal",
+      labeled: false,
+    },
+  );
+});
+
+test("a payload problem reads as the end of the failure's sentence", () => {
+  assert.equal(problemWords({ kind: "missing" }), "is missing");
+  assert.equal(
+    problemWords({ kind: "wrong_kind", expected: "integer", found: "text" }),
+    "should be an integer, found text",
   );
 });
 
@@ -155,6 +194,15 @@ test("the deadline sample is the default, a whole number, or refused", () => {
     kind: "invalid",
     problem: "too many windows",
   });
+});
+
+test("text that is not a number keeps the sample applied before", () => {
+  assert.equal(appliedSample("3", null), 3);
+  assert.equal(appliedSample("3x", 3), 3);
+  assert.equal(appliedSample("3x", null), null);
+  assert.equal(appliedSample("", 3), null);
+  assert.equal(appliedSample("0", 3), 0);
+  assert.equal(appliedSample("9007199254740992", 4), 4);
 });
 
 test("the request carries the sample only when one is chosen", () => {

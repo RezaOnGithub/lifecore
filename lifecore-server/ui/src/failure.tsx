@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ApplicationErrorData, ErrorKind } from "./contract.ts";
 import { IdLink } from "./links.tsx";
 import { typeName } from "./model/labels.ts";
+import { problemWords } from "./model/valuation.ts";
 import { HttpRejectionError, RpcError, TransportError } from "./rpc.ts";
 
 // Headings for the kinds a reader is likely to meet. Any other kind,
@@ -45,11 +46,8 @@ function sentence(data: ApplicationErrorData): ReactNode | null {
       return (
         <>
           Field <code>{data.field}</code> of {typeName(data.ty_name)}{" "}
-          <IdLink id={data.entry} />{" "}
-          {data.problem.kind === "missing"
-            ? "is missing"
-            : `should be ${data.problem.expected}, found ${data.problem.found}`}
-          , and the ranking reads that field.
+          <IdLink id={data.entry} /> {problemWords(data.problem)}, and the
+          ranking reads that field.
         </>
       );
     default:

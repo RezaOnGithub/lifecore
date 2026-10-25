@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   AnalyzerConfig,
-  NodeRecord,
+  EntryId,
   Ranked,
   Valuation,
 } from "../contract.ts";
 import { latest, useAsOf, useCall, useData, useLabels } from "../data.tsx";
 import { FailureView } from "../failure.tsx";
-import { IdLink, NodeLink, useEdit } from "../links.tsx";
-import { entryKey, labelField, typeName, viewWords } from "../model/labels.ts";
+import { IdLink, Position, useEdit, useOpen } from "../links.tsx";
+import { entryKey, LABEL_LIMIT, typeName, viewWords } from "../model/labels.ts";
+import { truncate } from "../model/payload.ts";
 import {
+  appliedSample,
   configuresPlanning,
   emphasis,
-  rankedIds,
+  type RowName,
+  rowName,
   sampleChoice,
   type TierGroup,
   tierGroups,
@@ -23,8 +26,10 @@ import { defaultValuationView, type ValuationView } from "../navigation.ts";
 import type { Call } from "../rpc.ts";
 import { readLabels } from "../views/entryLabels.ts";
 
+// The names read for a valuation's rows, by entry key: only what a row
+// shows, never a node record, whose `current` depends on the boundary.
 interface Labels {
-  nodes: Map<string, NodeRecord>;
+  names: Map<string, RowName>;
   failure: unknown;
 }
 
@@ -53,13 +58,17 @@ function useRankedLabels(valuation: Valuation): Labels | null {
     const call: Call = (method, params) => client.call(method, params);
     void readLabels(
       call,
-      rankedIds(valuation.ranked),
+      valuation.ranked.map((row) => row.revision),
       valuation.boundary.end_exclusive,
-    ).then((labels) => {
-      if (labels.failure === null) {
+    ).then(({ nodes, failure }) => {
+      const labels: Labels = { names: new Map(), failure };
+      for (const [key, node] of nodes) {
+        labels.names.set(key, rowName(node));
+      }
+      if (failure === null) {
         READ.set(valuation, labels);
       }
-      book.noteNodes(labels.nodes.values());
+      book.noteNodes(nodes.values());
       if (active) {
         setLast(labels);
       }
@@ -71,35 +80,44 @@ function useRankedLabels(valuation: Valuation): Labels | null {
   return READ.get(valuation) ?? last;
 }
 
-// One ranked revision: its row label linking to the inspector, `@position`,
-// and type, then each reason in the server's words. The structured reason
-// only decides emphasis. Without a label read, the revision shows by
-// position alone.
-function RankedRow({
-  row,
-  node,
-}: {
-  row: Ranked;
-  node: NodeRecord | undefined;
-}) {
+// A revision's row label linking to its inspector, cut as NodeLink cuts
+// it, then `@position` and the type, unless the label is the fallback
+// `<type> @<position>` already.
+function RowLink({ id, name }: { id: EntryId; name: RowName }) {
+  const open = useOpen();
+  const { label, ty_name, labeled } = name;
+  return (
+    <>
+      <button
+        type="button"
+        className="link"
+        title={label.length > LABEL_LIMIT ? label : undefined}
+        onClick={() => open({ kind: "inspector", id })}
+      >
+        {truncate(label, LABEL_LIMIT)}
+      </button>
+      {labeled && (
+        <>
+          {" "}
+          <Position id={id} />{" "}
+          <span className="muted ranked-type">{typeName(ty_name)}</span>
+        </>
+      )}
+    </>
+  );
+}
+
+// One ranked revision: its name, then each reason in the server's words.
+// The structured reason only decides emphasis. Without a label read, the
+// revision shows by position alone.
+function RankedRow({ row, name }: { row: Ranked; name: RowName | undefined }) {
   return (
     <li className="ranked" data-testid="ranked">
       <span className="ranked-item">
-        {node === undefined ? (
+        {name === undefined ? (
           <IdLink id={row.revision} />
         ) : (
-          <>
-            <NodeLink node={node} />
-            {/* A fallback label already reads `<type> @<position>`. */}
-            {labelField(node) !== null && (
-              <>
-                {" "}
-                <span className="muted ranked-type">
-                  {typeName(node.ty_name)}
-                </span>
-              </>
-            )}
-          </>
+          <RowLink id={row.revision} name={name} />
         )}
       </span>
       {row.reasons.length > 0 && (
@@ -122,10 +140,10 @@ function RankedRow({
 
 function TierSection({
   group,
-  nodes,
+  names,
 }: {
   group: TierGroup;
-  nodes: Map<string, NodeRecord>;
+  names: Map<string, RowName>;
 }) {
   const { tier, title, summary, rows } = group;
   return (
@@ -146,7 +164,7 @@ function TierSection({
           <RankedRow
             key={entryKey(row.revision)}
             row={row}
-            node={nodes.get(entryKey(row.revision))}
+            name={names.get(entryKey(row.revision))}
           />
         ))}
       </ol>
@@ -179,7 +197,7 @@ function Ranking({ valuation }: { valuation: Valuation }) {
         </p>
       )}
       {shown.map((group) => (
-        <TierSection key={group.tier} group={group} nodes={labels.nodes} />
+        <TierSection key={group.tier} group={group} names={labels.names} />
       ))}
       {empty.length > 0 && (
         <p className="muted" data-testid="empty-tiers">
@@ -217,21 +235,30 @@ export function ValuationScreen({
   );
   const choice = sampleChoice(view.windows);
   // The sample applies a moment after the last keystroke, as a table's text
-  // filter does; one that is not a number leaves the last one applied. A
-  // step returned to applies its own at once.
-  const [applied, setApplied] = useState(() =>
-    choice.kind === "windows" ? choice.windows : null,
-  );
+  // filter does, and the step keeps it; text that is not a number leaves
+  // the last one applied, also for a step returned to.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const chosen = sampleChoice(view.windows);
-      if (chosen.kind !== "invalid") {
-        setApplied(chosen.kind === "windows" ? chosen.windows : null);
-      }
-    }, 300);
+    const typed = view.windows;
+    const timer = setTimeout(
+      () =>
+        edit((screen) => {
+          if (screen.kind !== "valuation") {
+            return screen;
+          }
+          const current = screen.view ?? defaultValuationView;
+          const applied = appliedSample(typed, current.applied);
+          return applied === current.applied
+            ? screen
+            : { ...screen, view: { ...current, applied } };
+        }),
+      300,
+    );
     return () => clearTimeout(timer);
-  }, [view.windows]);
-  const load = useCall("planning.valuation", valuationParams(asOf, applied));
+  }, [edit, view.windows]);
+  const load = useCall(
+    "planning.valuation",
+    valuationParams(asOf, view.applied),
+  );
   const valuation = latest(load);
   return (
     <section aria-label="Plan" data-testid="valuation-screen">
@@ -239,8 +266,9 @@ export function ValuationScreen({
       <p className="muted intro">
         The planning valuation ranks what presses at this boundary, from what
         the next seal would reject down to the rest in play. A ranking has no
-        identity and nothing to dismiss: only an appended entry, such as a
-        stance, an event, or a review, moves a row.
+        identity and nothing to dismiss: for a given deadline sample, only the
+        entries in the view decide it, so a row moves only when a stance, an
+        event, a review, or another entry is appended.
       </p>
       {suite !== null && !configuresPlanning(suite) && (
         <p className="muted" data-testid="planning-unconfigured">
@@ -249,13 +277,16 @@ export function ValuationScreen({
         </p>
       )}
       <div className="row">
-        <label title="The deadline estimate's sample: the last this many windows between reviews whose times increase. Empty for the default, 6.">
+        <label
+          className="plan-sample"
+          title="The deadline estimate's sample: the last this many windows between reviews whose times increase. Empty for the server's default."
+        >
           deadlines estimated from the last{" "}
           <input
             aria-label="deadline sample windows"
             inputMode="numeric"
-            size={3}
-            placeholder="6"
+            size={7}
+            placeholder="default"
             value={view.windows}
             aria-invalid={choice.kind === "invalid"}
             onChange={(event) => setWindows(event.target.value)}

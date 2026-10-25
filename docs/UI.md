@@ -42,9 +42,9 @@ contract with the service.
   relationship toggle, sort, open cells, and rows shown; the inspector's
   expanded outline rows, toggled groups, historical toggles, filters, and raw
   JSON; Explore's form, query, and display choices; the Plan screen's
-  deadline sample. Returning restores the main pane's scroll offset once the
-  content is tall enough, unless the user scrolls, clicks, or types there
-  first.
+  deadline sample, as typed and as last applied. Returning restores the main
+  pane's scroll offset once the content is tall enough, unless the user
+  scrolls, clicks, or types there first.
 - The last result of each call is cached (40 calls), so a screen returned to
   renders at once, reads again, and shows "reloading…" until the answer. An
   answer with the same JSON as the cached one keeps the cached object. A
@@ -394,14 +394,17 @@ contract with the service.
   red, `lapses_at_next_seal` in italic amber. Each row's left edge goes from
   red at tier 0 to gray at tier 5. Rows have no identity, dismissal, or
   filter.
-- Labels are read at the valuation's boundary as Findings reads them (§6).
-  A read that succeeded stays with its answer, so an identical answer names
-  its rows at once. Until a new answer's labels arrive, the last read names
-  the rows it covers, since a revision reads the same at every boundary that
-  holds it; before any read, rows wait rather than show by position.
-- The deadline sample is a field, empty for the server's default of 6 and
-  applied 300 ms after the last keystroke; text that is not a whole number
-  says so and leaves the last applied sample.
+- Labels are read at the valuation's boundary as Findings reads them (§6),
+  keeping only each row's label and type. A read that succeeded stays with
+  its answer, so an identical answer names its rows at once. Until a new
+  answer's labels arrive, the last read names the rows it covers, since a
+  revision's label and type are the same at every boundary that holds it;
+  before any read, rows wait rather than show by position.
+- The deadline sample is a field, empty for the server's default
+  ([PLANNING §10](PLANNING.md#10-time)), applied 300 ms after the last
+  keystroke. Text that is not a whole number is marked invalid, says so,
+  sends nothing, and leaves the last applied sample, also for a step
+  returned to.
 - A suite without Planning adds a note that no review is judged and that the
   ranking is the same either way, since the valuation never reads the
   suite.

@@ -1,4 +1,10 @@
-import { expect, type Page, type Route, test } from "@playwright/test";
+import {
+  expect,
+  type Page,
+  type Request,
+  type Route,
+  test,
+} from "@playwright/test";
 import type {
   EntryId,
   Method,
@@ -318,7 +324,7 @@ test("a row opens the inspector, and Back shows the ranking again", async () => 
   await expect(rows(4)).toHaveCount(3);
 });
 
-test("the ranking follows the as-of boundary and names nothing past it", async () => {
+test("the ranking follows the as-of boundary, down to an empty view", async () => {
   // Before the second review: the first one has sealed, the second not yet.
   await setAsOf(position("second_review"));
   await expect(main().getByTestId("valuation-view")).toHaveText(
@@ -359,31 +365,79 @@ test("the ranking follows the as-of boundary and names nothing past it", async (
   await expect(rows(3)).toHaveCount(2);
 });
 
-test("the deadline sample is sent as typed, and refused in place unless a number", async () => {
+type SampleParams = { deadline_sample_windows?: number };
+
+// The params of a `planning.valuation` request, else null.
+function valuationParams(request: Request): SampleParams | null {
+  let body: { method?: string; params?: SampleParams } | null = null;
+  try {
+    body = request.postDataJSON();
+  } catch {
+    return null;
+  }
+  return body?.method === "planning.valuation" ? (body.params ?? {}) : null;
+}
+
+const sent = (windows: number | undefined) =>
+  page.waitForRequest(
+    (request) => valuationParams(request)?.deadline_sample_windows === windows,
+  );
+
+// Every `planning.valuation` request's params from now until `stop`.
+function watchValuations() {
+  const seen: SampleParams[] = [];
+  const listener = (request: Request) => {
+    const params = valuationParams(request);
+    if (params !== null) {
+      seen.push(params);
+    }
+  };
+  page.on("request", listener);
+  return { seen, stop: () => page.off("request", listener) };
+}
+
+// Longer than the pause after which typing applies.
+const PAUSE = 800;
+
+test("the deadline sample applies as typed, and text that is not a number keeps it, across Back too", async () => {
   const sample = main().getByLabel("deadline sample windows");
-  const sent = (windows: number | undefined) =>
-    page.waitForRequest((request) => {
-      const body = request.postDataJSON() as {
-        method?: string;
-        params?: { deadline_sample_windows?: number };
-      } | null;
-      return (
-        body?.method === "planning.valuation" &&
-        body.params?.deadline_sample_windows === windows
-      );
-    });
-  const zero = sent(0);
-  await sample.fill("0");
-  await zero;
-  await sample.fill("x");
+  const three = sent(3);
+  await sample.fill("3");
+  await three;
+  // Text that is not a number sends nothing, however long it stays.
+  const quiet = watchValuations();
+  await sample.fill("3x");
   await expect(main().getByTestId("sample-invalid")).toHaveText(
     "a whole number of windows, 0 or more",
   );
-  await expect(rows(3)).toHaveCount(2);
+  await expect(sample).toHaveAttribute("aria-invalid", "true");
+  await page.waitForTimeout(PAUSE);
+  quiet.stop();
+  expect(quiet.seen).toEqual([]);
+  // A step returned to reads with the sample it applied, under the text
+  // as it was left.
+  await row(4, "Move to Lisbon")
+    .getByRole("button", { name: "Move to Lisbon", exact: true })
+    .click();
+  await expect(
+    main().getByRole("heading", { name: "Move to Lisbon" }),
+  ).toBeVisible();
+  const back = watchValuations();
+  await page.getByRole("button", { name: "← Back" }).click();
+  await expect(sample).toHaveValue("3x");
+  await expect(main().getByTestId("sample-invalid")).toBeVisible();
+  await expect.poll(() => back.seen.length).toBeGreaterThan(0);
+  await page.waitForTimeout(PAUSE);
+  back.stop();
+  for (const params of back.seen) {
+    expect(params).toEqual({ deadline_sample_windows: 3 });
+  }
+  // Emptied, the field asks for the server's default.
   const cleared = sent(undefined);
   await sample.fill("");
   await cleared;
   await expect(main().getByTestId("sample-invalid")).toHaveCount(0);
+  await expect(sample).toHaveAttribute("aria-invalid", "false");
 });
 
 test("a planning payload the ranking cannot read names its entry and field", async () => {
