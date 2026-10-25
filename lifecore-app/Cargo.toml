@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 lifecore = { path = "../" }
+lifecore-prod = { path = "../lifecore-prod" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["raw_value"] }
 serde_path_to_error = "0.1.20"

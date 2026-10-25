@@ -174,6 +174,7 @@ methods! {
     AnalysisRun => "analysis.run",
     FindingsDismiss => "findings.dismiss",
     FindingsRestore => "findings.restore",
+    PlanningValuation => "planning.valuation",
 }
 
 impl Method {
@@ -209,6 +210,7 @@ fn dispatch(service: &Service, method: &str, params: &str) -> Result<Value, Disp
     Method::AnalysisRun => call(params, |p| service.run_analysis(p)),
     Method::FindingsDismiss => call(params, |p| service.dismiss_finding(p)),
     Method::FindingsRestore => call(params, |p| service.restore_finding(p)),
+    Method::PlanningValuation => call(params, |p| service.valuation(p)),
     }
 }
 

@@ -28,7 +28,8 @@ working around the document.
 - Domain analyzers: Reconnect ([RECONNECT](RECONNECT.md)) and Planning
   ([PLANNING](PLANNING.md)) registered beside TypeCheck and DAG Check, and
   configured together after TypeCheck by `lifecore init --default-analyzers`
-  ([INTERFACES §2](INTERFACES.md#2-cli-surface)).
+  ([INTERFACES §2](INTERFACES.md#2-cli-surface)). The planning valuation is
+  printed by `lifecore valuation` and served by `planning.valuation`.
 
 ## 2. Remaining work
 
@@ -76,15 +77,12 @@ Follow [SUGGESTIONS](SUGGESTIONS.md).
 ### 2.3 Planning
 
 Follow [PLANNING](PLANNING.md). The analyzer and the `valuation` function are
-built in `lifecore-prod`, and the application registers the analyzer.
+built in `lifecore-prod`, the application registers the analyzer, and
+`lifecore valuation` and `planning.valuation` deliver the ranking
+([PLANNING §12](PLANNING.md#12-delivery-without-a-core-change)).
 
-- [ ] Build the executable of
-  [PLANNING §12](PLANNING.md#12-delivery-without-a-core-change): a
-  `lifecore-plan` binary or a CLI subcommand that opens the selected database
-  read-only as a preview and prints the valuation at the head or at an "as
-  of" boundary, as lines or JSON, with `--deadline-sample-windows`.
-- [ ] When the browser client wants the ranking, one RPC method over the same
-  function, with the `Valuation` shape in the fixtures and `contract.ts`.
+- [ ] A browser screen for the ranking, under Findings: its tiers in order,
+  each row's reason text, and links into the inspector.
 
 ### 2.4 Final verification
 

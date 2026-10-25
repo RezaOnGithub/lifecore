@@ -1561,7 +1561,8 @@ Every protocol rule so far is judged at a seal, and every structural one at
 the entry that breaks it. Between seals Reza needs to know what presses, and
 that is not a set of facts to be dismissed; it is an ordering. The analyzer
 produces a **valuation**: a deterministic ranking at the requested boundary,
-each row with structured reasons and rendered text.
+each row with structured reasons and rendered text. `lifecore valuation`
+prints it as JSON, at the head or, with `--as-of`, at an earlier boundary.
 
 > A **valuation** has no finding identity, cannot be dismissed, is never
 > recorded as an observation, and is computed only at the boundary asked for.

@@ -475,6 +475,7 @@ version = "0.1.0"
 dependencies = [
  "lifecore",
  "lifecore-dag-check",
+ "lifecore-prod",
  "lifecore-typecheck",
  "serde",
  "serde_json",
@@ -547,6 +548,7 @@ dependencies = [
  "lifecore",
  "lifecore-app",
  "lifecore-dag-check",
+ "lifecore-prod",
  "lifecore-typecheck",
  "semver",
  "serde",

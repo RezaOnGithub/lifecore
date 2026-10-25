@@ -49,14 +49,14 @@ plan: the ten planning declarations, then windows of seven entries each, a
 task, its revision, a `committed` stance about the revision with its `About`
 edge, a review, and, in the next window, a `Done` about the revision with its
 `About` edge. Each cell is the median of three `check` runs of a one-node
-proposal.
+proposal; the last column times `lifecore valuation` at the head.
 
-| Entries | TypeCheck | + Reconnect | + Planning | all three |
-| ---: | ---: | ---: | ---: | ---: |
-| 498 | 0.035 s | 0.036 s | 0.056 s | 0.057 s |
-| 995 | 0.14 s | 0.13 s | 0.22 s | 0.20 s |
-| 1,996 | 0.44 s | 0.44 s | 1.4 s | 1.4 s |
-| 3,998 | 1.7 s | 1.8 s | 10.8 s | 11.1 s |
+| Entries | TypeCheck | + Reconnect | + Planning | all three | valuation |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 498 | 0.035 s | 0.036 s | 0.056 s | 0.057 s | 0.005 s |
+| 995 | 0.14 s | 0.13 s | 0.22 s | 0.20 s | 0.009 s |
+| 1,996 | 0.44 s | 0.44 s | 1.4 s | 1.4 s | 0.021 s |
+| 3,998 | 1.7 s | 1.8 s | 10.8 s | 11.1 s | 0.082 s |
 
 Reconnect adds almost nothing: it judges a prefix only when its newest entry
 supersedes a node, with one scan of the view
@@ -66,6 +66,8 @@ per-item questions (what an item serves, its `Enables` sources, readiness,
 strict subgraphs) each scan every current edge of the view, so a seal costs
 items times edges, and replay judges every seal. At 4,000 entries a check
 under `lifecore init --default-analyzers` exceeds the 10-second busy window.
+The valuation is computed at one boundary only and costs about as much as
+loading the snapshot, which `plan-id` also takes.
 
 ## 2. Output size
 

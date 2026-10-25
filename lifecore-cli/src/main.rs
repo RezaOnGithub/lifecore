@@ -7,7 +7,7 @@ use lifecore_app::{
     AppError, Service,
     proposal::{self, Format, Proposal},
     rpc,
-    service::{AddAnalyzerRequest, NoParams, ProposalRequest},
+    service::{AddAnalyzerRequest, NoParams, ProposalRequest, ValuationRequest},
     storage::StatePath,
 };
 use lifecore_dag_check::DagCheckFactory;
@@ -90,6 +90,23 @@ enum Command {
         configuration: String,
         #[command(flatten)]
         evaluation: Evaluation,
+    },
+    #[command(
+        about = "Print the planning valuation of the selected database as JSON, without storing anything"
+    )]
+    Valuation {
+        #[arg(
+            long,
+            value_name = "POSITION",
+            help = "Rank the prefix before this position instead of the whole history"
+        )]
+        as_of: Option<usize>,
+        #[arg(
+            long,
+            value_name = "N",
+            help = "Estimate deadlines from the last N windows between reviews [default: 6]"
+        )]
+        deadline_sample_windows: Option<usize>,
     },
 }
 
@@ -367,6 +384,15 @@ fn main() -> ExitCode {
             configuration,
             evaluation_time: evaluation.evaluation_time,
             now: evaluation.now,
+        })
+    })),
+    Command::Valuation {
+        as_of,
+        deadline_sample_windows,
+    } => emit(service().and_then(|service| {
+        service.valuation(ValuationRequest {
+            as_of,
+            deadline_sample_windows,
         })
     })),
     }

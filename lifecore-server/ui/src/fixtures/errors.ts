@@ -123,8 +123,8 @@ export const application = {
               "name": "Type_Check",
               "version": "0.1.0"
             },
-            "analyzer_certificate": "{\"UnknownType\":{\"subject\":{\"origin\":\"00000000-0000-4000-8000-00000000001b\",\"position\":\"3\"},\"ty_name\":\"Undeclared\"}}",
-            "database": "00000000-0000-4000-8000-00000000001b",
+            "analyzer_certificate": "{\"UnknownType\":{\"subject\":{\"origin\":\"00000000-0000-4000-8000-00000000001d\",\"position\":\"3\"},\"ty_name\":\"Undeclared\"}}",
+            "database": "00000000-0000-4000-8000-00000000001d",
             "kind": "inconsistency"
           },
           "kind": "cannot_dismiss_inconsistency"
@@ -197,12 +197,12 @@ export const application = {
         "code": 4001,
         "data": {
           "id": {
-            "origin": "00000000-0000-4000-8000-00000000001a",
+            "origin": "00000000-0000-4000-8000-00000000001c",
             "position": "18446744073709551615"
           },
           "kind": "entry_not_found"
         },
-        "message": "entry EntryId { position: 18446744073709551615, origin: 00000000-0000-4000-8000-00000000001a } is not present in the selected view"
+        "message": "entry EntryId { position: 18446744073709551615, origin: 00000000-0000-4000-8000-00000000001c } is not present in the selected view"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -214,10 +214,10 @@ export const application = {
         "code": 2004,
         "data": {
           "actual": "00000000-0000-4000-8000-000000000001",
-          "expected": "00000000-0000-4000-8000-000000000017",
+          "expected": "00000000-0000-4000-8000-000000000019",
           "kind": "foreign_database"
         },
-        "message": "the plan ID names database 00000000-0000-4000-8000-000000000017, but the selected database is 00000000-0000-4000-8000-000000000001"
+        "message": "the plan ID names database 00000000-0000-4000-8000-000000000019, but the selected database is 00000000-0000-4000-8000-000000000001"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -227,10 +227,10 @@ export const application = {
         "code": 2004,
         "data": {
           "actual": "00000000-0000-4000-8000-000000000001",
-          "expected": "00000000-0000-4000-8000-000000000020",
+          "expected": "00000000-0000-4000-8000-000000000023",
           "kind": "foreign_database"
         },
-        "message": "the finding key names database 00000000-0000-4000-8000-000000000020, but the selected database is 00000000-0000-4000-8000-000000000001"
+        "message": "the finding key names database 00000000-0000-4000-8000-000000000023, but the selected database is 00000000-0000-4000-8000-000000000001"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -433,7 +433,7 @@ export const application = {
         "data": {
           "kind": "publication_uncertain",
           "outcome": {
-            "graph_revision": "00000000-0000-4000-8000-00000000001c",
+            "graph_revision": "00000000-0000-4000-8000-00000000001f",
             "kind": "applied",
             "report": {
               "analysis": {
@@ -471,14 +471,14 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "scope",
-                      "database": "00000000-0000-4000-8000-00000000001d",
+                      "database": "00000000-0000-4000-8000-000000000020",
                       "kind": "warning"
                     }
                   },
                   {
                     "diagnostic": {
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-00000000001e",
+                        "origin": "00000000-0000-4000-8000-000000000021",
                         "position": "1"
                       },
                       "kind": "warning",
@@ -486,26 +486,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-00000000001d",
+                        "database": "00000000-0000-4000-8000-000000000020",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "1"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-00000000001d",
+                        "database": "00000000-0000-4000-8000-000000000020",
                         "end_exclusive": "4",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "3"
                         }
                       }
@@ -516,8 +516,8 @@ export const application = {
                         "name": "Type_Check",
                         "version": "0.1.0"
                       },
-                      "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-00000000001e\"},\"issue\":{\"path\":[\"notes\"],\"kind\":\"MissingEncouraged\"}}}",
-                      "database": "00000000-0000-4000-8000-00000000001d",
+                      "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000021\"},\"issue\":{\"path\":[\"notes\"],\"kind\":\"MissingEncouraged\"}}}",
+                      "database": "00000000-0000-4000-8000-000000000020",
                       "kind": "warning"
                     }
                   },
@@ -537,7 +537,7 @@ export const application = {
                           },
                           "predecessor": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-00000000001e",
+                              "origin": "00000000-0000-4000-8000-000000000021",
                               "position": "1"
                             }
                           },
@@ -545,7 +545,7 @@ export const application = {
                         }
                       ],
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-00000000001e",
+                        "origin": "00000000-0000-4000-8000-000000000021",
                         "position": "1"
                       },
                       "kind": "suggestion",
@@ -553,26 +553,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-00000000001d",
+                        "database": "00000000-0000-4000-8000-000000000020",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "1"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-00000000001d",
+                        "database": "00000000-0000-4000-8000-000000000020",
                         "end_exclusive": "2",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "1"
                         }
                       }
@@ -584,7 +584,7 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "done:1",
-                      "database": "00000000-0000-4000-8000-00000000001d",
+                      "database": "00000000-0000-4000-8000-000000000020",
                       "kind": "suggestion"
                     }
                   },
@@ -604,7 +604,7 @@ export const application = {
                           },
                           "predecessor": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-00000000001e",
+                              "origin": "00000000-0000-4000-8000-000000000021",
                               "position": "1"
                             }
                           },
@@ -613,7 +613,7 @@ export const application = {
                         {
                           "from": {
                             "existing": {
-                              "origin": "00000000-0000-4000-8000-00000000001e",
+                              "origin": "00000000-0000-4000-8000-000000000021",
                               "position": "2"
                             }
                           },
@@ -625,7 +625,7 @@ export const application = {
                         }
                       ],
                       "focus": {
-                        "origin": "00000000-0000-4000-8000-00000000001e",
+                        "origin": "00000000-0000-4000-8000-000000000021",
                         "position": "1"
                       },
                       "kind": "suggestion",
@@ -633,26 +633,26 @@ export const application = {
                       "sticky": false,
                       "subjects": [
                         {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "1"
                         }
                       ]
                     },
                     "evaluated_view": {
                       "first": {
-                        "database": "00000000-0000-4000-8000-00000000001d",
+                        "database": "00000000-0000-4000-8000-000000000020",
                         "end_exclusive": "3",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "2"
                         }
                       },
                       "kind": "prefixes",
                       "last": {
-                        "database": "00000000-0000-4000-8000-00000000001d",
+                        "database": "00000000-0000-4000-8000-000000000020",
                         "end_exclusive": "4",
                         "head": {
-                          "origin": "00000000-0000-4000-8000-00000000001e",
+                          "origin": "00000000-0000-4000-8000-000000000021",
                           "position": "3"
                         }
                       }
@@ -664,52 +664,52 @@ export const application = {
                         "version": "1.0.0"
                       },
                       "analyzer_certificate": "done:1",
-                      "database": "00000000-0000-4000-8000-00000000001d",
+                      "database": "00000000-0000-4000-8000-000000000020",
                       "kind": "suggestion"
                     }
                   }
                 ],
                 "view": {
-                  "database": "00000000-0000-4000-8000-00000000001d",
+                  "database": "00000000-0000-4000-8000-000000000020",
                   "end_exclusive": "4",
                   "head": {
-                    "origin": "00000000-0000-4000-8000-00000000001e",
+                    "origin": "00000000-0000-4000-8000-000000000021",
                     "position": "3"
                   }
                 }
               },
               "base": {
-                "database": "00000000-0000-4000-8000-00000000001d",
+                "database": "00000000-0000-4000-8000-000000000020",
                 "end_exclusive": "0",
                 "head": null
               },
-              "base_revision": "00000000-0000-4000-8000-00000000001f",
-              "database": "00000000-0000-4000-8000-00000000001d",
+              "base_revision": "00000000-0000-4000-8000-000000000022",
+              "database": "00000000-0000-4000-8000-000000000020",
               "operations": [
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001e",
+                    "origin": "00000000-0000-4000-8000-000000000021",
                     "position": "0"
                   },
                   "name": "task_type"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001e",
+                    "origin": "00000000-0000-4000-8000-000000000021",
                     "position": "1"
                   },
                   "name": "report"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001e",
+                    "origin": "00000000-0000-4000-8000-000000000021",
                     "position": "2"
                   },
                   "name": "review"
                 },
                 {
                   "entry": {
-                    "origin": "00000000-0000-4000-8000-00000000001e",
+                    "origin": "00000000-0000-4000-8000-000000000021",
                     "position": "3"
                   },
                   "name": "review_after_report"
@@ -737,8 +737,8 @@ export const application = {
                     "name": "Type_Check",
                     "version": "0.1.0"
                   },
-                  "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-00000000001e\"},\"issue\":{\"path\":[\"notes\"],\"kind\":\"MissingEncouraged\"}}}",
-                  "database": "00000000-0000-4000-8000-00000000001d",
+                  "analyzer_certificate": "{\"Field\":{\"subject\":{\"position\":\"1\",\"origin\":\"00000000-0000-4000-8000-000000000021\"},\"issue\":{\"path\":[\"notes\"],\"kind\":\"MissingEncouraged\"}}}",
+                  "database": "00000000-0000-4000-8000-000000000020",
                   "kind": "warning"
                 },
                 "note": "Notes come with the draft.",
@@ -851,7 +851,7 @@ export const application = {
                       "database": "00000000-0000-4000-8000-000000000001",
                       "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001b",
                         "position": "6"
                       }
                     }
@@ -870,7 +870,7 @@ export const application = {
                 {
                   "diagnostic": {
                     "focus": {
-                      "origin": "00000000-0000-4000-8000-000000000019",
+                      "origin": "00000000-0000-4000-8000-00000000001b",
                       "position": "6"
                     },
                     "kind": "inconsistency",
@@ -878,7 +878,7 @@ export const application = {
                     "sticky": false,
                     "subjects": [
                       {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001b",
                         "position": "6"
                       }
                     ]
@@ -888,7 +888,7 @@ export const application = {
                       "database": "00000000-0000-4000-8000-000000000001",
                       "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001b",
                         "position": "6"
                       }
                     },
@@ -897,7 +897,7 @@ export const application = {
                       "database": "00000000-0000-4000-8000-000000000001",
                       "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001b",
                         "position": "6"
                       }
                     }
@@ -908,7 +908,7 @@ export const application = {
                       "name": "Type_Check",
                       "version": "0.1.0"
                     },
-                    "analyzer_certificate": "{\"MissingType\":{\"subject\":{\"position\":\"6\",\"origin\":\"00000000-0000-4000-8000-000000000019\"},\"name\":\"Undeclared\"}}",
+                    "analyzer_certificate": "{\"MissingType\":{\"subject\":{\"position\":\"6\",\"origin\":\"00000000-0000-4000-8000-00000000001b\"},\"name\":\"Undeclared\"}}",
                     "database": "00000000-0000-4000-8000-000000000001",
                     "kind": "inconsistency"
                   }
@@ -1124,7 +1124,7 @@ export const application = {
                       "database": "00000000-0000-4000-8000-000000000001",
                       "end_exclusive": "7",
                       "head": {
-                        "origin": "00000000-0000-4000-8000-000000000019",
+                        "origin": "00000000-0000-4000-8000-00000000001b",
                         "position": "6"
                       }
                     }
@@ -1145,7 +1145,7 @@ export const application = {
                 "database": "00000000-0000-4000-8000-000000000001",
                 "end_exclusive": "7",
                 "head": {
-                  "origin": "00000000-0000-4000-8000-000000000019",
+                  "origin": "00000000-0000-4000-8000-00000000001b",
                   "position": "6"
                 }
               }
@@ -1163,7 +1163,7 @@ export const application = {
             "operations": [
               {
                 "entry": {
-                  "origin": "00000000-0000-4000-8000-000000000019",
+                  "origin": "00000000-0000-4000-8000-00000000001b",
                   "position": "6"
                 },
                 "name": "stray"
@@ -1183,10 +1183,10 @@ export const application = {
         "code": 2005,
         "data": {
           "actual": "00000000-0000-4000-8000-000000000016",
-          "expected": "00000000-0000-4000-8000-000000000018",
+          "expected": "00000000-0000-4000-8000-00000000001a",
           "kind": "stale_base"
         },
-        "message": "the plan ID base 00000000-0000-4000-8000-000000000018 is stale; the current graph revision is 00000000-0000-4000-8000-000000000016"
+        "message": "the plan ID base 00000000-0000-4000-8000-00000000001a is stale; the current graph revision is 00000000-0000-4000-8000-000000000016"
       },
       "id": "call",
       "jsonrpc": "2.0"
@@ -1202,6 +1202,26 @@ export const application = {
         "message": "LIFECORE_STATE_FILE_PATH is set but empty"
       },
       "id": "state_path_empty",
+      "jsonrpc": "2.0"
+    }
+  ],
+  "valuation_failed": [
+    {
+      "error": {
+        "code": 4007,
+        "data": {
+          "entry": {
+            "origin": "00000000-0000-4000-8000-00000000001e",
+            "position": "0"
+          },
+          "field": "at",
+          "kind": "valuation_failed",
+          "problem": "is missing",
+          "ty_name": "Review"
+        },
+        "message": "cannot rank the plan: field `at` of Review EntryId { position: 0, origin: 00000000-0000-4000-8000-00000000001e } is missing"
+      },
+      "id": "call",
       "jsonrpc": "2.0"
     }
   ],

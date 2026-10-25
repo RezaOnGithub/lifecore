@@ -11,7 +11,8 @@ use crate::{
     service::{
         AddAnalyzerRequest, AnalysisRunRequest, DismissRequest, DismissalList, EntryGetRequest,
         EntryInspectRequest, EntryListRequest, EntryRecord, NoParams, ProposalRequest, Published,
-        RestoreRequest, RestoreResult, TypeListRequest, ViewQueryRequest, ViewRenderRequest,
+        RestoreRequest, RestoreResult, TypeListRequest, ValuationRequest, ViewQueryRequest,
+        ViewRenderRequest,
     },
     storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
@@ -30,6 +31,7 @@ use lifecore::{
     },
 };
 use lifecore_dag_check::DagCheckFactory;
+use lifecore_prod::{PlanningType, Reason, ValuationOptions};
 use lifecore_typecheck::TypeCheckFactory;
 use serde_json::{Value, json};
 use std::{
@@ -4763,4 +4765,174 @@ fn types_list_and_inspection_agree_with_typecheck_at_each_boundary() {
                 .any(|f| matches!(f, TypeCheckMessage::BadEdgeEndpoint { .. }))
         );
     }
+}
+
+// The planning declarations, a goal, a task that enables it, a review, and a
+// habit after it: positions 0 to 9, then 10 to 14.
+fn planning(scratch: &Scratch) -> Vec<EntryId> {
+    let service = scratch.service();
+    service.init(&typecheck()).unwrap();
+    let mut entries = PlanningType::ALL
+        .iter()
+        .map(|ty| {
+            json!({"name": format!("{}_type", ty.name()), "kind": "node", "ty_name": "Type",
+                "payload": ty.canonical().to_body()})
+        })
+        .collect::<Vec<_>>();
+    entries.extend([
+        json!({"name": "swim", "kind": "node", "ty_name": "Goal", "payload": {"title": "Swim 1 km"}}),
+        json!({"name": "book", "kind": "node", "ty_name": "Task", "payload": {"title": "Book lessons"}}),
+        json!({"name": "book_swim", "kind": "edge", "ty_name": "Enables",
+            "from": {"added": "book"}, "to": {"added": "swim"}}),
+        json!({"name": "review", "kind": "node", "ty_name": "Review", "payload": {"budget": 3,
+            "at": {"kind": "timestamp", "value": "2026-01-01T00:00:00Z"}}}),
+        json!({"name": "run", "kind": "node", "ty_name": "Habit", "payload": {"title": "Run", "quota": 3}}),
+    ]);
+    let applied = service
+        .apply(request(proposal(Value::Array(entries))))
+        .unwrap();
+    applied
+        .report
+        .operations
+        .iter()
+        .map(|operation| operation.entry)
+        .collect()
+}
+
+// The service ranks the selected prefix with the library function, at each
+// boundary independently, and never consults the suite: this database
+// configures TypeCheck alone.
+#[test]
+fn the_valuation_ranks_the_selected_prefix_without_the_planning_analyzer() {
+    let scratch = Scratch::new();
+    let ids = planning(&scratch);
+    let (swim, book, run) = (ids[10], ids[11], ids[14]);
+    let service = scratch.service();
+    let snapshot = storage::read(&scratch.state()).unwrap();
+    let rows = |as_of: Option<usize>| {
+        let valuation = service
+            .valuation(ValuationRequest {
+                as_of,
+                deadline_sample_windows: None,
+            })
+            .unwrap();
+        let view = match as_of {
+        Some(end) => snapshot.graph.view().prefix(end).unwrap(),
+        None => snapshot.graph.view(),
+        };
+        assert_eq!(
+            valuation,
+            lifecore_prod::valuation(view, &ValuationOptions::default()).unwrap()
+        );
+        assert_eq!(valuation.boundary, view.id());
+        valuation
+            .ranked
+            .into_iter()
+            .map(|row| {
+                let reasons = row
+                    .reasons
+                    .into_iter()
+                    .map(|reason| reason.reason)
+                    .collect();
+                (row.revision, row.tier, reasons)
+            })
+            .collect::<Vec<(EntryId, u8, Vec<Reason>)>>()
+    };
+    // Before any entry of the plan, nothing ranks.
+    assert_eq!(rows(Some(10)), vec![]);
+    // Before the review, the ready task is undecided and the goal, whose
+    // root no review has sealed, ranks last.
+    assert_eq!(
+        rows(Some(13)),
+        vec![(book, 0, vec![Reason::Undecided]), (swim, 5, vec![])]
+    );
+    // After it, the goal starves; the habit after the review is new.
+    let head = vec![
+        (book, 0, vec![Reason::Undecided]),
+        (swim, 4, vec![Reason::Starved { seals: 0 }]),
+        (run, 5, vec![Reason::New]),
+    ];
+    assert_eq!(rows(None), head);
+    assert_eq!(rows(Some(15)), head);
+
+    // Over RPC, a boundary is a decimal string, the sample a number, and
+    // neither takes null.
+    let call = |params: Value| {
+        let line =
+            json!({"jsonrpc": "2.0", "id": 1, "method": "planning.valuation", "params": params})
+                .to_string();
+        serde_json::to_value(rpc::handle(&service, &line)).unwrap()
+    };
+    let answer = call(json!({"as_of": "13", "deadline_sample_windows": 0}));
+    assert_eq!(answer["result"]["boundary"]["end_exclusive"], "13");
+    assert_eq!(
+        answer["result"]["ranked"][0]["reasons"][0]["reason"],
+        json!({"name": "undecided"})
+    );
+    assert_eq!(
+        answer["result"]["ranked"][0]["reasons"][0]["text"],
+        Reason::Undecided.text()
+    );
+    for params in [
+        json!({"as_of": null}),
+        json!({"deadline_sample_windows": null}),
+        json!({"deadline_sample_windows": "6"}),
+        json!({"as_of": 13}),
+        json!({"evaluation_time": "2026-01-01T00:00:00Z"}),
+    ] {
+        assert_eq!(call(params.clone())["error"]["code"], -32602, "{params}");
+    }
+    let beyond = call(json!({"as_of": "16"}));
+    assert_eq!(beyond["error"]["data"]["kind"], "beyond_boundary");
+}
+
+// A planning node whose payload lacks a field the valuation reads fails it
+// with its own error, naming the entry and the field. TypeCheck admits it,
+// since this `Review` declaration has no `at`, and Planning, which would
+// reject the declaration, is not configured.
+#[test]
+fn a_payload_the_valuation_cannot_read_fails_it_distinctly() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&typecheck()).unwrap();
+    let review_type = Type::new(
+        "Review",
+        &[("budget", (ValueType::Integer, FieldStatus::Mandatory))],
+        &[],
+        &[],
+        &[],
+    )
+    .to_body();
+    let applied = service
+        .apply(request(proposal(json!([
+            {"name": "review_type", "kind": "node", "ty_name": "Type", "payload": review_type},
+            {"name": "review", "kind": "node", "ty_name": "Review", "payload": {"budget": 1}},
+        ]))))
+        .unwrap();
+    let review = applied.report.operations[1].entry;
+    let error = service.valuation(ValuationRequest::default()).unwrap_err();
+    assert!(
+        matches!(&error, AppError::Valuation(failure) if failure.node == review && failure.field == "at")
+    );
+    let object = serde_json::to_value(error.to_object()).unwrap();
+    assert_eq!(object["code"], 4007);
+    assert_eq!(object["data"]["kind"], "valuation_failed");
+    assert_eq!(
+        object["data"]["entry"],
+        serde_json::to_value(review).unwrap()
+    );
+    assert_eq!(object["data"]["ty_name"], "Review");
+    assert_eq!(object["data"]["field"], "at");
+    assert_eq!(object["data"]["problem"], "is missing");
+    // Before the review, there is nothing to read.
+    assert!(
+        service
+            .valuation(ValuationRequest {
+                as_of: Some(1),
+                deadline_sample_windows: None,
+            })
+            .unwrap()
+            .ranked
+            .is_empty()
+    );
 }

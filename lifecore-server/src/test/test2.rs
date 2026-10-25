@@ -26,6 +26,7 @@ use lifecore_app::{
     storage::{DEFAULT_STATE_FILE, StatePath},
 };
 use lifecore_dag_check::DagCheckFactory;
+use lifecore_prod::PlanningType;
 use lifecore_typecheck::TypeCheckFactory;
 use semver::Version;
 use serde_json::{Value, json};
@@ -1241,8 +1242,134 @@ fn task_declaration() -> Value {
     })
 }
 
+// The planning declarations at positions 0 to 9, then a plan whose
+// valuation at the head ranks a row in every tier and gives every reason:
+// three windows, sealed by the reviews at 24 and 34, the last one open.
+fn planning_entries() -> Vec<Value> {
+    let at = |date: &str| json!({"kind": "timestamp", "value": format!("{date}T09:00:00Z")});
+    let node = |name: &str, ty: &str, payload: Value| json!({"name": name, "kind": "node", "ty_name": ty, "payload": payload});
+    let edge = |name: &str, ty: &str, from: &str, to: &str| {
+        json!({"name": name, "kind": "edge", "ty_name": ty,
+            "from": {"added": from}, "to": {"added": to}})
+    };
+    let mut entries = PlanningType::ALL
+        .iter()
+        .map(|ty| {
+            node(
+                &format!("{}_type", ty.name().to_lowercase()),
+                Type::TYPE_NAME,
+                serde_json::to_value(ty.canonical().to_body()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.extend([
+        // Window 0.
+        node(
+            "swim",
+            "Goal",
+            json!({"title": "Swim 1 km", "deadline": at("2026-03-01")}),
+        ),
+        node("book", "Task", json!({"title": "Book lessons"})),
+        edge("book_swim", "Enables", "book", "swim"),
+        node("run", "Habit", json!({"title": "Run", "quota": 3})),
+        edge("run_swim", "Helps", "run", "swim"),
+        node("abroad", "Goal", json!({"title": "Live abroad a year"})),
+        node("cook", "Goal", json!({"title": "Learn to cook"})),
+        node("recipe", "Task", json!({"title": "Cook a first recipe"})),
+        edge("recipe_cook", "Enables", "recipe", "cook"),
+        node(
+            "hand_over",
+            "Project",
+            json!({"title": "Hand over at work", "deadline": at("2026-01-05")}),
+        ),
+        node("notes", "Task", json!({"title": "Write hand-over notes"})),
+        edge("notes_hand_over", "Enables", "notes", "hand_over"),
+        node(
+            "book_plan",
+            "Stance",
+            json!({"kind": "committed", "cost": 1, "at": at("2026-01-01")}),
+        ),
+        edge("book_plan_about", "About", "book_plan", "book"),
+        node(
+            "first_review",
+            "Review",
+            json!({"budget": 5, "at": at("2026-01-01")}),
+        ),
+        // Window 1.
+        node("ran", "Did", json!({"at": at("2026-01-03")})),
+        edge("ran_about", "About", "ran", "run"),
+        node(
+            "certificate",
+            "Task",
+            json!({"title": "Language certificate"}),
+        ),
+        node(
+            "later",
+            "Stance",
+            json!({"kind": "deferred", "horizon": 1, "at": at("2026-01-08")}),
+        ),
+        edge("later_about", "About", "later", "certificate"),
+        json!({"name": "book_again", "kind": "node", "ty_name": "Stance",
+            "predecessor": {"added": "book_plan"}, "intent": "revise",
+            "payload": {"kind": "committed", "cost": 1, "at": at("2026-01-08")}}),
+        edge("book_again_about", "About", "book_again", "book"),
+        node(
+            "notes_plan",
+            "Stance",
+            json!({"kind": "committed", "cost": 2, "at": at("2026-01-08")}),
+        ),
+        edge("notes_plan_about", "About", "notes_plan", "notes"),
+        node(
+            "second_review",
+            "Review",
+            json!({"budget": 5, "at": at("2026-01-08")}),
+        ),
+        // Window 2, open at the head.
+        node("ran_again", "Did", json!({"at": at("2026-01-09")})),
+        edge("ran_again_about", "About", "ran_again", "run"),
+        node("stretch", "Habit", json!({"title": "Stretch", "quota": 2})),
+    ]);
+    entries
+}
+
+// The valuation reads any database and never its suite, so the plan is
+// applied under TypeCheck alone, in its own database.
+fn valuation(recorder: &mut Recorder, scratch: &Scratch) -> Module {
+    let planning = service(StatePath::new(scratch.0.join("planning.json")));
+    planning
+        .init(&[configured(TypeCheckFactory::name())])
+        .unwrap();
+    let checked = std::mem::replace(&mut recorder.service, planning);
+    recorder.raw_result(
+        "proposal.apply",
+        json!({"proposal": {"entries": planning_entries()}}),
+    );
+    let head = recorder.call("valuation", "planning.valuation", json!({}));
+    let tiers = head.1["result"]["ranked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["tier"].as_u64().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(tiers, (0..=5).collect(), "{}", head.1);
+    // Before the second review, with no deadline sample.
+    let as_of = recorder.call(
+        "valuation_as_of",
+        "planning.valuation",
+        json!({"as_of": "34", "deadline_sample_windows": 0}),
+    );
+    recorder.service = checked;
+    method_module(
+        "planning.valuation",
+        vec![
+            ("request", "response", head),
+            ("asOfRequest", "asOfResponse", as_of),
+        ],
+    )
+}
+
 // Every application error kind; the recorded fixtures must match it exactly.
-const ERROR_KINDS: [&str; 26] = [
+const ERROR_KINDS: [&str; 27] = [
     "state_path_empty",
     "working_directory",
     "directory_missing",
@@ -1266,6 +1393,7 @@ const ERROR_KINDS: [&str; 26] = [
     "graphviz_unavailable",
     "graphviz_failed",
     "invalid_seeds",
+    "valuation_failed",
     "invalid_params",
     "backend_failure",
     "internal",
@@ -1298,6 +1426,7 @@ fn listed(error: &AppError) {
     | AppError::GraphvizUnavailable { .. }
     | AppError::GraphvizFailed { .. }
     | AppError::InvalidSeeds { .. }
+    | AppError::Valuation(_)
     | AppError::InvalidParams { .. }
     | AppError::Backend { .. }
     | AppError::Internal { .. } => {}
@@ -1608,6 +1737,7 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "database.describe",
         vec![("request", "response", described)],
     ));
+    modules.push(valuation(&mut recorder, scratch));
 
     let covered = modules
         .iter()
@@ -1766,6 +1896,19 @@ fn application_errors(
         .unwrap();
         recorder.normalizer.value(response)
     };
+    // A `Review` without `at`, in a database without TypeCheck, which the
+    // valuation cannot read.
+    let unreadable = service(elsewhere("unreadable_plan.json"));
+    unreadable.init(&[]).unwrap();
+    let checked = std::mem::replace(&mut recorder.service, unreadable);
+    recorder.raw_result(
+        "proposal.apply",
+        json!({"proposal": {"entries": [
+            {"name": "review", "kind": "node", "ty_name": "Review", "payload": {"budget": 1}},
+        ]}}),
+    );
+    samples.push(call(recorder, "planning.valuation", json!({})));
+    recorder.service = checked;
     samples.push(describe(recorder, elsewhere("missing.json")));
     fs::write(scratch.0.join("garbage.json"), "not a snapshot").unwrap();
     samples.push(describe(recorder, elsewhere("garbage.json")));

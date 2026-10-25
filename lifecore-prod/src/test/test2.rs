@@ -3727,3 +3727,50 @@ fn a_dropped_connection_skips_an_ended_until_and_an_earlier_did() {
     assert_eq!(dropped, vec![this_window]);
     assert!(judged(&db, review).contains(&undecided(jog, review)));
 }
+
+// The wire encoding of reasons: tagged by `name`, counts as JSON numbers, and
+// a payload's `quota` and the deadline estimate as decimal strings, which a
+// JavaScript client would otherwise round past 2^53.
+#[test]
+fn reasons_round_trip_with_unbounded_integers_as_decimal_strings() {
+    let cases = [
+        (Reason::Undecided, serde_json::json!({"name": "undecided"})),
+        (
+            Reason::OpenFor { seals: 3 },
+            serde_json::json!({"name": "open_for", "seals": 3}),
+        ),
+        (
+            Reason::Standing {
+                kind: StanceKind::Deferred,
+                seals_left: 1,
+            },
+            serde_json::json!({"name": "standing", "kind": "deferred", "seals_left": 1}),
+        ),
+        (
+            Reason::DeadlineIn { reviews: u64::MAX },
+            serde_json::json!({"name": "deadline_in", "reviews": "18446744073709551615"}),
+        ),
+        (
+            Reason::Shortfall {
+                have: 1,
+                quota: i64::MAX,
+            },
+            serde_json::json!({"name": "shortfall", "have": 1, "quota": "9223372036854775807"}),
+        ),
+        (
+            Reason::LapsesAtNextSeal,
+            serde_json::json!({"name": "lapses_at_next_seal"}),
+        ),
+    ];
+    for (reason, json) in cases {
+        assert_eq!(serde_json::to_value(reason).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Reason>(json).unwrap(), reason);
+    }
+    // A number where a decimal string belongs is refused, not rounded.
+    assert!(
+        serde_json::from_value::<Reason>(
+            serde_json::json!({"name": "shortfall", "have": 1, "quota": 3})
+        )
+        .is_err()
+    );
+}

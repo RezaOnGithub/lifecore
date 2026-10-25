@@ -73,10 +73,11 @@ inconsistency gate ([SPEC §7](SPEC.md#7-mandatory-validation),
 | `lifecore plan-id` | Mint a token for the selected current database/base without changing history. |
 | `lifecore export FILE --format json\|toml` | Serialize a proposal document in the chosen format, preserving `plan_id` and `acknowledges`. |
 | `lifecore add-analyzer NAME [CONFIGURATION]` | Append a registered analyzer with its configuration string, default `{}`, to the ordered suite. |
+| `lifecore valuation` | Print the planning valuation of `planning.valuation` ([PLANNING §12](PLANNING.md#12-delivery-without-a-core-change)) at the head, or before `--as-of <position>`, with `--deadline-sample-windows <n>` when given. It reads the database as a preview and stores nothing. |
 
 These conveniences call the same operations and use the same data as RPC.
-`init`, `check`, `apply`, `plan-id`, and `add-analyzer` print the corresponding
-RPC result or error object as JSON on stdout, adding a one-line diagnostic on
+`init`, `check`, `apply`, `plan-id`, `add-analyzer`, and `valuation` print the
+corresponding RPC result or error object as JSON on stdout, adding a one-line diagnostic on
 stderr for errors, and exit zero on success, nonzero on rejection or error.
 `check` of a proposal that is not accepted prints its result and exits nonzero.
 `export` prints the converted document. `FILE` arguments select JSON or TOML by

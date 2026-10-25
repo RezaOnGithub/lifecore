@@ -55,19 +55,36 @@ pub struct RenderedReason {
     pub text: String,
 }
 
-// Tests assert the structured reason; clients show the text.
+// Tests assert the structured reason; clients show the text. Counts of
+// seals and events are bounded by the history's length and travel as JSON
+// numbers; a payload's `quota` and the unbounded deadline estimate travel
+// as decimal strings, so JavaScript clients never round them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reason {
     Undecided,
     BrokenPlan,
-    OpenFor { seals: usize },
-    Standing { kind: StanceKind, seals_left: usize },
+    OpenFor {
+        seals: usize,
+    },
+    Standing {
+        kind: StanceKind,
+        seals_left: usize,
+    },
     LapsesAtNextSeal,
-    DeadlineIn { reviews: u64 },
+    DeadlineIn {
+        #[serde(with = "lifecore::decimal")]
+        reviews: u64,
+    },
     DeadlinePassed,
-    Starved { seals: usize },
-    Shortfall { have: usize, quota: i64 },
+    Starved {
+        seals: usize,
+    },
+    Shortfall {
+        have: usize,
+        #[serde(with = "lifecore::decimal")]
+        quota: i64,
+    },
     New,
 }
 

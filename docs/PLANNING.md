@@ -2,8 +2,9 @@
 
 Status: implemented in `lifecore-prod`, whose factory the application
 registers as `Planning`, beside Reconnect; `lifecore init --default-analyzers`
-configures both ([INTERFACES §2](INTERFACES.md#2-cli-surface)). The planning
-executable of section 12 is not built. This document owns the contract of
+configures both ([INTERFACES §2](INTERFACES.md#2-cli-surface)). The valuation
+of section 12 is delivered as `lifecore valuation` and the RPC method
+`planning.valuation`. This document owns the contract of
 the planning analyzer and its valuation.
 [PLANNING-EXPLAINER](PLANNING-EXPLAINER.md) walks through the same design by
 example, with every entry written as a change file; a test in
@@ -826,20 +827,25 @@ traits, the runner, or [ANALYZERS](ANALYZERS.md).
    finding's identity (decision 62).
    `Valuation { boundary, ranked: [ { revision, tier, reasons: [ { reason, text } ] } ] }`
    is a Serde type owned by the crate; reasons are its own enum, tagged by
-   `name` in snake case, with rendered text beside each. The function is
-   pure, so another analyzer may call it itself; nothing passes the valuation
-   through the runner (decision 63).
-2. **Executable.** Not built yet ([PLAN §2.3](PLAN.md#23-planning)). A
-   `lifecore-plan` binary, or a subcommand of the CLI, opens the selected
-   database read-only as a preview ([STORAGE](STORAGE.md)) and prints the
-   ranking at the head or at an "as of" boundary as lines or JSON. It takes
+   `name` in snake case, with rendered text beside each. Counts of seals and
+   events serialize as JSON numbers, and `Shortfall`'s `quota` and
+   `DeadlineIn`'s `reviews` as decimal strings, since a payload integer and
+   the deadline estimate can exceed what a JavaScript number holds exactly.
+   The function is pure, so another analyzer may call it itself; nothing
+   passes the valuation through the runner (decision 63).
+2. **Executable.** `lifecore valuation`, a subcommand of the CLI, opens the
+   selected database read-only as a preview ([STORAGE](STORAGE.md)) and
+   prints the ranking at the head, or before `--as-of <position>`, as the
+   JSON result of the RPC method below
+   ([INTERFACES §2](INTERFACES.md#2-cli-surface)). It takes
    `--deadline-sample-windows` and does not read the analysis suite, since
    the valuation needs nothing from the analyzer configuration (decision
-   62).
-3. **Application later.** When the browser client wants the ranking, the
-   application service adds one RPC method that calls the same function, and
-   the client renders tiers and reason text with links into the inspector.
-   Fixtures and the client contract then carry the `Valuation` shape.
+   62). Line output is not built; the JSON carries each reason's text.
+3. **Application.** The application service's one RPC method,
+   `planning.valuation` ([RPC §2](RPC.md#2-methods)), calls the same
+   function. Fixtures and the client contract carry the `Valuation` shape.
+   A browser screen that renders tiers and reason text with links into the
+   inspector remains ([PLAN §2.3](PLAN.md#23-planning)).
 
 Nothing else is needed: `ancestors`, for planning roots and the re-pointing
 checks; current descendants and the all-edges selection, for the

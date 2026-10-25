@@ -5,6 +5,7 @@ use crate::{
     service::{ProposalReport, Published},
 };
 use lifecore::{EntryId, LifeCoreError, analysis::FindingKey};
+use lifecore_prod::PayloadError;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -84,6 +85,12 @@ pub enum AppError {
     // Every refused seed at once, so a caller can drop them in one retry.
     #[error("seeds must be nodes of the selected view, but {}", refusals(refused))]
     InvalidSeeds { refused: Vec<RefusedSeed> },
+    // The valuation reads planning's fields as the analyzer does, so a node
+    // of a planning type whose payload lacks one fails it (PLANNING §12).
+    // TypeCheck keeps such nodes out of a database whose suite configures
+    // Planning, but the valuation reads any database.
+    #[error("cannot rank the plan: {0}")]
+    Valuation(PayloadError),
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
     // Raised by a host, not the service: the task running a call ended
@@ -134,6 +141,7 @@ impl AppError {
         Self::GraphvizUnavailable { .. } => "graphviz_unavailable",
         Self::GraphvizFailed { .. } => "graphviz_failed",
         Self::InvalidSeeds { .. } => "invalid_seeds",
+        Self::Valuation(_) => "valuation_failed",
         Self::InvalidParams { .. } => "invalid_params",
         Self::Backend { .. } => "backend_failure",
         Self::Internal { .. } => "internal",
@@ -167,6 +175,7 @@ impl AppError {
         Self::GraphvizUnavailable { .. } => 4004,
         Self::GraphvizFailed { .. } => 4005,
         Self::InvalidSeeds { .. } => 4006,
+        Self::Valuation(_) => 4007,
         Self::Backend { .. } => 5001,
         }
     }
@@ -204,6 +213,12 @@ impl AppError {
         Self::GraphvizUnavailable { message } => json!({ "message": message }),
         Self::GraphvizFailed { cause, stderr } => json!({ "cause": cause, "stderr": stderr }),
         Self::InvalidSeeds { refused } => json!({ "refused": refused }),
+        Self::Valuation(error) => json!({
+            "entry": error.node,
+            "ty_name": error.ty,
+            "field": error.field,
+            "problem": error.problem.to_string(),
+        }),
         _ => json!({}),
         }
     }

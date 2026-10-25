@@ -26,7 +26,7 @@ behavior before implementing it:
   DAG Check (the `lifecore` binary's factories), and configured together by
   `lifecore init --default-analyzers`:
   [PLANNING](docs/PLANNING.md) specifies the planning analyzer and its
-  valuation, in `lifecore-prod`, with
+  valuation, in `lifecore-prod` and served by `planning.valuation`, with
   [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) as its walkthrough; and
   [RECONNECT](docs/RECONNECT.md) specifies the general reconnection analyzer
   planning relies on, in `lifecore-reconnect`, with
