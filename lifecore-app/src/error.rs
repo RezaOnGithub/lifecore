@@ -5,7 +5,7 @@ use crate::{
     service::{ProposalReport, Published},
 };
 use lifecore::{EntryId, LifeCoreError, analysis::FindingKey};
-use lifecore_prod::PayloadError;
+use lifecore_prod::{PayloadError, Problem};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -85,10 +85,10 @@ pub enum AppError {
     // Every refused seed at once, so a caller can drop them in one retry.
     #[error("seeds must be nodes of the selected view, but {}", refusals(refused))]
     InvalidSeeds { refused: Vec<RefusedSeed> },
-    // The valuation reads planning's fields as the analyzer does, so a node
-    // of a planning type whose payload lacks one fails it (PLANNING §12).
-    // TypeCheck keeps such nodes out of a database whose suite configures
-    // Planning, but the valuation reads any database.
+    // The valuation reads planning's fields strictly, so a node of a
+    // planning type whose payload lacks one fails it (PLANNING §12).
+    // TypeCheck and Planning together keep such nodes out of a database
+    // whose suite configures both, but the valuation reads any database.
     #[error("cannot rank the plan: {0}")]
     Valuation(PayloadError),
     #[error("invalid parameters: {message}")]
@@ -213,11 +213,18 @@ impl AppError {
         Self::GraphvizUnavailable { message } => json!({ "message": message }),
         Self::GraphvizFailed { cause, stderr } => json!({ "cause": cause, "stderr": stderr }),
         Self::InvalidSeeds { refused } => json!({ "refused": refused }),
+        // The problem is tagged like other causes, so a client can tell a
+        // missing field from one of another kind without reading text.
         Self::Valuation(error) => json!({
             "entry": error.node,
             "ty_name": error.ty,
             "field": error.field,
-            "problem": error.problem.to_string(),
+            "problem": match error.problem {
+            Problem::Missing => json!({ "kind": "missing" }),
+            Problem::WrongKind { expected, found } => {
+                json!({ "kind": "wrong_kind", "expected": expected, "found": found })
+            }
+            },
         }),
         _ => json!({}),
         }

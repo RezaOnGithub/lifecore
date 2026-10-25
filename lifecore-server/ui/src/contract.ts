@@ -418,13 +418,14 @@ export type StanceKind =
   | "resumed"
   | "sufficient"
   | "abandoned";
-// Seal and event counts are JSON numbers, bounded by the history's length; a
-// payload's `quota` and the deadline estimate are decimal strings.
+// Seal and event counts are JSON numbers, bounded by the history's length;
+// what a payload integer bounds (`quota`, and `seals_left` through a stance's
+// `horizon`) and the deadline estimate are decimal strings.
 export type Reason =
   | { name: "undecided" }
   | { name: "broken_plan" }
   | { name: "open_for"; seals: number }
-  | { name: "standing"; kind: StanceKind; seals_left: number }
+  | { name: "standing"; kind: StanceKind; seals_left: DecimalString }
   | { name: "lapses_at_next_seal" }
   | { name: "deadline_in"; reviews: DecimalString }
   | { name: "deadline_passed" }
@@ -501,7 +502,8 @@ export interface RestoreParams {
   key: FindingKey;
 }
 export interface ValuationParams extends AsOfParams {
-  // How many recent windows between reviews estimate deadlines; default 6.
+  // How many recent windows between reviews estimate deadlines; omitted,
+  // the server's default (PLANNING §10).
   deadline_sample_windows?: number;
 }
 export interface ViewRenderParams {
@@ -551,6 +553,10 @@ export interface RefusedSeed {
   id: EntryId;
   reason: "absent" | "edge";
 }
+// Why the valuation could not read a field of a planning node.
+export type PayloadProblem =
+  | { kind: "missing" }
+  | { kind: "wrong_kind"; expected: PayloadKind; found: PayloadKind };
 // Why `dot` failed after it started. Durations are in milliseconds.
 export type GraphvizFailure =
   | { kind: "pipe_thread"; message: string }
@@ -598,7 +604,7 @@ export type ApplicationErrorData =
       entry: EntryId;
       ty_name: string;
       field: string;
-      problem: string;
+      problem: PayloadProblem;
     }
   | { kind: "invalid_params" }
   | { kind: "backend_failure" }

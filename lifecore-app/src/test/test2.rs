@@ -4923,7 +4923,7 @@ fn a_payload_the_valuation_cannot_read_fails_it_distinctly() {
     );
     assert_eq!(object["data"]["ty_name"], "Review");
     assert_eq!(object["data"]["field"], "at");
-    assert_eq!(object["data"]["problem"], "is missing");
+    assert_eq!(object["data"]["problem"], json!({"kind": "missing"}));
     // Before the review, there is nothing to read.
     assert!(
         service
@@ -4934,5 +4934,112 @@ fn a_payload_the_valuation_cannot_read_fails_it_distinctly() {
             .unwrap()
             .ranked
             .is_empty()
+    );
+    // A field of another kind is told apart from a missing one.
+    let review_type = Type::new(
+        "Review",
+        &[
+            ("budget", (ValueType::Integer, FieldStatus::Mandatory)),
+            ("at", (ValueType::Text, FieldStatus::Mandatory)),
+        ],
+        &[],
+        &[],
+        &[],
+    )
+    .to_body();
+    let other = Scratch::new();
+    let service = other.service();
+    service.init(&typecheck()).unwrap();
+    service
+        .apply(request(proposal(json!([
+            {"name": "review_type", "kind": "node", "ty_name": "Type", "payload": review_type},
+            {"name": "review", "kind": "node", "ty_name": "Review", "payload": {"budget": 1, "at": "soon"}},
+        ]))))
+        .unwrap();
+    let object = serde_json::to_value(
+        service
+            .valuation(ValuationRequest::default())
+            .unwrap_err()
+            .to_object(),
+    )
+    .unwrap();
+    assert_eq!(
+        object["data"]["problem"],
+        json!({"kind": "wrong_kind", "expected": "timestamp", "found": "text"})
+    );
+}
+
+// The deadline sample reaches the library through the service and RPC: with
+// windows of one and ten days, the default sample's median is 5.5 days, a
+// sample of one is the last window, and none gives no deadline reason.
+#[test]
+fn the_deadline_sample_chooses_the_windows_that_estimate_a_deadline() {
+    let scratch = Scratch::new();
+    let service = scratch.service();
+    service.init(&typecheck()).unwrap();
+    let day = |n: u32| json!({"kind": "timestamp", "value": format!("2026-01-{n:02}T00:00:00Z")});
+    let review = |name: &str, n: u32| json!({"name": name, "kind": "node", "ty_name": "Review", "payload": {"budget": 3, "at": day(n)}});
+    let mut entries = PlanningType::ALL
+        .iter()
+        .map(|ty| {
+            json!({"name": format!("{}_type", ty.name()), "kind": "node", "ty_name": "Type",
+                "payload": ty.canonical().to_body()})
+        })
+        .collect::<Vec<_>>();
+    entries.extend([
+        json!({"name": "swim", "kind": "node", "ty_name": "Goal",
+            "payload": {"title": "Swim 1 km", "deadline": {"kind": "timestamp", "value": "2026-02-26T00:00:00Z"}}}),
+        json!({"name": "book", "kind": "node", "ty_name": "Task", "payload": {"title": "Book lessons"}}),
+        json!({"name": "book_swim", "kind": "edge", "ty_name": "Enables",
+            "from": {"added": "book"}, "to": {"added": "swim"}}),
+        review("first", 1),
+        review("second", 2),
+        json!({"name": "plan", "kind": "node", "ty_name": "Stance",
+            "payload": {"kind": "committed", "cost": 1, "at": day(2)}}),
+        json!({"name": "plan_about", "kind": "edge", "ty_name": "About",
+            "from": {"added": "plan"}, "to": {"added": "book"}}),
+        review("third", 12),
+    ]);
+    let applied = service
+        .apply(request(proposal(Value::Array(entries))))
+        .unwrap();
+    let book = applied.report.operations[11].entry;
+    let deadline = |deadline_sample_windows: Option<usize>| {
+        let valuation = service
+            .valuation(ValuationRequest {
+                as_of: None,
+                deadline_sample_windows,
+            })
+            .unwrap();
+        let row = valuation
+            .ranked
+            .iter()
+            .find(|row| row.revision == book)
+            .expect("the committed task ranks");
+        assert_eq!(row.tier, 1);
+        row.reasons
+            .iter()
+            .map(|reason| reason.reason)
+            .find(|reason| matches!(reason, Reason::DeadlineIn { .. } | Reason::DeadlinePassed))
+    };
+    // 45 days from the third review's `at` to the deadline.
+    assert_eq!(deadline(None), Some(Reason::DeadlineIn { reviews: 8 }));
+    assert_eq!(deadline(Some(6)), Some(Reason::DeadlineIn { reviews: 8 }));
+    assert_eq!(deadline(Some(1)), Some(Reason::DeadlineIn { reviews: 4 }));
+    assert_eq!(deadline(Some(0)), None);
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "planning.valuation",
+        "params": {"deadline_sample_windows": 1}})
+    .to_string();
+    let answer = serde_json::to_value(rpc::handle(&service, &line)).unwrap();
+    let reasons = answer["result"]["ranked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["reasons"].as_array().unwrap().clone())
+        .map(|reason| reason["reason"].clone())
+        .collect::<Vec<_>>();
+    assert!(
+        reasons.contains(&json!({"name": "deadline_in", "reviews": "4"})),
+        "{answer}"
     );
 }

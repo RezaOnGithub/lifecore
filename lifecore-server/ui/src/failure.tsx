@@ -40,14 +40,16 @@ function sentence(data: ApplicationErrorData): ReactNode | null {
             `@${id.position} ${reason === "absent" ? "is not in this view" : "is an edge"}`,
         )
         .join(", ")}.`;
-    // The entry is in the view the valuation read, so it links; the
-    // problem reads "is missing" or "should be <kind>, found <kind>".
+    // The entry is in the view the valuation read, so it links.
     case "valuation_failed":
       return (
         <>
           Field <code>{data.field}</code> of {typeName(data.ty_name)}{" "}
-          <IdLink id={data.entry} /> {data.problem}, and the ranking reads that
-          field.
+          <IdLink id={data.entry} />{" "}
+          {data.problem.kind === "missing"
+            ? "is missing"
+            : `should be ${data.problem.expected}, found ${data.problem.found}`}
+          , and the ranking reads that field.
         </>
       );
     default:

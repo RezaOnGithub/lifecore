@@ -407,7 +407,7 @@ test("a planning payload the ranking cannot read names its entry and field", asy
             entry: review,
             ty_name: "Review",
             field: "at",
-            problem: "is missing",
+            problem: { kind: "missing" },
           },
         },
       },

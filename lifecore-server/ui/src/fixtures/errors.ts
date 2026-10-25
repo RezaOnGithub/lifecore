@@ -1216,7 +1216,9 @@ export const application = {
           },
           "field": "at",
           "kind": "valuation_failed",
-          "problem": "is missing",
+          "problem": {
+            "kind": "missing"
+          },
           "ty_name": "Review"
         },
         "message": "cannot rank the plan: field `at` of Review EntryId { position: 0, origin: 00000000-0000-4000-8000-00000000001e } is missing"

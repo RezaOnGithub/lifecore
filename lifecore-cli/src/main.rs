@@ -11,7 +11,7 @@ use lifecore_app::{
     storage::StatePath,
 };
 use lifecore_dag_check::DagCheckFactory;
-use lifecore_prod::PlanningFactory;
+use lifecore_prod::{PlanningFactory, ValuationOptions};
 use lifecore_reconnect::ReconnectFactory;
 use lifecore_server::{Options, Ui};
 use lifecore_typecheck::TypeCheckFactory;
@@ -104,9 +104,10 @@ enum Command {
         #[arg(
             long,
             value_name = "N",
-            help = "Estimate deadlines from the last N windows between reviews [default: 6]"
+            default_value_t = ValuationOptions::default().deadline_sample_windows,
+            help = "Estimate deadlines from the last N windows between reviews"
         )]
-        deadline_sample_windows: Option<usize>,
+        deadline_sample_windows: usize,
     },
 }
 
@@ -392,7 +393,7 @@ fn main() -> ExitCode {
     } => emit(service().and_then(|service| {
         service.valuation(ValuationRequest {
             as_of,
-            deadline_sample_windows,
+            deadline_sample_windows: Some(deadline_sample_windows),
         })
     })),
     }

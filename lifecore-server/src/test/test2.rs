@@ -1352,6 +1352,42 @@ fn valuation(recorder: &mut Recorder, scratch: &Scratch) -> Module {
         .map(|row| row["tier"].as_u64().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(tiers, (0..=5).collect(), "{}", head.1);
+    let reasons = |response: &Value| {
+        response["result"]["ranked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| row["reasons"].as_array().unwrap())
+            .map(|reason| reason["reason"]["name"].as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>()
+    };
+    let every_reason = [
+        "undecided",
+        "broken_plan",
+        "open_for",
+        "standing",
+        "lapses_at_next_seal",
+        "deadline_in",
+        "deadline_passed",
+        "starved",
+        "shortfall",
+        "new",
+    ];
+    assert_eq!(
+        reasons(&head.1),
+        BTreeSet::from(every_reason.map(String::from))
+    );
+    // At the head without a deadline sample, which drops both deadline reasons.
+    let unsampled = recorder.call(
+        "valuation_unsampled",
+        "planning.valuation",
+        json!({"deadline_sample_windows": 0}),
+    );
+    let dropped = reasons(&head.1)
+        .difference(&reasons(&unsampled.1))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(dropped, ["deadline_in", "deadline_passed"]);
     // Before the second review, with no deadline sample.
     let as_of = recorder.call(
         "valuation_as_of",
@@ -1363,6 +1399,7 @@ fn valuation(recorder: &mut Recorder, scratch: &Scratch) -> Module {
         "planning.valuation",
         vec![
             ("request", "response", head),
+            ("unsampledRequest", "unsampledResponse", unsampled),
             ("asOfRequest", "asOfResponse", as_of),
         ],
     )

@@ -66,8 +66,10 @@ per-item questions (what an item serves, its `Enables` sources, readiness,
 strict subgraphs) each scan every current edge of the view, so a seal costs
 items times edges, and replay judges every seal. At 4,000 entries a check
 under `lifecore init --default-analyzers` exceeds the 10-second busy window.
-The valuation is computed at one boundary only and costs about as much as
-loading the snapshot, which `plan-id` also takes.
+The valuation is computed at one boundary only. On these snapshots, where
+almost every task is done, it costs about as much as loading the snapshot,
+which `plan-id` also takes; it asks the same per-item questions, so with many
+open items it grows with items times edges, as a seal does.
 
 ## 2. Output size
 
@@ -95,7 +97,8 @@ Not scheduled:
 - Planning's seal judging: index the current `Enables`, `Helps`, `About`, and
   `Until` edges by endpoint once per seal instead of scanning the view for
   each item, so that a seal costs time linear in its prefix and replay under
-  Planning becomes quadratic ([section 1](#1-measurements)).
+  Planning becomes quadratic ([section 1](#1-measurements)). The valuation
+  shares those questions and would become linear too.
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
 - A repeatable benchmark in the repository, replacing these ad hoc measurements.

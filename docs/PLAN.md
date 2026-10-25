@@ -75,14 +75,7 @@ Follow [SUGGESTIONS](SUGGESTIONS.md).
   Acknowledgment makes analyzer certificates carry more weight.
 - [ ] Cover the [acceptance scenarios](SUGGESTIONS.md#7-acceptance-scenarios).
 
-### 2.3 Planning
-
-Follow [PLANNING](PLANNING.md). The analyzer and the `valuation` function are
-built in `lifecore-prod`, the application registers the analyzer, and
-`lifecore valuation` and `planning.valuation` deliver the ranking
-([PLANNING §12](PLANNING.md#12-delivery-without-a-core-change)).
-
-### 2.4 Final verification
+### 2.3 Final verification
 
 Each stage verifies its own workflow; these checks cut across stages.
 

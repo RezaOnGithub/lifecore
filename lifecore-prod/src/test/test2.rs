@@ -3729,8 +3729,8 @@ fn a_dropped_connection_skips_an_ended_until_and_an_earlier_did() {
 }
 
 // The wire encoding of reasons: tagged by `name`, counts as JSON numbers, and
-// a payload's `quota` and the deadline estimate as decimal strings, which a
-// JavaScript client would otherwise round past 2^53.
+// what a payload integer bounds and the deadline estimate as decimal
+// strings, which a JavaScript client would otherwise round past 2^53.
 #[test]
 fn reasons_round_trip_with_unbounded_integers_as_decimal_strings() {
     let cases = [
@@ -3741,10 +3741,10 @@ fn reasons_round_trip_with_unbounded_integers_as_decimal_strings() {
         ),
         (
             Reason::Standing {
-                kind: StanceKind::Deferred,
-                seals_left: 1,
+                kind: StanceKind::Waiting,
+                seals_left: usize::MAX,
             },
-            serde_json::json!({"name": "standing", "kind": "deferred", "seals_left": 1}),
+            serde_json::json!({"name": "standing", "kind": "waiting", "seals_left": "18446744073709551615"}),
         ),
         (
             Reason::DeadlineIn { reviews: u64::MAX },

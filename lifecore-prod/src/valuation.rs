@@ -56,9 +56,10 @@ pub struct RenderedReason {
 }
 
 // Tests assert the structured reason; clients show the text. Counts of
-// seals and events are bounded by the history's length and travel as JSON
-// numbers; a payload's `quota` and the unbounded deadline estimate travel
-// as decimal strings, so JavaScript clients never round them.
+// seals and events, bounded by the history's length, travel as JSON
+// numbers. What a payload integer bounds, `quota` and `seals_left`, which
+// grows with a stance's `horizon`, and the deadline estimate travel as
+// decimal strings, so JavaScript clients never round them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reason {
@@ -69,6 +70,7 @@ pub enum Reason {
     },
     Standing {
         kind: StanceKind,
+        #[serde(with = "lifecore::decimal")]
         seals_left: usize,
     },
     LapsesAtNextSeal,

@@ -819,18 +819,20 @@ traits, the runner, or [ANALYZERS](ANALYZERS.md).
    as `Planning`, and a plain function
    `valuation(view, &ValuationOptions) -> Result<Valuation, PayloadError>`
    over a bounded `View`. The output is bounded by its view. The function
-   reads payloads as the analyzer does, so a field it reads that is missing
-   or of another kind is an error, which TypeCheck keeps out of a committed
-   database (decision 81).
+   reads payloads as strictly as the analyzer does, so a field it reads that
+   is missing or of another kind is an error, which TypeCheck and the
+   judgment of declarations of section 8.1 together keep out of a database
+   whose suite configures both (decision 81).
    `ValuationOptions { deadline_sample_windows }` defaults to 6 and is not
    analyzer configuration: it affects no finding, so it is no part of any
    finding's identity (decision 62).
    `Valuation { boundary, ranked: [ { revision, tier, reasons: [ { reason, text } ] } ] }`
    is a Serde type owned by the crate; reasons are its own enum, tagged by
    `name` in snake case, with rendered text beside each. Counts of seals and
-   events serialize as JSON numbers, and `Shortfall`'s `quota` and
-   `DeadlineIn`'s `reviews` as decimal strings, since a payload integer and
-   the deadline estimate can exceed what a JavaScript number holds exactly.
+   events serialize as JSON numbers, and `Shortfall`'s `quota`, `Standing`'s
+   `seals_left`, which grows with the stance's `horizon`, and `DeadlineIn`'s
+   `reviews` as decimal strings, since what a payload integer bounds and the
+   deadline estimate can exceed what a JavaScript number holds exactly.
    The function is pure, so another analyzer may call it itself; nothing
    passes the valuation through the runner (decision 63).
 2. **Executable.** `lifecore valuation`, a subcommand of the CLI, opens the
@@ -1444,14 +1446,17 @@ callouts here.
     lengths.** Rejected: the lower or the upper of the two. Reason:
     **Provisional, owner to confirm:** it is the usual median, and the
     estimate is rounded down afterwards anyway (section 10).
-81. **The valuation returns an error where the analyzer would.** A field the
-    rules read that is missing, or of another kind, is an error from
-    `valuation` as from the analyzer. Rejected: lenient reads that take such a
-    field as absent. Reason: **Provisional, owner to confirm:** one reading of
-    payloads serves both, and TypeCheck with section 3.4 keeps such payloads
-    out of a committed database, so an error means a database that does not
-    run TypeCheck, where planning's behavior is not specified (section 12;
-    decisions 39 and 53).
+81. **The valuation reads payloads as strictly as the analyzer.** A field the
+    rules of sections 9 and 10 read that is missing, or of another kind, is
+    an error from `valuation`, as a field the analyzer reads is from the
+    analyzer. The valuation reads some fields the analyzer may not, such as
+    every review's `at` for the deadline estimate. Rejected: lenient reads
+    that take such a field as absent. Reason: **Provisional, owner to
+    confirm:** one reading of payloads serves both, and TypeCheck with the
+    analyzer's judgment of declarations against section 3.4 keeps such
+    payloads out of a committed database, so an error means a database whose
+    suite lacks TypeCheck or Planning, where planning's behavior is not
+    specified (section 12; decisions 39 and 53).
 
 82. **`seals_left` reads the graph as it stands.** A deferral whose `Until`
     edges are all historical at the boundary has `seals_left` 1 and
