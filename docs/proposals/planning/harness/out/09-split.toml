@@ -1,0 +1,15 @@
+[[entries]]
+name = "club"
+kind = "node"
+ty_name = "Task"
+predecessor = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
+intent = "revise"
+payload = { title = "Six club lessons" }
+
+[[entries]]
+name = "private"
+kind = "node"
+ty_name = "Task"
+predecessor = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
+intent = "branch"
+payload = { title = "Four private lessons" }

@@ -19,10 +19,12 @@ behavior before implementing it:
   and [UI](docs/UI.md) (presentation decisions).
 - [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
   contracts.
-- Proposed, not implemented: [PLANNING](docs/PLANNING.md) specifies the
-  planning analyzer for `lifecore-prod`, and
-  [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) walks through it. Write or
-  revise a proposal with the `proposal` skill.
+- Proposed, not implemented, one directory per proposal under
+  [docs/proposals](docs/proposals/):
+  [PLANNING](docs/proposals/planning/PLANNING.md) specifies the planning
+  analyzer for `lifecore-prod`, and
+  [PLANNING-EXPLAINER](docs/proposals/planning/PLANNING-EXPLAINER.md) walks
+  through it. Write or revise a proposal with the `proposal` skill.
 - Implemented, not yet registered by the application:
   [RECONNECT](docs/RECONNECT.md) specifies the general reconnection analyzer
   planning relies on, in `lifecore-reconnect`, with

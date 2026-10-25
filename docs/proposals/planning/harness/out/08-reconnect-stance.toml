@@ -1,0 +1,6 @@
+[[entries]]
+name = "action_0"
+kind = "edge"
+ty_name = "About"
+from = { existing = { origin = "18d737c3-ca8e-48a0-ac78-e11cd7bac183", position = "20" } }
+to = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }

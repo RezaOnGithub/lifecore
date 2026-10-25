@@ -4,9 +4,9 @@ Status: proposal, not implemented. This document owns the contract of the
 planning analyzer intended for `lifecore-prod`. [PLANNING-EXPLAINER](PLANNING-EXPLAINER.md)
 walks through the same design by example, with every entry written as a
 change file. The graph and analyzer contracts it
-relies on are [SPEC](SPEC.md), [ANALYZERS](ANALYZERS.md), the declaration
-encoding in [FILES §2.6](FILES.md#26-type-declaration-payloads), and the
-general reconnection analyzer of [RECONNECT](RECONNECT.md). Section 13
+relies on are [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md), the declaration
+encoding in [FILES §2.6](../../FILES.md#26-type-declaration-payloads), and the
+general reconnection analyzer of [RECONNECT](../../RECONNECT.md). Section 13
 records each design decision with the alternative it rejected and the reason;
 the rules link to them by number.
 
@@ -47,10 +47,10 @@ use them begin in section 4.
    (decision 2).
 3. **Identity is the exact revision, everywhere.** Edges, decisions, and
    events all attach to one revision and go historical when it is superseded,
-   as [SPEC §5](SPEC.md#5-current-and-historical-data) says. The analyzer
+   as [SPEC §5](../../SPEC.md#5-current-and-historical-data) says. The analyzer
    never resolves a connection through a revision tree. Re-pointing a
    connection after a revision is the ordinary LifeCore reconnection pattern,
-   suggested by the general [RECONNECT](RECONNECT.md) analyzer, checked where
+   suggested by the general [RECONNECT](../../RECONNECT.md) analyzer, checked where
    it is appended, and named at the seal if missing (decisions 3, 4, and
    57).
 4. **Every open item is in play; commitment is a stance.** `Enables` and
@@ -133,7 +133,7 @@ The canonical declarations (section 11) give every bookkeeping node an `at`.
 The analyzer reads it only on reviews, for the deadline estimate and the
 stale-review nudge (section 10); otherwise it serves display. On events it
 exists because the core rejects a node whose predecessor, type, and payload
-equal a current node's ([SPEC §7.1](SPEC.md#71-append-checks) rule 5), so two
+equal a current node's ([SPEC §7.1](../../SPEC.md#71-append-checks) rule 5), so two
 `Did` events about one habit need a distinguishing field (decision 23). The
 same holds for stances: two root `abandoned` stances about different items
 would otherwise be identical. A review's position, not its `at`, is what the
@@ -198,7 +198,7 @@ horizon, and the database would become a bucket list (decision 40).
 
 Bootstrap suggests each canonical declaration of section 11 that is missing.
 After that, the declarations are the user's to amend like any other
-([SPEC §6](SPEC.md#6-type-declarations)). A user may add fields and labels of
+([SPEC §6](../../SPEC.md#6-type-declarations)). A user may add fields and labels of
 their own to a planning type, and later remove, deprecate, or encourage them,
 and may change or remove any canonical field the analyzer does not read. The
 analyzer ignores fields and labels it does not read. It requires only what its
@@ -216,12 +216,12 @@ this table at the declaration's own prefix (section 8.1; decision 36).
 
 `cost` and `horizon` cannot be mandatory because section 3.3 forbids them on
 most kinds. Same-type successors are always permitted
-([SPEC §6](SPEC.md#6-type-declarations)); section 8.1 rejects them for reviews
+([SPEC §6](../../SPEC.md#6-type-declarations)); section 8.1 rejects them for reviews
 and events. The canonical fields left out of the table are free: `title`,
 `criterion`, `deliverable`, `note`, `reason`, and `at` on stances and events.
 Removing `at` from a stance or event declaration is permitted, but two
 otherwise identical stances or events then collide under
-[SPEC §7.1](SPEC.md#71-append-checks) rule 5. An item's own `successors` are
+[SPEC §7.1](../../SPEC.md#71-append-checks) rule 5. An item's own `successors` are
 the user's: a transition between item types is allowed, and age counts only
 over the run of item types (section 4; decision 71), while a transition between
 an item and a bookkeeping type is an inconsistency (section 8.1; decision 72).
@@ -234,7 +234,7 @@ revision is superseded, the connections to it become historical and the
 successor has none until they are re-asserted: for a dependency, a new edge
 between the current revisions; for a stance or `Did`, a new `About` edge from
 the existing node to the successor. The core permits both, since the node is
-current and the successor is current, and the [RECONNECT](RECONNECT.md)
+current and the successor is current, and the [RECONNECT](../../RECONNECT.md)
 analyzer suggests exactly these edges. This is why `About` is not
 one-to-one: re-pointing must keep the stance's position, because its
 lifetime (section 6) is measured from it (decision 5). A `Done` is never
@@ -445,7 +445,7 @@ stale-review nudge, while their condition holds (decision 37).
 
 **Left to TypeCheck.** The analyzer assumes TypeCheck is configured in the
 same suite, as `init` does by default
-([INTERFACES §2](INTERFACES.md#2-cli-surface)), and does not repeat its checks
+([INTERFACES §2](../../INTERFACES.md#2-cli-surface)), and does not repeat its checks
 (decision 39). TypeCheck rejects a node whose payload does not fit its current
 declaration; with section 3.4, that means every stance carries a text `kind`,
 every review an integer `budget` and a timestamp `at`, every habit and concern
@@ -454,17 +454,17 @@ types when present. It also rejects an edge whose label either endpoint's
 declaration does not permit; a type transition no declaration permits, which
 with section 3.4 keeps a bookkeeping node from being replaced by a node of
 another type; and a declaration that does not parse or shares its name
-([SPEC §6.2](SPEC.md#62-name-resolution)). The analyzer checks what a
+([SPEC §6.2](../../SPEC.md#62-name-resolution)). The analyzer checks what a
 declaration cannot say: the type at the opposite endpoint of each of its
 labels, the kind vocabulary, the conditional fields, the signs of integers,
 and the no-revision rules, since same-type successors are always permitted
-([SPEC §6](SPEC.md#6-type-declarations); decision 33). It also judges each
+([SPEC §6](../../SPEC.md#6-type-declarations); decision 33). It also judges each
 declaration of its types against section 3.4, because TypeCheck checks nodes
 against whatever the current declaration says (decision 36).
 
 An implementation may assume that every payload fits its declaration. Every
 configured analyzer replays every prefix, including a candidate prefix
-TypeCheck rejects ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)),
+TypeCheck rejects ([ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization)),
 so the planning analyzer can still meet a payload that does not fit. If it
 returns an error there, the plan is rejected either way; only the report
 differs, because an analyzer error aborts the run and its text replaces
@@ -519,7 +519,7 @@ Two more inconsistencies concern re-pointing and the one current stance:
   that already has `About` edges, current or historical, whose target has
   none of their targets among its ancestors (decision 57). Re-pointing after
   a revision or a split always passes, since the successor descends from the
-  earlier target, and so does every edge the [RECONNECT](RECONNECT.md)
+  earlier target, and so does every edge the [RECONNECT](../../RECONNECT.md)
   analyzer suggests. A second `About` edge in one plan to an unrelated item
   is rejected. The same holds for an `Until` edge from a stance that already
   has `Until` edges, current or historical, against their targets
@@ -592,12 +592,12 @@ own finding (decision 18).
 
 - **Bootstrap.** Nonsticky, re-emitted while the condition holds: one per
   canonical declaration of section 11 whose name resolves as missing
-  ([SPEC §6.2](SPEC.md#62-name-resolution)), adding it. An amended
+  ([SPEC §6.2](../../SPEC.md#62-name-resolution)), adding it. An amended
   declaration is never suggested back to its canonical form; section 8.1
   judges it instead (decision 36).
 
 Re-pointing connections after a revision is not this analyzer's job. The
-general [RECONNECT](RECONNECT.md) analyzer suggests recreating a superseded
+general [RECONNECT](../../RECONNECT.md) analyzer suggests recreating a superseded
 revision's edges on its successors, which covers `Enables`, `Helps`, `About`,
 and `Until` alike; the planning analyzer only names what is still missing at
 the seal (section 8.5; decision 4). The analyzer never suggests stances or
@@ -714,7 +714,7 @@ of a `deferred` stance, judged at the stance's own prefix (section 8.1), and
 `null` removes the cap; `waiting` is not capped (decisions 43 and 44). The
 cap is part of the configuration string, and so of every planning finding's
 identity (decision 15), and an analyzer in the suite is never reconfigured
-([INTERFACES §2](INTERFACES.md#2-cli-surface)), so changing the cap means
+([INTERFACES §2](../../INTERFACES.md#2-cli-surface)), so changing the cap means
 adding a new planning instance. Section 8.1 judges all history, so adding a
 planning instance to a database whose history holds a deferral longer than
 its cap is rejected; such a database configures a cap of at least its
@@ -726,9 +726,9 @@ already holds reviews, or upgrading to stricter seal rules, cannot lock the
 database behind a historical seal inconsistency (decision 25). It does not
 exempt sections 8.1 to 8.3, which judge every prefix of history, so adding the
 analyzer to a database whose history uses its names differently is rejected
-([INTERFACES §2](INTERFACES.md#2-cli-surface)). Adopting requires a history
+([INTERFACES §2](../../INTERFACES.md#2-cli-surface)). Adopting requires a history
 that uses planning's vocabulary as planning does; namespacing in the type
-system ([PLAN §3](PLAN.md#3-backlog)) is the remedy for one that does not
+system ([PLAN §3](../../PLAN.md#3-backlog)) is the remedy for one that does not
 (decision 66). The configuration string is part of analyzer identity, so
 defaults should rarely change (decision 15). The valuation reads nothing from
 it (section 12).
@@ -780,7 +780,7 @@ makes itself, including its judgment of each declaration against section 3.4
 ## 12. Delivery without a core change
 
 The valuation is not an analyzer output and needs no change to the analyzer
-traits, the runner, or [ANALYZERS](ANALYZERS.md).
+traits, the runner, or [ANALYZERS](../../ANALYZERS.md).
 
 1. **Library.** `lifecore-prod` exports the analyzer, its factory, and a plain
    function `valuation(view, &ValuationOptions) -> Valuation` over a bounded
@@ -794,7 +794,7 @@ traits, the runner, or [ANALYZERS](ANALYZERS.md).
    itself; nothing passes the valuation through the runner (decision 63).
 2. **Executable.** A `lifecore-plan` binary, or a subcommand of the CLI,
    opens the selected database read-only as a preview
-   ([STORAGE](STORAGE.md)) and prints the ranking at the head or at an "as
+   ([STORAGE](../../STORAGE.md)) and prints the ranking at the head or at an "as
    of" boundary as lines or JSON. It takes `--deadline-sample-windows` and
    does not read the analysis suite, since the valuation needs nothing from
    the analyzer configuration (decision 62).
@@ -842,7 +842,7 @@ callouts here.
    item is an ordinary eligible edge of the predecessor, so Reconnect covers
    every case the planning rule covered, and planning keeps only what is
    specific to windows, the dropped-connection warning at the seal
-   (section 8.6, [RECONNECT §8](RECONNECT.md#8-planning-analyzer)).
+   (section 8.6, [RECONNECT §8](../../RECONNECT.md#8-planning-analyzer)).
 5. **`About` is not one-to-one: a stance or `Did` is re-pointed by adding an
    `About` edge, keeping its position.** Rejected: a fresh stance about the
    successor. Reason: a stance's lifetime is measured from its position, so a
@@ -889,7 +889,7 @@ callouts here.
     output.** Rejected: a valuation hook on the analyzer traits. Reason: it
     would have put a presentation output into the runner contract and the
     shared message types; a function over a bounded `View` gives the same
-    ranking with no change to [ANALYZERS](ANALYZERS.md) (section 12).
+    ranking with no change to [ANALYZERS](../../ANALYZERS.md) (section 12).
 14. **Stances are nodes.** Rejected: stances as edges from the review.
     Reason: edges carry no payload and could not hold cost, horizon, or
     reason (section 3.1).
@@ -932,7 +932,7 @@ callouts here.
 23. **Events carry a mandatory `at` timestamp the analyzer gives no meaning
     to.** Rejected: payload-free events. Reason: the core rejects a node
     whose predecessor, type, and payload equal a current node's
-    ([SPEC §7.1](SPEC.md#71-append-checks) rule 5), so two `Did` events
+    ([SPEC §7.1](../../SPEC.md#71-append-checks) rule 5), so two `Did` events
     about one habit need a distinguishing field (section 3.1).
 24. **Reviews, `Done`, and `Did` are never revised.** Rejected: revising an
     event or a review. Reason for events: they cannot be taken back
@@ -976,7 +976,7 @@ callouts here.
     a declaration cannot say the type at the opposite endpoint, the kind
     vocabulary, the conditional fields, or the no-revision rules, since
     same-type successors are always permitted
-    ([SPEC §6](SPEC.md#6-type-declarations)) (section 8).
+    ([SPEC §6](../../SPEC.md#6-type-declarations)) (section 8).
 34. **The union of current `Enables` and `Helps` edges must be acyclic.**
     Rejected: permitting cycles in the dependency graph. Reason: **not
     recorded** (section 3.2).
@@ -997,7 +997,7 @@ callouts here.
     fields and labels of their own on planning's types. A revert suggestion
     re-emitted forever made every amendment noise, and its action could not
     apply while a current edge used an added label
-    ([SPEC §7.3](SPEC.md#73-resulting-view-checks) rule 4). An unchecked
+    ([SPEC §7.3](../../SPEC.md#73-resulting-view-checks) rule 4). An unchecked
     amendment that dropped `budget` or `About` would silently disable the
     rules that read them, so each declaration of a planning type is judged
     once, at its own prefix, as TypeCheck judges a type transition
@@ -1072,7 +1072,7 @@ callouts here.
     cap, and `abandoned` stays the only indefinite quiet state. Two
     consequences follow. The configuration string is part of finding
     identity (decision 15) and an analyzer is never reconfigured
-    ([INTERFACES §2](INTERFACES.md#2-cli-surface)), so changing the cap means
+    ([INTERFACES §2](../../INTERFACES.md#2-cli-surface)), so changing the cap means
     adding a new planning instance, the concern that led decision 62 to move
     `horizon_windows` out of the configuration. And section 8.1 judges all
     history, so adopting the analyzer on a database whose history holds
@@ -1105,7 +1105,7 @@ callouts here.
     recorded just before a review is undecided or short at that seal, for a
     window it barely existed in, as a repro showed. The warning says why the
     item was not judged; it is a warning because there is no `info` message
-    kind yet ([PLAN §3](PLAN.md#3-backlog)) (sections 7 and 8.5). **Revised by
+    kind yet ([PLAN §3](../../PLAN.md#3-backlog)) (sections 7 and 8.5). **Revised by
     decision 71:** newness counts from the youngest unbroken run of habit
     and concern revisions, not from the tree's root.
 47. **The grace warning is the sticky Grace period warning, with the item
@@ -1161,7 +1161,7 @@ callouts here.
     and may return an error at a prefix TypeCheck rejects.** Rejected:
     requiring the analyzer never to fail on a payload TypeCheck rejects.
     Reason (owner): the requirement was pedantic. An analyzer error aborts
-    the run ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)), but
+    the run ([ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization)), but
     at such a prefix the plan is rejected either way, so only the report
     differs: the error text replaces TypeCheck's finding. If TypeCheck
     rejects a field planning does not read, planning runs normally
@@ -1286,7 +1286,7 @@ callouts here.
     position, as `first_sealed_review` does for seals. Reason:
     **Provisional, owner to confirm:** adopting requires a history that uses
     planning's vocabulary as planning does, and namespacing in the type
-    system ([PLAN §3](PLAN.md#3-backlog)) is the remedy for one that does
+    system ([PLAN §3](../../PLAN.md#3-backlog)) is the remedy for one that does
     not. A database whose history holds deferrals longer than the default
     cap configures a cap of at least its longest deferral, or `null`
     (section 11; open question 7).

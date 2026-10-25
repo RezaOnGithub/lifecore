@@ -137,7 +137,7 @@ workflows.
   declaration payload and gives `Type` no edge permissions, so a user cannot
   annotate declarations with fields of their own or link them to other nodes:
   the same customization problem
-  [PLANNING §3.4](PLANNING.md#34-amending-the-declarations) addresses for
+  [PLANNING §3.4](proposals/planning/PLANNING.md#34-amending-the-declarations) addresses for
   planning's types. This revisits the AGENTS.md invariant that TypeCheck has a
   fixed built-in metatype and no bootstrap node.
 - Pooled failure reporting. Analyzer inconsistencies are already collected in
@@ -150,7 +150,7 @@ workflows.
 - An `info` message kind beside `inconsistency`, `warning`, and `suggestion`
   ([ANALYZERS §2](ANALYZERS.md#2-finding-identity-and-observations)), for
   notices that need no action. Planning's Grace period notice
-  ([PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings)) is a sticky
+  ([PLANNING §8.5](proposals/planning/PLANNING.md#85-at-a-seal-sticky-warnings)) is a sticky
   warning until then. It touches ANALYZERS, [MESSAGES](MESSAGES.md),
   [RPC](RPC.md), the client contract and its fixtures
   ([CLIENT §2](CLIENT.md#2-contract-and-fixtures)), and [UI](UI.md).
@@ -160,4 +160,4 @@ workflows.
   applies to every analyzer, not only to planning.
 - Namespacing in the type system, so that two vocabularies can share a type
   name or an edge label. Planning owns its names outright until then
-  ([PLANNING](PLANNING.md#13-design-decisions), decision 35).
+  ([PLANNING](proposals/planning/PLANNING.md#13-design-decisions), decision 35).

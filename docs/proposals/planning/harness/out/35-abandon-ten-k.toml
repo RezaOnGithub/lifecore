@@ -1,0 +1,12 @@
+[[entries]]
+name = "abandon_ten_k"
+kind = "node"
+ty_name = "Stance"
+payload = { kind = "abandoned", at = { kind = "timestamp", value = "2027-03-02T19:00:00Z" }, reason = "Knee" }
+
+[[entries]]
+name = "abandon_ten_k_about"
+kind = "edge"
+ty_name = "About"
+from = { added = "abandon_ten_k" }
+to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "71" } }

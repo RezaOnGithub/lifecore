@@ -9,12 +9,14 @@ revisions and supersession, exact-endpoint edges, bounded views, configured
 analyzers with full-prefix replay, finding keys, observations, and dismissal.
 
 Every entry is shown as the TOML change file Reza writes and applies with
-`lifecore apply FILE` ([FILES](FILES.md)). The files were applied in order to
+`lifecore apply FILE` ([FILES](../../FILES.md)). The files were applied in order to
 a scratch database holding the ten declarations of
 [PLANNING §11](PLANNING.md#11-configuration-and-bootstrap) at positions 0 to
 9, and the positions and `origin` values below are the ones that run
 assigned; a reader repeating the walk gets different origins, since each
 applied plan mints its own, and copies them from each `apply` result. The
+walk's change files, and the script that replays them, are kept in
+[harness](harness/README.md). The
 planning analyzer is not implemented, so what each seal says is what the
 contract specifies, not captured output, with the default configuration of
 PLANNING §11. The files pass the structural checks and TypeCheck as written.
@@ -78,77 +80,26 @@ Reza wants to swim a kilometer. Two tasks lead there: book lessons, then
 attend eight of them. The first planning session is one change file. Within
 a file, an edge names a node created earlier in the same file by its
 operation name, with `added`; timestamps and integers use the envelopes of
-[FILES §2.1](FILES.md#21-syntax-and-values), with bare integers accepted as
+[FILES §2.1](../../FILES.md#21-syntax-and-values), with bare integers accepted as
 shorthand.
 
-```toml
-[[entries]]
-name = "swim"
-kind = "node"
-ty_name = "Goal"
-payload = { title = "Swim 1 km" }
-
-[[entries]]
-name = "book"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Book lessons" }
-
-[[entries]]
-name = "attend"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Attend 8 lessons" }
-
-[[entries]]
-name = "book_enables_attend"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "book" }
-to = { added = "attend" }
-
-[[entries]]
-name = "attend_enables_swim"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "attend" }
-to = { added = "swim" }
-
-[[entries]]
-name = "commit_book"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "committed", at = { kind = "timestamp", value = "2026-01-04T18:05:00Z" }, cost = 1 }
-
-[[entries]]
-name = "commit_book_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "commit_book" }
-to = { added = "book" }
-```
+{{toml:01-first-plan.toml}}
 
 Then the review, as its own file, because the ritual is to append decisions
 first and the review last; if the seal is rejected, the review is the
 transaction that fails.
 
-```toml
-[[entries]]
-name = "review_1"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 3, at = { kind = "timestamp", value = "2026-01-05T09:00:00Z" } }
-```
+{{toml:02-review-1.toml}}
 
 Here is the graph after both.
 
 ```mermaid
 flowchart BT
-    G["10 Goal: Swim 1 km"]
-    T1["11 Task: Book lessons"] -- Enables --> T2["12 Task: Attend 8 lessons"]
+    G["@swim#@ Goal: Swim 1 km"]
+    T1["@book#@ Task: Book lessons"] -- Enables --> T2["@attend#@ Task: Attend 8 lessons"]
     T2 -- Enables --> G
-    S1["15 Stance: committed, cost 1"] -- About --> T1
-    R1["17 Review: budget 3"]
+    S1["@commit_book#@ Stance: committed, cost 1"] -- About --> T1
+    R1["@review_1#@ Review: budget 3"]
 ```
 
 > **Items** are the nodes the plan is about: `Goal`, `Project`, `Task`,
@@ -162,10 +113,11 @@ flowchart BT
 > nodes**, recording what Reza decided, did, and reviewed: the stances,
 > events, and reviews below. None of the analyzer's edges points at one.
 
-Positions 10 to 14 record a goal, two tasks, and the dependencies between
-them. Nothing there says Reza owes action. But recording is not free either:
-every open item is **in play** from the moment it is recorded, and an item in
-play is owed a *decision*, not action. Position 15 adds the first decision.
+Positions @swim#@ to @attend_enables_swim#@ record a goal, two tasks, and the
+dependencies between them. Nothing there says Reza owes action. But recording
+is not free either: every open item is **in play** from the moment it is
+recorded, and an item in play is owed a *decision*, not action. Position
+@commit_book#@ adds the first decision.
 
 > A **stance** is a node recording one decision about one revision, with a
 > `kind`, a timestamp, and an `About` edge to the revision. The kinds are
@@ -173,10 +125,10 @@ play is owed a *decision*, not action. Position 15 adds the first decision.
 > `abandoned`. Changing a decision supersedes the stance with a successor, as
 > with any node, and a revision has at most one current stance.
 
-At position 15 Reza commits to booking lessons this coming window at a cost of
-one unit. Cost is whatever coarse capacity unit Reza likes; the analyzer only
-adds it up. The goal needs no stance: recording it is how Reza says it
-matters, and section 13 shows what a goal does need.
+At position @commit_book#@ Reza commits to booking lessons this coming window
+at a cost of one unit. Cost is whatever coarse capacity unit Reza likes; the
+analyzer only adds it up. The goal needs no stance: recording it is how Reza
+says it matters, and section 13 shows what a goal does need.
 
 > **Why is an `Enables` edge not a commitment?** If the edge meant both
 > "this matters" and "I owe action on this now", honest breadth would
@@ -192,8 +144,8 @@ matters, and section 13 shows what a goal does need.
 > sets aside a whole branch.
 > [Decision 40](PLANNING.md#13-design-decisions).
 
-Then position 17 appends a `Review` with a budget of three. This is the only
-entry that moves the analyzer's clock.
+Then position @review_1#@ appends a `Review` with a budget of three. This is
+the only entry that moves the analyzer's clock.
 
 > A **review** divides history into **windows**. Appending one **seals** the
 > window since the previous review. At that prefix, and only there, the
@@ -202,7 +154,7 @@ entry that moves the analyzer's clock.
 > advance. The stances sealed by a review are the plan for the window it
 > opens. Between reviews, no protocol rule blocks anything.
 
-What does the seal at 17 check?
+What does the seal at @review_1#@ check?
 
 1. **The frontier.** Which revisions need a decision right now? `Book
    lessons` has no `Enables` sources, so it is *ready*, and it is in play, so
@@ -216,7 +168,7 @@ What does the seal at 17 check?
 4. **Broken plans.** Can the goal advance at all? The chain of tasks that
    strictly enable it contains a ready one. Yes.
 
-**Seal passes.** The transaction containing position 17 commits.
+**Seal passes.** The transaction containing position @review_1#@ commits.
 
 ## 4. The next window
 
@@ -225,48 +177,16 @@ completion and the next commitment; `About` edges from a new event or stance
 to an existing item use `existing` references copied from the first plan's
 result.
 
-```toml
-[[entries]]
-name = "booked"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-01-08T17:30:00Z" } }
+{{toml:03-window-2.toml}}
 
-[[entries]]
-name = "booked_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "booked" }
-to = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "11" } }
-
-[[entries]]
-name = "commit_attend"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "committed", at = { kind = "timestamp", value = "2026-01-11T18:00:00Z" }, cost = 2 }
-
-[[entries]]
-name = "commit_attend_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "commit_attend" }
-to = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "12" } }
-```
-
-```toml
-[[entries]]
-name = "review_2"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 3, at = { kind = "timestamp", value = "2026-01-12T09:00:00Z" } }
-```
+{{toml:04-review-2.toml}}
 
 ```mermaid
 flowchart BT
-    T1["11 Task: Book lessons"] -- Enables --> T2["12 Task: Attend 8 lessons"]
-    D1["18 Done"] -- About --> T1
-    S3["20 Stance: committed, cost 2"] -- About --> T2
-    R2["22 Review: budget 3"]
+    T1["@book#@ Task: Book lessons"] -- Enables --> T2["@attend#@ Task: Attend 8 lessons"]
+    D1["@booked#@ Done"] -- About --> T1
+    S3["@commit_attend#@ Stance: committed, cost 2"] -- About --> T2
+    R2["@review_2#@ Review: budget 3"]
 ```
 
 > **Events** record that something happened to a revision. `Done` completes a
@@ -275,11 +195,11 @@ flowchart BT
 > edge, and is never revised. Completion is an append, not a revision of the
 > item, and a done revision is final: it can never be superseded.
 
-Look at what position 18 did not do: it did not supersede `Book lessons`. The
-edge from it to `Attend 8 lessons` is still current. Because of that, the
-analyzer can judge the `Done` against the plan: at the prefix of its `About`
-edge, 19, it checks that every `Enables` source of `Book lessons` is done. It
-has none, so the event is accepted.
+Look at what position @booked#@ did not do: it did not supersede `Book
+lessons`. The edge from it to `Attend 8 lessons` is still current. Because of
+that, the analyzer can judge the `Done` against the plan: at the prefix of
+its `About` edge, @booked_about#@, it checks that every `Enables` source of
+`Book lessons` is done. It has none, so the event is accepted.
 
 Had Reza instead tried to mark `Attend 8 lessons` done while `Book lessons`
 was still open, that `Done` would be an inconsistency at its `About` prefix
@@ -298,18 +218,20 @@ plan, not around it.
 > has **lapsed**. Fresh or standing, a stance is a **decision**. A `committed`
 > stance stands for exactly the one window after the seal that sealed it.
 
-Now the seal at 22:
+Now the seal at @review_2#@:
 
 - `Book lessons` is done, so `Attend 8 lessons` is ready and enters the
   frontier. It has a fresh `committed` stance. Decided.
-- The commitment from position 15 was the plan for window 1 and lapses here.
-  Had the task still been open it would need a new decision, but it is done.
+- The commitment from position @commit_book#@ was the plan for window 1 and
+  lapses here. Had the task still been open it would need a new decision,
+  but it is done.
 - Cost 2, budget 3.
 
-**Seal passes.** Suppose the stance at 20 were missing. The seal would fail
-with one **Undecided item** inconsistency about `Attend 8 lessons` and the
-review. Reza appends the stance and retries. The transaction that fails is the
-one that claimed the window was reviewed, which is the right one to fail.
+**Seal passes.** Suppose the stance at @commit_attend#@ were missing. The seal
+would fail with one **Undecided item** inconsistency about `Attend 8 lessons`
+and the review. Reza appends the stance and retries. The transaction that
+fails is the one that claimed the window was reviewed, which is the right one
+to fail.
 
 > **Why judge at seals?** It follows the pattern TypeCheck uses for type
 > transitions: judge once, at a fixed prefix, against the view at that
@@ -323,78 +245,53 @@ Reza decides eight lessons is too few and revises the task to say ten. This
 is an ordinary LifeCore revision: a successor node with the same type, whose
 `predecessor` is the exact identity of the old one.
 
-```toml
-[[entries]]
-name = "attend_10"
-kind = "node"
-ty_name = "Task"
-predecessor = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "12" } }
-intent = "revise"
-payload = { title = "Attend 10 lessons" }
-```
+{{toml:05-revise-attend.toml}}
 
 ```mermaid
 flowchart BT
-    T1["11 Task: Book lessons"] -- Enables --> T2["12 Task: Attend 8 lessons"]
-    T2 -- Enables --> G["10 Goal: Swim 1 km"]
-    T2 -.-> T2b["23 Task: Attend 10 lessons"]
-    S3["20 Stance: committed, cost 2"] -- About --> T2
+    T1["@book#@ Task: Book lessons"] -- Enables --> T2["@attend#@ Task: Attend 8 lessons"]
+    T2 -- Enables --> G["@swim#@ Goal: Swim 1 km"]
+    T2 -.-> T2b["@attend_10#@ Task: Attend 10 lessons"]
+    S3["@commit_attend#@ Stance: committed, cost 2"] -- About --> T2
 ```
 
-Every connection to 12 is now historical: both `Enables` edges and the
+Every connection to @attend#@ is now historical: both `Enables` edges and the
 stance's `About` edge. That is exactly what SPEC §5 says supersession means,
-and the analyzer adds no exception. Position 23 has no prerequisites, serves
-nothing, and has no decision. Serving nothing, it is in play by itself, and
-with no prerequisites it is ready, so the next seal will ask about it. The
-goal, meanwhile, has lost its only prerequisite.
+and the analyzer adds no exception. Position @attend_10#@ has no
+prerequisites, serves nothing, and has no decision. Serving nothing, it is in
+play by itself, and with no prerequisites it is ready, so the next seal will
+ask about it. The goal, meanwhile, has lost its only prerequisite.
 
 Help comes from elsewhere. A separate, general analyzer
-([RECONNECT](RECONNECT.md)) looks at every supersession and suggests
-recreating the predecessor's edges on the successor: here two `Enables` edges
-between current revisions, and one new `About` edge from the existing stance
-20 to 23. Each suggestion is exported as a one-edge proposal
-([RECONNECT-EXPLAINER §4](RECONNECT-EXPLAINER.md#4-applying-a-suggestion)
-shows the full export with its `acknowledges` key); the three actions, as Reza
-applies them one after another, are:
+([RECONNECT](../../RECONNECT.md)) looks at every supersession and suggests
+recreating the predecessor's edges on the successor: here two `Enables`
+edges between current revisions, and one new `About` edge from the existing
+stance @commit_attend#@ to @attend_10#@. Each suggestion is exported as a
+one-edge proposal
+([RECONNECT-EXPLAINER §4](../../RECONNECT-EXPLAINER.md#4-applying-a-suggestion)
+shows the full export with its `acknowledges` key); the three actions, as
+Reza applies them one after another, are:
 
-```toml
-[[entries]]
-name = "action_0"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "11" } }
-to = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
-```
+{{toml:06-reconnect-book.toml}}
 
-```toml
-[[entries]]
-name = "action_0"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
-to = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "10" } }
-```
+{{toml:07-reconnect-swim.toml}}
 
-```toml
-[[entries]]
-name = "action_0"
-kind = "edge"
-ty_name = "About"
-from = { existing = { origin = "18d737c3-ca8e-48a0-ac78-e11cd7bac183", position = "20" } }
-to = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
-```
+{{toml:08-reconnect-stance.toml}}
 
-Positions 24, 25, and 26. The core permits the last one because 20 is current
-and 23 is current; a stance may acquire `About` edges over time, and its
+Positions @06-reconnect-book.toml/action_0#@,
+@07-reconnect-swim.toml/action_0#@, and @08-reconnect-stance.toml/action_0#@.
+The core permits the last one because @commit_attend#@ is current and
+@attend_10#@ is current; a stance may acquire `About` edges over time, and its
 subject is whatever they currently point at. Accept all three and the plan is
 as before, with the same stance, and the same lifetime, still counting. That
 is why `About` is not one-to-one: a fresh stance would have a fresh position
 and a fresh lifetime.
 
-The planning analyzer judges that last edge at its own prefix, 26, and finds
-nothing. A stance that is already about something may be re-pointed only to a
-descendant of an earlier target, and 23 descends from 12. Re-pointing stance
-20 at an unrelated task would be an inconsistency there
+The planning analyzer judges that last edge at its own prefix,
+@08-reconnect-stance.toml/action_0#@, and finds nothing. A stance that is
+already about something may be re-pointed only to a descendant of an earlier
+target, and @attend_10#@ descends from @attend#@. Re-pointing stance
+@commit_attend#@ at an unrelated task would be an inconsistency there
 ([decision 57](PLANNING.md#13-design-decisions)).
 
 > **Why re-point the stance instead of writing a new one?** The stance's
@@ -403,14 +300,15 @@ descendant of an earlier target, and 23 descends from 12. Re-pointing stance
 > made and the window it was made in.
 > [Decision 5](PLANNING.md#13-design-decisions).
 
-If Reza seals without accepting them, the seal fails twice: **Undecided item**
-for 23, which is ready and has no stance, and **Broken plan** for the goal,
-whose strict subgraph no longer holds anything that could advance it. The seal
-also emits a sticky **Dropped connection** warning per lost connection, naming
-23, 12, and the edge. That warning is not what fails the seal, and it would
-not on its own, because sometimes dropping a connection is exactly what the
-edit meant. Inside a window the graph is a working tree; the seal is where
-loose ends are named ([decision 17](PLANNING.md#13-design-decisions)).
+If Reza seals without accepting them, the seal fails twice: **Undecided
+item** for @attend_10#@, which is ready and has no stance, and **Broken plan**
+for the goal, whose strict subgraph no longer holds anything that could
+advance it. The seal also emits a sticky **Dropped connection** warning per
+lost connection, naming @attend_10#@, @attend#@, and the edge. That warning is
+not what fails the seal, and it would not on its own, because sometimes
+dropping a connection is exactly what the edit meant. Inside a window the
+graph is a working tree; the seal is where loose ends are named
+([decision 17](PLANNING.md#13-design-decisions)).
 
 > **Why not resolve connections through the revision tree instead?** An
 > earlier draft did, for stances and events only, and paid for it with rules
@@ -432,94 +330,31 @@ The same rule makes splits ordinary. "Attend 10 lessons" turns out to be two
 things: a block of six with the club and four private ones. One file creates
 both successors; the second must say `branch`, because after the first
 operation the predecessor is no longer current
-([FILES §2.4](FILES.md#24-node-and-edge-operations)).
+([FILES §2.4](../../FILES.md#24-node-and-edge-operations)).
 
-```toml
-[[entries]]
-name = "club"
-kind = "node"
-ty_name = "Task"
-predecessor = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
-intent = "revise"
-payload = { title = "Six club lessons" }
+{{toml:09-split.toml}}
 
-[[entries]]
-name = "private"
-kind = "node"
-ty_name = "Task"
-predecessor = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
-intent = "branch"
-payload = { title = "Four private lessons" }
-```
-
-Positions 27 and 28. Reconnect now offers each successor both `Enables` edges
-and the stance's `About` edge, exactly as in section 5. Reza applies the four
+Positions @club#@ and @private#@. Reconnect now offers each successor both
+`Enables` edges and the stance's `About` edge, exactly as in section 5. Reza
+applies the four
 `Enables` edges and re-points the old commitment to the club block, then
 writes a deferral for the private lessons. Written as one hand-made file
 instead of five exports, the edges are the same entries; the suggestions they
 satisfy are simply marked satisfied rather than acknowledged.
 
-```toml
-[[entries]]
-name = "book_enables_club"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "11" } }
-to = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "27" } }
-
-[[entries]]
-name = "club_enables_swim"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "27" } }
-to = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "10" } }
-
-[[entries]]
-name = "book_enables_private"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "11" } }
-to = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "28" } }
-
-[[entries]]
-name = "private_enables_swim"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "28" } }
-to = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "10" } }
-
-[[entries]]
-name = "commit_attend_about_club"
-kind = "edge"
-ty_name = "About"
-from = { existing = { origin = "18d737c3-ca8e-48a0-ac78-e11cd7bac183", position = "20" } }
-to = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "27" } }
-
-[[entries]]
-name = "defer_private"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-01-14T20:00:00Z" }, horizon = 4 }
-
-[[entries]]
-name = "defer_private_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "defer_private" }
-to = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "28" } }
-```
+{{toml:10-split-edges.toml}}
 
 ```mermaid
 flowchart BT
-    T2b["23 Task: Attend 10 lessons"]
-    T2b -.-> A["27 Task: Six club lessons"]
-    T2b -.-> B["28 Task: Four private lessons"]
-    T1["11 Task: Book lessons"] -- Enables --> A
+    T2b["@attend_10#@ Task: Attend 10 lessons"]
+    T2b -.-> A["@club#@ Task: Six club lessons"]
+    T2b -.-> B["@private#@ Task: Four private lessons"]
+    T1["@book#@ Task: Book lessons"] -- Enables --> A
     T1 -- Enables --> B
-    A -- Enables --> G["10 Goal: Swim 1 km"]
+    A -- Enables --> G["@swim#@ Goal: Swim 1 km"]
     B -- Enables --> G
-    S3["20 Stance: committed, cost 2"] -- About --> A
-    S4["34 Stance: deferred, horizon 4"] -- About --> B
+    S3["@commit_attend#@ Stance: committed, cost 2"] -- About --> A
+    S4["@defer_private#@ Stance: deferred, horizon 4"] -- About --> B
 ```
 
 Both successors are current. Each gets its own edges, re-pointed from the
@@ -527,118 +362,41 @@ suggestions, and its own decision: the old commitment now points at the club
 block, and the private lessons are deferred for four windows. A deferred item
 is **dormant**: no seal asks about it until the deferral lapses (section 8
 says exactly what that covers). A `Done` about one successor leaves the other
-open. The only thing the two share is their age, because the analyzer measures
-how long an item has been part of the plan from its planning root: the oldest
-revision of the youngest unbroken run of item types that ends at it, here
-simply the root of the tree. The re-pointed edge, 33, passes the check of
-section 5 with no finding: the club block descends from 23 and 12, the
-stance's earlier targets. The check uses `ancestors`, one of the analyzer's
-two history queries, which also finds the planning root. The other, for the
-Dropped connection warning of section 5, finds the current successors of a
-superseded revision.
+open. The only thing the two share is their age, because the analyzer
+measures how long an item has been part of the plan from its planning root:
+the oldest revision of the youngest unbroken run of item types that ends at
+it, here simply the root of the tree.
+The re-pointed edge, @commit_attend_about_club#@, passes the check of
+section 5 with no finding: the club block descends from @attend_10#@ and
+@attend#@, the stance's earlier targets. The check uses `ancestors`, one
+of the analyzer's two history queries, which also finds the planning root.
+The other, for the Dropped connection warning of section 5, finds the current
+successors of a superseded revision.
 
 ## 7. Too much on the plate
 
-A busier window. Reza has three ready tasks, each enabling a goal in play, and
-commits to all of them at cost 2 in one transaction. The file adds a second
-goal with two tasks of its own and writes the three commitments. The club
-block's new commitment supersedes stance 20, the one re-pointed to it in
-section 6, because a revision has at most one current stance.
+A busier window. Reza has three ready tasks, each enabling a goal in play,
+and commits to all of them at cost 2 in one transaction. The file adds a
+second goal with two tasks of its own and writes the three commitments. The
+club block's new commitment supersedes stance @commit_attend#@, the one
+re-pointed to it in section 6, because a revision has at most one current
+stance.
 
-```toml
-[[entries]]
-name = "trip"
-kind = "node"
-ty_name = "Goal"
-payload = { title = "Cycling trip in May" }
-
-[[entries]]
-name = "passport"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Renew passport" }
-
-[[entries]]
-name = "passport_enables_trip"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "passport" }
-to = { added = "trip" }
-
-[[entries]]
-name = "bike"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Fix the bike" }
-
-[[entries]]
-name = "bike_enables_trip"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "bike" }
-to = { added = "trip" }
-
-[[entries]]
-name = "commit_club"
-kind = "node"
-ty_name = "Stance"
-predecessor = { existing = { origin = "18d737c3-ca8e-48a0-ac78-e11cd7bac183", position = "20" } }
-intent = "revise"
-payload = { kind = "committed", at = { kind = "timestamp", value = "2026-01-18T18:00:00Z" }, cost = 2 }
-
-[[entries]]
-name = "commit_club_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "commit_club" }
-to = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "27" } }
-
-[[entries]]
-name = "commit_passport"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "committed", at = { kind = "timestamp", value = "2026-01-18T18:01:00Z" }, cost = 2 }
-
-[[entries]]
-name = "commit_passport_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "commit_passport" }
-to = { added = "passport" }
-
-[[entries]]
-name = "commit_bike"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "committed", at = { kind = "timestamp", value = "2026-01-18T18:02:00Z" }, cost = 2 }
-
-[[entries]]
-name = "commit_bike_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "commit_bike" }
-to = { added = "bike" }
-```
+{{toml:11-trip.toml}}
 
 A later transaction appends a review with budget 5.
 
-```toml
-[[entries]]
-name = "review_3"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 5, at = { kind = "timestamp", value = "2026-01-19T09:00:00Z" } }
-```
+{{toml:12-review-3.check.toml}}
 
 ```mermaid
 flowchart BT
-    A["27 Task: Six club lessons"]
-    B["37 Task: Renew passport"]
-    C["39 Task: Fix the bike"]
-    S0["20 Stance: committed, cost 2"] -.-> SA
-    SA["41 Stance: committed, cost 2"] -- About --> A
-    SB["43 Stance: committed, cost 2"] -- About --> B
-    SC["45 Stance: committed, cost 2"] -- About --> C
+    A["@club#@ Task: Six club lessons"]
+    B["@passport#@ Task: Renew passport"]
+    C["@bike#@ Task: Fix the bike"]
+    S0["@commit_attend#@ Stance: committed, cost 2"] -.-> SA
+    SA["@commit_club#@ Stance: committed, cost 2"] -- About --> A
+    SB["@commit_passport#@ Stance: committed, cost 2"] -- About --> B
+    SC["@commit_bike#@ Stance: committed, cost 2"] -- About --> C
     R["Review: budget 5"]
 ```
 
@@ -648,38 +406,17 @@ committed; only the review was rejected. Reza could raise the budget,
 re-estimate, or abandon a task. The move that keeps the plan honest is to
 change one decision.
 
-```toml
-[[entries]]
-name = "defer_bike"
-kind = "node"
-ty_name = "Stance"
-predecessor = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "45" } }
-intent = "revise"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-01-19T09:10:00Z" }, horizon = 1, reason = "lessons first" }
+{{toml:13-defer-bike.toml}}
 
-[[entries]]
-name = "defer_bike_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "defer_bike" }
-to = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "39" } }
-```
-
-```toml
-[[entries]]
-name = "review_3"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 5, at = { kind = "timestamp", value = "2026-01-19T09:15:00Z" } }
-```
+{{toml:14-review-3.toml}}
 
 ```mermaid
 flowchart BT
-    C["39 Task: Fix the bike"]
-    SC["45 Stance: committed, cost 2"] -- About --> C
-    SC -.-> SC2["47 Stance: deferred, horizon 1<br/>reason: lessons first"]
+    C["@bike#@ Task: Fix the bike"]
+    SC["@commit_bike#@ Stance: committed, cost 2"] -- About --> C
+    SC -.-> SC2["@defer_bike#@ Stance: deferred, horizon 1<br/>reason: lessons first"]
     SC2 -- About --> C
-    R["49 Review: budget 5"]
+    R["@review_3#@ Review: budget 5"]
 ```
 
 The new stance supersedes the old one, as any revision does, and carries its
@@ -708,45 +445,11 @@ The passport does not get renewed. In the next window Reza changes the
 commitment to a deferral, by superseding the stance. The club block,
 meanwhile, is finished, so the same file records its `Done`. Then Reza seals.
 
-```toml
-[[entries]]
-name = "defer_passport"
-kind = "node"
-ty_name = "Stance"
-predecessor = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "43" } }
-intent = "revise"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-01-25T20:00:00Z" }, horizon = 1 }
+{{toml:15-defer-passport.toml}}
 
-[[entries]]
-name = "defer_passport_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "defer_passport" }
-to = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "37" } }
+{{toml:16-review-4.toml}}
 
-[[entries]]
-name = "club_done"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-01-25T20:05:00Z" } }
-
-[[entries]]
-name = "club_done_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "club_done" }
-to = { existing = { origin = "034813ad-287d-4fca-83c3-f4f5538e01d8", position = "27" } }
-```
-
-```toml
-[[entries]]
-name = "review_4"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 5, at = { kind = "timestamp", value = "2026-01-26T09:00:00Z" } }
-```
-
-At the seal, 54, the frontier is empty. The club block is done, and the
+At the seal, @review_4#@, the frontier is empty. The club block is done, and the
 passport, the bike, and the private lessons are deferred, so all three are
 dormant. Neither goal is broken: each still has a ready task in its strict
 subgraph, deferred or not, because Broken plan asks whether the plan *could*
@@ -756,8 +459,8 @@ Suppose Reza keeps deferring the passport, window after window.
 
 ```mermaid
 flowchart LR
-    T["37 Task: Renew passport"]
-    S1["50 deferred, horizon 1<br/>sealed by Review 4"] -- About --> T
+    T["@passport#@ Task: Renew passport"]
+    S1["@defer_passport#@ deferred, horizon 1<br/>sealed by Review 4"] -- About --> T
     S2["deferred, horizon 1<br/>sealed by Review 5"] -- About --> T
     S3["deferred, horizon 2<br/>sealed by Review 6"] -- About --> T
     S1 -.-> S2 -.-> S3
@@ -799,22 +502,7 @@ whatever Reza writes, until the task is done or abandoned.
 
 Why not defer it once, for a year? Reza tries:
 
-```toml
-[[entries]]
-name = "park_passport"
-kind = "node"
-ty_name = "Stance"
-predecessor = { existing = { origin = "0a4b8fcd-2f5a-43db-9e32-a6e2fb4abd8d", position = "50" } }
-intent = "revise"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-01-26T20:00:00Z" }, horizon = 52, reason = "someday" }
-
-[[entries]]
-name = "park_passport_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "park_passport" }
-to = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "37" } }
-```
+{{toml:17-defer-passport-year.check.toml}}
 
 This file passes the structural checks and TypeCheck, which is all the
 scratch database runs, so it was checked and not applied. The planning
@@ -835,20 +523,7 @@ There is a better move than deferring each task. The passport and the bike
 wait on the same thing: Reza is not ready to think about the trip. So Reza
 defers the goal.
 
-```toml
-[[entries]]
-name = "defer_trip"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-01-27T19:00:00Z" }, horizon = 3, reason = "not before March" }
-
-[[entries]]
-name = "defer_trip_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "defer_trip" }
-to = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "36" } }
-```
+{{toml:18-defer-trip.toml}}
 
 That one decision quiets both tasks.
 
@@ -860,16 +535,16 @@ That one decision quiets both tasks.
 > play whatever it serves. Every open item that is not dormant is
 > **in play**. [PLANNING §7](PLANNING.md#7-in-play-ready-and-the-frontier).
 
-The trip is dormant by its own stance, 55. `Renew passport` and `Fix the bike`
-serve only the trip, and neither has a commitment, so they are dormant too,
-whatever their own deferrals say. At the next seal, 70, the bike's own
-deferral has lapsed, since it stood through Review 4, yet the seal asks
-nothing about the bike and does not judge the trip's plan. When the trip's
-deferral lapses after Review 8, or sooner if Reza ends it with a `resumed`
-stance (section 11), both tasks return to play with it, and each needs a
-decision at the next seal. Had Reza committed to the bike instead, the
-commitment would keep the bike in play under the dormant goal, and its cost
-would count toward the budget.
+The trip is dormant by its own stance, @defer_trip#@. `Renew passport` and
+`Fix the bike` serve only the trip, and neither has a commitment, so they are
+dormant too, whatever their own deferrals say. At the next seal, @review_5#@, the bike's own deferral has
+lapsed, since it stood through Review 4, yet the seal asks nothing about the
+bike and does not judge the trip's plan. When the trip's deferral lapses
+after Review 8, or sooner if Reza ends it with a `resumed` stance
+(section 11), both tasks return to play with it, and each needs a decision
+at the next seal. Had Reza committed to the bike instead, the commitment
+would keep the bike in play under the dormant goal, and its cost would count
+toward the budget.
 
 > **Why does deferring a goal quiet its tasks?** Otherwise deferring a goal
 > would quiet only the goal, and each of its tasks would need its own
@@ -882,44 +557,12 @@ would count toward the budget.
 Reza is planning a sabbatical abroad. A language certificate would help, and
 would be a fine thing to have, but the sabbatical can go ahead without it.
 
-```toml
-[[entries]]
-name = "abroad"
-kind = "node"
-ty_name = "Goal"
-payload = { title = "Live abroad a year" }
-
-[[entries]]
-name = "sabbatical"
-kind = "node"
-ty_name = "Project"
-payload = { title = "Sabbatical" }
-
-[[entries]]
-name = "certificate"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Language certificate" }
-
-[[entries]]
-name = "sabbatical_enables_abroad"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "sabbatical" }
-to = { added = "abroad" }
-
-[[entries]]
-name = "certificate_helps_sabbatical"
-kind = "edge"
-ty_name = "Helps"
-from = { added = "certificate" }
-to = { added = "sabbatical" }
-```
+{{toml:19-sabbatical.toml}}
 
 ```mermaid
 flowchart BT
-    Q["59 Task: Language certificate"] -- Helps --> P["58 Project: Sabbatical"]
-    P -- Enables --> G["57 Goal: Live abroad a year"]
+    Q["@certificate#@ Task: Language certificate"] -- Helps --> P["@sabbatical#@ Project: Sabbatical"]
+    P -- Enables --> G["@abroad#@ Goal: Live abroad a year"]
 ```
 
 The two edge kinds still draw a line. `Enables` is strict, so the sabbatical
@@ -936,47 +579,27 @@ next seal.
 A year abroad would also be the best language course there is, and Reza is
 tempted to record that the sabbatical helps the certificate as well:
 
-```toml
-[[entries]]
-name = "sabbatical_helps_certificate"
-kind = "edge"
-ty_name = "Helps"
-from = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "59" } }
-```
+{{toml:19a-sabbatical-helps-certificate.check.toml}}
 
-This file passes the structural checks and TypeCheck, which is all the scratch
-database runs, so it was checked and not applied. The planning analyzer would
-reject it at its only operation: the union of current `Enables` and `Helps`
-edges must be acyclic, and this edge closes a cycle with the certificate's
-`Helps` edge, 61. The inconsistency names the cycle's members, and it is
-judged at the edge that closes the cycle, not at the earlier one
+This file passes the structural checks and TypeCheck, which is all the
+scratch database runs, so it was checked and not applied. The planning
+analyzer would reject it at its only operation: the union of current `Enables`
+and `Helps` edges must be acyclic, and this edge closes a cycle with the
+certificate's `Helps` edge, @certificate_helps_sabbatical#@. The inconsistency names the cycle's members,
+and it is judged at the edge that closes the cycle, not at the earlier one
 ([decision 34](PLANNING.md#13-design-decisions)).
 
 Reza does not want it now, and defers it with a reason:
 
-```toml
-[[entries]]
-name = "defer_certificate"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-01-27T19:30:00Z" }, horizon = 6, reason = "after the move" }
+{{toml:20-defer-certificate.toml}}
 
-[[entries]]
-name = "defer_certificate_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "defer_certificate" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "59" } }
-```
-
-Position 62 makes the certificate dormant for six windows. It still sits in
-the graph with its `Helps` edge, and it comes back by itself when the deferral
-lapses. If the sabbatical is done first, the certificate's `Helps` edge points
-at a finished project and serves nothing, so the certificate stands on its
-own: once its deferral lapses it is in play and needs a decision like any
-task, to commit to it, defer it again, or abandon it
-([decision 55](PLANNING.md#13-design-decisions)).
+Position @defer_certificate#@ makes the certificate dormant for six windows.
+It still sits in the graph with its `Helps` edge, and it comes back by itself
+when the deferral lapses. If the sabbatical is done first, the certificate's
+`Helps` edge points at a finished project and serves nothing, so the
+certificate stands on its own: once its deferral lapses it is in play and
+needs a decision like any task, to commit to it, defer it again, or abandon
+it ([decision 55](PLANNING.md#13-design-decisions)).
 
 > **Why is helping work owed a decision at all?** A rule that left work
 > reached only through `Helps` out of play would leave every habit out of
@@ -991,62 +614,17 @@ task, to commit to it, defer it again, or abandon it
 Back to the sabbatical. Booking flights needs a visa decision Reza cannot
 influence.
 
-```toml
-[[entries]]
-name = "visa"
-kind = "node"
-ty_name = "External"
-payload = { title = "Visa decision" }
+{{toml:21-visa.toml}}
 
-[[entries]]
-name = "flights"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Book flights" }
-
-[[entries]]
-name = "visa_enables_flights"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "visa" }
-to = { added = "flights" }
-
-[[entries]]
-name = "flights_enables_sabbatical"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "flights" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
-
-[[entries]]
-name = "wait_visa"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "waiting", at = { kind = "timestamp", value = "2026-01-28T19:00:00Z" }, horizon = 2 }
-
-[[entries]]
-name = "wait_visa_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "wait_visa" }
-to = { added = "visa" }
-```
-
-```toml
-[[entries]]
-name = "review_5"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 5, at = { kind = "timestamp", value = "2026-02-02T09:00:00Z" } }
-```
+{{toml:22-review-5.toml}}
 
 ```mermaid
 flowchart BT
-    E["64 External: Visa decision"] -- Enables --> T["65 Task: Book flights"]
-    T -- Enables --> P["58 Project: Sabbatical"]
-    P -- Enables --> G["57 Goal: Live abroad a year"]
-    Q["59 Task: Language certificate"] -- Helps --> P
-    W["68 Stance: waiting, horizon 2"] -- About --> E
+    E["@visa#@ External: Visa decision"] -- Enables --> T["@flights#@ Task: Book flights"]
+    T -- Enables --> P["@sabbatical#@ Project: Sabbatical"]
+    P -- Enables --> G["@abroad#@ Goal: Live abroad a year"]
+    Q["@certificate#@ Task: Language certificate"] -- Helps --> P
+    W["@wait_visa#@ Stance: waiting, horizon 2"] -- About --> E
 ```
 
 An `External` is an item for something outside the user's control. It is
@@ -1054,7 +632,7 @@ finished by a `Done` like a task, and the stance peculiar to it is `waiting`,
 which must carry a horizon. The horizon is the check-in: after two seals the
 wait lapses and Reza must look again, wait again, or abandon.
 
-At the seal, 70: `Book flights` is blocked by the visa, so not in the
+At the seal, @review_5#@: `Book flights` is blocked by the visa, so not in the
 frontier. The visa is in play and in the frontier, with a fresh `waiting`
 stance. The certificate is dormant. Is the goal **broken**? The rule asks
 whether anything can advance it: the goal's strict subgraph, reached over
@@ -1081,46 +659,15 @@ goal at all; it is a `Concern`, a broad area that never finishes and should
 get attention every window. One file records the items, and the review
 follows.
 
-```toml
-[[entries]]
-name = "ten_k"
-kind = "node"
-ty_name = "Goal"
-payload = { title = "Finish the 10 km" }
+{{toml:23-habits.toml}}
 
-[[entries]]
-name = "run"
-kind = "node"
-ty_name = "Habit"
-payload = { title = "Run", quota = 3 }
-
-[[entries]]
-name = "run_helps_ten_k"
-kind = "edge"
-ty_name = "Helps"
-from = { added = "run" }
-to = { added = "ten_k" }
-
-[[entries]]
-name = "parents"
-kind = "node"
-ty_name = "Concern"
-payload = { title = "Parents", quota = 1 }
-```
-
-```toml
-[[entries]]
-name = "review_6"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 5, at = { kind = "timestamp", value = "2026-02-09T09:00:00Z" } }
-```
+{{toml:24-review-6.toml}}
 
 ```mermaid
 flowchart BT
-    H["72 Habit: Run, quota 3"] -- Helps --> G["71 Goal: Finish the 10 km"]
-    C["74 Concern: Parents, quota 1"]
-    R["75 Review"]
+    H["@run#@ Habit: Run, quota 3"] -- Helps --> G["@ten_k#@ Goal: Finish the 10 km"]
+    C["@parents#@ Concern: Parents, quota 1"]
+    R["@review_6#@ Review"]
 ```
 
 The goal and the concern serve nothing, so they are in play; the habit
@@ -1130,13 +677,13 @@ window counts as the decision, even below quota, because demanding a stance
 per window on top of the participation would be ceremony
 ([decision 19](PLANNING.md#13-design-decisions)).
 
-But neither has had a window yet. Both were recorded in the window 75 seals,
-so they are **new** at that seal, and it does not judge them: no **Undecided
-item**, no **Shortfall**. Instead it emits one sticky **Grace period** warning
-for each, with the item and the review as subjects, saying that the item is
-new and is first judged at the next seal. The 10 km goal is not broken: a
-habit in play helps into it, and a new habit counts for that. **Seal passes**,
-with two warnings.
+But neither has had a window yet. Both were recorded in the window
+@review_6#@ seals, so they are **new** at that seal, and it does not judge
+them: no **Undecided item**, no **Shortfall**. Instead it emits one sticky
+**Grace period** warning for each, with the item and the review as subjects,
+saying that the item is new and is first judged at the next seal. The 10 km
+goal is not broken: a habit in play helps into it, and a new habit counts for
+that. **Seal passes**, with two warnings.
 
 > **Why a grace period?** Without it, a habit recorded the evening before a
 > review would be undecided or short at that seal, for a window it barely
@@ -1149,69 +696,24 @@ with two warnings.
 
 The next week's participation is one file, and the review another.
 
-```toml
-[[entries]]
-name = "run_1"
-kind = "node"
-ty_name = "Did"
-payload = { at = { kind = "timestamp", value = "2026-02-10T07:00:00Z" } }
+{{toml:25-did.toml}}
 
-[[entries]]
-name = "run_1_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "run_1" }
-to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "72" } }
-
-[[entries]]
-name = "run_2"
-kind = "node"
-ty_name = "Did"
-payload = { at = { kind = "timestamp", value = "2026-02-12T07:00:00Z" } }
-
-[[entries]]
-name = "run_2_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "run_2" }
-to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "72" } }
-
-[[entries]]
-name = "called"
-kind = "node"
-ty_name = "Did"
-payload = { at = { kind = "timestamp", value = "2026-02-14T18:00:00Z" } }
-
-[[entries]]
-name = "called_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "called" }
-to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "74" } }
-```
-
-```toml
-[[entries]]
-name = "review_7"
-kind = "node"
-ty_name = "Review"
-payload = { budget = 5, at = { kind = "timestamp", value = "2026-02-16T09:00:00Z" } }
-```
+{{toml:26-review-7.toml}}
 
 ```mermaid
 flowchart BT
-    H["72 Habit: Run, quota 3"] -- Helps --> G["71 Goal: Finish the 10 km"]
-    C["74 Concern: Parents, quota 1"]
-    D1["76 Did"] -- About --> H
-    D2["78 Did"] -- About --> H
-    D3["80 Did"] -- About --> C
-    R["82 Review"]
+    H["@run#@ Habit: Run, quota 3"] -- Helps --> G["@ten_k#@ Goal: Finish the 10 km"]
+    C["@parents#@ Concern: Parents, quota 1"]
+    D1["@run_1#@ Did"] -- About --> H
+    D2["@run_2#@ Did"] -- About --> H
+    D3["@called#@ Did"] -- About --> C
+    R["@review_7#@ Review"]
 ```
 
-The seal at 82: the habit and the concern are in the frontier now, and both
-are decided by their `Did` events; **passes**. It also emits one sticky
-**Shortfall** warning for the habit, "have 2, quota 3", with subjects the
-habit, the review, and the two `Did` events. The concern met its quota.
+The seal at @review_7#@: the habit and the concern are in the frontier now,
+and both are decided by their `Did` events; **passes**. It also emits one
+sticky **Shortfall** warning for the habit, "have 2, quota 3", with subjects
+the habit, the review, and the two `Did` events. The concern met its quota.
 
 Shortfall is sticky for the reason the flag exists: it judges a closed window
 once, and the next window gets its own finding with its own review in the
@@ -1228,51 +730,23 @@ window is where the participation did or did not happen
 The evening after Review 7, Reza twists a knee and defers the habit for four
 windows.
 
-```toml
-[[entries]]
-name = "defer_run"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "deferred", at = { kind = "timestamp", value = "2026-02-16T19:00:00Z" }, horizon = 4, reason = "knee" }
+{{toml:27-defer-run.toml}}
 
-[[entries]]
-name = "defer_run_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "defer_run" }
-to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "72" } }
-```
+From position @defer_run#@ the habit is dormant: had a review sealed now, it
+would neither ask Run for a `Did` nor count a shortfall. The next morning a
+scan shows only a bruise, and Reza ends the deferral by superseding it.
 
-From position 83 the habit is dormant: had a review sealed now, it would
-neither ask Run for a `Did` nor count a shortfall. The next morning a scan
-shows only a bruise, and Reza ends the deferral by superseding it.
-
-```toml
-[[entries]]
-name = "resume_run"
-kind = "node"
-ty_name = "Stance"
-predecessor = { existing = { origin = "bcf853bc-1297-4b69-b09f-532f06578c3a", position = "83" } }
-intent = "revise"
-payload = { kind = "resumed", at = { kind = "timestamp", value = "2026-02-17T08:00:00Z" }, reason = "only bruised" }
-
-[[entries]]
-name = "resume_run_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "resume_run" }
-to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "72" } }
-```
+{{toml:28-resume-run.toml}}
 
 > A **`resumed`** stance ends a deferral at once. It applies to any item and
 > is never a decision: it has no lifetime and decides nothing, so the item is
 > back in play, owed its usual decision, unless it is dormant through what it
 > serves.
 
-From position 85 Run is in play again, and the next seal judges it like any
-habit, wanting a `Did`. It has to be a successor of the deferral: a second,
-root stance about Run would be an inconsistency, since a revision has at most
-one current stance.
+From position @resume_run#@ Run is in play again, and the next seal judges it
+like any habit, wanting a `Did`. It has to be a successor of the deferral: a
+second, root stance about Run would be an inconsistency, since a revision has
+at most one current stance.
 
 > **Why a stance that decides nothing?** A task can be brought back early by
 > committing to it, and an external by waiting on it, but a goal, project,
@@ -1284,20 +758,7 @@ one current stance.
 
 The visa arrives, and Reza appends `Done` about it.
 
-```toml
-[[entries]]
-name = "visa_granted"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-02-17T11:00:00Z" }, note = "Granted for twelve months" }
-
-[[entries]]
-name = "visa_granted_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "visa_granted" }
-to = { existing = { origin = "f5e0fdfc-3ecb-4e7e-8a08-58f95f6cd783", position = "64" } }
-```
+{{toml:29-visa-done.toml}}
 
 `Book flights` is ready at once, and the ranking shows it undecided. The edge
 from the visa to it is still current, so when the flights are booked, the
@@ -1307,68 +768,16 @@ The sabbatical project has three strict prerequisites. Reza records the other
 two, "Sublet the flat" and "Hand over at work", and soon the flights are
 booked and the flat is sublet; the third is still open.
 
-```toml
-[[entries]]
-name = "sublet"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Sublet the flat" }
-
-[[entries]]
-name = "sublet_enables_sabbatical"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "sublet" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
-
-[[entries]]
-name = "handover"
-kind = "node"
-ty_name = "Task"
-payload = { title = "Hand over at work" }
-
-[[entries]]
-name = "handover_enables_sabbatical"
-kind = "edge"
-ty_name = "Enables"
-from = { added = "handover" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
-
-[[entries]]
-name = "flights_booked"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-02-19T12:00:00Z" } }
-
-[[entries]]
-name = "flights_booked_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "flights_booked" }
-to = { existing = { origin = "f5e0fdfc-3ecb-4e7e-8a08-58f95f6cd783", position = "65" } }
-
-[[entries]]
-name = "sublet_done"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-02-21T12:00:00Z" } }
-
-[[entries]]
-name = "sublet_done_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "sublet_done" }
-to = { added = "sublet" }
-```
+{{toml:30-sabbatical-tasks.toml}}
 
 ```mermaid
 flowchart BT
-    T1["65 Task: Book flights"] -- Enables --> P["58 Project: Sabbatical"]
-    T2["89 Task: Sublet the flat"] -- Enables --> P
-    T3["91 Task: Hand over at work"] -- Enables --> P
-    P -- Enables --> G["57 Goal: Live abroad a year"]
-    D1["93 Done"] -- About --> T1
-    D2["95 Done"] -- About --> T2
+    T1["@flights#@ Task: Book flights"] -- Enables --> P["@sabbatical#@ Project: Sabbatical"]
+    T2["@sublet#@ Task: Sublet the flat"] -- Enables --> P
+    T3["@handover#@ Task: Hand over at work"] -- Enables --> P
+    P -- Enables --> G["@abroad#@ Goal: Live abroad a year"]
+    D1["@flights_booked#@ Done"] -- About --> T1
+    D2["@sublet_done#@ Done"] -- About --> T2
 ```
 
 A project is not ready while `Hand over at work` is open, so it needs no
@@ -1377,20 +786,7 @@ it would be rejected at the `About` prefix, exactly as for a task. This file
 passes the structural checks and TypeCheck, which is all the scratch database
 runs, and the planning analyzer would reject it at its second operation:
 
-```toml
-[[entries]]
-name = "sabbatical_done"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-02-22T12:00:00Z" } }
-
-[[entries]]
-name = "sabbatical_done_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "sabbatical_done" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
-```
+{{toml:31-sabbatical-done-early.check.toml}}
 
 Once the hand-over is done the project becomes *ready* and enters the
 frontier, where its options differ from a task's: accept it with `Done`,
@@ -1400,33 +796,7 @@ abandon it. Satisfying every dependency makes delivery possible without
 proving the deliverable was accepted, so acceptance stays a decision
 ([decision 27](PLANNING.md#13-design-decisions)).
 
-```toml
-[[entries]]
-name = "handover_done"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-02-27T17:00:00Z" } }
-
-[[entries]]
-name = "handover_done_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "handover_done" }
-to = { existing = { origin = "86cb462f-5fe7-4b35-b116-9e5ff0e3bfb2", position = "91" } }
-
-[[entries]]
-name = "sabbatical_done"
-kind = "node"
-ty_name = "Done"
-payload = { at = { kind = "timestamp", value = "2026-02-28T10:00:00Z" }, note = "Leaving on the first" }
-
-[[entries]]
-name = "sabbatical_done_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "sabbatical_done" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "58" } }
-```
+{{toml:32-sabbatical-done.toml}}
 
 A done project is not open, so no seal judges it again. The certificate's
 `Helps` edge now points at a finished project and serves nothing, so when its
@@ -1449,20 +819,7 @@ them would be undecided too.
 Goals never take `Done`. A year later Reza declares the goal `sufficient`.
 The goal had no stance until now, so this one is a root stance.
 
-```toml
-[[entries]]
-name = "abroad_sufficient"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "sufficient", at = { kind = "timestamp", value = "2027-03-01T10:00:00Z" } }
-
-[[entries]]
-name = "abroad_sufficient_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "abroad_sufficient" }
-to = { existing = { origin = "33ad7787-9c0f-41c3-8314-60259c324660", position = "57" } }
-```
+{{toml:33-sufficient.toml}}
 
 That stance is legal only when every `Enables` source of the goal is done;
 here the project is. Sufficiency is a judgment, but not one that may
@@ -1474,13 +831,7 @@ goal ([decisions 28, 11, and 56](PLANNING.md#13-design-decisions)).
 
 Mid-window, Reza adds a goal, "Learn to cook", with no stance and no plan.
 
-```toml
-[[entries]]
-name = "cook"
-kind = "node"
-ty_name = "Goal"
-payload = { title = "Learn to cook" }
-```
+{{toml:34-cook.toml}}
 
 From that moment the goal is in play: it serves nothing, and nothing defers
 it. Until a goal is ready it needs no stance at a seal, but it is judged by
@@ -1503,20 +854,7 @@ most. Awareness has a cost, and the cost is one decision, not action.
 Later, Reza abandons "Finish the 10 km". The goal has no stance yet, so this
 is a root stance too.
 
-```toml
-[[entries]]
-name = "abandon_ten_k"
-kind = "node"
-ty_name = "Stance"
-payload = { kind = "abandoned", at = { kind = "timestamp", value = "2027-03-02T19:00:00Z" }, reason = "Knee" }
-
-[[entries]]
-name = "abandon_ten_k_about"
-kind = "edge"
-ty_name = "About"
-from = { added = "abandon_ten_k" }
-to = { existing = { origin = "7fa75d44-38d0-47f5-93bc-9d9365264de2", position = "71" } }
-```
+{{toml:35-abandon-ten-k.toml}}
 
 The habit "Run" helped only the 10 km goal. A `Helps` edge into a finished or
 abandoned item serves nothing, so Run now serves nothing and stands on its
@@ -1670,62 +1008,27 @@ to the manual it needs. Neither is planning's business. Reza amends the
 `Task` declaration with a `place` field and a `Cites` label, and declares a
 `Book` type for the other end.
 
-```toml
-[[entries]]
-name = "task_type_place"
-kind = "node"
-ty_name = "Type"
-predecessor = { existing = { origin = "592e3ada-a22f-47d9-b0fa-53f96bd44b85", position = "3" } }
-intent = "revise"
-[entries.payload]
-name = "Task"
-fields = { kind = "record", value = { title = ["mandatory", "text"], note = ["optional", "text"], place = ["optional", "text"] } }
-outgoing = ["Enables", "Helps", "Cites"]
-incoming = ["Enables", "Helps", "About", "Until"]
-successors = []
-
-[[entries]]
-name = "book_type"
-kind = "node"
-ty_name = "Type"
-[entries.payload]
-name = "Book"
-fields = { kind = "record", value = { title = ["mandatory", "text"] } }
-outgoing = []
-incoming = ["Cites"]
-successors = []
-
-[[entries]]
-name = "manual"
-kind = "node"
-ty_name = "Book"
-payload = { title = "Road bike repair manual" }
-
-[[entries]]
-name = "bike_cites_manual"
-kind = "edge"
-ty_name = "Cites"
-from = { existing = { origin = "c3f4f576-0bb8-48fd-b895-43d36046e512", position = "39" } }
-to = { added = "manual" }
-```
+{{toml:36-amend-task.toml}}
 
 ```mermaid
 flowchart BT
-    TT["3 Type: Task"] -.-> TT2["106 Type: Task, with place and Cites"]
-    BT["107 Type: Book"]
-    C["39 Task: Fix the bike"] -- Cites --> M["108 Book: Road bike repair manual"]
+    TT["@task_type#@ Type: Task"] -.-> TT2["@task_type_place#@ Type: Task, with place and Cites"]
+    BT["@book_type#@ Type: Book"]
+    C["@bike#@ Task: Fix the bike"] -- Cites --> M["@manual#@ Book: Road bike repair manual"]
 ```
 
-Positions 106 to 109. TypeCheck accepts them: `place` is optional, so every
-current task still fits the revised declaration, and `Cites` is permitted at
-both ends of the new edge. The planning analyzer acts at 106, a declaration
-that claims `Task`, and judges it against
+Positions @task_type_place#@ to @bike_cites_manual#@. TypeCheck accepts them:
+`place` is optional, so every current task still fits the revised
+declaration, and `Cites` is permitted at both ends of the new edge. The
+planning analyzer acts at @task_type_place#@, a declaration that claims
+`Task`, and judges it against
 [PLANNING §3.4](PLANNING.md#34-amending-the-declarations). The revision still
 permits every label the canonical `Task` permits, and the analyzer reads no
-field of a task, so there is no finding. At 107 to 109 it does nothing at all:
-a type it does not own, a node of that type, and an edge with a label it does
-not own are outside its vocabulary. Bootstrap stays quiet too, since it
-suggests only a declaration that is missing.
+field of a task, so there is no finding. At @book_type#@ to
+@bike_cites_manual#@ it does nothing at all: a type it does not own, a node of
+that type, and an edge with a label it does not own are outside its
+vocabulary. Bootstrap stays quiet too, since it suggests only a declaration
+that is missing.
 
 > **Why not require the canonical declarations exactly?** Then Reza's
 > `place` field would earn a suggestion to revert it at every prefix, and the
@@ -1742,20 +1045,7 @@ comes from a stance or an event
 Some amendments the analyzer cannot live with. Suppose Reza tires of setting
 a budget at every review and makes `budget` optional:
 
-```toml
-[[entries]]
-name = "review_type_no_budget"
-kind = "node"
-ty_name = "Type"
-predecessor = { existing = { origin = "592e3ada-a22f-47d9-b0fa-53f96bd44b85", position = "8" } }
-intent = "revise"
-[entries.payload]
-name = "Review"
-fields = { kind = "record", value = { budget = ["optional", "integer"], at = ["mandatory", "timestamp"], note = ["optional", "text"] } }
-outgoing = []
-incoming = []
-successors = []
-```
+{{toml:37-review-budget-optional.check.toml}}
 
 This file passes the structural checks and TypeCheck, which is all the
 scratch database runs: the declaration is well formed, and every current
