@@ -1,10 +1,19 @@
 [package]
 name = "lifecore-prod"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 lifecore = { path = "../" }
+lifecore-dag-check = { path = "../lifecore-dag-check" }
+jiff = { version = "0.2.28", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+semver = "1.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+lifecore-typecheck = { path = "../lifecore-typecheck" }
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 ---
 name: proposal
-description: Write or revise a proposal in docs/proposals/ for an analyzer or feature that is specified but not implemented, such as PLANNING. Use when drafting a new proposal, revising one after review, or adding its explainer.
+description: Write or revise a proposal in docs/proposals/ for an analyzer or feature that is specified but not implemented. Use when drafting a new proposal, revising one after review, or adding its explainer.
 ---
 
 # Proposals
@@ -17,8 +17,8 @@ A proposal has its own directory, `docs/proposals/<name>/`, holding
 the core contracts go up two levels, as in `../../SPEC.md`. AGENTS.md lists
 the pair under "Proposed, not implemented" until the work lands. Then the
 contract and explainer move to `docs/` beside the contracts they join, and
-the implementation's tests replace the harness, as RECONNECT's replay test
-did.
+the implementation's tests replace the harness, as the RECONNECT and PLANNING
+replay tests did.
 
 ## The contract
 
@@ -69,11 +69,11 @@ Every change file in the explainer comes from a real run, so its positions
 and origins are the ones the core assigned and every file passes the
 structural checks and TypeCheck. The proposal's `harness/` keeps the change
 files as templates, the run they produced, and the explainer's text as a
-template; its README says how to use it, and
-[the planning harness](../../../docs/proposals/planning/harness/README.md)
-is the model for a new one. Never edit a position or origin by hand: edit
-the template and regenerate. Before you finish, check that the explainer
-matches what its template produces.
+template; its README says how to use it. The planning harness, retired when
+PLANNING landed, is the model for a new one: see `git show
+c6fcf32:docs/proposals/planning/harness/README.md` and its siblings. Never
+edit a position or origin by hand: edit the template and regenerate. Before
+you finish, check that the explainer matches what its template produces.
 
 ## Style
 

@@ -1,12 +1,14 @@
 # Reconnect analyzer
 
 Status: the analyzer is implemented in `lifecore-reconnect`, but the
-application does not register it yet, and neither the export marks of
-section 4 nor the planning changes of section 8 are implemented. This
+application does not register it yet, and the export marks of section 4 are
+not implemented. Planning's side of section 8 is: PLANNING has no Re-point
+suggestion and keeps Dropped connection; registering both analyzers and
+configuring them together remain ([PLAN §2.3](PLAN.md#23-planning)). This
 document owns the contract of a general-purpose analyzer, provisionally named
 Reconnect, packaged as `lifecore-reconnect` and registered as `Reconnect`. It
 relies on [SPEC](SPEC.md), [ANALYZERS](ANALYZERS.md), and [SUGGESTIONS](SUGGESTIONS.md),
-and replaces the Re-point suggestion of [PLANNING §8.6](proposals/planning/PLANNING.md#86-suggestions).
+and replaces the Re-point suggestion of [PLANNING §8.6](PLANNING.md#86-suggestions).
 [RECONNECT-EXPLAINER](RECONNECT-EXPLAINER.md) walks through the same rules
 with one running example written as change files.
 
@@ -230,7 +232,7 @@ every case it covered, including the `About` edge from an existing stance or
 The application registers both factories, and a planning database configures
 both in its suite; planning drops section 8.6's Re-point
 and keeps the Dropped-connection warning of
-[PLANNING §8.5](proposals/planning/PLANNING.md#85-at-a-seal-sticky-warnings) as its own seal-time
+[PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings) as its own seal-time
 rule, since judging a connection at a window's close against any current
 successor is planning's domain semantics, not a general one.
 

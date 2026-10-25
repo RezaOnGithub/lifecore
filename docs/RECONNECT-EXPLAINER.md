@@ -669,7 +669,7 @@ one do not carry to the other. An unknown field such as `"filters"` is an
 
 ## 13. Where planning comes in
 
-[PLANNING](proposals/planning/PLANNING.md) revises items, stances, and events the same way this
+[PLANNING](PLANNING.md) revises items, stances, and events the same way this
 walk revised notes, and its `About` edge from a stance or `Did` to a revised
 item is an ordinary incoming edge of the predecessor, exactly like `reading`
 citing `exact` in section 3. That is why planning has no re-point suggestion

@@ -510,6 +510,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lifecore-prod"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "lifecore",
+ "lifecore-dag-check",
+ "lifecore-typecheck",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "lifecore-reconnect"
 version = "0.1.0"
 dependencies = [

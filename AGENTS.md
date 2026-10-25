@@ -19,13 +19,13 @@ behavior before implementing it:
   and [UI](docs/UI.md) (presentation decisions).
 - [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
   contracts.
-- Proposed, not implemented, one directory per proposal under
-  [docs/proposals](docs/proposals/):
-  [PLANNING](docs/proposals/planning/PLANNING.md) specifies the planning
-  analyzer for `lifecore-prod`, and
-  [PLANNING-EXPLAINER](docs/proposals/planning/PLANNING-EXPLAINER.md) walks
-  through it. Write or revise a proposal with the `proposal` skill.
+- Proposed, not implemented: none at present. A proposal gets its own
+  directory under `docs/proposals/`; write or revise one with the `proposal`
+  skill.
 - Implemented, not yet registered by the application:
+  [PLANNING](docs/PLANNING.md) specifies the planning analyzer and its
+  valuation, in `lifecore-prod`, with
+  [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) as its walkthrough; and
   [RECONNECT](docs/RECONNECT.md) specifies the general reconnection analyzer
   planning relies on, in `lifecore-reconnect`, with
   [RECONNECT-EXPLAINER](docs/RECONNECT-EXPLAINER.md) as its walkthrough.
@@ -49,11 +49,12 @@ Preserve historical correctness under the chosen model and unrelated user work.
 ## Checks
 
 Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-`lifecore-reconnect`, `lifecore-app`, `lifecore-cli`, and `lifecore-server`
-(the Axum adapter behind `lifecore serve`; its `build.rs` embeds the React
-client in `lifecore-server/ui`). Shared checking and atomic in-memory commits
-live in `lifecore::transaction`; persistence belongs to the synchronous
-application service `lifecore_app::service::Service`, shared by HTTP and CLI.
+`lifecore-reconnect`, `lifecore-prod`, `lifecore-app`, `lifecore-cli`, and
+`lifecore-server` (the Axum adapter behind `lifecore serve`; its `build.rs`
+embeds the React client in `lifecore-server/ui`). Shared checking and atomic
+in-memory commits live in `lifecore::transaction`; persistence belongs to the
+synchronous application service `lifecore_app::service::Service`, shared by
+HTTP and CLI.
 
 - Tests: `cargo test --workspace` or `cargo test -p <package>`. Where Graphviz
   is installed, `LIFECORE_UI=skip cargo test -p lifecore-app -- --include-ignored`

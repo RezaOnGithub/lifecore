@@ -71,7 +71,26 @@ Follow [SUGGESTIONS](SUGGESTIONS.md).
   Acknowledgment makes analyzer certificates carry more weight.
 - [ ] Cover the [acceptance scenarios](SUGGESTIONS.md#7-acceptance-scenarios).
 
-### 2.3 Final verification
+### 2.3 Planning
+
+Follow [PLANNING](PLANNING.md). The analyzer and the `valuation` function are
+built in `lifecore-prod`; nothing outside the crate uses them yet.
+
+- [ ] Register Planning beside TypeCheck, DAG Check, and Reconnect, so that
+  `lifecore add-analyzer Planning` works, and configure Reconnect wherever
+  Planning is ([RECONNECT §8](RECONNECT.md#8-planning-analyzer)). Then add
+  Planning where ANALYZERS and PERFORMANCE describe the built-in analyzers,
+  and update the Planning status lines here, in AGENTS.md, and in both
+  PLANNING documents.
+- [ ] Build the executable of
+  [PLANNING §12](PLANNING.md#12-delivery-without-a-core-change): a
+  `lifecore-plan` binary or a CLI subcommand that opens the selected database
+  read-only as a preview and prints the valuation at the head or at an "as
+  of" boundary, as lines or JSON, with `--deadline-sample-windows`.
+- [ ] When the browser client wants the ranking, one RPC method over the same
+  function, with the `Valuation` shape in the fixtures and `contract.ts`.
+
+### 2.4 Final verification
 
 Each stage verifies its own workflow; these checks cut across stages.
 
@@ -137,7 +156,7 @@ workflows.
   declaration payload and gives `Type` no edge permissions, so a user cannot
   annotate declarations with fields of their own or link them to other nodes:
   the same customization problem
-  [PLANNING §3.4](proposals/planning/PLANNING.md#34-amending-the-declarations) addresses for
+  [PLANNING §3.4](PLANNING.md#34-amending-the-declarations) addresses for
   planning's types. This revisits the AGENTS.md invariant that TypeCheck has a
   fixed built-in metatype and no bootstrap node.
 - Pooled failure reporting. Analyzer inconsistencies are already collected in
@@ -150,7 +169,7 @@ workflows.
 - An `info` message kind beside `inconsistency`, `warning`, and `suggestion`
   ([ANALYZERS §2](ANALYZERS.md#2-finding-identity-and-observations)), for
   notices that need no action. Planning's Grace period notice
-  ([PLANNING §8.5](proposals/planning/PLANNING.md#85-at-a-seal-sticky-warnings)) is a sticky
+  ([PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings)) is a sticky
   warning until then. It touches ANALYZERS, [MESSAGES](MESSAGES.md),
   [RPC](RPC.md), the client contract and its fixtures
   ([CLIENT §2](CLIENT.md#2-contract-and-fixtures)), and [UI](UI.md).
@@ -160,4 +179,4 @@ workflows.
   applies to every analyzer, not only to planning.
 - Namespacing in the type system, so that two vocabularies can share a type
   name or an edge label. Planning owns its names outright until then
-  ([PLANNING](proposals/planning/PLANNING.md#13-design-decisions), decision 35).
+  ([PLANNING](PLANNING.md#13-design-decisions), decision 35).

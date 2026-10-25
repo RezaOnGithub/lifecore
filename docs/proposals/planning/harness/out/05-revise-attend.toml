@@ -1,7 +1,0 @@
-[[entries]]
-name = "attend_10"
-kind = "node"
-ty_name = "Task"
-predecessor = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "12" } }
-intent = "revise"
-payload = { title = "Attend 10 lessons" }

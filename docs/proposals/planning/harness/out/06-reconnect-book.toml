@@ -1,6 +1,0 @@
-[[entries]]
-name = "action_0"
-kind = "edge"
-ty_name = "Enables"
-from = { existing = { origin = "abb5ad8a-199e-4eaa-b4cf-85a4755457c4", position = "11" } }
-to = { existing = { origin = "788b7bed-00e1-48fc-a2ec-c97e62dbffe9", position = "23" } }
