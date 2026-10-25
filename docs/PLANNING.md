@@ -59,9 +59,10 @@ use them begin in section 4.
    or a `Stance`, one decision about one revision, sets it aside: `deferred`
    for a while, `abandoned` for good, or `sufficient` when a goal is good
    enough. A deferral makes the item **dormant**, and with it everything
-   that serves only dormant, finished, or abandoned items, so one decision
-   quiets a whole branch. Only a `committed` stance owes action (decisions
-   7, 40, 41, and 42).
+   that serves only dormant items, so one decision quiets a whole branch.
+   Abandoning does not spread: an item is abandoned only once its
+   prerequisites are resolved. Only a `committed` stance owes action
+   (decisions 7, 40, 41, 42, and 74).
 5. **Status changes are events, not revisions.** Completion appends a `Done`
    about the revision, which stays current, so its edges stay current and a
    bypassed prerequisite is a plain check. A finished revision is final, and
@@ -152,7 +153,7 @@ bookkeeping node to an item.
 | `Stance` | `About` | Any item; the stance's `kind` narrows the type (section 3.3) | The decision's subject. One or more over time, each later one to a descendant of an earlier target; a revision has at most one current stance (sections 4 and 8.3). |
 | `Done` | `About` | `Task`, `Project`, `External` | The completed revision. At most one; a `Done` without one has no subject and no effect (decision 59). |
 | `Did` | `About` | `Habit`, `Concern` | The attended revision. One or more over time, each later one to a descendant of an earlier target (sections 4 and 8.3). |
-| `Stance` | `Until` | `Task`, `Project`, `External` | Only from a `deferred` stance, and at most one. Ends the deferral early when the target is terminal. |
+| `Stance` | `Until` | `Task`, `Project`, `External` | Only from a `deferred` stance, and at most one current. Ends the deferral early when the target is terminal. After a revision of its target it is re-pointed to a descendant, like `About`; a deferral left with no current `Until` lapses after the next seal (sections 6 and 8.3). |
 
 Any other endpoint pair for these four labels is an inconsistency, judged at
 the edge's own prefix (sections 8.2 and 8.3). The union
@@ -171,7 +172,7 @@ kind requires.
 | `waiting` | `External` | `horizon` ≥ 1 | Externally gated; check in after `horizon` seals. Keeps the external in play. |
 | `resumed` | Any item | | Ends a deferral at once: supersedes a `deferred` stance, and the item is in play again unless it is dormant through what it serves (section 7). Never a decision: it decides no frontier revision and has no lifetime. |
 | `sufficient` | `Goal` | | Terminal and final: judged good enough. Permitted only once every `Enables` source of the goal is done (section 8.3). |
-| `abandoned` | Any item | | Terminal and final. |
+| `abandoned` | Any item | | Terminal and final. Permitted only once no `Enables` source of the item is open (section 8.3). |
 
 `cost` is permitted only on `committed`, and `horizon` only on `deferred` and
 `waiting`; either field on any other kind is an inconsistency (section 8.1).
@@ -220,8 +221,10 @@ and events. The canonical fields left out of the table are free: `title`,
 `criterion`, `deliverable`, `note`, `reason`, and `at` on stances and events.
 Removing `at` from a stance or event declaration is permitted, but two
 otherwise identical stances or events then collide under
-[SPEC §7.1](SPEC.md#71-append-checks) rule 5. Whether an item's `successors`
-should be constrained is open (section 14, question 6).
+[SPEC §7.1](SPEC.md#71-append-checks) rule 5. An item's own `successors` are
+the user's: a transition between item types is allowed, and age counts only
+over the run of item types (section 4; decision 71), while a transition between
+an item and a bookkeeping type is an inconsistency (section 8.1; decision 72).
 
 ## 4. Identity, subjects, and state
 
@@ -256,13 +259,23 @@ predecessor is superseded, its `About` edges are historical, and its state
 reads `open`. New work is a new item. A split is ordinary: each current
 revision carries its own connections, decisions, and state.
 
-The analyzer makes three history queries over revision trees. `root_of`
-measures how long an item has existed and whether a habit or concern is new at
-a seal (section 7); all revisions of a tree share that age. `ancestors` checks
-that a re-pointed `About` edge targets a descendant of an earlier target
-(section 8.3; decision 57). The Dropped connection warning looks up the
-current successors of a revision superseded in the window (section 8.5). Each
-measures, validates, or reports; none resolves a connection through a
+The analyzer makes two history queries over revision trees.
+
+- `ancestors` finds a revision's **planning root**: walking back through its
+  predecessors, the oldest revision of the youngest unbroken run of item
+  types that ends at it. The run stops at the first predecessor that is not
+  an item, so time spent as another type, or out of the plan before a
+  return, does not count, while a `Task` revised into a `Project` keeps its
+  age. The planning root measures how long an item has been part of the plan
+  (section 9). A narrower run, of `Habit` and `Concern` revisions only,
+  decides whether a habit or concern is new at a seal (section 7)
+  (decision 71). `ancestors` also checks that a re-pointed `About` or `Until`
+  edge targets a descendant of an earlier target (section 8.3; decisions 57
+  and 73).
+- The Dropped connection warning looks up the current successors of a
+  revision superseded in the window (section 8.5).
+
+Each measures, validates, or reports; none resolves a connection through a
 revision tree, so decision 3 holds.
 
 ## 5. Windows and seals
@@ -303,7 +316,10 @@ Lifetimes count seals from a stance's position; no lineage is involved
   the next seal.
 - `deferred` with `horizon = n` stands through the n-th seal after its sealing
   review and lapses after it; it lapses earlier at any boundary where its
-  `Until` target is terminal.
+  `Until` target is terminal. A deferral that has an `Until` edge but no
+  current one at a seal, because its target was revised and the edge not
+  re-pointed, stands through that seal and lapses after it: the thing it
+  waited on changed, so the item comes back to be reassessed (decision 73).
 - `waiting` stands through `horizon` seals like `deferred`.
 - `resumed` has no lifetime: it is never a decision.
 - `sufficient` and `abandoned` are terminal and final.
@@ -318,15 +334,16 @@ decision, even while fresh (section 3.3; decision 54).
 A lapsed stance stays the item's current stance until superseded, but it no
 longer decides anything. When a deferral lapses, the item returns to play by
 itself, with no new entry, unless the rule of section 7 keeps it dormant
-because everything it serves is dormant or terminal. A returning item in the
+because everything it serves is dormant. A returning item in the
 frontier needs a new decision at the next seal.
 
-A deferral runs until it lapses, until its `Until` target is terminal, or
-until a successor stance ends it: `resumed` for any item, `committed` for a
-task, or `waiting` for an external. A `resumed` stance ends the deferral at
-once and decides nothing, so the item is in play again unless it is dormant
-through what it serves (decision 54). Superseding a deferral with another
-`deferred` stance starts a new lifetime instead.
+A deferral runs until it lapses, until its `Until` target is terminal or is
+left behind by a revision, as above, or until a successor stance ends it:
+`resumed` for any item, `committed` for a task, or `waiting` for an external. A
+`resumed` stance ends the deferral at once and decides nothing, so the item is
+in play again unless it is dormant through what it serves (decision 54).
+Superseding a deferral with another `deferred` stance starts a new lifetime
+instead.
 
 ## 7. In play, ready, and the frontier
 
@@ -341,8 +358,7 @@ to that boundary as section 6 defines them.
    optional work is owed a decision like any other (decision 42).
 2. An open revision is **dormant** when either holds:
    - its current stance is a `deferred` decision;
-   - it serves at least one item, and every item it serves is dormant or
-     terminal.
+   - it serves at least one item, and every item it serves is dormant.
 
    One exception comes first: an open revision whose current stance is a
    `committed` or `waiting` decision is never dormant. Every open revision
@@ -350,33 +366,37 @@ to that boundary as section 6 defines them.
    serves nothing, such as every goal and concern, is in play unless its own
    stance defers it. Section 3.2 keeps the union of current `Enables` and
    `Helps` edges acyclic, so the rule settles every revision, starting from
-   those that serve nothing.
+   those that serve nothing. An open item never serves a terminal one: a
+   `Helps` edge into a terminal item serves nothing (item 1), section 8.2
+   rejects an `Enables` edge into a terminal target, and section 8.3 rejects
+   a `Done`, `sufficient`, or `abandoned` while its target has an open
+   `Enables` source (decision 74).
 3. So one deferral of a goal makes dormant every task, project, external, and
    habit that serves only that goal, directly or through other dormant items.
    When the deferral lapses, or a `resumed` stance ends it, they all return to
    play with no further entry. A committed task stays in play under a deferred
-   goal, and so do the prerequisites that serve it. When what an item served
-   finishes or is abandoned:
-   - helping work and habits whose `Helps` target finished or was abandoned
-     serve nothing through that edge, so they stand on their own: in play,
-     and asked about like any item;
-   - an open prerequisite, an `Enables` source, of an abandoned item still
-     serves it and stays dormant for good, as the abandonment implies, unless
-     it also serves something in play or its own `committed` or `waiting`
-     decision keeps it in play;
-   - an open `Enables` source of a done or sufficient item cannot exist:
-     section 8.3 rejects the `Done` or `sufficient` while a source is open,
-     and section 8.2 rejects an `Enables` edge into a terminal target.
+   goal, and so do the prerequisites that serve it. When what an item
+   helped finishes or is abandoned, the helping work and habits whose `Helps`
+   target it was serve nothing through that edge, so they stand on their
+   own: in play, and asked about like any item (decision 55). Abandoning, by
+   contrast, makes nothing dormant. An item can be abandoned only once each
+   of its `Enables` sources is done, abandoned, or redirected by a revision,
+   so its prerequisites are settled by explicit decisions; and abandoning a
+   prerequisite blocks what it enabled until that is revised without it or
+   abandoned too (sections 8.3 and 8.4; decision 74).
 4. **Ready** means an open `Task` or `Project` whose `Enables` sources are all
    done, or an open `Goal` that has at least one current `Enables` source, all
    of them done; in play or dormant alike (decision 61).
 5. The **strict subgraph** of a goal or project is the item itself and every
    open revision reached from it by walking `Enables` backward, target to
    source, through open revisions, in play or dormant.
-6. A habit or concern is **new** at a seal when the root of its revision tree
-   (`root_of`, section 4) was appended in the window being sealed; at a
-   non-seal boundary, when it was appended in the open window. Revising the
-   item does not make it new again (decision 46).
+6. A habit or concern is **new** at a seal when the oldest revision of the
+   youngest unbroken run of `Habit` and `Concern` revisions that ends at it
+   (section 4) was appended in the window being sealed; at a non-seal
+   boundary, when it was appended in the open window. Revising the item does
+   not make it new again, but an item that has just become a habit or
+   concern, from a task or from outside the plan, is new (decisions 46 and
+   71).
 7. The **frontier**, the revisions that need a decision, is:
    - every ready `Task` in play;
    - every ready `Project` in play;
@@ -461,7 +481,9 @@ negative `cost`, `horizon` below 1, negative `budget` or `quota`; a
 `deferred` stance whose `horizon` exceeds `max_deferral_horizon`, unless the
 key is `null` (section 11; decisions 43 and 44); a `Review`, `Done`, or `Did`
 with a predecessor; a successor of a revision that is terminal in the view
-immediately before it (section 4); a successor of an `abandoned` or
+immediately before it (section 4); a node of an item type whose predecessor
+is a bookkeeping node, or a bookkeeping node whose predecessor is an item
+(decision 72); a successor of an `abandoned` or
 `sufficient` stance, whatever its kind, so that abandoning an item or calling
 a goal sufficient is as final as a `Done` (decision 56).
 
@@ -479,14 +501,17 @@ sorted member identities.
 
 Inconsistencies: endpoint types outside section 3.2, such as a source that is
 not a stance or event or a target that is not an item; a kind that does not
-apply to the target's type; `Until` from anything but a `deferred` stance, or
-a second `Until`; a second `About` from a `Done`; any `About` to a revision
-that is terminal in the view immediately before the edge, since the `About`
-edge of a `Done`, or of an `abandoned` or `sufficient` stance, makes its own
-target terminal; `Done` whose target has an `Enables` source that is not
-done; `sufficient` whose target has an `Enables` source that is not done.
-The last two are judged immediately because events cannot be taken back
-(decision 10).
+apply to the target's type; `Until` from anything but a `deferred` stance, or a
+second current `Until` from the same stance; a second `About` from a `Done`;
+any `About` to a revision that is terminal in the view immediately before the
+edge, since the `About` edge of a `Done`, or of an `abandoned` or `sufficient`
+stance, makes its own target terminal; `Done` whose target has an `Enables`
+source that is not done; `sufficient` whose target has an `Enables` source that
+is not done; `abandoned` whose target has an open `Enables` source, so that
+each prerequisite is finished, abandoned, or redirected by a revision before
+what it enables is abandoned (decision 74). These three are judged immediately:
+events cannot be taken back (decision 10), and `sufficient` and `abandoned` are
+final (decision 56).
 
 Two more inconsistencies concern re-pointing and the one current stance:
 
@@ -496,7 +521,9 @@ Two more inconsistencies concern re-pointing and the one current stance:
   a revision or a split always passes, since the successor descends from the
   earlier target, and so does every edge the [RECONNECT](RECONNECT.md)
   analyzer suggests. A second `About` edge in one plan to an unrelated item
-  is rejected.
+  is rejected. The same holds for an `Until` edge from a stance that already
+  has `Until` edges, current or historical, against their targets
+  (decision 73).
 - **A second current stance.** An `About` edge from a stance to a revision
   that already has a different current stance (decision 58). Supersession
   passes: once a stance's successor is appended, the old stance is no longer
@@ -519,6 +546,13 @@ Two more inconsistencies concern re-pointing and the one current stance:
   stance, and into which (the item or its strict subgraph) no `Habit` in play
   currently `Helps`. No other helping work rescues a plan (decisions 45 and
   49). Subjects are the goal or project and the review.
+- **Blocked by an abandoned prerequisite.** One per current `Enables` edge
+  from an abandoned source into an open revision in play. The target can
+  never become ready, so the user revises it without that edge, if it goes
+  ahead without the prerequisite, or abandons it, which section 8.3 then
+  permits, since the source is no longer open. A dormant target is judged
+  once it returns to play. Subjects are the edge, its source and target, and
+  the review (decision 74).
 
 A dormant goal or project is not judged, and a done project is not open, so
 neither is ever broken. A ready goal or project is never broken either: its
@@ -543,7 +577,13 @@ a deferral before the next seal (decisions 45 and 61).
   Subjects are the connection, each revision it touched that was superseded
   in the window together with that revision's current successors, and the
   review. A warning, not a gate, because dropping a connection is sometimes
-  what the edit meant (decision 17).
+  what the edit meant (decision 17). The match is a heuristic, and a few
+  misfires are acceptable: an equivalent connection is read as a current
+  edge with the same label and direction whose endpoints are each the
+  original endpoint, if still current, or one of its current descendants.
+  Each connection is judged once, at the seal of the window in which its
+  revision was superseded, so the warnings never accumulate across windows
+  (decision 75).
 
 Sticky because each judges a closed window once; the next window gets its
 own finding (decision 18).
@@ -569,11 +609,11 @@ Between reviews the valuation ranks revisions at the requested boundary,
 with the terms of section 7 judged at that boundary. The ranking covers the
 revisions in play and, in tier 3 only, the revisions whose own current stance
 is a standing `deferred`. A revision that is dormant only through what it
-serves, everything it serves being dormant or terminal, is not ranked
+serves, everything it serves being dormant, is not ranked
 (decision 51). Each revision appears once, in the first tier whose members
-include it. Rows are ordered by tier, then the tier's keys, then root
+include it. Rows are ordered by tier, then the tier's keys, then planning-root
 position ascending, then the revision's own position ascending, which orders
-split siblings that share a root (decision 70).
+split siblings that share one (decisions 70 and 71).
 
 | Tier | Members | Keys |
 | --- | --- | --- |
@@ -581,8 +621,8 @@ split siblings that share a root (decision 70).
 | 1 | Open tasks whose current stance is a standing `committed` | `OpenFor` descending; then `DeadlineIn` ascending when present |
 | 2 | Habits and concerns in play, not new, below `quota` so far in the open window | shortfall descending |
 | 3 | Revisions whose current stance is a standing `deferred` or `waiting` | lapsing at the next seal first; then `OpenFor` descending |
-| 4 | Goals and projects in play, with a sealed root, whose strict subgraph holds no task with a standing `committed` | `Starved` descending |
-| 5 | The rest of the revisions in play, including a new habit or concern | root position |
+| 4 | Goals and projects in play, with a sealed planning root, whose strict subgraph holds no task with a standing `committed` | `Starved` descending |
+| 5 | The rest of the revisions in play, including a new habit or concern | planning-root position |
 
 Tier 0's broken plans are decision 50, and its ready goals decision 61.
 There is no tier of available contributions: work that only helps is in play
@@ -593,18 +633,19 @@ structured value; clients show the text.
 
 - `Undecided`: an undecided frontier revision, a ready goal included.
 - `BrokenPlan`: a goal or project in play whose plan is broken (section 8.4).
-- `OpenFor { seals }`: seals since the revision tree's root was appended, so
-  an edit never resets it (decision 65).
+- `OpenFor { seals }`: seals since the item's planning root (section 4) was
+  appended, so an edit never resets it, while time as another type or out of
+  the plan does not count (decisions 65 and 71).
 - `Standing { kind, seals_left }`: given only for a standing `deferred` or
   `waiting` stance, in tier 3. Tier 1's standing `committed` stances carry no
   `Standing` reason, since a commitment always lapses at the next seal.
 - `LapsesAtNextSeal`: with `Standing`, as below.
 - `DeadlineIn { reviews }` and `DeadlinePassed`: section 10.
-- `Starved { seals }`: seals since the latest review that sealed a
-  `committed` stance, current or superseded, with a current or historical
-  `About` edge to a task in the item's strict subgraph or to a done task its
-  walk reaches; with none, seals since the sealing review of the item's root
-  (decisions 52 and 67).
+- `Starved { seals }`: seals since the latest review that sealed a `committed`
+  stance, current or superseded, with a current or historical `About` edge to a
+  task in the item's strict subgraph or to a done task its walk reaches; with
+  none, seals since the sealing review of the item's planning root (decisions
+  52 and 67).
 - `Shortfall { have, quota }`: a habit or concern below quota so far in the
   open window.
 - `New`: a new habit or concern (section 7), which ranks in tier 5; a seal
@@ -762,10 +803,10 @@ traits, the runner, or [ANALYZERS](ANALYZERS.md).
    the client renders tiers and reason text with links into the inspector.
    Fixtures and the client contract then carry the `Valuation` shape.
 
-Nothing else is needed: `root_of`, `ancestors`, current descendants for the
-dropped-connection rule, the all-edges selection for that rule, the
-re-pointing check, and `Starved`, newest-entry inspection, timestamp fields,
-and suggestion actions exist.
+Nothing else is needed: `ancestors`, for planning roots and the re-pointing
+checks; current descendants and the all-edges selection, for the
+dropped-connection rule and `Starved`; newest-entry inspection; timestamp
+fields; and suggestion actions all exist.
 
 ## 13. Design decisions
 
@@ -1008,7 +1049,9 @@ callouts here.
     came with the approved rule and its reason is **not recorded**; it is
     what makes every commitment count toward the budget (decision 48)
     (section 7). **Revised by decision 55:** a `Helps` edge into a terminal
-    item serves nothing; the rest stands.
+    item serves nothing; the rest stands. **Revised by decision 74:** abandoning
+    no longer makes anything dormant, so the rule loses its "or terminal"
+    clause.
 42. **Optional work is owed a decision: an item serves the targets of its
     `Helps` edges exactly as it serves those of its `Enables` edges.**
     Rejected: a rule that an item reached only through `Helps` is dormant.
@@ -1062,7 +1105,9 @@ callouts here.
     recorded just before a review is undecided or short at that seal, for a
     window it barely existed in, as a repro showed. The warning says why the
     item was not judged; it is a warning because there is no `info` message
-    kind yet ([PLAN §3](PLAN.md#3-backlog)) (sections 7 and 8.5).
+    kind yet ([PLAN §3](PLAN.md#3-backlog)) (sections 7 and 8.5). **Revised by
+    decision 71:** newness counts from the youngest unbroken run of habit
+    and concern revisions, not from the tree's root.
 47. **The grace warning is the sticky Grace period warning, with the item
     and the review as subjects.** Rejected: a nonsticky warning re-emitted
     while the item is new. Reason (owner approved, 2026-10-25): it
@@ -1110,7 +1155,8 @@ callouts here.
     anchor the analyzer already reads (`root_of`, section 4); counting from a
     return to play would need the item's dormancy at earlier boundaries
     (section 9; open question 19). **Revised by decision 67:** the root is the
-    fallback when no commitment toward the item was ever sealed.
+    fallback when no commitment toward the item was ever sealed. **Revised by
+    decision 71:** the fallback is the planning root, not the tree's root.
 53. **An implementation may assume that payloads fit their declarations,
     and may return an error at a prefix TypeCheck rejects.** Rejected:
     requiring the analyzer never to fail on a payload TypeCheck rejects.
@@ -1147,7 +1193,8 @@ callouts here.
     item; an open prerequisite of an abandoned item stays dormant, as the
     abandonment implies; and an open `Enables` source of a done or
     sufficient item cannot exist (sections 8.2 and 8.3). Revises decisions
-    41 and 42 (section 7; open question 21).
+    41 and 42 (section 7; open question 21). **Revised by decision 74:** an open
+    `Enables` source of an abandoned item can no longer exist.
 56. **A successor of an `abandoned` or `sufficient` stance is an
     inconsistency at the successor's own prefix.** Neither can be undone, by
     `resumed` or any other kind, and reviving abandoned work means recording
@@ -1232,7 +1279,8 @@ callouts here.
 65. **`OpenFor` counts from the root of the revision tree.** Rejected:
     counting from the current revision. Reason: **Provisional, owner to
     confirm:** an edit must not reset an item's age (section 9; open
-    question 5).
+    question 5). **Revised by decision 71:** `OpenFor` counts from the planning
+    root.
 66. **There is no adoption exemption beyond seals.** Rejected: exempting
     sections 8.1 to 8.3 and the declaration rule before a configured
     position, as `first_sealed_review` does for seals. Reason:
@@ -1251,6 +1299,8 @@ callouts here.
     confirm:** the key must be computable from the view. Counting tasks that
     are done keeps a finished commitment as progress, so completing work does
     not make an item look more starved. Revises decision 52 (section 9).
+    **Revised by decision 71:** the fallback is the planning root's sealing
+    review.
 68. **A task's deadline comes only from goals and projects in play.**
     Rejected: every goal and project reachable forward over `Enables`,
     terminal and dormant ones included. Reason: **Provisional, owner to
@@ -1265,6 +1315,57 @@ callouts here.
     revision's own position.** Rejected: leaving split siblings, which share
     a root, in an unspecified order. Reason: **Provisional, owner to
     confirm:** the valuation must be deterministic (section 9).
+71. **Age and newness count over the youngest unbroken run of item types
+    that ends at a revision, its planning root.** Walking back through
+    predecessors, the run stops at the first revision that is not an item;
+    newness uses the narrower run of `Habit` and `Concern` revisions.
+    `OpenFor`, `Starved`'s fallback, tier 4's sealed root, and row order use
+    the planning root. Rejected: counting from the revision tree's root
+    whatever its type, counting from the oldest item revision anywhere in the
+    tree, and rejecting cross-type transitions. Reason (owner, 2026-10-25):
+    an item's age is how long it has been part of the plan; time as another
+    type, or before it left the plan and came back, is not. A task promoted
+    to a project keeps its age, and a task that just became a habit has had
+    no window to log a `Did` in, so it is new. Revises decisions 46, 52, 65,
+    and 67, and closes open question 6 (sections 4, 7, and 9).
+72. **A transition between an item and a bookkeeping type is an
+    inconsistency at the successor's own prefix.** Rejected: leaving item
+    declarations free to permit a `Stance` successor, or another type's to
+    permit an item successor of a bookkeeping node. Reason (owner approved,
+    2026-10-25): an item and a decision or event about it are different
+    things, and no rule reads a revision chain that crosses between them;
+    section 3.4 already keeps bookkeeping declarations from permitting other
+    types (section 8.1).
+73. **An `Until` edge is re-pointed like `About`, and a deferral left
+    without a current one lapses after the next seal.** A stance has at most
+    one current `Until`; a later one must target a descendant of an earlier
+    target. Rejected: one `Until` ever, which left Reconnect's suggestion
+    unappliable and turned the deferral into a plain timed one; and ending
+    the deferral at every revision of its target. Reason (owner, 2026-10-25):
+    a revision of what a deferral waits on may mean the situation changed, so
+    the item should come back to be reassessed; but every edit is a revision,
+    a typo fix included, so re-pointing keeps the deferral, and only a
+    revision left unanswered by the seal ends it (sections 3.2, 6, and 8.3).
+74. **Abandoning does not spread: an item may be abandoned only once no
+    `Enables` source of it is open, and an abandoned prerequisite of an open
+    item in play is a seal inconsistency.** The dormancy rule loses its
+    "or terminal" clause, since an open item can no longer serve a terminal
+    one. Rejected: letting an abandoned item's prerequisites go dormant for
+    good, which decision 41 did, and letting an abandoned prerequisite block
+    its target silently. Reason (owner, 2026-10-25): abandonment is final,
+    so its consequences must be explicit decisions, the way `Done` and
+    `sufficient` already require their prerequisites done (decisions 10 and
+    28); items left dormant behind an abandoned one, never asked about and
+    never ranked, were a bucket list by another door. When a prerequisite is
+    abandoned, its target is revised without it or abandoned too; authoring
+    tools can write the cleanup for a whole branch. Revises decisions 41 and
+    55 (sections 2, 7, 8.3, and 8.4).
+75. **Dropped connection is a heuristic, judged once per connection.**
+    Rejected: defining connection equivalence exactly now. Reason (owner,
+    2026-10-25): the warning's job is to notify, and a misfire has still
+    notified; what matters is that it fires once, at the seal of the window
+    that superseded the revision, and so never accumulates long after the
+    work is done. It can be refined later (section 8.5).
 
 ## 14. Open questions
 
@@ -1280,16 +1381,11 @@ callouts here.
    client makes of re-pointing.
 5. *Decided by decision 65.* `OpenFor` counts from the root, so an edit
    cannot reset an item's age.
-6. What may become an item, and what an item may become. The canonical item
-   declarations permit no successors of another type, but another type's
-   declaration can permit a `Task` successor
-   ([SPEC §10.4](SPEC.md#104-historical-transition-permission)) without
-   amending planning's, and section 3.4 does not constrain an item's own
-   `successors`. When an item's tree has a root of another type, does
-   `OpenFor` count from that root, from the first item revision, or should
-   such transitions be rejected? The same choice decides when such a habit
-   or concern is new (section 7). The same question covers a `Task` revised
-   into a `Project`.
+6. *Decided by decisions 71 and 72.* Transitions between item types, and
+   into or out of the plan, are allowed; age counts from the oldest revision
+   of the youngest unbroken run of item types, newness over the run of
+   habits and concerns; a transition between an item and a bookkeeping type
+   is an inconsistency.
 7. *Decided by decision 66.* No adoption exemption beyond seals: namespacing
    is the remedy for a foreign vocabulary, and a cap of at least history's
    longest deferral, or `null`, admits long deferrals.
@@ -1359,7 +1455,12 @@ history-sensitive cases checked before and after the relevant append.
    counts once.
 9. `committed` lapses at the next seal; `deferred` stands exactly `horizon`
    seals and lapses early when its `Until` target is done or abandoned; once
-   it lapses, the item is in play again with no new entry.
+   it lapses, the item is in play again with no new entry. Revise the `Until`
+   target and re-point the `Until` edge to the successor before the seal: the
+   deferral keeps its lifetime. Revise it without re-pointing: the deferral
+   stands through that seal and lapses after it. A second current `Until`,
+   or one re-pointed to an unrelated item, is an inconsistency at its edge's
+   prefix.
 10. A ready task whose only edge is a `Helps` edge into a goal in play is in
     the frontier; deferring the goal makes the task dormant; abandoning the
     goal, or a project's `Done`, leaves a task that only helped it serving
@@ -1380,19 +1481,18 @@ history-sensitive cases checked before and after the relevant append.
     prerequisite, then seal: an Undecided item for the goal and no Broken
     plan; append `sufficient`, or a deferral, and seal: no finding. A ready
     project is undecided until `Done`. Check before and after each `Done`.
-13. Valuation tiers and reasons for the explainer's examples; identical
-    across runs, with split siblings ordered by their own positions;
-    unaffected by dismissals; tiers 1 to 4 empty before the first review; a
-    deferred goal in tier 3 and its dormant tasks in no tier; a goal with a
-    broken plan in tier 0 with `BrokenPlan`, and a ready goal there with
-    `Undecided`; a new habit in tier 5 with `New`; `Standing` only on
-    deferred and waiting stances, with `LapsesAtNextSeal` exactly when
-    `seals_left` is 1; `Starved` counting from the latest review that sealed
-    a commitment to a task in the strict subgraph, a task since done
-    included, and otherwise from the root's sealing review; `DeadlineIn`
-    omitted with fewer than two increasing review timestamps, taken over the
-    last `deadline_sample_windows` increasing pairs, and ignoring dormant and
-    terminal goals and projects.
+13. Valuation tiers and reasons for the explainer's examples; identical across
+    runs, with split siblings ordered by their own positions; unaffected by
+    dismissals; tiers 1 to 4 empty before the first review; a deferred goal in
+    tier 3 and its dormant tasks in no tier; a goal with a broken plan in tier
+    0 with `BrokenPlan`, and a ready goal there with `Undecided`; a new habit
+    in tier 5 with `New`; `Standing` only on deferred and waiting stances, with
+    `LapsesAtNextSeal` exactly when `seals_left` is 1; `Starved` counting from
+    the latest review that sealed a commitment to a task in the strict
+    subgraph, a task since done included, and otherwise from the planning
+    root's sealing review; `DeadlineIn` omitted with fewer than two increasing
+    review timestamps, taken over the last `deadline_sample_windows` increasing
+    pairs, and ignoring dormant and terminal goals and projects.
 14. With `stale_review_after_days` set and no evaluation time, analysis
     errors; unset, no evaluation time is required. `first_sealed_review`
     suppresses earlier seal findings.
@@ -1416,14 +1516,14 @@ history-sensitive cases checked before and after the relevant append.
 19. Dormancy: defer a goal, and every task and habit that serves only it is
     dormant at every boundary from the prefix of the deferral's `About` edge
     through the deferral's sealing review, so none is in the frontier and the
-    goal is not judged for Broken plan. A task that also serves a goal in
-    play stays in play. A task under the deferred goal with a fresh
-    `committed` stays in play, keeps its prerequisites in play, and counts
-    toward the budget. When the deferral lapses, all of them are in play
-    again at the next seal. A habit that helps only an abandoned goal serves
-    nothing and is in play; an open `Enables` source of an abandoned goal is
-    dormant. Check before and after the deferral, at the seal where it stands
-    for the last time, and at the one after.
+    goal is not judged for Broken plan. A task that also serves a goal in play
+    stays in play. A task under the deferred goal with a fresh `committed`
+    stays in play, keeps its prerequisites in play, and counts toward the
+    budget. When the deferral lapses, all of them are in play again at the next
+    seal. A habit that helps only an abandoned goal serves nothing and is in
+    play; abandoning a goal that still has an open `Enables` source is an
+    inconsistency (test 28). Check before and after the deferral, at the seal
+    where it stands for the last time, and at the one after.
 20. Deferral cap: a `deferred` stance whose `horizon` equals
     `max_deferral_horizon` is accepted; one above it is an inconsistency at
     the stance's own prefix and not at the prefix before; with the key
@@ -1458,3 +1558,19 @@ history-sensitive cases checked before and after the relevant append.
     kind about a type it does not apply to, an `Until` from a stance that is
     not `deferred`, and `sufficient` about a goal with an open `Enables`
     source are each an inconsistency at the edge's prefix.
+27. Planning root: a `Task` whose predecessor is another type's node counts
+    `OpenFor` from the `Task`; a `Task` revised into a `Project` keeps its
+    age; an item that left the plan as another type and came back counts
+    from its return; a `Task` revised into a `Habit` is new at the next seal,
+    with a Grace period warning, and judged at the one after. A `Stance`
+    whose predecessor is a `Task`, or a `Task` whose predecessor is a `Did`,
+    is an inconsistency at its own prefix.
+28. Abandonment: `abandoned` about a goal with an open `Enables` source is
+    an inconsistency at its edge's prefix; after the source is done,
+    abandoned, or revised without the edge, it is accepted. Abandoning a
+    task that `Enables` an open project in play gives a Blocked by an
+    abandoned prerequisite inconsistency at the next seal, and none once the
+    project is revised without the edge or abandoned; none while the project
+    is dormant. Check before and after each stance.
+29. Dropped connection: a connection reported at one seal is not reported at
+    a later one, even if it is never restored.

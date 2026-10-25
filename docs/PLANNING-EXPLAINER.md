@@ -528,13 +528,14 @@ block, and the private lessons are deferred for four windows. A deferred item
 is **dormant**: no seal asks about it until the deferral lapses (section 8
 says exactly what that covers). A `Done` about one successor leaves the other
 open. The only thing the two share is their age, because the analyzer measures
-how long an item has existed from the root of its revision tree. The
-re-pointed edge, 33, passes the check of section 5 with no finding: the club
-block descends from 23 and 12, the stance's earlier targets. Those are two of
-the analyzer's three history queries: `root_of` for age, and `ancestors` for
-where a stance or `Did` may be re-pointed. The third, for the Dropped
-connection warning of section 5, finds the current successors of a superseded
-revision.
+how long an item has been part of the plan from its planning root: the oldest
+revision of the youngest unbroken run of item types that ends at it, here
+simply the root of the tree. The re-pointed edge, 33, passes the check of
+section 5 with no finding: the club block descends from 23 and 12, the
+stance's earlier targets. The check uses `ancestors`, one of the analyzer's
+two history queries, which also finds the planning root. The other, for the
+Dropped connection warning of section 5, finds the current successors of a
+superseded revision.
 
 ## 7. Too much on the plate
 
@@ -766,7 +767,11 @@ A `deferred` stance carries a `horizon`, a number of seals. Sealed by review
 *j* with horizon *n*, it stands through review *j+n* and lapses after it. It
 may also carry an `Until` edge to a task, project, or external, and then it
 lapses early as soon as that item is done or abandoned: "after the move" is
-a deferral like any other.
+a deferral like any other. If the item it waits on is revised, Reza re-points
+the `Until` edge to the successor, as with any connection, and the deferral
+keeps its clock. Left unanswered, the deferral ends after the next seal, so
+the item comes back to be reassessed against the changed situation
+([decision 73](PLANNING.md#13-design-decisions)).
 
 | Seal | Current stance of the task | Outcome |
 | --- | --- | --- |
@@ -788,7 +793,8 @@ whatever Reza writes, until the task is done or abandoned.
 
 > **Why not count the deferrals?** Counting would read the stance chain,
 > which is the lineage model the design gave up. Each stance's lifetime
-> comes from its own position; the age of the task comes from its root.
+> comes from its own position; the age of the task comes from its planning
+> root, the start of its time in the plan.
 > [Decision 6](PLANNING.md#13-design-decisions).
 
 Why not defer it once, for a year? Reza tries:
@@ -848,7 +854,7 @@ That one decision quiets both tasks.
 
 > An open item is **dormant** when its own current stance is a deferral that
 > is still a decision, or when it serves at least one item and every item it
-> serves is dormant, finished, or abandoned. An item **serves** the targets
+> serves is dormant. An item **serves** the targets
 > of its `Enables` edges, and of its `Helps` edges into items that are not
 > finished or abandoned. A `committed` or `waiting` decision keeps an item in
 > play whatever it serves. Every open item that is not dormant is
@@ -1134,8 +1140,9 @@ with two warnings.
 
 > **Why a grace period?** Without it, a habit recorded the evening before a
 > review would be undecided or short at that seal, for a window it barely
-> existed in. Newness is measured from the root of the item's revision tree,
-> so revising the habit does not restart the grace. It is announced by a
+> existed in. Newness is measured from when the item became a habit or
+> concern, so revising the habit does not restart the grace, but a task just
+> turned into a habit gets one. It is announced by a
 > warning because LifeCore has no message kind yet for a notice that needs
 > no action.
 > [Decisions 46 and 47](PLANNING.md#13-design-decisions).
@@ -1515,10 +1522,20 @@ The habit "Run" helped only the 10 km goal. A `Helps` edge into a finished or
 abandoned item serves nothing, so Run now serves nothing and stands on its
 own: it is in play, and the next seal asks for a `Did` like any habit. If
 Reza no longer wants to run, that is a decision of its own, a deferral or
-`abandoned`. A project that strictly enabled the abandoned goal would be
-different: an `Enables` source of an abandoned item still serves it, so the
-project goes dormant for good, as the abandonment implies, unless it also
-serves something in play. Neither is deleted, and neither is its edge.
+`abandoned`. A project that strictly enabled the goal would have stopped the
+abandonment: a goal can be abandoned only once each of its `Enables` sources
+is done, abandoned, or revised without the edge, so Reza would settle the
+project first, in the same file. Abandoning a prerequisite works the other
+way round: what it enabled can never become ready, so the next seal reports
+**Blocked by an abandoned prerequisite** until Reza revises the target
+without it or abandons the target too. Nothing is deleted.
+
+> **Why must Reza settle the prerequisites first?** Abandoning is final, so
+> its consequences should be decisions, not side effects. Left dormant behind
+> an abandoned goal, its prerequisites would sit in the graph unranked and
+> never asked about, which is a bucket list by another door. A `Done` and
+> `sufficient` already wait for their prerequisites; `abandoned` now waits
+> for them to be settled. [Decision 74](PLANNING.md#13-design-decisions).
 
 > **Why does Run stay in play when its goal is gone?** Helping work and
 > habits have value of their own. Left dormant behind a finished or abandoned
@@ -1566,7 +1583,7 @@ The tiers, in order of pressure:
    first, then by how many goals in play the item reaches.
 1. **Standing commitments** still open, by how long the item has existed,
    then by nearest deadline. The private lessons have been open for ten
-   seals, counted from the root of their revision tree, and committed for
+   seals, counted from their planning root, and committed for
    several of those windows. That is the honest shape of "the easy tasks got
    done and this one did not", and it rises without an escalation rule.
 2. **Habits and concerns below quota** so far this window, once they have a
