@@ -1,6 +1,7 @@
 # LifeCore Lite Specification
 
-Status: proposed contract for the simplified LifeCore model.
+Status: core contract for the simplified LifeCore model, implemented by the
+`lifecore` crate, with the type rules in `lifecore-typecheck`.
 
 This document specifies a typed graph with explicit replacement history. Every entry
 prefix must be valid and inspectable; an ordered plan commits atomically.

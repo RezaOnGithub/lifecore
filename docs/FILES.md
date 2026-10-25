@@ -170,6 +170,9 @@ selects the database through the [path rule](STORAGE.md#1-database-selection). A
 supplied token asserts that this database and its current base match.
 `acknowledges` is verified by replay and, on success, dismisses that finding
 atomically with the graph changes. There is no general `dismissals` list.
+Until verification is built, a proposal carrying `acknowledges` fails with
+`acknowledgment_unsupported` ([RPC §3](RPC.md#3-errors),
+[PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)).
 
 This example assumes compatible type declarations and an existing current node
 with the illustrated exact identity:

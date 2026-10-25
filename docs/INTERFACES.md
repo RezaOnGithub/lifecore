@@ -1,7 +1,9 @@
 # LifeCore Application Interfaces
 
-Status: proposed application contract for the shared service's architecture,
-the CLI, the RPC envelope, server access, and analysis lifetime.
+Status: application contract for the shared service's architecture, the CLI,
+the RPC envelope, server access, and analysis lifetime, implemented by
+`lifecore-app`, `lifecore-cli`, and `lifecore-server`; suggestion export is
+pending ([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)).
 [RPC](RPC.md) lists the methods and errors, [STORAGE](STORAGE.md) database
 selection and publication, and [CLIENT](CLIENT.md) the React client.
 

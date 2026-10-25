@@ -1,8 +1,10 @@
 # AGENTS.md
 
 LifeCore is an experimental Rust database with an append-only, typed graph.
-Remaining work is in [PLAN](docs/PLAN.md). Read the document that owns a
-behavior before implementing it:
+Remaining work is in [PLAN](docs/PLAN.md). The landing page (README,
+screenshots, badges) lives only on the repository's front-page branch;
+development commits never add it. Read the document that owns a behavior
+before implementing it:
 
 - Core: [SPEC](docs/SPEC.md) (graph semantics, validation, inspection),
   [ANALYZERS](docs/ANALYZERS.md) (execution, finding identity, dismissal), and

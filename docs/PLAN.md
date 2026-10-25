@@ -114,10 +114,24 @@ workflows.
 - [Durable application receipts](backlog/RECEIPTS.md): recognizing completed
   retries and recovering from uncertain publication. Tokens alone provide no
   retry recovery.
-- Checking-cost work ([PERFORMANCE §3](PERFORMANCE.md#3-backlog)).
+- Checking-cost work ([PERFORMANCE §3](PERFORMANCE.md#3-backlog)). Planning's
+  seal judging comes first: replay under Planning grows with the cube of
+  history length, so at about 4,000 entries a check under
+  `lifecore init --default-analyzers` takes longer than the writer's busy
+  window ([PERFORMANCE §1](PERFORMANCE.md#1-measurements),
+  [STORAGE §4](STORAGE.md#4-writers)).
+- Planning's open questions 22 to 24
+  ([PLANNING §14](PLANNING.md#14-open-questions)): how the valuation ranks
+  fresh stances, where `Starved` starts counting, and a deferral waiting on
+  both halves of a split target. The implementation follows the decisions as
+  written until they are settled.
 - Result limits and paging for list and query methods. The prototype returns
   complete results.
 - Browser tests in Chromium. Firefox is the tested browser for now.
+- A Web Lock around the browser's apply. Two tabs that both write the shared
+  draft within the storage's cross-tab delay, such as two Apply clicks at
+  once, can still overwrite each other's in-flight marker
+  (`saveGuarded` in `ui/src/draft/persist.ts`).
 - Client navigation aids left out of the prototype: hover previews of linked
   nodes, links from a superseded neighbour to its current successors, and an
   incremental neighbourhood map with stable positions.
