@@ -21,9 +21,13 @@ before implementing it:
   and [UI](docs/UI.md) (presentation decisions).
 - [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
   contracts.
-- Proposed, not implemented: none at present. A proposal gets its own
-  directory under `docs/proposals/`; write or revise one with the `proposal`
-  skill.
+- Proposed, not implemented: the
+  [core round](docs/proposals/core-round/CORE-ROUND.md), a design document for
+  new value kinds, typed payload decoding, and optional indexes, with input
+  for the next PLANNING round. A proposal gets its own directory under
+  `docs/proposals/`; write or revise an analyzer proposal with the
+  `analyzer-proposal` skill, and give a core change a design document
+  instead.
 - Domain analyzers, registered by the application beside TypeCheck and
   DAG Check (the `lifecore` binary's factories), and configured together by
   `lifecore init --default-analyzers`:

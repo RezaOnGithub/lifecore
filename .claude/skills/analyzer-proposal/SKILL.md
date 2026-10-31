@@ -1,15 +1,21 @@
 ---
-name: proposal
-description: Write or revise a proposal in docs/proposals/ for an analyzer or feature that is specified but not implemented. Use when drafting a new proposal, revising one after review, or adding its explainer.
+name: analyzer-proposal
+description: Write or revise an analyzer proposal in docs/proposals/ for an analyzer that is specified but not implemented. Use when drafting a new analyzer proposal, revising one after review, or adding its explainer. Not for core changes, which get a design document instead.
 ---
 
-# Proposals
+# Analyzer proposals
 
-A proposal specifies behavior the code does not yet have. Its reader is the
-project owner, who wrote the core and will judge whether the design is sound
-and whether the human-shaped authoring tools (change files, the CLI, the
-browser) make the behavior obvious. Write for that review, not for an
-implementer who already agrees.
+This framework (vocabulary tables, activation conditions, certificates, and
+an explainer of change files) fits an analyzer and its vocabulary. Changes
+to the core, such as value kinds, indexes, or the analyzer contract, get a
+design document in their own `docs/proposals/<name>/` directory instead, as
+`docs/proposals/core-round/` does.
+
+An analyzer proposal specifies behavior the code does not yet have. Its
+reader is the project owner, who wrote the core and will judge whether the
+design is sound and whether the human-shaped authoring tools (change files,
+the CLI, the browser) make the behavior obvious. Write for that review, not
+for an implementer who already agrees.
 
 A proposal has its own directory, `docs/proposals/<name>/`, holding
 `<NAME>.md`, the contract, `<NAME>-EXPLAINER.md`, a walkthrough, and

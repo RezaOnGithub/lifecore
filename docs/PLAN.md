@@ -34,6 +34,11 @@ working around the document.
 
 ## 2. Remaining work
 
+The [core round](proposals/core-round/CORE-ROUND.md) comes before
+section 2.2. It covers value kinds, typed payload decoding, and optional
+indexes, followed by a separate PLANNING round, in the order of its
+section 6.
+
 Each UI stage runs UI → API → UI: sketch the screens against existing methods,
 add or reshape the methods they turn out to need, then finish the screens.
 Compatibility is not a concern, so a stage may reshape an earlier method; each
