@@ -11,7 +11,7 @@ The planning analyzer motivates most of this round, but it is shelved
 ([AGENTS.md](../../../AGENTS.md#planning-is-shelved)). PLANNING and
 `lifecore-prod` are cited as of `59c702c`, their last state, and "Planning"
 below means that analyzer.
-Section 8, question 2 asks what shelving it means for steps 4 and 5.
+Section 8, question 2 asks what shelving it means for step 5.
 
 ## 0. Summary
 
@@ -307,9 +307,10 @@ enum Decision {
 }
 ```
 
-`StanceDeclaration::declaration()` returns the canonical `Type`. Planning's
-bootstrap suggestions are built from it, and a test compares it with the TOML
-in PLANNING §11, which stays the owning text. A second test checks each decode
+`StanceDeclaration::declaration()` returns the canonical `Type`. Once
+Planning is reworked (section 6, step 6), its bootstrap suggestions are built
+from it, and a test compares it with the TOML in PLANNING §11, which stays the
+owning text. A second test checks each decode
 type against its declaration: every field of `FromBody::fields()` occurs in
 the declaration with the same shape. A field the analyzer reads as `T` is
 declared `mandatory`, and one read as `Option<T>` may have any policy. Those
@@ -342,9 +343,8 @@ per-field `#[lifecore(declare_only)]` attribute that keeps one type for both
 roles. It hides which fields are read behind an attribute, while separate
 types make the read set what the test above checks.
 
-Both derives go in `lifecore-proc-macro`, today an empty stub outside the
-workspace. Its directory is renamed `lifecore-derive`, the name its package
-already has, and it joins the workspace.
+Both derives go in `lifecore-derive`, today an empty stub outside the
+workspace, which it joins in step 4.
 
 ### 3.3 Why not serde
 
@@ -764,8 +764,14 @@ shapes, the fixtures and `contract.ts` together.
    Results are unchanged by construction. Measure again.
 3. **Value kinds.** Core, TypeCheck, FILES encodings, client values and
    editors, fixtures.
-4. **`FromPayload`, `FromBody`, and `Declare`.** Porting Planning's payload
-   reads and its error type moves to step 6.
+4. **`FromPayload`, `FromBody`, and `Declare`.** This lands in this round
+   (decided, section 8). Its tests use the basic shape of PLANNING's types at
+   `59c702c` (section 5.1): records with mandatory and optional fields, a
+   unit-only enum such as `per`, and a variant with per-tag fields such as
+   `Stance.decision`, each with a `Declare` type and a narrower decode type,
+   their declarations compared with TOML the tests hold. These are test
+   fixtures, not an analyzer. Porting Planning's payload reads and its error
+   type moves to step 6.
 5. **Index templates.** `index_templates` and the two admitted templates
    with their reference scans. Planning reading them moves to step 6.
 6. **Planning round.** A proposal revising PLANNING on the new kinds,
@@ -780,9 +786,8 @@ and the others touch no analyzer that remains. Step 6 defines Planning's
 findings and certificates anew. All of this goes before acknowledgment
 (PLAN §2.2), which gives certificates weight.
 
-Housekeeping along the way: in step 4, rename `lifecore-proc-macro` to
-`lifecore-derive` and make it a workspace member. `lifecore-kman` stays as it
-is.
+Housekeeping along the way: in step 4, make `lifecore-derive` a workspace
+member. `lifecore-kman` stays as it is.
 
 ## 7. Documents that would change
 
@@ -815,15 +820,19 @@ Decided by the owner:
    today's shortfall at the evaluation time's local date whenever an
    evaluation time is given, which is more current but reverses decision 32.
    The Planning round records this as a design decision (section 5).
+9. Typed decoding (section 3) lands in this round, without waiting for
+   Planning's rework, tested on types of PLANNING's basic shape (section 6,
+   step 4). It has been planned since the start, as the long-standing
+   `lifecore-derive` stub shows.
 
 Still open:
 
 1. **Which document owns the index catalogue.** Section 8.1.
-2. **Steps 4 and 5 without Planning.** Planning was the only consumer of both
-   typed decoding and the two templates, and admission criterion 4 of
-   section 4.5 asks for a named consumer today. Either they land now, with
-   tests as their only users and Planning's rework as the consumer named in
-   advance, or they move into step 6 and land with it.
+2. **Step 5 without Planning.** Planning was the only consumer of the two
+   templates, and admission criterion 4 of section 4.5 asks for a named
+   consumer today. Either they land now, with tests as their only users and
+   Planning's rework as the consumer named in advance, or they move into
+   step 6 and land with it.
 
 ### 8.1 Owning the index catalogue
 
