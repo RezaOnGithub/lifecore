@@ -51,3 +51,50 @@ test("shapes read as words", () => {
     "record {owner: text}",
   );
 });
+
+test("the new kinds format as their canonical strings and words", () => {
+  assert.equal(
+    formatPayload({ kind: "duration", value: "PT1H30M" }),
+    "PT1H30M",
+  );
+  assert.equal(
+    formatPayload({ kind: "date", value: "2026-11-06" }),
+    "2026-11-06",
+  );
+  assert.equal(
+    formatPayload({
+      kind: "offset_timestamp",
+      value: "2026-10-29T08:15:00+01:00",
+    }),
+    "2026-10-29T08:15:00+01:00",
+  );
+  assert.equal(
+    formatPayload({
+      kind: "variant",
+      tag: "committed",
+      value: { cost: { kind: "duration", value: "PT2H" } },
+    }),
+    "committed {cost: PT2H}",
+  );
+  assert.equal(
+    formatPayload({ kind: "variant", tag: "resumed", value: {} }),
+    "resumed {}",
+  );
+  assert.equal(shapeWords({ kind: "offset_timestamp" }), "offset_timestamp");
+  assert.equal(
+    shapeWords({ kind: "enum", members: ["day", "week"] }),
+    "enum day | week",
+  );
+  assert.equal(
+    shapeWords({
+      kind: "variant",
+      tags: {
+        committed: {
+          cost: { status: "mandatory", shape: { kind: "duration" } },
+        },
+        resumed: {},
+      },
+    }),
+    "variant committed {cost: duration} | resumed {}",
+  );
+});

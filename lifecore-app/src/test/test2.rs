@@ -16,7 +16,7 @@ use crate::{
     storage::{self, DEFAULT_STATE_FILE, Publication, Snapshot, StatePath},
 };
 use lifecore::{
-    Body, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp,
+    Body, Entry, EntryId, LifeCoreList, Node, OffsetTimestamp, Payload, Timestamp,
     analysis::{
         AnalysisRunner, AnalyzerCertificate, AnalyzerFactory, AnalyzerIdentity, Config,
         EvaluatedView, FindingKey, MessageType,
@@ -1443,7 +1443,7 @@ fn evaluation_time_is_explicit_or_captured_once_by_the_host() {
     let service = scratch.service();
     let absent = service.check(request(proposal(json!([])))).unwrap();
     assert_eq!(absent.report.analysis.inputs.evaluation_time, None);
-    let at: Timestamp = "2026-01-02T03:04:05.000000006Z".parse().unwrap();
+    let at: OffsetTimestamp = "2026-01-02T04:04:05.000000006+01:00".parse().unwrap();
     let explicit = service
         .check(ProposalRequest {
             evaluation_time: Some(at),
@@ -3170,7 +3170,7 @@ fn analysis_run_replays_the_stored_suite_at_the_selected_boundary() {
     assert_eq!(clean.analysis.observations().count(), 0);
     assert!(clean.dismissals.is_empty());
     let c = warned(&scratch);
-    let at: Timestamp = "2026-01-02T03:04:05.000000006Z".parse().unwrap();
+    let at: OffsetTimestamp = "2026-01-02T04:04:05.000000006+01:00".parse().unwrap();
     let warned = service
         .run_analysis(AnalysisRunRequest {
             as_of: None,
@@ -3283,7 +3283,8 @@ fn analysis_run_replays_the_stored_suite_at_the_selected_boundary() {
             .to_string();
         serde_json::to_value(rpc::handle(&service, &line)).unwrap()
     };
-    let response = call(json!({"as_of": "5", "evaluation_time": "2026-01-02T03:04:05.000000006Z"}));
+    let response =
+        call(json!({"as_of": "5", "evaluation_time": "2026-01-02T04:04:05.000000006+01:00"}));
     let result = &response["result"];
     assert_eq!(
         result["analysis"]["view"]["end_exclusive"], "5",
@@ -3291,7 +3292,7 @@ fn analysis_run_replays_the_stored_suite_at_the_selected_boundary() {
     );
     assert_eq!(
         result["analysis"]["inputs"]["evaluation_time"],
-        "2026-01-02T03:04:05.000000006Z"
+        "2026-01-02T04:04:05.000000006+01:00"
     );
     assert_eq!(
         result["analysis"]["observations"][0]["key"]["kind"],
@@ -3306,6 +3307,8 @@ fn analysis_run_replays_the_stored_suite_at_the_selected_boundary() {
         json!({"as_of": null}),
         json!({"as_of": 5}),
         json!({"evaluation_time": null}),
+        // An instant without its offset is not an evaluation time.
+        json!({"evaluation_time": "2026-01-02T03:04:05Z"}),
         json!({"now": "yes"}),
         json!({"seeds": []}),
     ] {
@@ -4762,5 +4765,133 @@ fn types_list_and_inspection_agree_with_typecheck_at_each_boundary() {
                 .iter()
                 .any(|f| matches!(f, TypeCheckMessage::BadEdgeEndpoint { .. }))
         );
+    }
+}
+
+// The declaration of CORE-ROUND 2.4 and a node using every new kind, in TOML
+// with non-canonical spellings.
+const KINDS_TOML: &str = r#"
+[[entries]]
+name = "stance_type"
+kind = "node"
+ty_name = "Type"
+
+[entries.payload]
+name = "Stance"
+fields = { kind = "record", value = {
+  cost     = ["optional", "duration"],
+  deadline = ["optional", "date"],
+  at       = ["mandatory", "offset_timestamp"],
+  per      = ["mandatory", "enum", ["window", "day", "week"]],
+  decision = ["mandatory", "variant", { kind = "record", value = {
+    committed = { kind = "record", value = { cost = ["mandatory", "duration"] } },
+    deferred  = { kind = "record", value = { horizon = ["mandatory", "integer"] } },
+    resumed   = { kind = "record", value = {} },
+  } }],
+} }
+
+[[entries]]
+name = "stance"
+kind = "node"
+ty_name = "Stance"
+
+[entries.payload]
+cost = { kind = "duration", value = "90m" }
+deadline = { kind = "date", value = "2026-11-06" }
+at = { kind = "offset_timestamp", value = "2026-10-29 08:15+01:00" }
+per = "day"
+decision = { kind = "variant", tag = "committed", value = { cost = { kind = "duration", value = "1h 30m" } } }
+"#;
+
+#[test]
+fn change_files_carry_the_new_kinds_in_both_formats_and_export_them_canonically() {
+    let from_toml = proposal::decode(KINDS_TOML, Format::Toml).unwrap();
+    let json_text = proposal::encode(&from_toml, Format::Json).unwrap();
+    assert_eq!(
+        proposal::decode(&json_text, Format::Json).unwrap(),
+        from_toml
+    );
+    let exported: Value = serde_json::from_str(&json_text).unwrap();
+    let payload = &exported["entries"][1]["payload"];
+    assert_eq!(
+        *payload,
+        json!({
+            "cost": {"kind": "duration", "value": "PT1H30M"},
+            "deadline": {"kind": "date", "value": "2026-11-06"},
+            "at": {"kind": "offset_timestamp", "value": "2026-10-29T08:15:00+01:00"},
+            "per": "day",
+            "decision": {"kind": "variant", "tag": "committed",
+                "value": {"cost": {"kind": "duration", "value": "PT1H30M"}}},
+        })
+    );
+    assert_eq!(
+        exported["entries"][0]["payload"]["fields"]["value"]["per"],
+        json!(["mandatory", "enum", ["window", "day", "week"]])
+    );
+    let toml_text = proposal::encode(&from_toml, Format::Toml).unwrap();
+    assert_eq!(
+        proposal::decode(&toml_text, Format::Toml).unwrap(),
+        from_toml
+    );
+    assert!(toml_text.contains("PT1H30M"), "{toml_text}");
+
+    // TypeCheck accepts the node, then rejects a member outside the enum,
+    // an unknown tag, and a tag's missing field, each with its path.
+    let scratch = Scratch::new();
+    scratch.service().init(&typecheck()).unwrap();
+    let service = scratch.service();
+    let check = |proposal: Proposal| service.check(request(proposal)).unwrap();
+    assert!(check(from_toml.clone()).accepted);
+    for (field, replacement, message) in [
+        (
+            "per",
+            json!("month"),
+            r#"field per is "month", which its enum does not list"#,
+        ),
+        (
+            "decision",
+            json!({"kind": "variant", "tag": "dropped", "value": {}}),
+            r#"field decision has tag "dropped", which its variant does not declare"#,
+        ),
+        (
+            "decision",
+            json!({"kind": "variant", "tag": "deferred", "value": {}}),
+            "mandatory field decision(deferred).horizon is missing",
+        ),
+    ] {
+        let mut changed = serde_json::to_value(&from_toml).unwrap();
+        changed["entries"][1]["payload"][field] = replacement;
+        let checked = check(serde_json::from_value(changed).unwrap());
+        assert!(!checked.accepted, "{field}");
+        assert!(
+            checked
+                .report
+                .analysis
+                .observations()
+                .any(|observation| observation.diagnostic.message == message),
+            "{message}"
+        );
+    }
+    // Native TOML dates are not date payloads, and time text is refused
+    // where Jiff's or LifeCore's rules do.
+    for (field, text) in [
+        ("deadline", "deadline = 2026-11-06"),
+        (
+            "deadline",
+            r#"deadline = { kind = "date", value = "20261106" }"#,
+        ),
+        ("cost", r#"cost = { kind = "duration", value = "1d" }"#),
+        (
+            "at",
+            r#"at = { kind = "offset_timestamp", value = "2026-10-29T07:15:00Z" }"#,
+        ),
+        ("decision", r#"decision = { kind = "variant", value = {} }"#),
+    ] {
+        let line = KINDS_TOML
+            .lines()
+            .find(|line| line.starts_with(&format!("{field} ")))
+            .unwrap();
+        let file = KINDS_TOML.replace(line, text);
+        assert!(proposal::decode(&file, Format::Toml).is_err(), "{text}");
     }
 }

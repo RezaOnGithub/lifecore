@@ -13,7 +13,9 @@ import {
   edgeTypeSuggestions,
   fieldRows,
   fitKeys,
+  hasValueEditor,
   initialShape,
+  isBuilderKind,
   lineCount,
   liveDraft,
   moveItem,
@@ -375,4 +377,40 @@ test("shape changes keep nested declarations where they can", () => {
   });
   assert.deepEqual(initialShape("record"), { kind: "record", fields: {} });
   assert.deepEqual(initialShape("boolean"), { kind: "boolean" });
+});
+
+test("the form edits the shapes it has editors for; others are read-only", () => {
+  for (const kind of [
+    "text",
+    "integer",
+    "boolean",
+    "timestamp",
+    "list",
+    "record",
+  ]) {
+    assert.ok(isBuilderKind(kind), kind);
+  }
+  for (const kind of [
+    "duration",
+    "date",
+    "offset_timestamp",
+    "enum",
+    "variant",
+  ]) {
+    assert.ok(!isBuilderKind(kind), kind);
+  }
+  assert.ok(hasValueEditor({ kind: "timestamp" }));
+  assert.ok(!hasValueEditor({ kind: "duration" }));
+  assert.ok(!hasValueEditor({ kind: "enum", members: ["day"] }));
+  assert.ok(!hasValueEditor({ kind: "variant", tags: { a: {} } }));
+  // A list needs an editor for its elements; a record's fields judge
+  // themselves, so a record is always editable.
+  assert.ok(hasValueEditor({ kind: "list", element: { kind: "text" } }));
+  assert.ok(!hasValueEditor({ kind: "list", element: { kind: "date" } }));
+  assert.ok(
+    hasValueEditor({
+      kind: "record",
+      fields: { d: { status: "mandatory", shape: { kind: "date" } } },
+    }),
+  );
 });

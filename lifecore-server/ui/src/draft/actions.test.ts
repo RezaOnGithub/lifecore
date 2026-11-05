@@ -298,7 +298,7 @@ test("apply reuses the check's captured instant and refuses a changed evaluation
       ...minted,
       "proposal.check": () => ({
         accepted: true,
-        report: report("2026-10-15T08:30:00.123456789Z"),
+        report: report("2026-10-15T10:30:00.123456789+02:00"),
       }),
       "proposal.apply": () => ({ graph_revision: "r2", report: report() }),
     }),
@@ -315,7 +315,7 @@ test("apply reuses the check's captured instant and refuses a changed evaluation
   const sent = h.calls.find((c) => c.method === "proposal.apply");
   assert.deepEqual(sent?.params, {
     proposal: sent?.state.proposal,
-    evaluation_time: "2026-10-15T08:30:00.123456789Z",
+    evaluation_time: "2026-10-15T10:30:00.123456789+02:00",
   });
 });
 

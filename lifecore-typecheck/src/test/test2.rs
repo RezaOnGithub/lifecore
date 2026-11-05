@@ -1859,3 +1859,262 @@ fn a_claimed_reserved_name_stays_the_builtin_metatype() {
     );
     assert_agrees_with_the_index(graph.view(), &report);
 }
+
+// ---- Enum and variant shapes ----
+
+fn habit(members: &[&str]) -> Type {
+    Type::new(
+        "Habit",
+        &[(
+            "per",
+            (
+                ValueType::Enum {
+                    members: members.iter().map(|m| m.to_string()).collect(),
+                },
+                FieldStatus::Mandatory,
+            ),
+        )],
+        &[],
+        &[],
+        &[],
+    )
+}
+
+fn per(word: &str) -> Body {
+    Body::from([("per".into(), word.into())])
+}
+
+#[test]
+fn removing_an_enum_member_a_current_node_uses_is_a_type_error_from_that_append() {
+    use lifecore::typing::FieldIssue;
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&habit(&["day", "week"]), None),
+            node("Habit", per("week"), None),
+        ],
+    );
+    // [2] drops `week` while the node still uses it; [3] revises the node to
+    // `day`; [4] restores `week`, which nothing uses any more.
+    let narrowed = append(
+        &mut graph,
+        &[declaration(&habit(&["day"]), Some(Existing(ids[0])))],
+    )[0];
+    let revised = append(
+        &mut graph,
+        &[node("Habit", per("day"), Some(Existing(ids[1])))],
+    )[0];
+    append(
+        &mut graph,
+        &[declaration(
+            &habit(&["day", "week"]),
+            Some(Existing(narrowed)),
+        )],
+    );
+    let not_a_member = |subject| TypeCheckMessage::Field {
+        subject,
+        issue: FieldIssue {
+            path: vec![PathPart::Field("per".into())],
+            kind: FieldIssueKind::NotAMember {
+                value: "week".into(),
+            },
+        },
+    };
+    assert_eq!(findings(&graph, 1), vec![]);
+    assert_eq!(findings(&graph, 2), vec![]);
+    assert_eq!(findings(&graph, 3), vec![not_a_member(ids[1])]);
+    assert_eq!(findings(&graph, 4), vec![]);
+    assert_eq!(findings(&graph, 5), vec![]);
+    // The revised node uses `day`, which every declaration lists.
+    assert!(findings(&graph, 5).iter().all(
+        |finding| !matches!(finding, TypeCheckMessage::Field { subject, .. } if *subject == revised)
+    ));
+
+    // Configured, TypeCheck rejects the narrowing itself, and accepts it
+    // once no current node uses the member.
+    let mut checked = LifeCoreList::default();
+    let ids = apply_checked(
+        &mut checked,
+        &[
+            configure(),
+            declaration(&habit(&["day", "week"]), None),
+            node("Habit", per("week"), None),
+        ],
+    );
+    let narrowing = [declaration(&habit(&["day"]), Some(Existing(ids[0])))];
+    let rejected = prepare(&checked, &narrowing, &mut runner())
+        .unwrap()
+        .accepted();
+    assert!(rejected.is_err());
+    apply_checked(
+        &mut checked,
+        &[node("Habit", per("day"), Some(Existing(ids[1])))],
+    );
+    apply_checked(&mut checked, &narrowing);
+}
+
+fn decided(tags: &[(&str, &[(&str, ValueType)])]) -> Type {
+    Type::new(
+        "Stance",
+        &[(
+            "decision",
+            (
+                ValueType::Variant {
+                    tags: tags
+                        .iter()
+                        .map(|(tag, fields)| {
+                            (
+                                tag.to_string(),
+                                fields
+                                    .iter()
+                                    .map(|(name, shape)| {
+                                        (
+                                            name.to_string(),
+                                            FieldDecl {
+                                                status: FieldStatus::Mandatory,
+                                                shape: shape.clone(),
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                },
+                FieldStatus::Mandatory,
+            ),
+        )],
+        &[],
+        &[],
+        &[],
+    )
+}
+
+fn decision(tag: &str, value: Body) -> Body {
+    Body::from([(
+        "decision".into(),
+        Payload::Variant {
+            tag: tag.into(),
+            value,
+        },
+    )])
+}
+
+#[test]
+fn variant_findings_follow_the_tags_declared_at_each_boundary() {
+    use lifecore::typing::FieldIssue;
+    let mut graph = LifeCoreList::default();
+    let ids = append(
+        &mut graph,
+        &[
+            declaration(&decided(&[("committed", &[]), ("resumed", &[])]), None),
+            node("Stance", decision("committed", Body::new()), None),
+        ],
+    );
+    // [2] gives `committed` a mandatory `cost`; [3] supplies it; [4] renames
+    // the tag the node uses.
+    let costed = append(
+        &mut graph,
+        &[declaration(
+            &decided(&[
+                ("committed", &[("cost", ValueType::Duration)]),
+                ("resumed", &[]),
+            ]),
+            Some(Existing(ids[0])),
+        )],
+    )[0];
+    let cost = Body::from([(
+        "cost".into(),
+        Payload::Duration(lifecore::SignedDuration::from_hours(2)),
+    )]);
+    let supplied = append(
+        &mut graph,
+        &[node(
+            "Stance",
+            decision("committed", cost),
+            Some(Existing(ids[1])),
+        )],
+    )[0];
+    append(
+        &mut graph,
+        &[declaration(
+            &decided(&[
+                ("promised", &[("cost", ValueType::Duration)]),
+                ("resumed", &[]),
+            ]),
+            Some(Existing(costed)),
+        )],
+    );
+    let missing_cost = TypeCheckMessage::Field {
+        subject: ids[1],
+        issue: FieldIssue {
+            path: vec![
+                PathPart::Field("decision".into()),
+                PathPart::Tag {
+                    tag: "committed".into(),
+                },
+                PathPart::Field("cost".into()),
+            ],
+            kind: FieldIssueKind::MissingMandatory,
+        },
+    };
+    let unknown_tag = TypeCheckMessage::Field {
+        subject: supplied,
+        issue: FieldIssue {
+            path: vec![PathPart::Field("decision".into())],
+            kind: FieldIssueKind::UnknownTag {
+                tag: "committed".into(),
+            },
+        },
+    };
+    assert_eq!(findings(&graph, 2), vec![]);
+    assert_eq!(findings(&graph, 3), vec![missing_cost.clone()]);
+    assert_eq!(findings(&graph, 4), vec![]);
+    assert_eq!(findings(&graph, 5), vec![unknown_tag.clone()]);
+
+    // The certificate names the tag as a path part, and the message reads
+    // the field under it.
+    let message = TypeCheck::default().convert_message(missing_cost);
+    assert_eq!(
+        message.diagnostic.message,
+        "mandatory field decision(committed).cost is missing"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&message.analyzer_certificate.0).unwrap()["Field"]
+            ["issue"]["path"],
+        serde_json::json!(["decision", {"tag": "committed"}, "cost"])
+    );
+    let message = TypeCheck::default().convert_message(unknown_tag);
+    assert_eq!(
+        message.diagnostic.message,
+        r#"field decision has tag "committed", which its variant does not declare"#
+    );
+    assert_eq!(
+        message.diagnostic.kind,
+        lifecore::analysis::MessageKind::Inconsistency
+    );
+}
+
+#[test]
+fn enum_messages_name_the_value_in_words() {
+    let mut graph = LifeCoreList::default();
+    let subject = append(&mut graph, &[node("A", Body::new(), None)])[0];
+    let message = TypeCheck::default().convert_message(TypeCheckMessage::Field {
+        subject,
+        issue: lifecore::typing::FieldIssue {
+            path: vec![PathPart::Field("per".into())],
+            kind: FieldIssueKind::NotAMember {
+                value: "month".into(),
+            },
+        },
+    });
+    assert_eq!(
+        message.diagnostic.message,
+        r#"field per is "month", which its enum does not list"#
+    );
+    assert_eq!(
+        message.diagnostic.kind,
+        lifecore::analysis::MessageKind::Inconsistency
+    );
+}

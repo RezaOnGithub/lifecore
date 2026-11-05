@@ -7,7 +7,7 @@ export const request = {
   "jsonrpc": "2.0",
   "method": "analysis.run",
   "params": {
-    "evaluation_time": "2026-10-15T08:30:00.123456789Z"
+    "evaluation_time": "2026-10-15T10:30:00.123456789+02:00"
   }
 } satisfies RpcRequest<"analysis.run">;
 
@@ -24,7 +24,7 @@ export const response = {
         }
       ],
       "inputs": {
-        "evaluation_time": "2026-10-15T08:30:00.123456789Z"
+        "evaluation_time": "2026-10-15T10:30:00.123456789+02:00"
       },
       "observations": [
         {

@@ -84,8 +84,10 @@ stderr for errors, and exit zero on success, nonzero on rejection or error.
 `export` prints the converted document. `FILE` arguments select JSON or TOML by
 their `.json` or `.toml` extension. There is no separate human-readable
 renderer yet. `check`, `apply`, and `add-analyzer` take
-`--evaluation-time <timestamp>` or `--now`; without either, evaluation time is
-absent. `--now` captures one instant before evaluation and reports it.
+`--evaluation-time <offset timestamp>`, such as
+`2026-10-15T10:30:00+02:00`, or `--now`; without either, evaluation time is
+absent. `--now` captures one instant and the local offset before evaluation and
+reports them ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)).
 `init` creates an empty database only; it does not import an existing graph.
 
 Changing the analyzer suite is a deliberate action, separate from proposals.

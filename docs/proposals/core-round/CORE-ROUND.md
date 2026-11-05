@@ -1,8 +1,8 @@
 # Core round: value kinds, typed payloads, and indexes
 
-Status: proposed; step 1 of section 6 (the benchmark) has landed, and the
-rest is not implemented. This is a design document for core work,
-not an analyzer proposal, so it has no explainer or harness. As each step of
+Status: proposed; steps 1 (the benchmark) and 3a (value kinds) of section 6
+have landed, and the rest is not implemented. This is a design document for
+core work, not an analyzer proposal, so it has no explainer or harness. As each step of
 section 6 lands, its contracts move into the owning documents listed in
 section 7. When the last one has moved, this directory is removed. It relies
 on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
@@ -57,6 +57,10 @@ These are decisions of the owner, not open questions:
 - Compatibility is not a concern: snapshots and change files may stop loading.
 
 ## 2. Value kinds
+
+*Landed in step 3a, except the editors of section 2.7.* The contracts below
+are owned by the documents section 6 names for that step; where this section
+and they differ, they hold, and this section stays as the design's record.
 
 ### 2.1 Problems
 
@@ -796,6 +800,23 @@ the browser.
      offset (section 2.5), `contract.ts` and the fixtures, and the client's
      read-only display of the new kinds. Done when the client shows every
      new value and declaration correctly and authors them through raw JSON.
+     *Landed.* Its contracts now live in
+     [SPEC §6.4](../../SPEC.md#64-value-kinds-and-shapes),
+     [FILES §2.1, §2.6, §4](../../FILES.md#21-syntax-and-values),
+     [ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization),
+     [RPC §1](../../RPC.md#1-conventions), [CLIENT §2–§4](../../CLIENT.md#3-values),
+     and [UI §5](../../UI.md#5-drafts-and-writes) ("Kinds without an
+     editor"), and section 2 here is history for them. Settled while
+     landing: jiff 0.2.33, the locked version, already has
+     `fmt::temporal::Pieces` and refuses days for `SignedDuration`, so no
+     upgrade was needed; `offset_timestamp` refuses every bracketed
+     annotation, not only zones, since Jiff silently drops calendar ones;
+     `OffsetTimestamp` keeps its fields private behind a constructor that
+     refuses offsets with seconds; three more schema errors name what the
+     section left unnamed (`missing_members` and `missing_tags`, like
+     `missing_record_fields`, and `empty_member` for the non-empty rule);
+     `variant` counts toward the 64-level depth limit like `record`; and a
+     tag in a field path is the part `{"tag": …}`, displayed in parentheses.
    - **3b.** The editors, as a UI stage of its own. Nothing else waits for it;
      it may come after steps 4 and 5.
 4. **`FromPayload`, `FromBody`, and `Declare`.** This lands in this round

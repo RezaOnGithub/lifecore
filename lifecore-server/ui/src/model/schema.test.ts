@@ -555,7 +555,7 @@ test("declaration errors read as a path and the client's words", () => {
   );
   assert.equal(
     text({ path: at(65), kind: "too_deep" }),
-    "fields.a[65]: more than 64 nested list and record words",
+    "fields.a[65]: more than 64 nested list, record, and variant words",
   );
   assert.equal(
     text({ path: ["outgoing", 2], kind: "duplicate_permission", name: "A" }),
@@ -757,4 +757,171 @@ test("a declaration reads as the server read it, else as the client does", () =>
     declarationOf(server, { id: at("7"), payload: { name: "X", other: "" } }),
     { kind: "unknown_keys", keys: ["other"] },
   );
+});
+
+// ---- The words of the new kinds (FILES §2.6) ----
+
+const stance: Body = {
+  name: "Stance",
+  fields: {
+    kind: "record",
+    value: {
+      cost: ["optional", "duration"],
+      deadline: ["optional", "date"],
+      at: ["mandatory", "offset_timestamp"],
+      per: ["mandatory", "enum", ["window", "day", "week"]],
+      decision: [
+        "mandatory",
+        "variant",
+        {
+          kind: "record",
+          value: {
+            resumed: { kind: "record", value: {} },
+            committed: {
+              kind: "record",
+              value: { cost: ["mandatory", "duration"] },
+            },
+          },
+        },
+      ],
+    },
+  },
+};
+
+test("the new words parse, and write back as the server writes them", () => {
+  const schema = parseDeclaration(stance);
+  assert.ok(schema !== null);
+  assert.deepEqual(schema.fields.cost?.shape, { kind: "duration" });
+  assert.deepEqual(schema.fields.deadline?.shape, { kind: "date" });
+  assert.deepEqual(schema.fields.at?.shape, { kind: "offset_timestamp" });
+  // Members are a set, in code point order.
+  assert.deepEqual(schema.fields.per?.shape, {
+    kind: "enum",
+    members: ["day", "week", "window"],
+  });
+  assert.deepEqual(schema.fields.decision?.shape, {
+    kind: "variant",
+    tags: {
+      committed: { cost: { status: "mandatory", shape: { kind: "duration" } } },
+      resumed: {},
+    },
+  });
+  const body = declarationBody(schema);
+  assert.deepEqual((body.fields as { value: Body }).value.per, [
+    "mandatory",
+    "enum",
+    ["day", "week", "window"],
+  ]);
+  assert.deepEqual(parseDeclaration(body), schema);
+  assert.equal(
+    declarationSummary({ kind: "ok", schema }),
+    "5 fields; out none; in none; successors none",
+  );
+});
+
+test("malformed enum and variant words are reported where the server does", () => {
+  const tags = (value: unknown) => ["optional", "variant", record(value)];
+  const record = (value: unknown) => ({ kind: "record", value });
+  for (const [words, error] of [
+    [["optional", "enum"], { path: at(2), kind: "missing_members" }],
+    [
+      ["optional", "enum", "day"],
+      { path: at(2), kind: "wrong_shape", expected: "list", actual: "text" },
+    ],
+    [["optional", "enum", []], { path: at(2), kind: "empty_enum" }],
+    [
+      ["optional", "enum", ["day", integerWord]],
+      {
+        path: at(2, 1),
+        kind: "wrong_shape",
+        expected: "text",
+        actual: "integer",
+      },
+    ],
+    [
+      ["optional", "enum", ["day", ""]],
+      { path: at(2, 1), kind: "empty_member" },
+    ],
+    [
+      ["optional", "enum", ["day", "week", "day"]],
+      { path: at(2, 2), kind: "duplicate_member", member: "day" },
+    ],
+    [
+      ["optional", "enum", ["day"], "text"],
+      { path: at(3), kind: "trailing_elements" },
+    ],
+    [["optional", "variant"], { path: at(2), kind: "missing_tags" }],
+    [
+      ["optional", "variant", ["committed"]],
+      { path: at(2), kind: "wrong_shape", expected: "record", actual: "list" },
+    ],
+    [tags({}), { path: at(2), kind: "empty_variant" }],
+    [
+      tags({ committed: "duration" }),
+      {
+        path: at(2, "committed"),
+        kind: "wrong_shape",
+        expected: "record",
+        actual: "text",
+      },
+    ],
+    [
+      tags({ b: record({ x: "bad" }), a: record({ x: "bad" }) }),
+      {
+        path: at(2, "a", "x"),
+        kind: "wrong_shape",
+        expected: "list",
+        actual: "text",
+      },
+    ],
+  ] as [unknown, SchemaError][]) {
+    assert.deepEqual(malformedAt(words), error, JSON.stringify(words));
+  }
+  assert.equal(
+    schemaErrorText({
+      path: at(2, 2),
+      kind: "duplicate_member",
+      member: "day",
+    }),
+    'fields.a[2][2]: "day" is repeated',
+  );
+  assert.equal(
+    schemaErrorText({ path: at(2), kind: "empty_variant" }),
+    "fields.a[2]: a variant needs at least one tag",
+  );
+});
+
+test("a variant counts toward the depth limit like a list or a record", () => {
+  // 64 nested variants parse; a 65th is refused at its word.
+  const nested = (count: number): unknown =>
+    Array.from({ length: count }).reduce<unknown>(
+      (inner) => [
+        "optional",
+        "variant",
+        {
+          kind: "record",
+          value: { t: { kind: "record", value: { f: inner } } },
+        },
+      ],
+      ["optional", "text"],
+    );
+  const deepest = readDeclaration({
+    name: "X",
+    fields: { kind: "record", value: { a: nested(64) as never } },
+  });
+  assert.equal(deepest.kind, "ok");
+  if (deepest.kind === "ok") {
+    const shape = deepest.schema.fields.a?.shape;
+    assert.ok(shape !== undefined);
+    assert.equal(shapeDepth(shape), 64);
+    assert.deepEqual(
+      parseDeclaration(declarationBody(deepest.schema)),
+      deepest.schema,
+    );
+  }
+  const below = Array.from({ length: 64 }).flatMap(() => [2, "t", "f"]);
+  assert.deepEqual(malformedAt(nested(65)), {
+    path: at(...below, 1),
+    kind: "too_deep",
+  });
 });

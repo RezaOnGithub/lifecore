@@ -155,3 +155,34 @@ export function ValidatedInput({
     </>
   );
 }
+
+// A value or declared shape the form has no editor for: its canonical JSON
+// in a read-only input, saying where it is edited instead (UI §5, "Kinds
+// without an editor"). `what` names it, as in "duration" or "enum day |
+// week".
+export function NoEditor({
+  label,
+  json,
+  what,
+}: {
+  label: string;
+  json: unknown;
+  what: string;
+}) {
+  const text = JSON.stringify(json);
+  return (
+    <span className="no-editor">
+      <input
+        type="text"
+        readOnly
+        aria-label={`${label} (read-only)`}
+        value={text}
+        size={Math.min(Math.max(text.length, 8), 48)}
+      />{" "}
+      <span className="edit-note">
+        read-only: the form has no editor for {what} yet; edit it in the raw
+        JSON
+      </span>
+    </span>
+  );
+}

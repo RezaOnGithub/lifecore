@@ -37,8 +37,13 @@ records declaration payloads with `Type::from_body`'s reading, covering every
 schema error kind and the depth limit, and node payload texts with the codec's
 canonical reading or refusal, and `npm test` asserts that the client reads them
 alike. Each payload text records where the raw payload editor differs by
-design: it refuses the bare integer shorthand, and it keeps timestamp text as
-typed for Jiff to judge.
+design: it refuses the bare integer shorthand, and it keeps the text of a time
+kind (timestamp, duration, date, offset timestamp) as typed for Rust to judge.
+The recorded fixtures hold at least one value and one declaration of each
+value kind and shape, nested ones included, so the type-check covers what
+Rust emits for every kind; a recorded payload nests shallowly enough for `tsc`
+to compare it, so the depth limit through variants is pinned in the unit
+tests instead.
 
 The fixture test writes `ui/src/fixtures/` when Rust tests run, which is after
 `build.rs` has bundled, and fails when the committed copies are stale, so the
@@ -61,6 +66,18 @@ Keep timestamp strings at full precision in model state; date widgets must not
 silently replace them with lower-precision values. The same requirement applies
 when importing and exporting change files.
 
+The other time kinds, `duration`, `date`, and `offset_timestamp`, are likewise
+kept verbatim as their strings
+([FILES §2.1](FILES.md#duration-date-and-offset-timestamp-representation)):
+the client refuses only an empty or non-string value and lets Rust parse,
+judge, and re-spell the rest on check. A `variant` is an object with `kind`,
+`tag`, and `value`, the body encoded as a payload is; an `enum` value is a
+plain string, and its shape, `{kind: "enum", members}`, is the only shape
+whose word is not a payload kind. The client reads every value and declared
+shape of [SPEC §6.4](SPEC.md#64-value-kinds-and-shapes); where it has no
+editor for one, it shows it read-only as its canonical JSON
+([UI §5](UI.md#5-drafts-and-writes)), and the draft's raw JSON writes it.
+
 ## 4. Drafts, suggestions, and evaluation time
 
 Drafts carry a service-minted `plan_id`. Preserve exact existing references and
@@ -75,9 +92,10 @@ a suggestion selects its ready-made proposal, shown and applied as
 removing `acknowledges`, turning it into an ordinary draft.
 
 Evaluation time is an explicit choice, absent by default; for `now`, the host
-captures one instant and reports it ([RPC §1](RPC.md#1-conventions)). Check,
-the Findings screen, and analyzer adds each offer their own choice: absent,
-`now`, or an explicit timestamp. Each displayed analysis identifies its view,
+captures one instant with its local offset and reports it
+([RPC §1](RPC.md#1-conventions)). Check, the Findings screen, and analyzer
+adds each offer their own choice: absent, `now`, or an explicit offset
+timestamp. Each displayed analysis identifies its view,
 implementations, configuration strings, and evaluation inputs. Keep
 certificates opaque; use supplied subjects and the focus entry for UI
 navigation. Dismissal and display filtering never change acceptance.

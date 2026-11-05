@@ -11,7 +11,7 @@ import {
   sameEvaluation,
 } from "../draft/model.ts";
 import { OperationLink, useOpen } from "../links.tsx";
-import { timestampHint } from "../model/values.ts";
+import { offsetTimestampHint } from "../model/values.ts";
 import type { Screen } from "../navigation.ts";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 import {
@@ -97,7 +97,8 @@ function applyNote(state: DraftState): string {
     : `applies at ${time}, as checked`;
 }
 
-const INSTANT = "an RFC 3339 instant such as 2026-10-15T08:30:00Z";
+const EXAMPLE = "2026-10-15T10:30:00+02:00";
+const INSTANT = `an RFC 3339 instant with its UTC offset, such as ${EXAMPLE}`;
 
 // The form an explicit time is expected in, said as it is typed. The
 // recognizer is loose and the server parses the time, so the hint never
@@ -106,9 +107,10 @@ function evaluationTimeHint(time: string): string | null {
   if (time.trim() === "") {
     return `enter ${INSTANT}`;
   }
-  return timestampHint(time) === null
+  const hint = offsetTimestampHint(time);
+  return hint === null
     ? null
-    : `expected ${INSTANT}; the server reports what it cannot read`;
+    : `expected ${INSTANT}: ${hint}; the server reports what it cannot read`;
 }
 
 export function EvaluationChoice({
@@ -152,8 +154,8 @@ export function EvaluationChoice({
         <>
           <input
             aria-label="evaluation timestamp"
-            placeholder="2026-10-15T08:30:00Z"
-            size={28}
+            placeholder={EXAMPLE}
+            size={30}
             disabled={disabled}
             value={evaluation.time}
             aria-invalid={hint !== null && evaluation.time.trim() !== ""}

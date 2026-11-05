@@ -7,6 +7,7 @@ import type {
   Shape,
   TypeSchema,
 } from "../contract.ts";
+import { shapeWords } from "../model/payload.ts";
 import {
   DECLARATION_KEYS,
   type DeclarationReading,
@@ -17,10 +18,13 @@ import {
   schemaErrorMessage,
   schemaPathText,
   shapeDepth,
+  shapeWordList,
 } from "../model/schema.ts";
-import type { PayloadKind } from "../model/values.ts";
 import {
+  BUILDER_KINDS,
+  type BuilderKind,
   initialShape,
+  isBuilderKind,
   liveDraft,
   namedKeys,
   parseTags,
@@ -32,17 +36,8 @@ import {
   withField,
   withoutField,
 } from "./helpers.ts";
-import { ModeToggle, ValidatedInput } from "./inputs.tsx";
+import { ModeToggle, NoEditor, ValidatedInput } from "./inputs.tsx";
 import { RawBodyEditor, useRawBody } from "./RawJsonEditor.tsx";
-
-const KINDS: readonly PayloadKind[] = [
-  "text",
-  "integer",
-  "boolean",
-  "timestamp",
-  "list",
-  "record",
-];
 
 function ShapeBuilder({
   field,
@@ -53,16 +48,27 @@ function ShapeBuilder({
   shape: Shape;
   onChange: (shape: Shape) => void;
 }) {
+  // A word the builder does not offer keeps its declaration as it is,
+  // shown as its words; the field's name and presence stay editable.
+  if (!isBuilderKind(shape.kind)) {
+    return (
+      <NoEditor
+        label={`${field} shape`}
+        json={shapeWordList(shape)}
+        what={shapeWords(shape)}
+      />
+    );
+  }
   return (
     <div className="shape-builder">
       <select
         aria-label={`${field} shape`}
         value={shape.kind}
         onChange={(event) =>
-          onChange(shapeOfKind(event.target.value as PayloadKind, shape))
+          onChange(shapeOfKind(event.target.value as BuilderKind, shape))
         }
       >
-        {KINDS.map((kind) => (
+        {BUILDER_KINDS.map((kind) => (
           <option key={kind} value={kind}>
             {kind}
           </option>
@@ -104,7 +110,7 @@ function AddDeclaration({
   const input = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [status, setStatus] = useState<FieldStatus>("optional");
-  const [kind, setKind] = useState<PayloadKind>("text");
+  const [kind, setKind] = useState<BuilderKind>("text");
   const what =
     prefix === null
       ? "new field declaration"
@@ -153,9 +159,9 @@ function AddDeclaration({
       <select
         aria-label={`${what} shape`}
         value={kind}
-        onChange={(event) => setKind(event.target.value as PayloadKind)}
+        onChange={(event) => setKind(event.target.value as BuilderKind)}
       >
-        {KINDS.map((option) => (
+        {BUILDER_KINDS.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
@@ -265,8 +271,8 @@ function FieldDeclsTable({
                   {prefix === null &&
                     shapeDepth(decl.shape) > MAX_SHAPE_DEPTH && (
                       <span className="field-error">
-                        more than {MAX_SHAPE_DEPTH} nested list and record
-                        words; the server rejects the declaration
+                        more than {MAX_SHAPE_DEPTH} nested list, record, and
+                        variant words; the server rejects the declaration
                       </span>
                     )}
                 </td>

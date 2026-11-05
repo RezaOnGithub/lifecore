@@ -37,12 +37,18 @@ and every replayed prefix. Its complete shape is:
 
 ```rust
 pub struct EvaluationInputs {
-    pub evaluation_time: Option<jiff::Timestamp>,
+    pub evaluation_time: Option<lifecore::OffsetTimestamp>,
 }
 ```
 
-The default is `None`. No clock is read implicitly; a time-dependent analyzer
-must error when the required time is absent. All configured implementations are
+The default is `None`. An evaluation time is an instant with a UTC offset
+([SPEC §6.4](SPEC.md#64-value-kinds-and-shapes)), so an analyzer can find the
+local date it is evaluated on without reading the system zone. For `now`, the
+host captures the instant and the local offset in effect at it, together and
+once, before replay, and reports both; that one capture is the only reading
+of the system zone, and determinism holds because the offset is an input like
+the instant. No clock is read implicitly; a time-dependent analyzer must error
+when the required time is absent. All configured implementations are
 constructed first, initialized in suite order, then each replays boundaries
 `0..=end_exclusive` in suite order. Empty histories execute both initialization
 and prefix zero. Missing factories, invalid configuration, execution failures,

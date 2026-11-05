@@ -44,13 +44,22 @@ Use one payload representation across files and RPC:
 | List | Native array whose elements recursively use this encoding. |
 | Boolean | Object/table with `kind = "boolean"` and boolean `value`. |
 | Timestamp | Object/table with `kind = "timestamp"` and Jiff's Serde string as `value`. |
+| Duration | Object/table with `kind = "duration"` and an ISO 8601 duration string as `value`, such as `"PT1H30M"`. |
+| Date | Object/table with `kind = "date"` and a `YYYY-MM-DD` string as `value`. |
+| Offset timestamp | Object/table with `kind = "offset_timestamp"` and an RFC 3339 string with a numeric offset as `value`, such as `"2026-10-29T08:15:00+01:00"`. |
 | Record | Object/table with `kind = "record"` and an object/table of recursively encoded fields as `value`. |
+| Variant | Object/table with `kind = "variant"`, the tag string as `tag`, and an object/table of recursively encoded fields as `value`, `{}` when empty. |
 
 Node payloads are typed maps of field names to values. Their outer map needs no
 record wrapper; record-valued fields do. Similarly, known proposal/control
 structs use ordinary objects/tables. Wrapping records prevents their field names
 from colliding with the tagged value envelope. Canonical output uses native
-strings and arrays; all other payload kinds are wrapped.
+strings and arrays; all other payload kinds are wrapped. An envelope has
+exactly `kind` and `value`, and a variant also `tag`; `tag` on any other kind
+is an unknown field. An `enum` value is a native string: `enum` is a field
+shape over text ([section 2.6](#26-type-declaration-payloads)), not a payload
+kind. [SPEC §6.4](SPEC.md#64-value-kinds-and-shapes) says what each kind
+means.
 
 For example, these node payloads represent the same values:
 
@@ -62,6 +71,11 @@ labels = ["work", "writing"]
 deadline = { kind = "timestamp", value = "2026-09-30T17:00:00Z" }
 completed = { kind = "boolean", value = false }
 details = { kind = "record", value = { owner = "Teto" } }
+effort = { kind = "duration", value = "PT1H30M" }
+due_day = { kind = "date", value = "2026-09-30" }
+started = { kind = "offset_timestamp", value = "2026-09-29T08:15:00+02:00" }
+per = "week"
+decision = { kind = "variant", tag = "committed", value = { cost = { kind = "duration", value = "PT2H" } } }
 ```
 
 ```json
@@ -72,7 +86,13 @@ details = { kind = "record", value = { owner = "Teto" } }
     "labels": ["work", "writing"],
     "deadline": { "kind": "timestamp", "value": "2026-09-30T17:00:00Z" },
     "completed": { "kind": "boolean", "value": false },
-    "details": { "kind": "record", "value": { "owner": "Teto" } }
+    "details": { "kind": "record", "value": { "owner": "Teto" } },
+    "effort": { "kind": "duration", "value": "PT1H30M" },
+    "due_day": { "kind": "date", "value": "2026-09-30" },
+    "started": { "kind": "offset_timestamp", "value": "2026-09-29T08:15:00+02:00" },
+    "per": "week",
+    "decision": { "kind": "variant", "tag": "committed",
+                  "value": { "cost": { "kind": "duration", "value": "PT2H" } } }
   }
 }
 ```
@@ -144,14 +164,53 @@ Parsing, accepted range, precision, and formatting follow Jiff's Serde behavior;
 there is no application-specific datetime normalization or narrower TOML profile.
 This adopts Jiff's parser semantics, including any normalization it performs,
 rather than promising preservation of input offset spelling or leap-second text.
-Known timestamp fields such as `EvaluationInputs.evaluation_time` already have a
-static type and use the Serde string directly, without a payload wrapper.
+A known control field of timestamp type uses the Serde string directly,
+without a payload wrapper.
 
 Export must preserve each represented core instant and its nanoseconds when
 read back by the same shared codec. The React client must retain full timestamp
 strings and decimal-string integers for the entire `i64` domain; see
 [the client contract](CLIENT.md#3-values). Jiff documents its
 [default timestamp serialization](https://docs.rs/jiff/latest/jiff/fmt/serde/timestamp/index.html).
+
+#### Duration, date, and offset timestamp representation
+
+Each is a string inside its envelope in both formats; native TOML dates and
+datetimes are refused as above. Parsing normalizes, and canonical output
+re-spells the input, as it does for integers: `90m` is stored and exported as
+`PT1H30M`.
+
+- **Duration** (`jiff::SignedDuration`): Jiff's parser, either ISO 8601
+  (`PT90M`, `-PT1H`, `PT0.5S`) or its friendly form (`1h 30m`, `90m`,
+  `1h ago`). Days, weeks, months, and years are refused in either form
+  (`1d`, `P1D`, `P1W`), as are empty and padded text. Output is Jiff's
+  `Display`, ISO 8601 with hours as the largest unit: `PT1H30M`, `PT0S`,
+  `-PT2H`, `PT0.000000001S`.
+- **Date** (`jiff::civil::Date`): exactly `YYYY-MM-DD`, a valid day of years
+  `0000` to `9999`. The basic form `20261106`, a signed six-digit year, and a
+  datetime are refused, though Jiff would read them. Output is the same form.
+- **Offset timestamp** (`lifecore::OffsetTimestamp`): an RFC 3339 date and
+  time with a numeric offset, read by Jiff's Temporal parser
+  (`fmt::temporal::Pieces`), so its spellings such as a space for `T`, an
+  omitted second, or `+01` for `+01:00` are accepted and normalized. `Z` and
+  `-00:00` are refused: RFC 9557 reads both as "UTC known, local offset
+  unknown", which is what this kind exists to avoid, while `+00:00` is a known
+  zero offset. A bracketed annotation, a zone such as `[Europe/Berlin]` or any
+  other, is refused rather than dropped, so no input is silently narrowed. An
+  offset with nonzero seconds is refused, as RFC 3339 cannot write it. Output
+  is Jiff's `Timestamp::display_with_offset`: the local date and time, a
+  fraction only when nonzero, and the offset to the minute, as in
+  `2026-10-29T08:15:00.5+01:00`. Known fields such as
+  `EvaluationInputs.evaluation_time` use the same string without an envelope.
+
+#### Variant representation
+
+`{kind = "variant", tag = "committed", value = {…}}`: the three keys in any
+order, `tag` a string (any string, the empty one included), and `value` an
+object/table of fields encoded like a node payload, required even when empty.
+A repeated field name in it is malformed, as everywhere. Which tags exist and
+what their bodies hold is the declaration's business
+([section 2.6](#26-type-declaration-payloads)), not the codec's.
 
 ### 2.2 Envelope and ordered entries
 
@@ -334,12 +393,15 @@ A type declaration is an ordinary node proposal with `ty_name = "Type"`
 
 A field declaration is a native list of words: the presence policy
 (`mandatory`, `encouraged`, `deprecated`, or `optional`) followed by the shape.
-A shape is `text`, `integer`, `boolean`, or `timestamp`; `list` followed by the
-element shape; or `record` followed by one record envelope whose fields are
-themselves field declarations, which is then the last element. Scalar and list
-shapes therefore need no envelopes; only `fields` itself, being a record-valued
-payload field, keeps the envelope that [section 2.1](#21-syntax-and-values)
-requires:
+A shape is `text`, `integer`, `boolean`, `timestamp`, `duration`, `date`, or
+`offset_timestamp`; `list` followed by the element shape; `record` followed by
+one record envelope whose fields are themselves field declarations; `enum`
+followed by one native list of its members; or `variant` followed by one
+record envelope whose fields are its tags, each a record envelope of field
+declarations. The element after `record`, `enum`, or `variant` is the last.
+Scalar and list shapes therefore need no envelopes; only `fields` itself,
+being a record-valued payload field, keeps the envelope that
+[section 2.1](#21-syntax-and-values) requires:
 
 ```toml
 [[entries]]
@@ -357,13 +419,38 @@ successors = ["Note"]
 
 A list of lists is `["optional", "list", "list", "integer"]`. A record-shaped
 field is `["optional", "record", { kind = "record", value = { owner = ["mandatory", "text"] } }]`.
+The new kinds, as fields of one declaration:
+
+```toml
+cost     = ["optional", "duration"]
+deadline = ["optional", "date"]
+at       = ["mandatory", "offset_timestamp"]
+per      = ["mandatory", "enum", ["window", "day", "week"]]
+decision = ["mandatory", "variant", { kind = "record", value = {
+  committed = { kind = "record", value = { cost = ["mandatory", "duration"] } },
+  deferred  = { kind = "record", value = { horizon = ["mandatory", "integer"] } },
+  resumed   = { kind = "record", value = {} },
+} }]
+```
+
+An enum's members are distinct, non-empty strings, at least one; they are a
+set, so canonical output lists them in code point order. A variant has at
+least one tag; a tag may declare no fields.
 
 Malformed declarations are reported with the path of the offending element,
 using the list position for words: a missing presence or shape word (reported at
 the position where it was expected), an unknown word, a non-string where a word
 belongs, `record` followed by nothing, by something other than a record
 envelope, or by further elements, a repeated permission, or more than 64 nested
-`list` and `record` words, which bounds recursion on hostile input. Canonical
+`list`, `record`, and `variant` words, which bounds recursion on hostile input.
+After `enum`, a missing list (`missing_members`), something else than a list,
+an empty one (`empty_enum`), a member that is not a string, is empty
+(`empty_member`), or repeats an earlier one (`duplicate_member`, at the
+repeat). After `variant`, a missing envelope (`missing_tags`), something else
+than a record envelope, an empty one (`empty_variant`), or a tag whose value
+is not a record envelope of field declarations, reported under the tag's
+name (`fields.decision[2].committed`). Tags, like fields, are read in code
+point order, so the first malformed one in that order is reported. Canonical
 output writes all five keys, with empty lists and an empty `fields` record where
 nothing is declared. Forms in the React client generate exactly this encoding,
 so a declaration written by hand and one built in the browser are the same
@@ -393,7 +480,9 @@ Include the verified prospective acknowledgment, if any, while saving neither
 effect.
 
 `EvaluationInputs` defaults to absent time. If a user explicitly chooses current
-time, the host captures one instant before replay and reports it. Neither runner
+time, the host captures one instant and the local offset in effect at it,
+together, before replay and reports both
+([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)). Neither runner
 nor analyzer reads a clock implicitly. Freeze inputs across initialization and
 every prefix. Record exact versions, original configuration strings, suite order,
 inputs, and the evaluated view. A previous check never authorizes skipping a new
@@ -430,6 +519,15 @@ acknowledgment, and the [backlog](backlog/) those for collections and receipts.
 | Nested lists, wrapped records, booleans, or empty collections | Round-trip without changing value kinds or confusing record fields with tags. |
 | Wrapped timestamp is imported/exported | Use Jiff Serde behavior and preserve represented instants and nanoseconds; test its accepted edge cases without a separate datetime profile. |
 | Plain timestamp-like text or a native TOML datetime appears | Keep plain strings as text; reject unwrapped native datetime payload syntax. |
+| A duration is written `PT90M`, `90m`, or `1h 30m` | Decode to one value; export `PT1H30M`. Two roots differing only in that spelling are duplicates. |
+| A duration names days or larger (`1d`, `P1D`, `P1W`) | Reject; a day is a civil unit, not elapsed time. |
+| A date is not exactly `YYYY-MM-DD` (`20261106`, `+002026-11-06`, a datetime) or is no valid day | Reject. |
+| An offset timestamp ends in `Z` or `-00:00`, carries a bracketed annotation, or has an offset with seconds | Reject; nothing is dropped or narrowed. `+00:00` is accepted. |
+| One instant is written at two offsets | Two different values, each exported at its own offset. |
+| A variant envelope lacks `tag` or `value`, or another envelope carries `tag` | Reject. An empty body is `value = {}`. |
+| A declaration's enum is empty, repeats or empties a member, or a variant declares no tag | Reject the declaration as malformed, at the offending element. |
+| An enum member or a variant tag is removed while a current node uses it | TypeCheck reports the node (`NotAMember`, `UnknownTag`) from that prefix on; configured, it rejects the revision. |
+| A variant's body misses a mandatory field of its tag | Report the field under the tag, as `decision(committed).cost`. |
 | An integer is outside JavaScript's exact-number range | Preserve the exact `i64` through browser import, editing, RPC, and export. |
 | Either integer input form contains `i64` extrema, including inside lists/records | Decode exactly in JSON and TOML; always export tagged decimal-string envelopes. |
 | Integer envelope or shorthand is malformed or outside `i64` | Reject; never round or silently coerce. Plain `"42"` remains text. |

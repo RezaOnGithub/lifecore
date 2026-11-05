@@ -8,7 +8,7 @@ export const request = {
   "method": "analyzers.add",
   "params": {
     "configuration": "{\"on_cycle\":\"inconsistency\"}",
-    "evaluation_time": "2026-10-15T08:30:00.123456789Z",
+    "evaluation_time": "2026-10-15T10:30:00.123456789+02:00",
     "name": "DAG_Check"
   }
 } satisfies RpcRequest<"analyzers.add">;
@@ -38,7 +38,7 @@ export const response = {
           }
         ],
         "inputs": {
-          "evaluation_time": "2026-10-15T08:30:00.123456789Z"
+          "evaluation_time": "2026-10-15T10:30:00.123456789+02:00"
         },
         "observations": [
           {
@@ -116,9 +116,34 @@ export const response = {
                   "intent": "revise",
                   "kind": "node",
                   "payload": {
+                    "cadence": "week",
+                    "decision": {
+                      "kind": "variant",
+                      "tag": "committed",
+                      "value": {
+                        "cost": {
+                          "kind": "duration",
+                          "value": "PT2H"
+                        }
+                      }
+                    },
+                    "effort": {
+                      "kind": "duration",
+                      "value": "PT1H30M"
+                    },
+                    "logged": [
+                      {
+                        "kind": "offset_timestamp",
+                        "value": "2026-10-29T08:15:00+01:00"
+                      }
+                    ],
                     "priority": {
                       "kind": "integer",
                       "value": "2"
+                    },
+                    "start": {
+                      "kind": "date",
+                      "value": "2026-11-06"
                     },
                     "status": "done",
                     "title": "Write the report"
@@ -183,9 +208,34 @@ export const response = {
                   "intent": "revise",
                   "kind": "node",
                   "payload": {
+                    "cadence": "week",
+                    "decision": {
+                      "kind": "variant",
+                      "tag": "committed",
+                      "value": {
+                        "cost": {
+                          "kind": "duration",
+                          "value": "PT2H"
+                        }
+                      }
+                    },
+                    "effort": {
+                      "kind": "duration",
+                      "value": "PT1H30M"
+                    },
+                    "logged": [
+                      {
+                        "kind": "offset_timestamp",
+                        "value": "2026-10-29T08:15:00+01:00"
+                      }
+                    ],
                     "priority": {
                       "kind": "integer",
                       "value": "2"
+                    },
+                    "start": {
+                      "kind": "date",
+                      "value": "2026-11-06"
                     },
                     "status": "done",
                     "title": "Write the report"
@@ -263,9 +313,34 @@ export const response = {
                   "intent": "revise",
                   "kind": "node",
                   "payload": {
+                    "cadence": "week",
+                    "decision": {
+                      "kind": "variant",
+                      "tag": "committed",
+                      "value": {
+                        "cost": {
+                          "kind": "duration",
+                          "value": "PT2H"
+                        }
+                      }
+                    },
+                    "effort": {
+                      "kind": "duration",
+                      "value": "PT1H30M"
+                    },
+                    "logged": [
+                      {
+                        "kind": "offset_timestamp",
+                        "value": "2026-10-29T08:15:00+01:00"
+                      }
+                    ],
                     "priority": {
                       "kind": "integer",
                       "value": "2"
+                    },
+                    "start": {
+                      "kind": "date",
+                      "value": "2026-11-06"
                     },
                     "status": "done",
                     "title": "Write the report"

@@ -176,10 +176,10 @@ test("Apply is gated on an accepted, unspent check of identical content and eval
 
 test("apply sends the evaluation time the check reported, never a new now", () => {
   const draft = { ...state([task]), evaluation: { kind: "now" as const } };
-  const ok = checked(draft, { time: "2026-10-15T08:30:00.123456789Z" });
+  const ok = checked(draft, { time: "2026-10-15T10:30:00.123456789+02:00" });
   assert.ok(ok.outcome !== null);
   assert.deepEqual(applyParams(ok.outcome), {
-    evaluation_time: "2026-10-15T08:30:00.123456789Z",
+    evaluation_time: "2026-10-15T10:30:00.123456789+02:00",
   });
   const none = checked(state([task]));
   assert.ok(none.outcome !== null);

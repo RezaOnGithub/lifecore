@@ -60,9 +60,34 @@ export const response = {
           },
           "kind": "node",
           "payload": {
+            "cadence": "week",
+            "decision": {
+              "kind": "variant",
+              "tag": "committed",
+              "value": {
+                "cost": {
+                  "kind": "duration",
+                  "value": "PT2H"
+                }
+              }
+            },
+            "effort": {
+              "kind": "duration",
+              "value": "PT1H30M"
+            },
+            "logged": [
+              {
+                "kind": "offset_timestamp",
+                "value": "2026-10-29T08:15:00+01:00"
+              }
+            ],
             "priority": {
               "kind": "integer",
               "value": "2"
+            },
+            "start": {
+              "kind": "date",
+              "value": "2026-11-06"
             },
             "title": "Write the report"
           },
@@ -203,9 +228,34 @@ export const asOfResponse = {
           },
           "kind": "node",
           "payload": {
+            "cadence": "week",
+            "decision": {
+              "kind": "variant",
+              "tag": "committed",
+              "value": {
+                "cost": {
+                  "kind": "duration",
+                  "value": "PT2H"
+                }
+              }
+            },
+            "effort": {
+              "kind": "duration",
+              "value": "PT1H30M"
+            },
+            "logged": [
+              {
+                "kind": "offset_timestamp",
+                "value": "2026-10-29T08:15:00+01:00"
+              }
+            ],
             "priority": {
               "kind": "integer",
               "value": "2"
+            },
+            "start": {
+              "kind": "date",
+              "value": "2026-11-06"
             },
             "title": "Write the report"
           },

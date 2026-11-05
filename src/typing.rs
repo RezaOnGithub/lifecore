@@ -21,8 +21,23 @@ pub enum ValueType {
     Integer,
     Boolean,
     Timestamp,
-    List { element: Box<ValueType> },
-    Record { fields: BTreeMap<String, FieldDecl> },
+    Duration,
+    Date,
+    OffsetTimestamp,
+    List {
+        element: Box<ValueType>,
+    },
+    Record {
+        fields: BTreeMap<String, FieldDecl>,
+    },
+    // A shape over text, not a payload kind: its values are native strings.
+    Enum {
+        members: BTreeSet<String>,
+    },
+    // Each tag's field declarations, which a variant value's body meets.
+    Variant {
+        tags: BTreeMap<String, BTreeMap<String, FieldDecl>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,13 +55,15 @@ pub struct Type {
     pub successors: BTreeSet<String>,
 }
 
-// A field name or a list position; the two never share a JSON type, so the
-// untagged form is unambiguous.
+// A field name, a list position, or a variant's tag; the three never share a
+// JSON type (a string, a number, an object `{"tag": …}`), so the untagged
+// form is unambiguous.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PathPart {
     Field(String),
     Index(usize),
+    Tag { tag: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -58,6 +75,15 @@ pub enum FieldIssueKind {
     TypeMismatch {
         expected: PayloadKind,
         actual: PayloadKind,
+    },
+    // Text where an enum is declared that names none of its members.
+    NotAMember {
+        value: String,
+    },
+    // A variant whose tag its declaration does not have; its body is not
+    // checked, since no tag says what it should hold.
+    UnknownTag {
+        tag: String,
     },
 }
 
@@ -97,12 +123,33 @@ pub enum SchemaErrorKind {
     DuplicatePermission {
         name: String,
     },
+    MissingMembers,
+    EmptyEnum,
+    EmptyMember,
+    DuplicateMember {
+        member: String,
+    },
+    MissingTags,
+    EmptyVariant,
 }
 
-// A payload path as messages write it: `email`, `details.owner`, `tags[1]`.
-// A field name outside the identifier grammar is quoted, so a dot, bracket, or
-// space inside a name cannot be read as structure.
+// A payload path as messages write it: `email`, `details.owner`, `tags[1]`,
+// and a variant's fields under its tag, `decision(committed).cost`. A field
+// name or tag outside the identifier grammar is quoted, so a dot, bracket,
+// parenthesis, or space inside one cannot be read as structure.
 pub fn path_text(path: &[PathPart]) -> String {
+    fn push_name(text: &mut String, name: &str) {
+        let mut chars = name.chars();
+        let plain = chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if plain {
+            text.push_str(name);
+        } else {
+            text.push_str(&format!("{name:?}"));
+        }
+    }
     let mut text = String::new();
     for part in path {
         match part {
@@ -110,18 +157,14 @@ pub fn path_text(path: &[PathPart]) -> String {
             if !text.is_empty() {
                 text.push('.');
             }
-            let mut chars = name.chars();
-            let plain = chars
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-            if plain {
-                text.push_str(name);
-            } else {
-                text.push_str(&format!("{name:?}"));
-            }
+            push_name(&mut text, name);
         }
         PathPart::Index(index) => text.push_str(&format!("[{index}]")),
+        PathPart::Tag { tag } => {
+            text.push('(');
+            push_name(&mut text, tag);
+            text.push(')');
+        }
         }
     }
     text
@@ -134,8 +177,12 @@ pub fn kind_word(kind: PayloadKind) -> &'static str {
     PayloadKind::Integer => "integer",
     PayloadKind::Boolean => "boolean",
     PayloadKind::Timestamp => "timestamp",
+    PayloadKind::Duration => "duration",
+    PayloadKind::Date => "date",
+    PayloadKind::OffsetTimestamp => "offset_timestamp",
     PayloadKind::List => "list",
     PayloadKind::Record => "record",
+    PayloadKind::Variant => "variant",
     }
 }
 
@@ -169,6 +216,14 @@ impl fmt::Display for SchemaError {
         SchemaErrorKind::DuplicatePermission { name } => {
             write!(f, "duplicate permission {name:?}")
         }
+        SchemaErrorKind::MissingMembers => f.write_str("missing member list after \"enum\""),
+        SchemaErrorKind::EmptyEnum => f.write_str("an enum needs at least one member"),
+        SchemaErrorKind::EmptyMember => f.write_str("an enum member cannot be empty"),
+        SchemaErrorKind::DuplicateMember { member } => {
+            write!(f, "duplicate enum member {member:?}")
+        }
+        SchemaErrorKind::MissingTags => f.write_str("missing tag declarations after \"variant\""),
+        SchemaErrorKind::EmptyVariant => f.write_str("a variant needs at least one tag"),
         }
     }
 }
@@ -357,7 +412,8 @@ impl<'a> View<'a> {
 // Declaration lists are flat, so unlike nested payloads their depth is not
 // bounded by the codecs' recursion limits. Parsing, dropping, and comparing a
 // `ValueType` recurse once per level, so a long run of `list` words would
-// otherwise overflow the stack instead of being reported.
+// otherwise overflow the stack instead of being reported. `list`, `record`,
+// and `variant` each count one level; `enum` holds no shapes.
 const MAX_SHAPE_DEPTH: usize = 64;
 
 impl Type {
@@ -432,8 +488,13 @@ impl ValueType {
         Self::Integer => PayloadKind::Integer,
         Self::Boolean => PayloadKind::Boolean,
         Self::Timestamp => PayloadKind::Timestamp,
+        Self::Duration => PayloadKind::Duration,
+        Self::Date => PayloadKind::Date,
+        Self::OffsetTimestamp => PayloadKind::OffsetTimestamp,
         Self::List { .. } => PayloadKind::List,
         Self::Record { .. } => PayloadKind::Record,
+        Self::Enum { .. } => PayloadKind::Text,
+        Self::Variant { .. } => PayloadKind::Variant,
         }
     }
     fn push_words(&self, words: &mut Vec<Payload>) {
@@ -442,6 +503,9 @@ impl ValueType {
         Self::Integer => words.push("integer".into()),
         Self::Boolean => words.push("boolean".into()),
         Self::Timestamp => words.push("timestamp".into()),
+        Self::Duration => words.push("duration".into()),
+        Self::Date => words.push("date".into()),
+        Self::OffsetTimestamp => words.push("offset_timestamp".into()),
         Self::List { element } => {
             words.push("list".into());
             element.push_words(words);
@@ -450,12 +514,27 @@ impl ValueType {
             words.push("record".into());
             words.push(fields_to_payload(fields));
         }
+        Self::Enum { members } => {
+            words.push("enum".into());
+            words.push(Payload::List(
+                members.iter().cloned().map(Payload::Text).collect(),
+            ));
+        }
+        Self::Variant { tags } => {
+            words.push("variant".into());
+            words.push(Payload::Record(
+                tags.iter()
+                    .map(|(tag, fields)| (tag.clone(), fields_to_payload(fields)))
+                    .collect(),
+            ));
+        }
         }
     }
     // Parses the shape that starts at `start` in a declaration list and returns
     // it with the index just after it. Indexes in errors are positions in that
-    // list, so a caller adds only the field path. `depth` counts the `list` and
-    // `record` words enclosing this shape, across nested records.
+    // list, so a caller adds only the field path. `depth` counts the `list`,
+    // `record`, and `variant` words enclosing this shape, across nested
+    // records and tags.
     fn from_words(
         words: &[Payload],
         start: usize,
@@ -466,7 +545,7 @@ impl ValueType {
             .ok_or_else(|| SchemaError::new(SchemaErrorKind::MissingShape).index(start))?;
         let word = text(word).map_err(|e| e.index(start))?;
         let next = start + 1;
-        if matches!(word, "list" | "record") && depth >= MAX_SHAPE_DEPTH {
+        if matches!(word, "list" | "record" | "variant") && depth >= MAX_SHAPE_DEPTH {
             return Err(SchemaError::new(SchemaErrorKind::TooDeep).index(start));
         }
         Ok(match word {
@@ -474,6 +553,9 @@ impl ValueType {
         "integer" => (Self::Integer, next),
         "boolean" => (Self::Boolean, next),
         "timestamp" => (Self::Timestamp, next),
+        "duration" => (Self::Duration, next),
+        "date" => (Self::Date, next),
+        "offset_timestamp" => (Self::OffsetTimestamp, next),
         "list" => {
             let (element, end) = Self::from_words(words, next, depth + 1)?;
             (
@@ -489,6 +571,20 @@ impl ValueType {
             })?;
             let fields = fields_from_payload(fields, depth + 1).map_err(|e| e.index(next))?;
             (Self::Record { fields }, next + 1)
+        }
+        "enum" => {
+            let members = words
+                .get(next)
+                .ok_or_else(|| SchemaError::new(SchemaErrorKind::MissingMembers).index(next))?;
+            let members = enum_members(members).map_err(|e| e.index(next))?;
+            (Self::Enum { members }, next + 1)
+        }
+        "variant" => {
+            let tags = words
+                .get(next)
+                .ok_or_else(|| SchemaError::new(SchemaErrorKind::MissingTags).index(next))?;
+            let tags = variant_tags(tags, depth + 1).map_err(|e| e.index(next))?;
+            (Self::Variant { tags }, next + 1)
         }
         other => {
             return Err(
@@ -519,6 +615,27 @@ impl ValueType {
         (Self::Record { fields }, Payload::Record(body)) => {
             check_fields(fields, body, path, issues)
         }
+        (Self::Enum { members }, Payload::Text(text)) => {
+            if !members.contains(text) {
+                issues.push(FieldIssue {
+                    path: path.clone(),
+                    kind: FieldIssueKind::NotAMember {
+                        value: text.clone(),
+                    },
+                });
+            }
+        }
+        (Self::Variant { tags }, Payload::Variant { tag, value }) => match tags.get(tag) {
+        Some(fields) => {
+            path.push(PathPart::Tag { tag: tag.clone() });
+            check_fields(fields, value, path, issues);
+            path.pop();
+        }
+        None => issues.push(FieldIssue {
+            path: path.clone(),
+            kind: FieldIssueKind::UnknownTag { tag: tag.clone() },
+        }),
+        },
         _ => {}
         }
     }
@@ -620,6 +737,53 @@ fn field_from_payload(value: &Payload, depth: usize) -> Result<FieldDecl, Schema
         return Err(SchemaError::new(SchemaErrorKind::TrailingElements).index(end));
     }
     Ok(FieldDecl { status, shape: ty })
+}
+
+// `enum`'s last element: a native list of distinct, non-empty strings. An
+// empty list is malformed, since no value could satisfy it. Errors carry the
+// member's position in the list.
+fn enum_members(value: &Payload) -> Result<BTreeSet<String>, SchemaError> {
+    let Payload::List(values) = value else {
+        return Err(wrong_shape(PayloadKind::List, value));
+    };
+    if values.is_empty() {
+        return Err(SchemaError::new(SchemaErrorKind::EmptyEnum));
+    }
+    let mut members = BTreeSet::new();
+    for (i, value) in values.iter().enumerate() {
+        let member = text(value).map_err(|e| e.index(i))?;
+        if member.is_empty() {
+            return Err(SchemaError::new(SchemaErrorKind::EmptyMember).index(i));
+        }
+        if !members.insert(member.to_string()) {
+            return Err(SchemaError::new(SchemaErrorKind::DuplicateMember {
+                member: member.into(),
+            })
+            .index(i));
+        }
+    }
+    Ok(members)
+}
+
+// `variant`'s last element: a record envelope whose fields are the tags, each
+// a record envelope of field declarations, as `record` takes. Tags are read
+// in the body's order, so the first malformed one in code point order is
+// reported.
+fn variant_tags(
+    value: &Payload,
+    depth: usize,
+) -> Result<BTreeMap<String, BTreeMap<String, FieldDecl>>, SchemaError> {
+    let tags = record(value)?;
+    if tags.is_empty() {
+        return Err(SchemaError::new(SchemaErrorKind::EmptyVariant));
+    }
+    tags.iter()
+        .map(|(tag, fields)| {
+            fields_from_payload(fields, depth)
+                .map(|fields| (tag.clone(), fields))
+                .map_err(|e| e.field(tag))
+        })
+        .collect()
 }
 
 fn keys(body: &Body, allowed: &[&str]) -> Result<(), SchemaError> {

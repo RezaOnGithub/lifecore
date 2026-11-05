@@ -12,9 +12,12 @@ Unknown or repeated request members are rejected (`-32600`), as are
 unknown parameters (`-32602`). Parameters never accept `null`: omit an optional
 parameter instead, as for optional proposal fields. Results may carry `null`
 for absent optional values, such as `view.head` or `analysis.inputs.evaluation_time`.
-Evaluation-dependent methods take optional `evaluation_time` (a Jiff timestamp
-string) or `now: true`, not both; the host captures `now` once and the result's
-`analysis.inputs` reports the instant used.
+Evaluation-dependent methods take optional `evaluation_time`, an offset
+timestamp string such as `"2026-10-15T10:30:00+02:00"`
+([FILES §2.1](FILES.md#duration-date-and-offset-timestamp-representation);
+`Z` and `-00:00` are refused), or `now: true`, not both; the host captures
+`now` once, with its local offset, and the result's `analysis.inputs` reports
+the time used ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)).
 
 A `proposal` parameter is decoded on its own, exactly like a change file, so a
 malformed one fails with `malformed_proposal` (2001) and a `data.decode.path`

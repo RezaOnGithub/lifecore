@@ -473,6 +473,7 @@ dependencies = [
 name = "lifecore-app"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "lifecore",
  "lifecore-dag-check",
  "lifecore-reconnect",

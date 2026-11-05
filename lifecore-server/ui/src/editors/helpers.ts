@@ -9,12 +9,7 @@ import type {
   TypeSummary,
 } from "../contract.ts";
 import { compareStrings, STATUS_ORDER } from "../model/columns.ts";
-import {
-  compareCodePoints,
-  nameError,
-  type PayloadKind,
-  setOwn,
-} from "../model/values.ts";
+import { compareCodePoints, nameError, setOwn } from "../model/values.ts";
 
 export type NodeOperation = Extract<ProposalEntry, { kind: "node" }>;
 export type EdgeOperation = Extract<ProposalEntry, { kind: "edge" }>;
@@ -245,10 +240,46 @@ export function parseTags(text: string): Tags {
 
 // ---- Declaration shapes ----
 
+// The shape words the builder offers. The others (the time kinds besides
+// `timestamp`, `enum`, and `variant`) have no editor yet: a declaration
+// using them shows that shape read-only and is changed through its raw JSON
+// (UI §5, "Kinds without an editor").
+export const BUILDER_KINDS = [
+  "text",
+  "integer",
+  "boolean",
+  "timestamp",
+  "list",
+  "record",
+] as const;
+export type BuilderKind = (typeof BUILDER_KINDS)[number];
+
+export function isBuilderKind(kind: string): kind is BuilderKind {
+  return (BUILDER_KINDS as readonly string[]).includes(kind);
+}
+
+// Whether the form can edit a value of this shape: a list only when it can
+// edit its elements, and a record always, since each of its fields judges
+// itself.
+export function hasValueEditor(shape: Shape): boolean {
+  switch (shape.kind) {
+    case "text":
+    case "integer":
+    case "boolean":
+    case "timestamp":
+    case "record":
+      return true;
+    case "list":
+      return hasValueEditor(shape.element);
+    default:
+      return false;
+  }
+}
+
 // The shape for a kind chosen in the shape builder, keeping what nests:
 // `list` wraps the current shape; a kind matching a list's element unwraps
 // it; a record chosen over a record keeps its fields; a scalar replaces.
-export function shapeOfKind(kind: PayloadKind, previous: Shape): Shape {
+export function shapeOfKind(kind: BuilderKind, previous: Shape): Shape {
   if (previous.kind === kind) {
     return previous;
   }
@@ -266,7 +297,7 @@ export function shapeOfKind(kind: PayloadKind, previous: Shape): Shape {
 }
 
 // A fresh field declaration's shape: a list starts as a list of text.
-export function initialShape(kind: PayloadKind): Shape {
+export function initialShape(kind: BuilderKind): Shape {
   switch (kind) {
     case "list":
       return { kind, element: { kind: "text" } };

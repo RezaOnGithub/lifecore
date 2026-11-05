@@ -1800,3 +1800,792 @@ fn the_declaration_index_files_claims_by_name_text_at_each_boundary() {
         ]
     );
 }
+
+// ---- Value kinds: duration, date, offset_timestamp, enum, variant ----
+
+fn payload_json(text: &str) -> Result<Payload, String> {
+    serde_json::from_str::<Payload>(text).map_err(|error| error.to_string())
+}
+
+fn envelope(kind: &str, value: &str) -> String {
+    serde_json::json!({"kind": kind, "value": value}).to_string()
+}
+
+#[test]
+fn durations_accept_jiffs_spellings_and_export_iso_8601() {
+    use jiff::SignedDuration;
+    let ninety = Payload::Duration(SignedDuration::from_mins(90));
+    for input in ["PT90M", "PT1H30M", "90m", "1h 30m", "1.5h", "+PT1H30M"] {
+        assert_eq!(
+            payload_json(&envelope("duration", input)),
+            Ok(ninety.clone()),
+            "{input}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&ninety).unwrap(),
+        serde_json::json!({"kind": "duration", "value": "PT1H30M"})
+    );
+    // Equal after parsing, whichever spelling: one value, one hash.
+    let a = payload_json(&envelope("duration", "PT120M")).unwrap();
+    let b = payload_json(&envelope("duration", "2h")).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(hash(&a), hash(&b));
+    for (input, canonical) in [
+        ("-PT1H", "-PT1H"),
+        ("1h ago", "-PT1H"),
+        ("0s", "PT0S"),
+        ("24h", "PT24H"),
+        ("PT0.000000001S", "PT0.000000001S"),
+    ] {
+        let value = payload_json(&envelope("duration", input)).unwrap();
+        assert_eq!(serde_json::to_value(&value).unwrap()["value"], canonical);
+    }
+    for extreme in [SignedDuration::MIN, SignedDuration::MAX] {
+        let value = Payload::Duration(extreme);
+        let text = serde_json::to_string(&value).unwrap();
+        assert_eq!(payload_json(&text), Ok(value));
+    }
+    // Days and larger are civil units, never durations; nor is empty or
+    // padded text.
+    for input in [
+        "1d",
+        "P1D",
+        "P1W",
+        "P1M",
+        "P1Y",
+        "P0D",
+        "PT1H ",
+        " 1h",
+        "",
+        "1 fortnight",
+    ] {
+        assert!(
+            payload_json(&envelope("duration", input)).is_err(),
+            "{input}"
+        );
+    }
+    assert!(payload_json(r#"{"kind":"duration","value":90}"#).is_err());
+}
+
+#[test]
+fn dates_accept_only_the_extended_calendar_form() {
+    let date = Payload::Date(jiff::civil::date(2026, 11, 6));
+    assert_eq!(
+        payload_json(&envelope("date", "2026-11-06")),
+        Ok(date.clone())
+    );
+    assert_eq!(
+        serde_json::to_value(&date).unwrap(),
+        serde_json::json!({"kind": "date", "value": "2026-11-06"})
+    );
+    for edge in ["0000-01-01", "9999-12-31", "2028-02-29"] {
+        let value = payload_json(&envelope("date", edge)).unwrap();
+        assert_eq!(serde_json::to_value(&value).unwrap()["value"], edge);
+    }
+    for input in [
+        "20261106",
+        "+002026-11-06",
+        "-000001-01-01",
+        "2026-11-06T10:00",
+        "2026-11-6",
+        "2026-02-30",
+        "2026-13-01",
+        "2026/11/06",
+        " 2026-11-06",
+        "２０２６-11-06",
+        "",
+    ] {
+        assert!(payload_json(&envelope("date", input)).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn offset_timestamps_keep_the_observed_offset_and_refuse_unknown_ones() {
+    use crate::OffsetTimestamp;
+    use jiff::tz::Offset;
+    let at = |text: &str| text.parse::<OffsetTimestamp>();
+    let berlin = at("2026-10-29T08:15:00+01:00").unwrap();
+    assert_eq!(berlin.instant(), "2026-10-29T07:15:00Z".parse().unwrap());
+    assert_eq!(berlin.offset(), Offset::constant(1));
+    let payload = Payload::OffsetTimestamp(berlin);
+    assert_eq!(
+        serde_json::to_value(&payload).unwrap(),
+        serde_json::json!({"kind": "offset_timestamp", "value": "2026-10-29T08:15:00+01:00"})
+    );
+    assert_eq!(
+        payload_json(&envelope("offset_timestamp", "2026-10-29T08:15:00+01:00")),
+        Ok(payload)
+    );
+    // The same instant at another offset is another value; `+00:00` is a
+    // known zero offset.
+    let utc = at("2026-10-29T07:15:00+00:00").unwrap();
+    assert_eq!(utc.instant(), berlin.instant());
+    assert_ne!(utc, berlin);
+    assert_eq!(utc.to_string(), "2026-10-29T07:15:00+00:00");
+    // Jiff's parser decides the rest of the syntax; output re-spells it.
+    for (input, canonical) in [
+        ("2026-10-29 08:15+01:00", "2026-10-29T08:15:00+01:00"),
+        ("2026-10-29t08:15:00+01", "2026-10-29T08:15:00+01:00"),
+        ("2026-10-29T08:15:00+01:00:00", "2026-10-29T08:15:00+01:00"),
+        (
+            "2026-10-29T08:15:00.123456789-05:30",
+            "2026-10-29T08:15:00.123456789-05:30",
+        ),
+        (
+            "2026-10-29T08:15:00.500+01:00",
+            "2026-10-29T08:15:00.5+01:00",
+        ),
+    ] {
+        assert_eq!(at(input).unwrap().to_string(), canonical, "{input}");
+    }
+    for input in [
+        "2026-10-29T08:15:00Z",
+        "2026-10-29T08:15:00z",
+        "2026-10-29T08:15:00-00:00",
+        "2026-10-29T08:15:00+01:00[Europe/Berlin]",
+        "2026-10-29T08:15:00+01:00[u-ca=iso8601]",
+        "2026-10-29T08:15:00[+01:00]",
+        "2026-10-29T08:15:00+01:00:30",
+        "2026-10-29T08:15:00",
+        "2026-10-29",
+        "yesterday",
+        "",
+    ] {
+        assert!(at(input).is_err(), "{input}");
+        assert!(
+            payload_json(&envelope("offset_timestamp", input)).is_err(),
+            "{input}"
+        );
+    }
+    // The extremes of the instant range at the widest whole-minute offsets
+    // print and read back exactly.
+    let widest = 25 * 3600 + 59 * 60;
+    for (instant, seconds) in [
+        (crate::Timestamp::MAX, widest),
+        (crate::Timestamp::MIN, -widest),
+        (crate::Timestamp::MAX, -widest),
+        (crate::Timestamp::MIN, widest),
+    ] {
+        let value = OffsetTimestamp::new(instant, Offset::from_seconds(seconds).unwrap()).unwrap();
+        assert_eq!(at(&value.to_string()), Ok(value));
+    }
+    // RFC 3339 cannot write an offset with seconds, so none is constructed.
+    assert!(
+        OffsetTimestamp::new(
+            crate::Timestamp::UNIX_EPOCH,
+            Offset::from_seconds(30).unwrap()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn evaluation_inputs_carry_the_offset_as_a_bare_string() {
+    use crate::analysis::EvaluationInputs;
+    let encoded = serde_json::json!({"evaluation_time": "2026-10-29T08:15:00+01:00"});
+    let inputs: EvaluationInputs = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(
+        inputs.evaluation_time,
+        Some("2026-10-29T08:15:00+01:00".parse().unwrap())
+    );
+    assert_eq!(serde_json::to_value(&inputs).unwrap(), encoded);
+    assert!(
+        serde_json::from_value::<EvaluationInputs>(
+            serde_json::json!({"evaluation_time": "2026-10-29T07:15:00Z"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn variants_carry_their_tag_beside_a_body() {
+    use jiff::SignedDuration;
+    let committed = Payload::Variant {
+        tag: "committed".into(),
+        value: Body::from([(
+            "cost".into(),
+            Payload::Duration(SignedDuration::from_hours(2)),
+        )]),
+    };
+    let canonical = r#"{"kind":"variant","tag":"committed","value":{"cost":{"kind":"duration","value":"PT2H"}}}"#;
+    assert_eq!(serde_json::to_string(&committed).unwrap(), canonical);
+    // Key order is not significant, and the body's values are canonicalized.
+    for input in [
+        canonical,
+        r#"{"value":{"cost":{"kind":"duration","value":"120m"}},"tag":"committed","kind":"variant"}"#,
+    ] {
+        assert_eq!(payload_json(input), Ok(committed.clone()), "{input}");
+    }
+    assert_eq!(committed.kind(), PayloadKind::Variant);
+    let empty = payload_json(r#"{"kind":"variant","tag":"resumed","value":{}}"#).unwrap();
+    assert_eq!(
+        empty,
+        Payload::Variant {
+            tag: "resumed".into(),
+            value: Body::new()
+        }
+    );
+    // A different tag over the same body is a different value.
+    assert_ne!(
+        payload_json(r#"{"kind":"variant","tag":"a","value":{}}"#),
+        payload_json(r#"{"kind":"variant","tag":"b","value":{}}"#)
+    );
+    for input in [
+        r#"{"kind":"variant","value":{}}"#,
+        r#"{"kind":"variant","tag":"a"}"#,
+        r#"{"kind":"variant","tag":1,"value":{}}"#,
+        r#"{"kind":"variant","tag":"a","tag":"a","value":{}}"#,
+        r#"{"kind":"variant","tag":"a","value":"x"}"#,
+        r#"{"kind":"variant","tag":"a","value":[]}"#,
+        r#"{"kind":"variant","tag":"a","value":{"x":"1","x":"2"}}"#,
+        r#"{"kind":"variant","tag":"a","value":{},"extra":true}"#,
+        r#"{"kind":"record","tag":"a","value":{}}"#,
+        r#"{"kind":"integer","tag":"a","value":"1"}"#,
+    ] {
+        assert!(payload_json(input).is_err(), "accepted {input}");
+    }
+    // An unknown kind is named as such even when it carries a tag.
+    let unknown = payload_json(r#"{"kind":"choice","tag":"a","value":{}}"#).unwrap_err();
+    assert!(unknown.contains("unknown variant `choice`"), "{unknown}");
+}
+
+fn decision_shape() -> ValueType {
+    use FieldStatus::*;
+    let decl = |status, shape| FieldDecl { status, shape };
+    ValueType::Variant {
+        tags: [
+            (
+                "committed".into(),
+                [("cost".into(), decl(Mandatory, ValueType::Duration))].into(),
+            ),
+            (
+                "deferred".into(),
+                [("horizon".into(), decl(Mandatory, ValueType::Integer))].into(),
+            ),
+            ("resumed".into(), Default::default()),
+        ]
+        .into(),
+    }
+}
+
+fn record_of(fields: impl IntoIterator<Item = (&'static str, Payload)>) -> Payload {
+    Payload::Record(
+        fields
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect(),
+    )
+}
+
+#[test]
+fn declarations_round_trip_the_new_words() {
+    use FieldStatus::*;
+    let per = ValueType::Enum {
+        members: ["window", "day", "week"].map(String::from).into(),
+    };
+    let ty = Type::new(
+        "Stance",
+        &[
+            ("cost", (ValueType::Duration, Optional)),
+            ("deadline", (ValueType::Date, Optional)),
+            ("at", (ValueType::OffsetTimestamp, Mandatory)),
+            ("per", (per, Mandatory)),
+            ("decision", (decision_shape(), Mandatory)),
+            (
+                "history",
+                (
+                    ValueType::List {
+                        element: Box::new(ValueType::OffsetTimestamp),
+                    },
+                    Optional,
+                ),
+            ),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    let members = Payload::List(vec!["day".into(), "week".into(), "window".into()]);
+    let tags = record_of([
+        (
+            "committed",
+            record_of([("cost", words(&["mandatory", "duration"], None))]),
+        ),
+        (
+            "deferred",
+            record_of([("horizon", words(&["mandatory", "integer"], None))]),
+        ),
+        ("resumed", record_of([])),
+    ]);
+    let fields = record_of([
+        ("cost", words(&["optional", "duration"], None)),
+        ("deadline", words(&["optional", "date"], None)),
+        ("at", words(&["mandatory", "offset_timestamp"], None)),
+        (
+            "per",
+            Payload::List(vec!["mandatory".into(), "enum".into(), members]),
+        ),
+        (
+            "decision",
+            Payload::List(vec!["mandatory".into(), "variant".into(), tags]),
+        ),
+        (
+            "history",
+            words(&["optional", "list", "offset_timestamp"], None),
+        ),
+    ]);
+    let body = ty.to_body();
+    assert_eq!(body["fields"], fields);
+    assert_eq!(Type::from_body(&body).unwrap(), ty);
+    // Members are a set: any order reads as the same declaration, and the
+    // canonical output lists them in code point order.
+    let mut shuffled = body.clone();
+    let Payload::Record(decls) = shuffled.get_mut("fields").unwrap() else {
+        unreachable!()
+    };
+    decls.insert(
+        "per".into(),
+        Payload::List(vec![
+            "mandatory".into(),
+            "enum".into(),
+            Payload::List(vec!["window".into(), "day".into(), "week".into()]),
+        ]),
+    );
+    assert_eq!(Type::from_body(&shuffled).unwrap(), ty);
+    // The structured form, as `types.list` serializes it.
+    let json = serde_json::to_value(&ty).unwrap();
+    assert_eq!(
+        json["fields"]["per"],
+        serde_json::json!({"status": "mandatory", "shape": {"kind": "enum", "members": ["day", "week", "window"]}})
+    );
+    assert_eq!(
+        json["fields"]["decision"]["shape"],
+        serde_json::json!({"kind": "variant", "tags": {
+            "committed": {"cost": {"status": "mandatory", "shape": {"kind": "duration"}}},
+            "deferred": {"horizon": {"status": "mandatory", "shape": {"kind": "integer"}}},
+            "resumed": {},
+        }})
+    );
+    assert_eq!(
+        json["fields"]["at"]["shape"],
+        serde_json::json!({"kind": "offset_timestamp"})
+    );
+    assert_eq!(serde_json::from_value::<Type>(json).unwrap(), ty);
+    // Variants count toward the depth limit like lists and records.
+    let deep = (0..64).fold(ValueType::Text, |inner, _| ValueType::Variant {
+        tags: [(
+            "t".into(),
+            [(
+                "f".into(),
+                FieldDecl {
+                    status: Optional,
+                    shape: inner,
+                },
+            )]
+            .into(),
+        )]
+        .into(),
+    });
+    let ty = Type::new("Deep", &[("d", (deep, Optional))], &[], &[], &[]);
+    assert_eq!(Type::from_body(&ty.to_body()).unwrap(), ty);
+}
+
+#[test]
+fn malformed_new_words_report_their_element_and_kind() {
+    use PathPart::{Field, Index};
+    use PayloadKind as K;
+    use SchemaErrorKind::*;
+    let field = |name: &str| Field(name.into());
+    let at = |rest: &[PathPart]| [vec![field("fields"), field("a")], rest.to_vec()].concat();
+    let decl = |items: Vec<Payload>| Payload::List(items);
+    let text = |word: &str| Payload::from(word);
+    let tags = |fields: Payload| decl(vec![text("optional"), text("variant"), fields]);
+    let mut deep = words(&["optional", "text"], None);
+    // 64 nested variants parse (see above); the 65th word is refused.
+    for _ in 0..65 {
+        deep = tags(record_of([("t", record_of([("f", deep)]))]));
+    }
+    let mut below = (0..64)
+        .flat_map(|_| [Index(2), field("t"), field("f")])
+        .collect::<Vec<_>>();
+    below.push(Index(1));
+    let cases = [
+        (
+            words(&["optional", "enum"], None),
+            at(&[Index(2)]),
+            MissingMembers,
+        ),
+        (
+            words(&["optional", "enum", "day"], None),
+            at(&[Index(2)]),
+            WrongShape {
+                expected: K::List,
+                actual: K::Text,
+            },
+        ),
+        (
+            decl(vec![text("optional"), text("enum"), Payload::List(vec![])]),
+            at(&[Index(2)]),
+            EmptyEnum,
+        ),
+        (
+            decl(vec![
+                text("optional"),
+                text("enum"),
+                Payload::List(vec!["day".into(), 1.into()]),
+            ]),
+            at(&[Index(2), Index(1)]),
+            WrongShape {
+                expected: K::Text,
+                actual: K::Integer,
+            },
+        ),
+        (
+            decl(vec![
+                text("optional"),
+                text("enum"),
+                Payload::List(vec!["day".into(), "".into()]),
+            ]),
+            at(&[Index(2), Index(1)]),
+            EmptyMember,
+        ),
+        (
+            decl(vec![
+                text("optional"),
+                text("enum"),
+                Payload::List(vec!["day".into(), "week".into(), "day".into()]),
+            ]),
+            at(&[Index(2), Index(2)]),
+            DuplicateMember {
+                member: "day".into(),
+            },
+        ),
+        (
+            decl(vec![
+                text("optional"),
+                text("enum"),
+                Payload::List(vec!["day".into()]),
+                text("text"),
+            ]),
+            at(&[Index(3)]),
+            TrailingElements,
+        ),
+        (
+            words(&["optional", "variant"], None),
+            at(&[Index(2)]),
+            MissingTags,
+        ),
+        (
+            words(&["optional", "variant", "committed"], None),
+            at(&[Index(2)]),
+            WrongShape {
+                expected: K::Record,
+                actual: K::Text,
+            },
+        ),
+        (tags(record_of([])), at(&[Index(2)]), EmptyVariant),
+        (
+            tags(record_of([("committed", text("duration"))])),
+            at(&[Index(2), field("committed")]),
+            WrongShape {
+                expected: K::Record,
+                actual: K::Text,
+            },
+        ),
+        (
+            tags(record_of([(
+                "committed",
+                record_of([("cost", words(&["mandatory", "hours"], None))]),
+            )])),
+            at(&[Index(2), field("committed"), field("cost"), Index(1)]),
+            UnknownShape {
+                word: "hours".into(),
+            },
+        ),
+        // Tags are read in code point order, so `a` is reported before `b`.
+        (
+            tags(record_of([
+                ("b", record_of([("x", text("bad"))])),
+                ("a", record_of([("x", text("bad"))])),
+            ])),
+            at(&[Index(2), field("a"), field("x")]),
+            WrongShape {
+                expected: K::List,
+                actual: K::Text,
+            },
+        ),
+        (deep, at(&below), TooDeep),
+    ];
+    for (declaration, path, kind) in cases {
+        let body = Body::from([
+            ("name".into(), "X".into()),
+            ("fields".into(), record_of([("a", declaration.clone())])),
+        ]);
+        assert_eq!(
+            Type::from_body(&body),
+            Err(SchemaError {
+                path: path.clone(),
+                kind: kind.clone()
+            }),
+            "{declaration:?}"
+        );
+    }
+    let error = |path, kind| SchemaError { path, kind }.to_string();
+    assert_eq!(
+        error(
+            at(&[Index(2), Index(2)]),
+            DuplicateMember {
+                member: "day".into()
+            }
+        ),
+        "invalid schema at fields.a[2][2]: duplicate enum member \"day\""
+    );
+    for (kind, words) in [
+        (MissingMembers, "missing member list after \"enum\""),
+        (EmptyEnum, "an enum needs at least one member"),
+        (EmptyMember, "an enum member cannot be empty"),
+        (MissingTags, "missing tag declarations after \"variant\""),
+        (EmptyVariant, "a variant needs at least one tag"),
+    ] {
+        assert_eq!(error(vec![], kind), format!("invalid schema: {words}"));
+    }
+    // Schema error kinds serialize as tagged snake case beside the path.
+    assert_eq!(
+        serde_json::to_value(SchemaError {
+            path: at(&[Index(2)]),
+            kind: DuplicateMember {
+                member: "day".into()
+            }
+        })
+        .unwrap(),
+        serde_json::json!({"path": ["fields", "a", 2], "kind": "duplicate_member", "member": "day"})
+    );
+}
+
+#[test]
+fn enum_and_variant_fields_are_checked_under_their_tag() {
+    use FieldIssueKind::*;
+    use FieldStatus::*;
+    use PathPart::{Field, Index, Tag};
+    let ty = Type::new(
+        "Stance",
+        &[
+            (
+                "per",
+                (
+                    ValueType::Enum {
+                        members: ["day", "week"].map(String::from).into(),
+                    },
+                    Mandatory,
+                ),
+            ),
+            ("decision", (decision_shape(), Mandatory)),
+            (
+                "history",
+                (
+                    ValueType::List {
+                        element: Box::new(decision_shape()),
+                    },
+                    Optional,
+                ),
+            ),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    let variant = |tag: &str, fields: Vec<(&'static str, Payload)>| Payload::Variant {
+        tag: tag.into(),
+        value: fields
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect(),
+    };
+    let hours = |n| Payload::Duration(jiff::SignedDuration::from_hours(n));
+    let body = |per: Payload, decision: Payload| {
+        Body::from([("per".into(), per), ("decision".into(), decision)])
+    };
+    assert_eq!(
+        ty.check(&body(
+            "day".into(),
+            variant("committed", vec![("cost", hours(2))])
+        )),
+        vec![]
+    );
+    assert_eq!(
+        ty.check(&body("week".into(), variant("resumed", vec![]))),
+        vec![]
+    );
+    let tag = |name: &str| Tag { tag: name.into() };
+    let field = |name: &str| Field(name.into());
+    let issue = |path: Vec<PathPart>, kind| crate::typing::FieldIssue { path, kind };
+    assert_eq!(
+        ty.check(&body(
+            "month".into(),
+            variant("committed", vec![("cost", 2.into()), ("note", "x".into())])
+        )),
+        vec![
+            issue(
+                vec![field("decision"), tag("committed"), field("cost")],
+                TypeMismatch {
+                    expected: PayloadKind::Duration,
+                    actual: PayloadKind::Integer
+                }
+            ),
+            issue(
+                vec![field("decision"), tag("committed"), field("note")],
+                UnexpectedField
+            ),
+            issue(
+                vec![field("per")],
+                NotAMember {
+                    value: "month".into()
+                }
+            ),
+        ]
+    );
+    // An unknown tag says so, without judging a body nothing declares.
+    assert_eq!(
+        ty.check(&body(
+            "day".into(),
+            variant("abandoned", vec![("x", "y".into())])
+        )),
+        vec![issue(
+            vec![field("decision")],
+            UnknownTag {
+                tag: "abandoned".into()
+            }
+        )]
+    );
+    // Kinds come first: a record where a variant is declared, an integer
+    // where an enum is, and a tag's missing mandatory field inside a list.
+    let mut wrong = body(1.into(), record_of([]));
+    wrong.insert(
+        "history".into(),
+        Payload::List(vec![variant("deferred", vec![])]),
+    );
+    let issues = ty.check(&wrong);
+    assert_eq!(
+        issues,
+        vec![
+            issue(
+                vec![field("decision")],
+                TypeMismatch {
+                    expected: PayloadKind::Variant,
+                    actual: PayloadKind::Record
+                }
+            ),
+            issue(
+                vec![
+                    field("history"),
+                    Index(0),
+                    tag("deferred"),
+                    field("horizon")
+                ],
+                MissingMandatory
+            ),
+            issue(
+                vec![field("per")],
+                TypeMismatch {
+                    expected: PayloadKind::Text,
+                    actual: PayloadKind::Integer
+                }
+            ),
+        ]
+    );
+    assert_eq!(path_text(&issues[1].path), "history[0](deferred).horizon");
+    assert_eq!(
+        path_text(&[field("decision"), tag("committed"), field("cost")]),
+        "decision(committed).cost"
+    );
+    // A tag outside the identifier grammar is quoted, so its parentheses or
+    // dots cannot be read as structure.
+    assert_eq!(
+        path_text(&[field("d"), tag("a).b"), field("c")]),
+        "d(\"a).b\").c"
+    );
+    // A tag part serializes as an object, apart from field names and indexes.
+    let path = vec![field("decision"), tag("committed"), Index(0)];
+    let encoded = serde_json::json!(["decision", {"tag": "committed"}, 0]);
+    assert_eq!(serde_json::to_value(&path).unwrap(), encoded);
+    assert_eq!(
+        serde_json::from_value::<Vec<PathPart>>(encoded).unwrap(),
+        path
+    );
+    for kind in [
+        PayloadKind::Duration,
+        PayloadKind::Date,
+        PayloadKind::OffsetTimestamp,
+        PayloadKind::Variant,
+    ] {
+        assert_eq!(
+            serde_json::to_value(kind).unwrap(),
+            serde_json::Value::from(kind_word(kind))
+        );
+    }
+}
+
+#[test]
+fn new_kinds_take_part_in_the_duplicate_rule_by_value() {
+    // Two roots whose payloads differ only in a duration's spelling are
+    // duplicates: equality is on the parsed value.
+    let mut graph = LifeCoreList::default();
+    let root = |payload: &str| {
+        Change::Entry(EntryChange::Node(NewNode {
+            ty_name: "T".into(),
+            payload: serde_json::from_str(payload).unwrap(),
+            predecessor: None,
+            intent: None,
+        }))
+    };
+    append(
+        &mut graph,
+        &[root(r#"{"d":{"kind":"duration","value":"PT120M"}}"#)],
+    );
+    let same = prepare(
+        &graph,
+        &[root(r#"{"d":{"kind":"duration","value":"2h"}}"#)],
+        &mut AnalysisRunner::default(),
+    );
+    assert!(same.is_err());
+    // One instant at two offsets is two values, so both roots stand.
+    append(
+        &mut graph,
+        &[
+            root(r#"{"t":{"kind":"offset_timestamp","value":"2026-10-29T08:15:00+01:00"}}"#),
+            root(r#"{"t":{"kind":"offset_timestamp","value":"2026-10-29T07:15:00+00:00"}}"#),
+        ],
+    );
+    assert_eq!(graph.view().len(), 3);
+}
+
+#[test]
+fn text_search_reaches_into_variant_bodies_but_not_tags() {
+    use crate::inspection::{Currentness, NodeSelection};
+    let mut graph = LifeCoreList::default();
+    append(
+        &mut graph,
+        &[Change::Entry(EntryChange::Node(NewNode {
+            ty_name: "T".into(),
+            payload: serde_json::from_str(
+                r#"{"d":{"kind":"variant","tag":"committed","value":{"why":"needle"}}}"#,
+            )
+            .unwrap(),
+            predecessor: None,
+            intent: None,
+        }))],
+    );
+    let found = |text: &str| {
+        graph
+            .view()
+            .select_nodes(&NodeSelection {
+                text: Some(text),
+                currentness: Currentness::All,
+                ..Default::default()
+            })
+            .count()
+    };
+    assert_eq!(found("needle"), 1);
+    assert_eq!(found("committed"), 0);
+}

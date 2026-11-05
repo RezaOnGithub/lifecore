@@ -7,8 +7,8 @@ use crate::{
     storage::{self, LockedSnapshot, Publication, Snapshot, StatePath, SyncDirectory},
 };
 use lifecore::{
-    BasicValidationFailure, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, Timestamp,
-    View, ViewError, ViewId,
+    BasicValidationFailure, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node,
+    OffsetTimestamp, View, ViewError, ViewId,
     analysis::{
         AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, FindingKey,
         MessageType, SuiteConfig,
@@ -50,7 +50,7 @@ pub struct NoParams {}
 pub struct ProposalRequest<P = Proposal> {
     pub proposal: P,
     #[serde(default, deserialize_with = "present")]
-    pub evaluation_time: Option<Timestamp>,
+    pub evaluation_time: Option<OffsetTimestamp>,
     #[serde(default)]
     pub now: bool,
 }
@@ -62,7 +62,7 @@ pub struct AddAnalyzerRequest {
     #[serde(default = "empty_configuration")]
     pub configuration: String,
     #[serde(default, deserialize_with = "present")]
-    pub evaluation_time: Option<Timestamp>,
+    pub evaluation_time: Option<OffsetTimestamp>,
     #[serde(default)]
     pub now: bool,
 }
@@ -135,7 +135,7 @@ pub struct AnalysisRunRequest {
     #[serde(default, deserialize_with = "boundary")]
     pub as_of: Option<usize>,
     #[serde(default, deserialize_with = "present")]
-    pub evaluation_time: Option<Timestamp>,
+    pub evaluation_time: Option<OffsetTimestamp>,
     #[serde(default)]
     pub now: bool,
 }
@@ -414,18 +414,33 @@ pub struct EntryLookup {
 }
 
 // The host captures `now` once, before evaluation; neither runner nor
-// analyzers read the clock.
-fn evaluation_inputs(time: Option<Timestamp>, now: bool) -> Result<EvaluationInputs, AppError> {
+// analyzers read the clock or the system zone.
+fn evaluation_inputs(
+    time: Option<OffsetTimestamp>,
+    now: bool,
+) -> Result<EvaluationInputs, AppError> {
     let evaluation_time = match (time, now) {
     (Some(_), true) => {
         return Err(AppError::InvalidParams {
             message: "choose either an explicit evaluation time or now, not both".into(),
         });
     }
-    (_, true) => Some(Timestamp::now()),
+    (_, true) => Some(capture_now()?),
     (time, false) => time,
     };
     Ok(EvaluationInputs { evaluation_time })
+}
+
+// The one place that reads the system zone: the instant and the offset in
+// effect at it come from a single reading, so they cannot straddle an
+// offset change. Every offset in use since 1972 is whole minutes; an older
+// zone rule with seconds cannot be written in RFC 3339 and fails here
+// rather than being rounded.
+fn capture_now() -> Result<OffsetTimestamp, AppError> {
+    let now = jiff::Zoned::now();
+    OffsetTimestamp::new(now.timestamp(), now.offset()).map_err(|message| AppError::Internal {
+        message: format!("cannot capture the local time: {message}"),
+    })
 }
 
 fn database(graph: &LifeCoreList) -> Uuid {

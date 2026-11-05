@@ -1286,18 +1286,18 @@ fn local_certificate(code: &str, subjects: &[EntryId], detail: &str) -> Analyzer
 
 fn timed_inputs() -> EvaluationInputs {
     EvaluationInputs {
-        evaluation_time: Some("2026-09-14T12:00:00.123456789Z".parse().unwrap()),
+        evaluation_time: Some("2026-09-14T14:00:00.123456789+02:00".parse().unwrap()),
     }
 }
 
 #[derive(Clone, Default)]
 struct TimedAnalyzer {
-    initialization_time: Option<crate::Timestamp>,
+    initialization_time: Option<crate::OffsetTimestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct TimeFinding {
-    evaluation_time: crate::Timestamp,
+    evaluation_time: crate::OffsetTimestamp,
 }
 impl InnerMessageType for TimeFinding {
     fn ty(&self) -> MessageType {

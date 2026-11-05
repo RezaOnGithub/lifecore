@@ -23,7 +23,9 @@ before implementing it:
   contracts.
 - Proposed, landing step by step: the
   [core round](docs/proposals/core-round/CORE-ROUND.md), a design document for
-  new value kinds, typed payload decoding, and optional indexes. A proposal
+  new value kinds, typed payload decoding, and optional indexes; its step 3a
+  (the value kinds in the core, and their read-only display in the client)
+  has landed in the owning documents. A proposal
   gets its own directory under `docs/proposals/`; write or revise an analyzer
   proposal with the `analyzer-proposal` skill, and give a core change a design
   document instead.
@@ -153,6 +155,12 @@ most likely to trip, with the owning section.
 - Dismissal, `sticky`, and display filtering never affect the inconsistency
   gate; non-emission or supersession never establishes resolution
   ([ANALYZERS §3](docs/ANALYZERS.md#3-presentation-and-dismissal)).
+- Time arithmetic stays within the exact domain (instants, durations) or the
+  civil one (dates, calendar words) and crosses between them only through an
+  offset carried by a stored value or an evaluation input. Nothing stores a
+  zone name or a precomputed future instant, and nothing but the host's one
+  capture for `now` reads the system zone
+  ([SPEC §6.4](docs/SPEC.md#64-value-kinds-and-shapes)).
 - Test history-sensitive changes at several boundaries, including before and
   after the relevant append.
 

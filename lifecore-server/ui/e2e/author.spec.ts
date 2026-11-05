@@ -517,13 +517,17 @@ test("Keep none and Remove ask first, Remove goes Back, and an explicit time is 
   const hint = tray().getByTestId("time-hint");
   await choice.selectOption("at");
   await expect(hint).toHaveText(
-    "enter an RFC 3339 instant such as 2026-10-15T08:30:00Z",
+    "enter an RFC 3339 instant with its UTC offset, such as 2026-10-15T10:30:00+02:00",
   );
   await expect(trayButton("Check")).toBeDisabled();
   await time.fill("next tuesday");
   await expect(hint).toContainText("expected an RFC 3339 instant");
   await expect(time).toHaveAttribute("aria-invalid", "true");
+  // An instant in UTC whose local offset is unknown is not an evaluation
+  // time (ANALYZERS §1).
   await time.fill("2026-10-15T08:30:00Z");
+  await expect(hint).toContainText("leave the local offset unknown");
+  await time.fill("2026-10-15T10:30:00+02:00");
   await expect(hint).toHaveCount(0);
   await expect(time).toHaveAttribute("aria-invalid", "false");
   await choice.selectOption("none");

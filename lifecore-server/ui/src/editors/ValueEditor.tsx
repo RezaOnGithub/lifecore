@@ -14,6 +14,7 @@ import {
   getOwn,
   integer,
   kindOf,
+  matchesShape,
   narrow,
   nowTimestamp,
   record,
@@ -26,13 +27,19 @@ import { withItem, withMember } from "./collections.ts";
 import {
   fieldRows,
   fitKeys,
+  hasValueEditor,
   moveItem,
   nextKey,
   sameList,
   withField,
   withoutField,
 } from "./helpers.ts";
-import { keepFocus, TextValueInput, ValidatedInput } from "./inputs.tsx";
+import {
+  keepFocus,
+  NoEditor,
+  TextValueInput,
+  ValidatedInput,
+} from "./inputs.tsx";
 import { RawValueEditor } from "./RawJsonEditor.tsx";
 
 // ShapeValueEditor, ListEditor, and FieldsEditor recurse into each other
@@ -177,7 +184,8 @@ const INTEGER_PATTERN = "0|-?[1-9][0-9]*";
 // timestamp made present without a value yet; nothing is committed until
 // one is typed, and `onAbandon` runs if focus leaves first. A value of
 // another kind than declared cannot be edited by that input, so it falls
-// back to JSON with a note.
+// back to JSON with a note. A shape the form has no editor for shows its
+// value read-only; the draft's raw JSON edits it.
 export function ShapeValueEditor({
   label,
   shape,
@@ -192,7 +200,7 @@ export function ShapeValueEditor({
   onAbandon?: () => void;
 }) {
   const abandon = onAbandon === undefined ? {} : { onAbandon };
-  if (value !== null && kindOf(value) !== shape.kind) {
+  if (value !== null && !matchesShape(value, shape)) {
     return (
       <RawValueEditor
         label={label}
@@ -201,6 +209,9 @@ export function ShapeValueEditor({
         note={`${kindOf(value)} value where ${shapeWords(shape)} is declared`}
       />
     );
+  }
+  if (!hasValueEditor(shape)) {
+    return <NoEditor label={label} json={value} what={shapeWords(shape)} />;
   }
   switch (shape.kind) {
     case "text":
@@ -281,6 +292,9 @@ export function ShapeValueEditor({
           onChange={(body) => onChange(record(body))}
         />
       );
+    default:
+      // `hasValueEditor` has sent every other shape to `NoEditor`.
+      return null;
   }
 }
 
@@ -341,10 +355,14 @@ export function FieldsEditor({
     setPending(withItem(pending, field, false));
     setNotes(withMember(notes, field, "reverted to absent"));
   };
+  const newDecl =
+    fields === null || newField === "" ? undefined : getOwn(fields, newField);
   const addError =
     newField !== "" && (Object.hasOwn(body, newField) || pending.has(newField))
       ? `${newField} is already present`
-      : null;
+      : newDecl !== undefined && !hasValueEditor(newDecl.shape)
+        ? `${newField} is ${shapeWords(newDecl.shape)}, which the form cannot edit yet; add it in the raw JSON`
+        : null;
   const add = () => {
     if (newField === "" || addError !== null) {
       return;
@@ -407,6 +425,14 @@ export function FieldsEditor({
                         type="checkbox"
                         aria-label={`${label} present`}
                         checked={shown}
+                        // Presence of a shape without an editor is changed
+                        // in the raw JSON, with its value.
+                        disabled={!hasValueEditor(decl.shape)}
+                        title={
+                          hasValueEditor(decl.shape)
+                            ? undefined
+                            : "read-only: edit this field in the raw JSON"
+                        }
                         onMouseDown={keepFocus}
                         onChange={(event) =>
                           event.target.checked

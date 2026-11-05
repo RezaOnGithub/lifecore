@@ -1,4 +1,4 @@
-use super::super::{Cli, factories, initial_suite, run_rpc};
+use super::super::{Cli, Command, factories, initial_suite, run_rpc};
 use clap::Parser;
 use lifecore::analysis::Config;
 use lifecore_app::{
@@ -161,4 +161,25 @@ fn the_benchmark_suite_is_the_default_suite() {
         lifecore_workload::default_suite().0,
         initial_suite(false, true)
     );
+}
+
+#[test]
+fn an_evaluation_time_is_an_offset_timestamp() {
+    let parsed =
+        |args: &[&str]| Cli::try_parse_from([&["lifecore", "check", "p.json"], args].concat());
+    let Ok(Cli {
+        command: Command::Check { evaluation, .. },
+    }) = parsed(&["--evaluation-time", "2026-10-29T08:15:00+01:00"])
+    else {
+        panic!("an offset timestamp is an evaluation time")
+    };
+    assert_eq!(
+        evaluation.evaluation_time.map(|time| time.to_string()),
+        Some("2026-10-29T08:15:00+01:00".into())
+    );
+    assert!(!evaluation.now);
+    // An instant whose offset is unknown is refused, as is asking for both.
+    assert!(parsed(&["--evaluation-time", "2026-10-29T07:15:00Z"]).is_err());
+    assert!(parsed(&["--evaluation-time", "2026-10-29T08:15:00+01:00", "--now"]).is_err());
+    assert!(parsed(&["--now"]).is_ok());
 }

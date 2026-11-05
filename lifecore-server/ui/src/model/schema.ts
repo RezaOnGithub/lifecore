@@ -32,8 +32,8 @@ export const DECLARATION_KEYS: readonly string[] = [
   "successors",
 ];
 
-// The server's bound on nested `list` and `record` words, counted across
-// nested records (FILES §2.6).
+// The server's bound on nested `list`, `record`, and `variant` words,
+// counted across nested records and tags (FILES §2.6).
 export const MAX_SHAPE_DEPTH = 64;
 
 // Keys outside the five are reported together, so the raw editor can name
@@ -212,15 +212,68 @@ function word(
   return value;
 }
 
+// `enum`'s list of distinct, non-empty member strings, in code point order
+// as the server's `BTreeSet` holds them.
+function readMembers(value: Payload): string[] {
+  if (!Array.isArray(value)) {
+    throw wrongShape("list", value);
+  }
+  if (value.length === 0) {
+    throw new Malformed({ kind: "empty_enum" });
+  }
+  const members = new Set<string>();
+  value.forEach((item, index) => {
+    if (typeof item !== "string") {
+      throw wrongShape("text", item).at(index);
+    }
+    if (item === "") {
+      throw new Malformed({ kind: "empty_member" }, [index]);
+    }
+    if (members.has(item)) {
+      throw new Malformed({ kind: "duplicate_member", member: item }, [index]);
+    }
+    members.add(item);
+  });
+  return [...members].sort(compareCodePoints);
+}
+
+// `variant`'s record envelope of tags, each a record envelope of field
+// declarations; tags are read in code point order, as fields are.
+function readTags(
+  value: Payload,
+  depth: number,
+): { [tag: string]: FieldDecls } {
+  if (kindOf(value) !== "record") {
+    throw wrongShape("record", value);
+  }
+  const tags = (value as RecordPayload).value;
+  const names = Object.keys(tags).sort(compareCodePoints);
+  if (names.length === 0) {
+    throw new Malformed({ kind: "empty_variant" });
+  }
+  const result: { [tag: string]: FieldDecls } = {};
+  for (const tag of names) {
+    setOwn(
+      result,
+      tag,
+      within(tag, () => readFieldDecls(tags[tag] as Payload, depth)),
+    );
+  }
+  return result;
+}
+
+const NESTING_WORDS: readonly string[] = ["list", "record", "variant"];
+
 // The shape starting at `start` and the index just after it. `depth`
-// counts the `list` and `record` words enclosing it, across records.
+// counts the `list`, `record`, and `variant` words enclosing it, across
+// records and tags.
 function readShape(
   words: readonly Payload[],
   start: number,
   depth: number,
 ): [Shape, number] {
   const head = word(words, start, { kind: "missing_shape" });
-  if ((head === "list" || head === "record") && depth >= MAX_SHAPE_DEPTH) {
+  if (NESTING_WORDS.includes(head) && depth >= MAX_SHAPE_DEPTH) {
     throw new Malformed({ kind: "too_deep" }, [start]);
   }
   switch (head) {
@@ -228,6 +281,9 @@ function readShape(
     case "integer":
     case "boolean":
     case "timestamp":
+    case "duration":
+    case "date":
+    case "offset_timestamp":
       return [{ kind: head }, start + 1];
     case "list": {
       const [element, end] = readShape(words, start + 1, depth + 1);
@@ -241,6 +297,24 @@ function readShape(
       }
       const fields = within(next, () => readFieldDecls(envelope, depth + 1));
       return [{ kind: "record", fields }, next + 1];
+    }
+    case "enum": {
+      const next = start + 1;
+      const list = words[next];
+      if (list === undefined) {
+        throw new Malformed({ kind: "missing_members" }, [next]);
+      }
+      const members = within(next, () => readMembers(list));
+      return [{ kind: "enum", members }, next + 1];
+    }
+    case "variant": {
+      const next = start + 1;
+      const envelope = words[next];
+      if (envelope === undefined) {
+        throw new Malformed({ kind: "missing_tags" }, [next]);
+      }
+      const tags = within(next, () => readTags(envelope, depth + 1));
+      return [{ kind: "variant", tags }, next + 1];
     }
     default:
       throw new Malformed({ kind: "unknown_shape", word: head }, [start]);
@@ -257,9 +331,16 @@ const KIND_WORDS: { [K in PayloadKind]: string } = {
   integer: "an integer",
   boolean: "a boolean",
   timestamp: "a timestamp",
+  duration: "a duration",
+  date: "a date",
+  offset_timestamp: "an offset timestamp",
   list: "a list",
   record: "a record",
+  variant: "a variant",
 };
+
+const SHAPE_WORDS =
+  "text, integer, boolean, timestamp, duration, date, offset_timestamp, list, record, enum, or variant";
 
 export function schemaErrorMessage(error: SchemaErrorKind): string {
   switch (error.kind) {
@@ -276,15 +357,27 @@ export function schemaErrorMessage(error: SchemaErrorKind): string {
     case "missing_shape":
       return "missing a shape word";
     case "unknown_shape":
-      return `unknown shape word ${JSON.stringify(error.word)}; expected text, integer, boolean, timestamp, list, or record`;
+      return `unknown shape word ${JSON.stringify(error.word)}; expected ${SHAPE_WORDS}`;
     case "missing_record_fields":
       return "record must be followed by a record envelope of field declarations";
     case "trailing_elements":
       return "unexpected element after the shape";
     case "too_deep":
-      return `more than ${MAX_SHAPE_DEPTH} nested list and record words`;
+      return `more than ${MAX_SHAPE_DEPTH} nested list, record, and variant words`;
     case "duplicate_permission":
       return `${JSON.stringify(error.name)} is repeated`;
+    case "missing_members":
+      return "enum must be followed by a list of its members";
+    case "empty_enum":
+      return "an enum needs at least one member";
+    case "empty_member":
+      return "an enum member cannot be empty";
+    case "duplicate_member":
+      return `${JSON.stringify(error.member)} is repeated`;
+    case "missing_tags":
+      return "variant must be followed by a record envelope of its tags";
+    case "empty_variant":
+      return "a variant needs at least one tag";
   }
 }
 
@@ -361,19 +454,23 @@ export function declarationOf(
   return server.get(entryKey(node.id)) ?? readDeclaration(node.payload);
 }
 
-// The deepest run of nested `list` and `record` words in a shape.
+function declsDepth(fields: FieldDecls): number {
+  return Math.max(
+    0,
+    ...Object.values(fields).map((decl) => shapeDepth(decl.shape)),
+  );
+}
+
+// The deepest run of nested `list`, `record`, and `variant` words in a
+// shape.
 export function shapeDepth(shape: Shape): number {
   switch (shape.kind) {
     case "list":
       return 1 + shapeDepth(shape.element);
     case "record":
-      return (
-        1 +
-        Math.max(
-          0,
-          ...Object.values(shape.fields).map((decl) => shapeDepth(decl.shape)),
-        )
-      );
+      return 1 + declsDepth(shape.fields);
+    case "variant":
+      return 1 + Math.max(0, ...Object.values(shape.tags).map(declsDepth));
     default:
       return 0;
   }
@@ -406,19 +503,31 @@ function fieldDeclsEnvelope(decls: FieldDecls): RecordPayload {
   return { kind: "record", value };
 }
 
-// `record` ends the list with its envelope; `list` is followed by the
-// element's own words.
-function shapeWordList(shape: Shape): Payload[] {
+// `record`, `enum`, and `variant` end the list with their argument; `list`
+// is followed by the element's own words.
+export function shapeWordList(shape: Shape): Payload[] {
   switch (shape.kind) {
     case "text":
     case "integer":
     case "boolean":
     case "timestamp":
+    case "duration":
+    case "date":
+    case "offset_timestamp":
       return [shape.kind];
     case "list":
       return ["list", ...shapeWordList(shape.element)];
     case "record":
       return ["record", fieldDeclsEnvelope(shape.fields)];
+    case "enum":
+      return ["enum", [...new Set(shape.members)].sort(compareCodePoints)];
+    case "variant": {
+      const tags: Body = {};
+      for (const [tag, fields] of Object.entries(shape.tags)) {
+        setOwn(tags, tag, fieldDeclsEnvelope(fields));
+      }
+      return ["variant", { kind: "record", value: tags }];
+    }
   }
 }
 

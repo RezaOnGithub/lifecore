@@ -1,5 +1,6 @@
 mod entries;
 mod graph;
+mod time;
 mod values;
 mod view;
 
@@ -11,7 +12,8 @@ pub mod typing;
 
 pub use entries::{Edge, Entry, EntryId, Node};
 pub use graph::{BasicValidationFailure, LifeCoreList};
-pub use jiff::Timestamp;
+pub use jiff::{SignedDuration, Timestamp, civil::Date};
+pub use time::OffsetTimestamp;
 pub use values::{Body, Payload, PayloadKind};
 pub use view::{View, ViewError, ViewId};
 

@@ -243,7 +243,9 @@ fn contains_text(value: &Payload, needle: &str) -> bool {
     match value {
     Payload::Text(text) => text.contains(needle),
     Payload::List(values) => values.iter().any(|value| contains_text(value, needle)),
-    Payload::Record(fields) => fields.values().any(|value| contains_text(value, needle)),
+    Payload::Record(fields) | Payload::Variant { value: fields, .. } => {
+        fields.values().any(|value| contains_text(value, needle))
+    }
     _ => false,
     }
 }

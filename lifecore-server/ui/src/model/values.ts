@@ -1,15 +1,22 @@
 import type {
   Body,
   BooleanPayload,
+  DatePayload,
   DecimalString,
+  DurationPayload,
   FieldDecls,
   IntegerPayload,
+  OffsetTimestampPayload,
   Payload,
+  PayloadKind,
   RecordPayload,
   Shape,
   TimestampPayload,
   TimestampString,
+  VariantPayload,
 } from "../contract.ts";
+
+export type { PayloadKind } from "../contract.ts";
 
 // ---- Own properties ----
 
@@ -107,6 +114,26 @@ export function timestampHint(text: string): string | null {
   return LOOSE_TIMESTAMP.test(text) ? null : TIMESTAMP_HINT;
 }
 
+// The same for an offset timestamp, such as an evaluation time: RFC 3339
+// with a numeric offset to the minute and no bracketed annotation. `Z` and
+// `-00:00` get their own hint, since they read as an instant but leave the
+// local offset unknown, which the server refuses (FILES §2.1).
+const LOOSE_OFFSET_TIMESTAMP =
+  /^[+-]?\d{4,6}-?\d{2}-?\d{2}[Tt ]\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?[+-]\d{2}(?::?\d{2})?$/;
+
+export const OFFSET_TIMESTAMP_HINT =
+  "not an RFC 3339 instant with a numeric offset; Check will report it if the server rejects it";
+
+export const UNKNOWN_OFFSET_HINT =
+  "Z and -00:00 leave the local offset unknown, which the server refuses; write a numeric offset such as +00:00";
+
+export function offsetTimestampHint(text: string): string | null {
+  if (/(?:[Zz]|-00:?00)$/.test(text)) {
+    return UNKNOWN_OFFSET_HINT;
+  }
+  return LOOSE_OFFSET_TIMESTAMP.test(text) ? null : OFFSET_TIMESTAMP_HINT;
+}
+
 // The instant `Date` knows, at the millisecond precision it has: no digits
 // are invented beyond it.
 export function nowTimestamp(date: Date = new Date()): TimestampString {
@@ -126,7 +153,13 @@ export function nameError(name: string): string | null {
 
 // ---- Payload envelopes ----
 
-export type PayloadKind = Shape["kind"];
+// A declared shape's word: a payload kind, or `enum`, a shape over text.
+export type ShapeKind = Shape["kind"];
+
+// The payload kind a shape's values have.
+export function shapeKind(shape: Shape): PayloadKind {
+  return shape.kind === "enum" ? "text" : shape.kind;
+}
 
 export function kindOf(value: Payload): PayloadKind {
   if (typeof value === "string") {
@@ -154,21 +187,41 @@ export function record(value: Body): RecordPayload {
   return { kind: "record", value };
 }
 
-// Only the outermost kind: a list editor judges each element on its own.
-export function matchesShape(value: Payload, shape: Shape): boolean {
-  return kindOf(value) === shape.kind;
+// The time kinds whose strings the client keeps as typed for Rust to judge.
+export type TimeKind = "timestamp" | "duration" | "date" | "offset_timestamp";
+
+export function timeValue(
+  kind: TimeKind,
+  value: string,
+): TimestampPayload | DurationPayload | DatePayload | OffsetTimestampPayload {
+  return { kind, value };
 }
 
-// The value a field gets when it becomes present, or null for an integer
-// or a timestamp: neither has a neutral value, so the editor waits for one
-// to be typed rather than inventing `0` or the current time. A record starts
-// with those of its mandatory fields that have a default.
+export function variant(tag: string, value: Body): VariantPayload {
+  return { kind: "variant", tag, value };
+}
+
+// Only the outermost kind: a list editor judges each element on its own.
+export function matchesShape(value: Payload, shape: Shape): boolean {
+  return kindOf(value) === shapeKind(shape);
+}
+
+// The value a field gets when it becomes present, or null where no value is
+// neutral: an integer or a time, so the editor waits for one to be typed
+// rather than inventing `0` or the current time, and an enum or a variant,
+// which have no editor yet. A record starts with those of its mandatory
+// fields that have a default.
 export function defaultValue(shape: Shape): Payload | null {
   switch (shape.kind) {
     case "text":
       return "";
     case "integer":
     case "timestamp":
+    case "duration":
+    case "date":
+    case "offset_timestamp":
+    case "enum":
+    case "variant":
       return null;
     case "boolean":
       return boolean(false);
@@ -200,6 +253,9 @@ class Malformed extends Error {}
 const INTEGER_FORM = '{"kind":"integer","value":"42"}';
 const BOOLEAN_FORM = '{"kind":"boolean","value":true}';
 const RECORD_FORM = '{"kind":"record","value":{…}}';
+const VARIANT_FORM = '{"kind":"variant","tag":"…","value":{…}}';
+const ENVELOPES =
+  "integer, boolean, timestamp, duration, date, offset_timestamp, record, or variant";
 
 function join(path: string, field: string): string {
   return path === "" ? field : `${path}.${field}`;
@@ -336,12 +392,37 @@ function canonicalValue(json: unknown, path: string): Payload {
       `${path}: an object must be an envelope with "kind" and "value"; a record is ${RECORD_FORM}`,
     );
   }
+  // Only a variant carries a third key, its tag.
+  const { kind, value, tag } = json as {
+    kind: unknown;
+    value: unknown;
+    tag: unknown;
+  };
+  if (kind === "variant") {
+    if (
+      !Object.hasOwn(json, "tag") ||
+      !Object.hasOwn(json, "value") ||
+      Object.keys(json).length !== 3
+    ) {
+      throw new Malformed(
+        `${path}: a variant has exactly "kind", "tag", and "value", as in ${VARIANT_FORM}`,
+      );
+    }
+    if (typeof tag !== "string") {
+      throw new Malformed(`${path}: a variant's tag is a string`);
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Malformed(
+        `${path}: a variant's value is an object of fields, {} when empty, as in ${VARIANT_FORM}`,
+      );
+    }
+    return variant(wellFormed(tag, path), canonicalBody(value, path));
+  }
   if (!Object.hasOwn(json, "value") || Object.keys(json).length !== 2) {
     throw new Malformed(
       `${path}: an envelope has exactly "kind" and "value", as in ${INTEGER_FORM}`,
     );
   }
-  const { kind, value } = json as { kind: unknown; value: unknown };
   switch (kind) {
     case "integer": {
       if (typeof value !== "string") {
@@ -362,15 +443,19 @@ function canonicalValue(json: unknown, path: string): Payload {
         );
       }
       return boolean(value);
-    case "timestamp": {
+    case "timestamp":
+    case "duration":
+    case "date":
+    case "offset_timestamp": {
+      const word = kind.replace("_", " ");
       if (typeof value !== "string") {
-        throw new Malformed(`${path}: a timestamp value is a string`);
+        throw new Malformed(`${path}: a ${word} value is a string`);
       }
-      const problem = timestampError(value);
-      if (problem !== null) {
-        throw new Malformed(`${path}: ${problem}`);
+      // Kept as typed; the server parses, judges, and re-spells it.
+      if (value === "") {
+        throw new Malformed(`${path}: a ${word} cannot be empty`);
       }
-      return timestamp(wellFormed(value, path));
+      return timeValue(kind, wellFormed(value, path));
     }
     case "record":
       if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -381,7 +466,7 @@ function canonicalValue(json: unknown, path: string): Payload {
       return record(canonicalBody(value, path));
     default:
       throw new Malformed(
-        `${path}: unknown kind ${JSON.stringify(kind)}; envelopes are integer, boolean, timestamp, or record`,
+        `${path}: unknown kind ${JSON.stringify(kind)}; envelopes are ${ENVELOPES}`,
       );
   }
 }
@@ -464,7 +549,11 @@ export interface PayloadByKind {
   integer: IntegerPayload;
   boolean: BooleanPayload;
   timestamp: TimestampPayload;
+  duration: DurationPayload;
+  date: DatePayload;
+  offset_timestamp: OffsetTimestampPayload;
   record: RecordPayload;
+  variant: VariantPayload;
 }
 
 // The value as its kind's type, or null when it is another kind.

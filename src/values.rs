@@ -1,4 +1,8 @@
-use crate::{Timestamp, decimal};
+use crate::{
+    OffsetTimestamp, Timestamp, decimal,
+    time::{parse_date, parse_duration},
+};
+use jiff::{SignedDuration, civil::Date};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, IntoDeserializer, MapAccess, SeqAccess, Visitor},
@@ -76,16 +80,24 @@ impl<'de> Deserialize<'de> for Body {
 }
 
 // Canonical encoding: text and lists are native; every other kind is a
-// `{kind, value}` envelope, integers carrying decimal strings. Input also
-// accepts bare i64 integers as shorthand.
+// `{kind, value}` envelope, integers carrying decimal strings and the time
+// kinds their canonical strings, and a variant adds `tag`. Input also accepts
+// bare i64 integers as shorthand. Equality and hashing are field by field
+// on the parsed values, which the duplicate rule and the analysis recorder
+// rely on: `PT120M` and `2h` are one duration, while one instant at two
+// offsets is two offset timestamps.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Payload {
     Text(String),
     Integer(i64),
     Boolean(bool),
     Timestamp(Timestamp),
+    Duration(SignedDuration),
+    Date(Date),
+    OffsetTimestamp(OffsetTimestamp),
     List(Vec<Payload>),
     Record(Body),
+    Variant { tag: String, value: Body },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -95,8 +107,12 @@ pub enum PayloadKind {
     Integer,
     Boolean,
     Timestamp,
+    Duration,
+    Date,
+    OffsetTimestamp,
     List,
     Record,
+    Variant,
 }
 
 impl Payload {
@@ -106,13 +122,26 @@ impl Payload {
         Self::Integer(_) => PayloadKind::Integer,
         Self::Boolean(_) => PayloadKind::Boolean,
         Self::Timestamp(_) => PayloadKind::Timestamp,
+        Self::Duration(_) => PayloadKind::Duration,
+        Self::Date(_) => PayloadKind::Date,
+        Self::OffsetTimestamp(_) => PayloadKind::OffsetTimestamp,
         Self::List(_) => PayloadKind::List,
         Self::Record(_) => PayloadKind::Record,
+        Self::Variant { .. } => PayloadKind::Variant,
         }
     }
 }
 
-const TAGS: &[&str] = &["integer", "boolean", "timestamp", "record"];
+const TAGS: &[&str] = &[
+    "integer",
+    "boolean",
+    "timestamp",
+    "duration",
+    "date",
+    "offset_timestamp",
+    "record",
+    "variant",
+];
 
 impl Serialize for Payload {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -120,6 +149,14 @@ impl Serialize for Payload {
         impl Serialize for Decimal {
             fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 decimal::serialize(&self.0, serializer)
+            }
+        }
+        // Jiff's `Display` is the canonical spelling: ISO 8601 for a
+        // duration (`PT1H30M`), `YYYY-MM-DD` for a date.
+        struct Displayed<'a, T>(&'a T);
+        impl<T: fmt::Display> Serialize for Displayed<'_, T> {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.collect_str(self.0)
             }
         }
         fn envelope<S: Serializer, T: Serialize>(
@@ -138,7 +175,17 @@ impl Serialize for Payload {
         Self::Integer(value) => envelope(serializer, "integer", &Decimal(*value)),
         Self::Boolean(value) => envelope(serializer, "boolean", value),
         Self::Timestamp(value) => envelope(serializer, "timestamp", value),
+        Self::Duration(value) => envelope(serializer, "duration", &Displayed(value)),
+        Self::Date(value) => envelope(serializer, "date", &Displayed(value)),
+        Self::OffsetTimestamp(value) => envelope(serializer, "offset_timestamp", value),
         Self::Record(fields) => envelope(serializer, "record", fields),
+        Self::Variant { tag, value } => {
+            let mut state = serializer.serialize_struct("Payload", 3)?;
+            state.serialize_field("kind", "variant")?;
+            state.serialize_field("tag", tag)?;
+            state.serialize_field("value", value)?;
+            state.end()
+        }
         }
     }
 }
@@ -154,7 +201,9 @@ struct PayloadVisitor;
 impl<'de> Visitor<'de> for PayloadVisitor {
     type Value = Payload;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("a string, list, i64 integer, or tagged integer/boolean/timestamp/record")
+        f.write_str(
+            "a string, list, i64 integer, or tagged integer/boolean/timestamp/duration/date/offset_timestamp/record/variant",
+        )
     }
     fn visit_str<E: de::Error>(self, value: &str) -> Result<Payload, E> {
         Ok(Payload::Text(value.into()))
@@ -182,16 +231,31 @@ impl<'de> Visitor<'de> for PayloadVisitor {
         // Object/table key order is not significant, so `value` may arrive
         // before `kind` and is buffered in a kind-neutral form.
         let mut kind: Option<String> = None;
+        let mut tag: Option<String> = None;
         let mut value: Option<EnvelopeValue> = None;
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
             "kind" if kind.is_none() => kind = Some(map.next_value()?),
+            "tag" if tag.is_none() => tag = Some(map.next_value()?),
             "value" if value.is_none() => value = Some(map.next_value()?),
-            "kind" | "value" => return Err(A::Error::custom(format!("duplicate field `{key}`"))),
-            other => return Err(A::Error::unknown_field(other, &["kind", "value"])),
+            "kind" | "tag" | "value" => {
+                return Err(A::Error::custom(format!("duplicate field `{key}`")));
+            }
+            other => return Err(A::Error::unknown_field(other, &["kind", "tag", "value"])),
             }
         }
         let kind = kind.ok_or_else(|| A::Error::missing_field("kind"))?;
+        if !TAGS.contains(&kind.as_str()) {
+            return Err(A::Error::unknown_variant(&kind, TAGS));
+        }
+        // Only a variant carries a tag; elsewhere it is an unknown field, so
+        // `{kind = "record", tag = …}` cannot pass for a variant.
+        match (kind.as_str(), &tag) {
+        ("variant", None) => return Err(A::Error::missing_field("tag")),
+        ("variant", Some(_)) => {}
+        (_, Some(_)) => return Err(A::Error::unknown_field("tag", &["kind", "value"])),
+        (_, None) => {}
+        }
         let value = value.ok_or_else(|| A::Error::missing_field("value"))?;
         match (kind.as_str(), value) {
         ("integer", EnvelopeValue::Text(text)) => decimal::parse(&text)
@@ -202,12 +266,24 @@ impl<'de> Visitor<'de> for PayloadVisitor {
             // Delegate to Jiff's own Serde parser; there is no LifeCore profile.
             Timestamp::deserialize(text.into_deserializer()).map(Payload::Timestamp)
         }
+        ("duration", EnvelopeValue::Text(text)) => parse_duration(&text)
+            .map(Payload::Duration)
+            .map_err(A::Error::custom),
+        ("date", EnvelopeValue::Text(text)) => parse_date(&text)
+            .map(Payload::Date)
+            .map_err(A::Error::custom),
+        ("offset_timestamp", EnvelopeValue::Text(text)) => OffsetTimestamp::parse(&text)
+            .map(Payload::OffsetTimestamp)
+            .map_err(A::Error::custom),
         ("record", EnvelopeValue::Record(fields)) => Ok(Payload::Record(fields)),
-        (kind, value) if TAGS.contains(&kind) => Err(A::Error::custom(format!(
+        ("variant", EnvelopeValue::Record(value)) => Ok(Payload::Variant {
+            tag: tag.expect("checked above"),
+            value,
+        }),
+        (kind, value) => Err(A::Error::custom(format!(
             "a {kind} envelope cannot carry {}",
             value.describe()
         ))),
-        (kind, _) => Err(A::Error::unknown_variant(kind, TAGS)),
         }
     }
 }
@@ -234,7 +310,7 @@ impl<'de> Deserialize<'de> for EnvelopeValue {
         impl<'de> Visitor<'de> for EnvelopeVisitor {
             type Value = EnvelopeValue;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a decimal or timestamp string, a boolean, or record fields")
+                f.write_str("a decimal or time string, a boolean, or record fields")
             }
             fn visit_str<E: de::Error>(self, value: &str) -> Result<EnvelopeValue, E> {
                 Ok(EnvelopeValue::Text(value.into()))
@@ -295,6 +371,21 @@ impl From<bool> for Payload {
 impl From<Timestamp> for Payload {
     fn from(v: Timestamp) -> Self {
         Self::Timestamp(v)
+    }
+}
+impl From<SignedDuration> for Payload {
+    fn from(v: SignedDuration) -> Self {
+        Self::Duration(v)
+    }
+}
+impl From<Date> for Payload {
+    fn from(v: Date) -> Self {
+        Self::Date(v)
+    }
+}
+impl From<OffsetTimestamp> for Payload {
+    fn from(v: OffsetTimestamp) -> Self {
+        Self::OffsetTimestamp(v)
     }
 }
 impl From<Vec<Payload>> for Payload {

@@ -28,6 +28,33 @@ export const response = {
           "kind": "declared",
           "schema": {
             "fields": {
+              "cadence": {
+                "shape": {
+                  "kind": "enum",
+                  "members": [
+                    "day",
+                    "week"
+                  ]
+                },
+                "status": "optional"
+              },
+              "decision": {
+                "shape": {
+                  "kind": "variant",
+                  "tags": {
+                    "committed": {
+                      "cost": {
+                        "shape": {
+                          "kind": "duration"
+                        },
+                        "status": "mandatory"
+                      }
+                    },
+                    "resumed": {}
+                  }
+                },
+                "status": "optional"
+              },
               "details": {
                 "shape": {
                   "fields": {
@@ -54,6 +81,21 @@ export const response = {
                 },
                 "status": "optional"
               },
+              "effort": {
+                "shape": {
+                  "kind": "duration"
+                },
+                "status": "optional"
+              },
+              "logged": {
+                "shape": {
+                  "element": {
+                    "kind": "offset_timestamp"
+                  },
+                  "kind": "list"
+                },
+                "status": "optional"
+              },
               "notes": {
                 "shape": {
                   "kind": "text"
@@ -63,6 +105,12 @@ export const response = {
               "priority": {
                 "shape": {
                   "kind": "integer"
+                },
+                "status": "optional"
+              },
+              "start": {
+                "shape": {
+                  "kind": "date"
                 },
                 "status": "optional"
               },
@@ -149,6 +197,33 @@ export const asOfResponse = {
           "kind": "declared",
           "schema": {
             "fields": {
+              "cadence": {
+                "shape": {
+                  "kind": "enum",
+                  "members": [
+                    "day",
+                    "week"
+                  ]
+                },
+                "status": "optional"
+              },
+              "decision": {
+                "shape": {
+                  "kind": "variant",
+                  "tags": {
+                    "committed": {
+                      "cost": {
+                        "shape": {
+                          "kind": "duration"
+                        },
+                        "status": "mandatory"
+                      }
+                    },
+                    "resumed": {}
+                  }
+                },
+                "status": "optional"
+              },
               "details": {
                 "shape": {
                   "fields": {
@@ -175,6 +250,21 @@ export const asOfResponse = {
                 },
                 "status": "optional"
               },
+              "effort": {
+                "shape": {
+                  "kind": "duration"
+                },
+                "status": "optional"
+              },
+              "logged": {
+                "shape": {
+                  "element": {
+                    "kind": "offset_timestamp"
+                  },
+                  "kind": "list"
+                },
+                "status": "optional"
+              },
               "notes": {
                 "shape": {
                   "kind": "text"
@@ -184,6 +274,12 @@ export const asOfResponse = {
               "priority": {
                 "shape": {
                   "kind": "integer"
+                },
+                "status": "optional"
+              },
+              "start": {
+                "shape": {
+                  "kind": "date"
                 },
                 "status": "optional"
               },

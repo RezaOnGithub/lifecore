@@ -12,6 +12,12 @@ export type Uuid = string;
 export type DecimalString = string;
 // Jiff's Serde timestamp spelling, kept at full (nanosecond) precision.
 export type TimestampString = string;
+// The canonical strings of the other time kinds (FILES §2.1), kept verbatim:
+// ISO 8601 durations (`PT1H30M`), `YYYY-MM-DD` dates, and RFC 3339 instants
+// with a numeric offset (`2026-10-29T08:15:00+01:00`).
+export type DurationString = string;
+export type DateString = string;
+export type OffsetTimestampString = string;
 // `lc1:<database>:<graph revision>:<proposal>`; carried verbatim.
 export type PlanId = string;
 // Owned by the analyzer that emitted it; never parsed or compared by prefix.
@@ -25,7 +31,11 @@ export type Payload =
   | IntegerPayload
   | BooleanPayload
   | TimestampPayload
-  | RecordPayload;
+  | DurationPayload
+  | DatePayload
+  | OffsetTimestampPayload
+  | RecordPayload
+  | VariantPayload;
 export interface IntegerPayload {
   kind: "integer";
   value: DecimalString;
@@ -38,8 +48,26 @@ export interface TimestampPayload {
   kind: "timestamp";
   value: TimestampString;
 }
+export interface DurationPayload {
+  kind: "duration";
+  value: DurationString;
+}
+export interface DatePayload {
+  kind: "date";
+  value: DateString;
+}
+export interface OffsetTimestampPayload {
+  kind: "offset_timestamp";
+  value: OffsetTimestampString;
+}
 export interface RecordPayload {
   kind: "record";
+  value: Body;
+}
+// A tagged alternative: the tag beside a body of fields, `{}` when empty.
+export interface VariantPayload {
+  kind: "variant";
+  tag: string;
   value: Body;
 }
 export type Body = { [field: string]: Payload };
@@ -105,8 +133,16 @@ export type Shape =
   | { kind: "integer" }
   | { kind: "boolean" }
   | { kind: "timestamp" }
+  | { kind: "duration" }
+  | { kind: "date" }
+  | { kind: "offset_timestamp" }
   | { kind: "list"; element: Shape }
-  | { kind: "record"; fields: FieldDecls };
+  | { kind: "record"; fields: FieldDecls }
+  // A shape over text: its values are plain strings among `members`, which
+  // come in code point order.
+  | { kind: "enum"; members: string[] }
+  // Each tag's field declarations, by tag.
+  | { kind: "variant"; tags: { [tag: string]: FieldDecls } };
 export interface FieldDecl {
   status: FieldStatus;
   shape: Shape;
@@ -120,7 +156,8 @@ export interface TypeSchema {
   incoming: string[];
   successors: string[];
 }
-export type PayloadKind = Shape["kind"];
+// `enum` is a shape, not a payload kind: its values are text.
+export type PayloadKind = Exclude<Shape["kind"], "enum">;
 // What is wrong with a declaration payload at one element.
 export type SchemaErrorKind =
   | { kind: "missing_field" }
@@ -133,7 +170,13 @@ export type SchemaErrorKind =
   | { kind: "missing_record_fields" }
   | { kind: "trailing_elements" }
   | { kind: "too_deep" }
-  | { kind: "duplicate_permission"; name: string };
+  | { kind: "duplicate_permission"; name: string }
+  | { kind: "missing_members" }
+  | { kind: "empty_enum" }
+  | { kind: "empty_member" }
+  | { kind: "duplicate_member"; member: string }
+  | { kind: "missing_tags" }
+  | { kind: "empty_variant" };
 // Why a declaration payload does not parse: the path of the offending
 // element, by field name and list index, beside its kind.
 export type SchemaError = { path: (string | number)[] } & SchemaErrorKind;
@@ -240,8 +283,9 @@ export interface AnalyzerIdentity {
   version: string;
   configuration: string;
 }
+// The instant with the UTC offset it was taken at (ANALYZERS §1).
 export interface EvaluationInputs {
-  evaluation_time: TimestampString | null;
+  evaluation_time: OffsetTimestampString | null;
 }
 // A finding's category; a diagnostic carries the same word in its `kind`.
 export type MessageType = "inconsistency" | "warning" | "suggestion";
@@ -413,7 +457,7 @@ export type Published =
 export type NoParams = { [name: string]: never };
 // An explicit instant or `now`, not both; absent by default.
 export interface EvaluationParams {
-  evaluation_time?: TimestampString;
+  evaluation_time?: OffsetTimestampString;
   now?: boolean;
 }
 // Read methods answer as of the prefix `[0, as_of)`; default: the whole
@@ -667,9 +711,9 @@ export type DeclarationFixture = { payload: Body } & (
 // A node payload text with the codec's canonical reading, null where it
 // rejects the text, and how the raw payload editor relates to the codec:
 // it agrees, refuses a bare integer the codec reads as shorthand, or keeps
-// timestamp text verbatim for Jiff to judge (FILES §2.1).
+// the text of a time kind verbatim for Rust to judge (FILES §2.1).
 export interface PayloadTextFixture {
   text: string;
   codec: Body | null;
-  client: "agrees" | "refuses_shorthand" | "defers_timestamp";
+  client: "agrees" | "refuses_shorthand" | "defers_time";
 }

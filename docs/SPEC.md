@@ -183,6 +183,7 @@ does not forbid successors altogether.
 presence policy. Undeclared fields are rejected. The encoding of a declaration
 payload is fixed in [FILES §2.6](FILES.md#26-type-declaration-payloads); it
 provides deterministic validation and equality for supported stored values.
+Section 6.4 lists the value kinds and shapes.
 
 Each declared field has one of four presence policies:
 
@@ -288,6 +289,57 @@ If used, a declaration fingerprint must cover the complete declaration,
 including relationship and successor permissions. A payload-schema hash alone
 identifies only the schema document. Arbitrary executable validation behavior is
 not assumed to be captured by that hash.
+
+### 6.4 Value kinds and shapes
+
+A payload value is one of ten kinds: `text`, `integer` (signed 64-bit),
+`boolean`, `timestamp`, `duration`, `date`, `offset_timestamp`, `list`,
+`record`, and `variant`. Their encodings and accepted spellings are fixed in
+[FILES §2.1](FILES.md#21-syntax-and-values). Values compare and hash field by
+field after parsing: `PT120M` and `2h` are one duration, and one instant at
+two offsets is two offset timestamps. The duplicate rule
+([§7.1](#71-append-checks)) and the analysis recorder rely on this.
+
+Time values fall into two domains, and arithmetic stays inside one:
+
+- **Exact:** instants and elapsed time. A `timestamp` is an instant with no
+  local meaning (an evaluation time, a machine-recorded instant, anything
+  authored in UTC on purpose). A `duration` (`jiff::SignedDuration`) is
+  elapsed time, at most hours: a day is not 24 hours across a DST change, so
+  days and larger units are refused.
+- **Civil:** days and calendar periods. A `date` (`jiff::civil::Date`) is a
+  calendar day. Calendar units such as day, week, and month are words, an
+  `enum`, not durations.
+
+An `offset_timestamp` (`lifecore::OffsetTimestamp`) is an instant with the
+UTC offset in effect where it was observed, in whole minutes, and belongs to
+both: its local date follows from the two without any zone lookup. The rule
+is to store what was observed, never a conversion that a time-zone database
+would have to redo, so no value carries a zone name or a precomputed future
+instant. Crossing between the domains happens only through an offset carried
+by a stored value or an evaluation input
+([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)); nothing in the
+core or an analyzer reads the system zone.
+
+A `variant` is a tag beside a body of fields, so a tagged value carries its
+tag even where no declaration is at hand.
+
+A field's shape names a kind, with these refinements:
+
+- `list` declares its element shape and `record` its field declarations.
+- `enum` is a shape over `text`, not a kind: it declares a non-empty set of
+  non-empty member strings, and a text value outside it is a type error
+  (`NotAMember`).
+- `variant` declares at least one tag, each with its own field declarations.
+  A value whose tag is not declared is a type error (`UnknownTag`), and its
+  body is not judged further; otherwise its body is checked against the tag's
+  fields under the usual presence policies, and each issue is reported under
+  the tag, as in `decision(committed).cost`.
+
+A value of another kind than its shape is a type mismatch. Because every
+current node must satisfy the resulting declaration
+([§6.2](#62-name-resolution)), removing an enum member or a variant tag that a
+current node uses is a type error, exactly like removing a field it uses.
 
 ## 7. Mandatory validation
 
@@ -467,7 +519,8 @@ These operations use `View`, with selection and structured results in
 `lifecore::inspection`. `NodeSelection` combines an optional exact
 type name, currentness, top-level field presence/absence/equality predicates,
 and a case-sensitive substring search across text values (including nested
-lists and records). Predicates are ANDed. Keys and type names are not searched;
+lists, records, and variant bodies). Predicates are ANDed. Keys, variant tags,
+and type names are not searched;
 there is no field-path or textual query language. Empty collections are present.
 `EdgeSelection` selects an exact relationship type and currentness.
 Both selections default to current entries; `Historical` selects only stale

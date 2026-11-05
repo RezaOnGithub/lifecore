@@ -108,6 +108,12 @@ impl TypeCheckMessage {
                 kind_word(*expected),
                 kind_word(*actual)
             ),
+            FieldIssueKind::NotAMember { value } => {
+                format!("field {path} is {value:?}, which its enum does not list")
+            }
+            FieldIssueKind::UnknownTag { tag } => {
+                format!("field {path} has tag {tag:?}, which its variant does not declare")
+            }
             }
         }
         Self::BadEdgeEndpoint {

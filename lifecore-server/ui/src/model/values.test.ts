@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { Shape } from "../contract.ts";
 import { payloadTexts } from "../fixtures/codec.ts";
 import {
   compareCodePoints,
@@ -13,6 +14,7 @@ import {
   nameError,
   nowTimestamp,
   setOwn,
+  shapeKind,
   TIMESTAMP_HINT,
   timestampError,
   timestampHint,
@@ -441,11 +443,81 @@ test("the raw payload editor reads every recorded text as the codec does", () =>
         assert.notEqual(codec, null, text);
         assert.ok("error" in result, text);
         break;
-      case "defers_timestamp":
-        // The text is kept as typed; Jiff judges and respells it on Check.
+      case "defers_time":
+        // The text is kept as typed; Rust judges and respells it on Check.
         assert.deepEqual(result, { payload: JSON.parse(text) }, text);
         assert.notDeepEqual(codec, JSON.parse(text), text);
         break;
     }
+  }
+});
+
+test("the new envelopes validate; time text is kept as typed", () => {
+  for (const kind of ["duration", "date", "offset_timestamp"] as const) {
+    // Any non-empty spelling is the server's to judge on Check.
+    assert.deepEqual(
+      validateCanonicalValue(`{"kind":"${kind}","value":"90m"}`),
+      { value: { kind, value: "90m" } },
+    );
+    assert.ok(
+      "error" in validateCanonicalValue(`{"kind":"${kind}","value":""}`),
+    );
+    assert.ok(
+      "error" in validateCanonicalValue(`{"kind":"${kind}","value":1}`),
+    );
+    assert.ok(
+      "error" in
+        validateCanonicalValue(`{"kind":"${kind}","tag":"a","value":"PT1H"}`),
+    );
+  }
+  assert.deepEqual(
+    validateCanonicalValue(
+      '{"tag":"committed","kind":"variant","value":{"cost":{"kind":"duration","value":"PT2H"}}}',
+    ),
+    {
+      value: {
+        kind: "variant",
+        tag: "committed",
+        value: { cost: { kind: "duration", value: "PT2H" } },
+      },
+    },
+  );
+  for (const bad of [
+    '{"kind":"variant","value":{}}',
+    '{"kind":"variant","tag":"a"}',
+    '{"kind":"variant","tag":1,"value":{}}',
+    '{"kind":"variant","tag":"a","value":[]}',
+    '{"kind":"variant","tag":"a","value":"x"}',
+    '{"kind":"variant","tag":"a","value":{},"extra":true}',
+    '{"kind":"variant","tag":"a","value":{"n":1}}',
+    '{"kind":"record","tag":"a","value":{}}',
+  ]) {
+    assert.ok("error" in validateCanonicalValue(bad), bad);
+  }
+  assert.match(
+    (
+      validateCanonicalValue('{"kind":"choice","value":{}}') as {
+        error: string;
+      }
+    ).error,
+    /envelopes are integer, boolean, timestamp, duration, date, offset_timestamp, record, or variant/,
+  );
+});
+
+test("an enum is a shape over text, and the new shapes start without a value", () => {
+  const per: Shape = { kind: "enum", members: ["day", "week"] };
+  assert.equal(shapeKind(per), "text");
+  assert.ok(matchesShape("month", per));
+  assert.ok(!matchesShape({ kind: "integer", value: "1" }, per));
+  assert.equal(kindOf({ kind: "variant", tag: "a", value: {} }), "variant");
+  const shapes: Shape[] = [
+    per,
+    { kind: "duration" },
+    { kind: "date" },
+    { kind: "offset_timestamp" },
+    { kind: "variant", tags: { a: {} } },
+  ];
+  for (const shape of shapes) {
+    assert.equal(defaultValue(shape), null, shape.kind);
   }
 });

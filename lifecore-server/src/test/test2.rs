@@ -1220,7 +1220,7 @@ fn method_module(method: &str, pairs: Vec<(&str, &str, (Value, Value))>) -> Modu
     )
 }
 
-const EVALUATION_TIME: &str = "2026-10-15T08:30:00.123456789Z";
+const EVALUATION_TIME: &str = "2026-10-15T10:30:00.123456789+02:00";
 
 fn task_declaration() -> Value {
     json!({
@@ -1234,6 +1234,14 @@ fn task_declaration() -> Value {
             "done": ["optional", "boolean"],
             "tags": ["optional", "list", "text"],
             "details": ["optional", "record", {"kind": "record", "value": {"owner": ["mandatory", "text"]}}],
+            "effort": ["optional", "duration"],
+            "start": ["optional", "date"],
+            "logged": ["optional", "list", "offset_timestamp"],
+            "cadence": ["optional", "enum", ["day", "week"]],
+            "decision": ["optional", "variant", {"kind": "record", "value": {
+                "committed": {"kind": "record", "value": {"cost": ["mandatory", "duration"]}},
+                "resumed": {"kind": "record", "value": {}},
+            }}],
         }},
         "outgoing": ["DependsOn"],
         "incoming": ["DependsOn"],
@@ -1343,8 +1351,15 @@ async fn fixtures(scratch: &Scratch) -> Vec<Module> {
         "proposal.apply",
         json!({"proposal": {"plan_id": first_plan, "entries": [
             {"name": "task_type", "kind": "node", "ty_name": "Type", "payload": task_declaration()},
+            // Every new value kind, some in spellings the codec re-spells.
             {"name": "report", "kind": "node", "ty_name": "Task",
-                "payload": {"title": "Write the report", "priority": {"kind": "integer", "value": "2"}}},
+                "payload": {"title": "Write the report", "priority": {"kind": "integer", "value": "2"},
+                    "effort": {"kind": "duration", "value": "90m"},
+                    "start": {"kind": "date", "value": "2026-11-06"},
+                    "logged": [{"kind": "offset_timestamp", "value": "2026-10-29T08:15:00+01:00"}],
+                    "cadence": "week",
+                    "decision": {"kind": "variant", "tag": "committed",
+                        "value": {"cost": {"kind": "duration", "value": "PT2H"}}}}},
             {"name": "review", "kind": "node", "ty_name": "Task",
                 "payload": {"title": "Review the report", "notes": "Ask Teto"}},
             {"name": "review_after_report", "kind": "edge", "ty_name": "DependsOn",
@@ -2198,10 +2213,16 @@ fn schema_error_tag(kind: &SchemaErrorKind) -> &'static str {
     SchemaErrorKind::TrailingElements => "trailing_elements",
     SchemaErrorKind::TooDeep => "too_deep",
     SchemaErrorKind::DuplicatePermission { .. } => "duplicate_permission",
+    SchemaErrorKind::MissingMembers => "missing_members",
+    SchemaErrorKind::EmptyEnum => "empty_enum",
+    SchemaErrorKind::EmptyMember => "empty_member",
+    SchemaErrorKind::DuplicateMember { .. } => "duplicate_member",
+    SchemaErrorKind::MissingTags => "missing_tags",
+    SchemaErrorKind::EmptyVariant => "empty_variant",
     }
 }
 
-const SCHEMA_ERROR_KINDS: [&str; 11] = [
+const SCHEMA_ERROR_KINDS: [&str; 17] = [
     "missing_field",
     "unknown_field",
     "wrong_shape",
@@ -2213,6 +2234,12 @@ const SCHEMA_ERROR_KINDS: [&str; 11] = [
     "trailing_elements",
     "too_deep",
     "duplicate_permission",
+    "missing_members",
+    "empty_enum",
+    "empty_member",
+    "duplicate_member",
+    "missing_tags",
+    "empty_variant",
 ];
 
 // Declaration payloads with `Type::from_body`'s reading of each (FILES 2.6):
@@ -2230,6 +2257,20 @@ fn declaration_cases() -> Value {
     through_record.extend(std::iter::repeat_n(json!("list"), 63));
     through_record.push(json!("record"));
     through_record.push(json!({"kind": "record", "value": {"g": ["mandatory", "list", "text"]}}));
+    // A variant counts as one level: after 63 `list` words, a variant inside
+    // a variant's tag is the 65th level. Lists keep the JSON shallow enough
+    // for the type-check to follow; the parse at 64 levels is left to Rust's
+    // and the client's unit tests, as its schema would nest too deep.
+    let through_variant = |inner: Value| {
+        let mut words = vec![json!("optional")];
+        words.extend(std::iter::repeat_n(json!("list"), 63));
+        words.push(json!("variant"));
+        words.push(
+            json!({"kind": "record", "value": {"t": {"kind": "record", "value": {"f": inner}}}}),
+        );
+        Value::Array(words)
+    };
+    let tags = |value: Value| json!(["optional", "variant", {"kind": "record", "value": value}]);
     let payloads = [
         task_declaration(),
         json!({"name": "Bare"}),
@@ -2280,6 +2321,46 @@ fn declaration_cases() -> Value {
         // reported: "10" before "9", and U+FF61 before U+1F600.
         fields(json!({"9": "x", "10": "x"})),
         fields(json!({"\u{1f600}": "x", "\u{ff61}": "x"})),
+        // The words of the new kinds, and each way they are malformed.
+        fields(json!({
+            "cost": ["optional", "duration"],
+            "deadline": ["optional", "date"],
+            "at": ["mandatory", "offset_timestamp"],
+            "per": ["mandatory", "enum", ["window", "day", "week", "\u{1f600}", "\u{ff61}"]],
+            "decision": tags(json!({
+                "committed": {"kind": "record", "value": {"cost": ["mandatory", "duration"]}},
+                "deferred": {"kind": "record", "value": {"horizon": ["mandatory", "integer"]}},
+                "resumed": {"kind": "record", "value": {}},
+            })),
+            "history": ["optional", "list", "variant", {"kind": "record", "value": {
+                "only": {"kind": "record", "value": {"per": ["optional", "enum", ["a"]]}}}}],
+        })),
+        fields(json!({"a": through_variant(json!(["optional", "variant",
+            {"kind": "record", "value": {"u": {"kind": "record", "value": {}}}}]))})),
+        fields(json!({"a": ["optional", "enum"]})),
+        fields(json!({"a": ["optional", "enum", "day"]})),
+        fields(json!({"a": ["optional", "enum", []]})),
+        fields(json!({"a": ["optional", "enum", ["day", 1]]})),
+        fields(json!({"a": ["optional", "enum", ["day", ""]]})),
+        fields(json!({"a": ["optional", "enum", ["day", "week", "day"]]})),
+        fields(json!({"a": ["optional", "enum", ["day"], "text"]})),
+        fields(json!({"a": ["optional", "variant"]})),
+        fields(json!({"a": ["optional", "variant", "committed"]})),
+        fields(json!({"a": ["optional", "variant", ["committed"]]})),
+        fields(json!({"a": tags(json!({}))})),
+        fields(json!({"a": tags(json!({"committed": "duration"}))})),
+        fields(
+            json!({"a": tags(json!({"committed": {"kind": "record", "value": {
+            "cost": ["mandatory", "hours"]}}}))}),
+        ),
+        fields(
+            json!({"a": tags(json!({"b": {"kind": "record", "value": {"x": "bad"}},
+            "a": {"kind": "record", "value": {"x": "bad"}}}))}),
+        ),
+        fields(
+            json!({"a": ["optional", "variant", {"kind": "record", "value": {
+            "t": {"kind": "record", "value": {}}}}, "text"]}),
+        ),
     ];
     let mut kinds = BTreeSet::new();
     let cases = payloads
@@ -2301,11 +2382,12 @@ fn declaration_cases() -> Value {
 
 // How the raw payload editor relates to the codec on a text: it agrees
 // exactly; it refuses a bare integer, which the codec accepts as shorthand
-// but `JSON.parse` would round; or it keeps a timestamp's text for Jiff to
-// judge and normalize (FILES 2.1).
+// but `JSON.parse` would round; or it keeps the text of a time kind
+// (timestamp, duration, date, offset timestamp) for Rust to judge and
+// normalize (FILES 2.1).
 const AGREES: &str = "agrees";
 const REFUSES_SHORTHAND: &str = "refuses_shorthand";
-const DEFERS_TIMESTAMP: &str = "defers_timestamp";
+const DEFERS_TIME: &str = "defers_time";
 
 // Node payload texts with the codec's reading: the canonical payload, or null
 // when it rejects the text.
@@ -2366,11 +2448,43 @@ fn payload_text_cases() -> Value {
         (r#"{"l":["a",[-9223372036854775808]]}"#, REFUSES_SHORTHAND),
         (
             r#"{"t":{"kind":"timestamp","value":"yesterday"}}"#,
-            DEFERS_TIMESTAMP,
+            DEFERS_TIME,
         ),
         (
             r#"{"t":{"kind":"timestamp","value":"2026-10-15T10:30:00+02:00"}}"#,
-            DEFERS_TIMESTAMP,
+            DEFERS_TIME,
+        ),
+        // The new kinds in canonical form, alone and nested.
+        (
+            r#"{"d":{"kind":"duration","value":"PT1H30M"},"day":{"kind":"date","value":"2026-11-06"},"at":{"kind":"offset_timestamp","value":"2026-10-29T08:15:00.5-05:30"},"v":{"kind":"variant","tag":"committed","value":{"cost":{"kind":"duration","value":"-PT2H"},"inner":{"kind":"variant","tag":"","value":{}}}},"l":[{"kind":"variant","tag":"a b","value":{"r":{"kind":"record","value":{}}}}]}"#,
+            AGREES,
+        ),
+        (r#"{"v":{"value":{},"tag":"x","kind":"variant"}}"#, AGREES),
+        (r#"{"v":{"kind":"variant","value":{}}}"#, AGREES),
+        (r#"{"v":{"kind":"variant","tag":"x"}}"#, AGREES),
+        (r#"{"v":{"kind":"variant","tag":1,"value":{}}}"#, AGREES),
+        (r#"{"v":{"kind":"variant","tag":"x","value":[]}}"#, AGREES),
+        (
+            r#"{"v":{"kind":"variant","tag":"x","value":{"kind":"record","value":{}}}}"#,
+            AGREES,
+        ),
+        (
+            r#"{"v":{"kind":"variant","tag":"x","tag":"y","value":{}}}"#,
+            AGREES,
+        ),
+        (r#"{"r":{"kind":"record","tag":"x","value":{}}}"#, AGREES),
+        (r#"{"d":{"kind":"duration","value":5400}}"#, AGREES),
+        (r#"{"d":{"kind":"date","value":""}}"#, AGREES),
+        (r#"{"d":{"kind":"duration","value":"90m"}}"#, DEFERS_TIME),
+        (r#"{"d":{"kind":"duration","value":"P1D"}}"#, DEFERS_TIME),
+        (r#"{"d":{"kind":"date","value":"20261106"}}"#, DEFERS_TIME),
+        (
+            r#"{"t":{"kind":"offset_timestamp","value":"2026-10-29T07:15:00Z"}}"#,
+            DEFERS_TIME,
+        ),
+        (
+            r#"{"t":{"kind":"offset_timestamp","value":"2026-10-29T08:15:00+01:00[Europe/Berlin]"}}"#,
+            DEFERS_TIME,
         ),
     ];
     cases
@@ -2389,7 +2503,7 @@ fn payload_text_cases() -> Value {
                 "{text}"
             ),
             // Jiff rejects or respells the text the client keeps.
-            DEFERS_TIMESTAMP => assert_ne!(
+            DEFERS_TIME => assert_ne!(
                 codec,
                 Some(serde_json::from_str::<Value>(text).unwrap()),
                 "{text}"

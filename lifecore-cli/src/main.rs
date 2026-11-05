@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use lifecore::{
-    Timestamp,
+    OffsetTimestamp,
     analysis::{AnalyzerFactory, Config},
 };
 use lifecore_app::{
@@ -96,12 +96,15 @@ enum Command {
 struct Evaluation {
     #[arg(
         long,
-        value_name = "TIMESTAMP",
+        value_name = "OFFSET_TIMESTAMP",
         conflicts_with = "now",
-        help = "Evaluate analyzers at this instant"
+        help = "Evaluate analyzers at this instant and UTC offset, as in 2026-10-29T08:15:00+01:00"
     )]
-    evaluation_time: Option<Timestamp>,
-    #[arg(long, help = "Capture the current instant once and evaluate at it")]
+    evaluation_time: Option<OffsetTimestamp>,
+    #[arg(
+        long,
+        help = "Capture the current instant and local offset once and evaluate at them"
+    )]
     now: bool,
 }
 

@@ -1,4 +1,4 @@
-use jiff::Timestamp;
+use crate::OffsetTimestamp;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,7 +17,9 @@ pub struct AnalyzerIdentity {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationInputs {
-    pub evaluation_time: Option<Timestamp>,
+    // The instant with the offset the host observed it at, so an analyzer
+    // can find the local date without reading the system zone.
+    pub evaluation_time: Option<OffsetTimestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

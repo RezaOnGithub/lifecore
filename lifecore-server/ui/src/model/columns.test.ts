@@ -133,3 +133,43 @@ test("absent cells sort last in both directions", () => {
     ["b", "c", "a"],
   );
 });
+
+test("durations compare by length, offset timestamps by instant, dates by day", () => {
+  const duration = (value: string): Payload => ({ kind: "duration", value });
+  // As text `PT1H` would follow `PT10M`... and `PT2H` follow `PT10H`.
+  assert.ok(compareCells(duration("PT2H"), duration("PT10H")) < 0);
+  assert.ok(compareCells(duration("PT59M"), duration("PT1H")) < 0);
+  assert.ok(compareCells(duration("-PT2H"), duration("-PT1H")) < 0);
+  assert.ok(compareCells(duration("PT0S"), duration("PT0.000000001S")) < 0);
+  assert.ok(compareCells(duration("PT1M0.5S"), duration("PT1M")) > 0);
+  assert.equal(compareCells(duration("PT1H"), duration("PT1H")), 0);
+  const at = (value: string): Payload => ({ kind: "offset_timestamp", value });
+  // Later local time, earlier instant: 08:15+01:00 is 07:15Z.
+  assert.ok(
+    compareCells(
+      at("2026-10-29T08:15:00+01:00"),
+      at("2026-10-29T07:30:00+00:00"),
+    ) < 0,
+  );
+  assert.equal(
+    compareCells(
+      at("2026-10-29T08:15:00+01:00"),
+      at("2026-10-29T01:45:00-05:30"),
+    ),
+    0,
+  );
+  assert.ok(
+    compareCells(
+      at("2026-10-29T08:15:00.5+01:00"),
+      at("2026-10-29T08:15:00+01:00"),
+    ) > 0,
+  );
+  assert.ok(
+    compareCells(
+      at("-009999-01-01T00:00:00+00:00"),
+      at("0001-01-01T00:00:00+00:00"),
+    ) < 0,
+  );
+  const date = (value: string): Payload => ({ kind: "date", value });
+  assert.ok(compareCells(date("2026-02-01"), date("2026-11-06")) < 0);
+});

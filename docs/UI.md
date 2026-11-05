@@ -94,9 +94,14 @@ contract with the service.
   own parse and the server's alike.
 - A table renders 500 rows, then "show next 500" and "show all" with the count
   of the rest. Cells render on one line (`[a, b]`, `{owner: me}`, `true`), cut
-  at 80 characters with the full text as a tooltip. Integers sort by value,
-  timestamps by instant at full precision, everything else as text; absent
-  cells sort last ascending. A wide table scrolls sideways.
+  at 80 characters with the full text as a tooltip. A duration, date, or
+  offset timestamp shows its canonical string, and a variant its tag before
+  its body (`committed {cost: PT2H}`). Integers sort by value, timestamps
+  and offset timestamps by instant at full precision (one instant at two
+  offsets ties), durations by length, everything else, dates included, as
+  text; absent cells sort last ascending. A wide table scrolls sideways.
+- A declared shape reads as words: `list of text`, `record {owner: text}`,
+  `enum day | week`, `variant committed {cost: duration} | resumed {}`.
 - A type table sends its text filter as the `text` of its node seed, 300 ms
   after the last keystroke; Explore sends its own on Run. The Findings and
   outline filters run in the client.
@@ -238,11 +243,28 @@ contract with the service.
 - Check is manual. Apply is enabled only after an accepted, unspent check of
   identical proposal JSON, plan ID included, with the same evaluation choice.
   It sends the evaluation time that check reported, so `now` applies at the
-  instant the check captured; the tray shows which. An explicit evaluation
-  time gets a hint naming the RFC 3339 form while what is typed does not
-  look like it; the server parses it. While an apply is in flight the draft
+  instant and offset the check captured; the tray shows which. An explicit
+  evaluation time gets a hint naming the RFC 3339 form with a numeric offset
+  while what is typed does not look like it, and says why `Z` or `-00:00`
+  will be refused; the server parses it. While an apply is in flight the draft
   is frozen: no edit, pick, import, or Clear lands. Drafts always apply to
   the current state; under an as-of boundary the tray says so.
+- Kinds without an editor: the form edits text, integers, booleans,
+  timestamps, lists of those, and records; the other value kinds and shapes
+  (duration, date, offset timestamp, enum, and variant, until their editors
+  arrive, and any kind added later) are shown, not edited. Such a field's value
+  is a read-only input holding its JSON as the draft has it (canonical once
+  stored; time text typed in the raw JSON stays as typed until then),
+  labelled `<field> (read-only)`, with a note to edit it in the raw JSON; its
+  presence checkbox is disabled, and adding it by name is refused with the
+  same advice. A list whose
+  element has no editor is read-only as a whole, while a record stays
+  editable field by field. In the declaration form, a field whose shape the
+  builder does not offer keeps its name, presence, and removal, and shows the
+  shape's words read-only the same way; the builder's select offers only the
+  editable words. The raw JSON reaches every shape, so nothing is out of
+  reach, and a value of another kind than declared still falls back to an
+  editable JSON field.
 - A successful Apply removes the operations it carried, matched by name and
   content, turns references to them into the assigned IDs, records their
   names, lists those IDs and the report's finding counts until dismissed, and

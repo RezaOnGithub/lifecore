@@ -8,6 +8,36 @@ export const declarations = [
       "fields": {
         "kind": "record",
         "value": {
+          "cadence": [
+            "optional",
+            "enum",
+            [
+              "day",
+              "week"
+            ]
+          ],
+          "decision": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "committed": {
+                  "kind": "record",
+                  "value": {
+                    "cost": [
+                      "mandatory",
+                      "duration"
+                    ]
+                  }
+                },
+                "resumed": {
+                  "kind": "record",
+                  "value": {}
+                }
+              }
+            }
+          ],
           "details": [
             "optional",
             "record",
@@ -29,6 +59,15 @@ export const declarations = [
             "optional",
             "timestamp"
           ],
+          "effort": [
+            "optional",
+            "duration"
+          ],
+          "logged": [
+            "optional",
+            "list",
+            "offset_timestamp"
+          ],
           "notes": [
             "encouraged",
             "text"
@@ -36,6 +75,10 @@ export const declarations = [
           "priority": [
             "optional",
             "integer"
+          ],
+          "start": [
+            "optional",
+            "date"
           ],
           "status": [
             "optional",
@@ -63,6 +106,33 @@ export const declarations = [
     },
     "schema": {
       "fields": {
+        "cadence": {
+          "shape": {
+            "kind": "enum",
+            "members": [
+              "day",
+              "week"
+            ]
+          },
+          "status": "optional"
+        },
+        "decision": {
+          "shape": {
+            "kind": "variant",
+            "tags": {
+              "committed": {
+                "cost": {
+                  "shape": {
+                    "kind": "duration"
+                  },
+                  "status": "mandatory"
+                }
+              },
+              "resumed": {}
+            }
+          },
+          "status": "optional"
+        },
         "details": {
           "shape": {
             "fields": {
@@ -89,6 +159,21 @@ export const declarations = [
           },
           "status": "optional"
         },
+        "effort": {
+          "shape": {
+            "kind": "duration"
+          },
+          "status": "optional"
+        },
+        "logged": {
+          "shape": {
+            "element": {
+              "kind": "offset_timestamp"
+            },
+            "kind": "list"
+          },
+          "status": "optional"
+        },
         "notes": {
           "shape": {
             "kind": "text"
@@ -98,6 +183,12 @@ export const declarations = [
         "priority": {
           "shape": {
             "kind": "integer"
+          },
+          "status": "optional"
+        },
+        "start": {
+          "shape": {
+            "kind": "date"
           },
           "status": "optional"
         },
@@ -1070,6 +1161,719 @@ export const declarations = [
       },
       "name": "X"
     }
+  },
+  {
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "at": [
+            "mandatory",
+            "offset_timestamp"
+          ],
+          "cost": [
+            "optional",
+            "duration"
+          ],
+          "deadline": [
+            "optional",
+            "date"
+          ],
+          "decision": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "committed": {
+                  "kind": "record",
+                  "value": {
+                    "cost": [
+                      "mandatory",
+                      "duration"
+                    ]
+                  }
+                },
+                "deferred": {
+                  "kind": "record",
+                  "value": {
+                    "horizon": [
+                      "mandatory",
+                      "integer"
+                    ]
+                  }
+                },
+                "resumed": {
+                  "kind": "record",
+                  "value": {}
+                }
+              }
+            }
+          ],
+          "history": [
+            "optional",
+            "list",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "only": {
+                  "kind": "record",
+                  "value": {
+                    "per": [
+                      "optional",
+                      "enum",
+                      [
+                        "a"
+                      ]
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "per": [
+            "mandatory",
+            "enum",
+            [
+              "window",
+              "day",
+              "week",
+              "😀",
+              "｡"
+            ]
+          ]
+        }
+      },
+      "name": "X"
+    },
+    "schema": {
+      "fields": {
+        "at": {
+          "shape": {
+            "kind": "offset_timestamp"
+          },
+          "status": "mandatory"
+        },
+        "cost": {
+          "shape": {
+            "kind": "duration"
+          },
+          "status": "optional"
+        },
+        "deadline": {
+          "shape": {
+            "kind": "date"
+          },
+          "status": "optional"
+        },
+        "decision": {
+          "shape": {
+            "kind": "variant",
+            "tags": {
+              "committed": {
+                "cost": {
+                  "shape": {
+                    "kind": "duration"
+                  },
+                  "status": "mandatory"
+                }
+              },
+              "deferred": {
+                "horizon": {
+                  "shape": {
+                    "kind": "integer"
+                  },
+                  "status": "mandatory"
+                }
+              },
+              "resumed": {}
+            }
+          },
+          "status": "optional"
+        },
+        "history": {
+          "shape": {
+            "element": {
+              "kind": "variant",
+              "tags": {
+                "only": {
+                  "per": {
+                    "shape": {
+                      "kind": "enum",
+                      "members": [
+                        "a"
+                      ]
+                    },
+                    "status": "optional"
+                  }
+                }
+              }
+            },
+            "kind": "list"
+          },
+          "status": "optional"
+        },
+        "per": {
+          "shape": {
+            "kind": "enum",
+            "members": [
+              "day",
+              "week",
+              "window",
+              "｡",
+              "😀"
+            ]
+          },
+          "status": "mandatory"
+        }
+      },
+      "incoming": [],
+      "name": "X",
+      "outgoing": [],
+      "successors": []
+    }
+  },
+  {
+    "error": {
+      "kind": "too_deep",
+      "path": [
+        "fields",
+        "a",
+        65,
+        "t",
+        "f",
+        1
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "list",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "t": {
+                  "kind": "record",
+                  "value": {
+                    "f": [
+                      "optional",
+                      "variant",
+                      {
+                        "kind": "record",
+                        "value": {
+                          "u": {
+                            "kind": "record",
+                            "value": {}
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "missing_members",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum"
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "actual": "text",
+      "expected": "list",
+      "kind": "wrong_shape",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum",
+            "day"
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "empty_enum",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum",
+            []
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "actual": "integer",
+      "expected": "text",
+      "kind": "wrong_shape",
+      "path": [
+        "fields",
+        "a",
+        2,
+        1
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum",
+            [
+              "day",
+              {
+                "kind": "integer",
+                "value": "1"
+              }
+            ]
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "empty_member",
+      "path": [
+        "fields",
+        "a",
+        2,
+        1
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum",
+            [
+              "day",
+              ""
+            ]
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "duplicate_member",
+      "member": "day",
+      "path": [
+        "fields",
+        "a",
+        2,
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum",
+            [
+              "day",
+              "week",
+              "day"
+            ]
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "trailing_elements",
+      "path": [
+        "fields",
+        "a",
+        3
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "enum",
+            [
+              "day"
+            ],
+            "text"
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "missing_tags",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant"
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "actual": "text",
+      "expected": "record",
+      "kind": "wrong_shape",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            "committed"
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "actual": "list",
+      "expected": "record",
+      "kind": "wrong_shape",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            [
+              "committed"
+            ]
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "empty_variant",
+      "path": [
+        "fields",
+        "a",
+        2
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {}
+            }
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "actual": "text",
+      "expected": "record",
+      "kind": "wrong_shape",
+      "path": [
+        "fields",
+        "a",
+        2,
+        "committed"
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "committed": "duration"
+              }
+            }
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "unknown_shape",
+      "path": [
+        "fields",
+        "a",
+        2,
+        "committed",
+        "cost",
+        1
+      ],
+      "word": "hours"
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "committed": {
+                  "kind": "record",
+                  "value": {
+                    "cost": [
+                      "mandatory",
+                      "hours"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "actual": "text",
+      "expected": "list",
+      "kind": "wrong_shape",
+      "path": [
+        "fields",
+        "a",
+        2,
+        "a",
+        "x"
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "a": {
+                  "kind": "record",
+                  "value": {
+                    "x": "bad"
+                  }
+                },
+                "b": {
+                  "kind": "record",
+                  "value": {
+                    "x": "bad"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "name": "X"
+    }
+  },
+  {
+    "error": {
+      "kind": "trailing_elements",
+      "path": [
+        "fields",
+        "a",
+        3
+      ]
+    },
+    "payload": {
+      "fields": {
+        "kind": "record",
+        "value": {
+          "a": [
+            "optional",
+            "variant",
+            {
+              "kind": "record",
+              "value": {
+                "t": {
+                  "kind": "record",
+                  "value": {}
+                }
+              }
+            },
+            "text"
+          ]
+        }
+      },
+      "name": "X"
+    }
   }
 ] satisfies DeclarationFixture[];
 
@@ -1322,12 +2126,12 @@ export const payloadTexts = [
     "text": "{\"l\":[\"a\",[-9223372036854775808]]}"
   },
   {
-    "client": "defers_timestamp",
+    "client": "defers_time",
     "codec": null,
     "text": "{\"t\":{\"kind\":\"timestamp\",\"value\":\"yesterday\"}}"
   },
   {
-    "client": "defers_timestamp",
+    "client": "defers_time",
     "codec": {
       "t": {
         "kind": "timestamp",
@@ -1335,5 +2139,136 @@ export const payloadTexts = [
       }
     },
     "text": "{\"t\":{\"kind\":\"timestamp\",\"value\":\"2026-10-15T10:30:00+02:00\"}}"
+  },
+  {
+    "client": "agrees",
+    "codec": {
+      "at": {
+        "kind": "offset_timestamp",
+        "value": "2026-10-29T08:15:00.5-05:30"
+      },
+      "d": {
+        "kind": "duration",
+        "value": "PT1H30M"
+      },
+      "day": {
+        "kind": "date",
+        "value": "2026-11-06"
+      },
+      "l": [
+        {
+          "kind": "variant",
+          "tag": "a b",
+          "value": {
+            "r": {
+              "kind": "record",
+              "value": {}
+            }
+          }
+        }
+      ],
+      "v": {
+        "kind": "variant",
+        "tag": "committed",
+        "value": {
+          "cost": {
+            "kind": "duration",
+            "value": "-PT2H"
+          },
+          "inner": {
+            "kind": "variant",
+            "tag": "",
+            "value": {}
+          }
+        }
+      }
+    },
+    "text": "{\"d\":{\"kind\":\"duration\",\"value\":\"PT1H30M\"},\"day\":{\"kind\":\"date\",\"value\":\"2026-11-06\"},\"at\":{\"kind\":\"offset_timestamp\",\"value\":\"2026-10-29T08:15:00.5-05:30\"},\"v\":{\"kind\":\"variant\",\"tag\":\"committed\",\"value\":{\"cost\":{\"kind\":\"duration\",\"value\":\"-PT2H\"},\"inner\":{\"kind\":\"variant\",\"tag\":\"\",\"value\":{}}}},\"l\":[{\"kind\":\"variant\",\"tag\":\"a b\",\"value\":{\"r\":{\"kind\":\"record\",\"value\":{}}}}]}"
+  },
+  {
+    "client": "agrees",
+    "codec": {
+      "v": {
+        "kind": "variant",
+        "tag": "x",
+        "value": {}
+      }
+    },
+    "text": "{\"v\":{\"value\":{},\"tag\":\"x\",\"kind\":\"variant\"}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"v\":{\"kind\":\"variant\",\"value\":{}}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"v\":{\"kind\":\"variant\",\"tag\":\"x\"}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"v\":{\"kind\":\"variant\",\"tag\":1,\"value\":{}}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"v\":{\"kind\":\"variant\",\"tag\":\"x\",\"value\":[]}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"v\":{\"kind\":\"variant\",\"tag\":\"x\",\"value\":{\"kind\":\"record\",\"value\":{}}}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"v\":{\"kind\":\"variant\",\"tag\":\"x\",\"tag\":\"y\",\"value\":{}}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"r\":{\"kind\":\"record\",\"tag\":\"x\",\"value\":{}}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"d\":{\"kind\":\"duration\",\"value\":5400}}"
+  },
+  {
+    "client": "agrees",
+    "codec": null,
+    "text": "{\"d\":{\"kind\":\"date\",\"value\":\"\"}}"
+  },
+  {
+    "client": "defers_time",
+    "codec": {
+      "d": {
+        "kind": "duration",
+        "value": "PT1H30M"
+      }
+    },
+    "text": "{\"d\":{\"kind\":\"duration\",\"value\":\"90m\"}}"
+  },
+  {
+    "client": "defers_time",
+    "codec": null,
+    "text": "{\"d\":{\"kind\":\"duration\",\"value\":\"P1D\"}}"
+  },
+  {
+    "client": "defers_time",
+    "codec": null,
+    "text": "{\"d\":{\"kind\":\"date\",\"value\":\"20261106\"}}"
+  },
+  {
+    "client": "defers_time",
+    "codec": null,
+    "text": "{\"t\":{\"kind\":\"offset_timestamp\",\"value\":\"2026-10-29T07:15:00Z\"}}"
+  },
+  {
+    "client": "defers_time",
+    "codec": null,
+    "text": "{\"t\":{\"kind\":\"offset_timestamp\",\"value\":\"2026-10-29T08:15:00+01:00[Europe/Berlin]\"}}"
   }
 ] satisfies PayloadTextFixture[];
