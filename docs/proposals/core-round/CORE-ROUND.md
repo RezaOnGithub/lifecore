@@ -269,13 +269,28 @@ Rules:
   ([PLANNING §3.4](../../PLANNING.md#34-amending-the-declarations)).
   TypeCheck, not decoding, rejects undeclared fields.
 - **Names.** Snake case by default, `#[lifecore(rename = "…")]` otherwise.
+- **Bodies only.** Decoding reads a body and nothing else. It never looks at
+  the node's `ty_name`, its edges, or its declaration. The caller chooses
+  which nodes to decode, by whatever names it uses. The type name in
+  `PayloadError` only serves the message.
+- **A decode type names only the fields the analyzer reads.** A user may
+  change or remove any canonical field the analyzer does not read
+  ([PLANNING §3.4](../../PLANNING.md#34-amending-the-declarations)), so
+  decoding such a field could fail on a payload TypeCheck accepted. The
+  canonical declaration therefore comes from a separate type.
 
-A type-level derive adds the declaration:
+A type-level derive, `Declare`, produces the canonical declaration from a
+type that lists every canonical field. Field shapes come from
+`FromPayload::shape`, so a `Declare` type needs no `FromBody`:
 
 ```rust
-#[derive(FromBody, Declare)]
-#[lifecore(type = "Stance", outgoing = ["About", "Until"], successors = [])]
-struct Stance { decision: Decision, at: OffsetTimestamp, reason: Option<String> }
+#[derive(Declare)]
+#[lifecore(type = "Stance", outgoing = ["About", "Until"])]
+struct StanceDeclaration { decision: Decision, at: OffsetTimestamp, reason: Option<String> }
+
+// What Planning's rules read; `at` and `reason` are free under §3.4.
+#[derive(FromBody)]
+struct Stance { decision: Decision }
 
 #[derive(FromPayload)]
 enum Decision {
@@ -286,12 +301,43 @@ enum Decision {
 }
 ```
 
-`Stance::declaration()` returns the canonical `Type`. Planning's bootstrap
-suggestions are built from it, and a test compares it with the TOML in
-PLANNING §11, which stays the owning text.
+`StanceDeclaration::declaration()` returns the canonical `Type`. Planning's
+bootstrap suggestions are built from it, and a test compares it with the TOML
+in PLANNING §11, which stays the owning text. A second test checks each decode
+type against its declaration: every field of `FromBody::fields()` occurs in
+the declaration with the same shape. A field the analyzer reads as `T` is
+declared `mandatory`, and one read as `Option<T>` may have any policy. Those
+are also the field requirements an analyzer's own declaration rule must keep
+(PLANNING §3.4), so that half of the table can be derived from the decode
+types. Whether Planning derives it is the Planning round's choice (section 6,
+step 6).
+
+Edge and successor attributes:
+
+- **They feed `Declare` and nothing else.** Edges carry no payload (section
+  1), so decoding has nothing to check on them. TypeCheck checks each current
+  edge against the user's stored declarations
+  ([SPEC §7.3](../../SPEC.md#73-resulting-view-checks), step 4), and an
+  analyzer's own declaration rule checks that the stored declarations still
+  permit what it relies on (PLANNING §3.4, today `unmet` in
+  `lifecore-prod/src/declarations.rs`). After step 4 that rule compares with
+  `declaration()` instead of the hand-written `PlanningType::canonical()`.
+- **An omitted `incoming`, `outgoing`, or `successors` is the empty set.**
+
+The names in `Declare` (the type name and the labels) are defaults, not
+identity. No analyzer configures its names today. Planning owns its names
+(PLANNING decision 35). DAG Check and Reconnect take names in their
+configuration, but they decode no payloads. Once namespacing
+([PLAN §3](../../PLAN.md#3-backlog)) or a configurable analyzer needs other
+names, `declaration()` becomes a convenience over a variant that takes a name
+mapping. Decoding needs no change, since it never reads names. Rejected: a
+per-field `#[lifecore(declare_only)]` attribute that keeps one type for both
+roles. It hides which fields are read behind an attribute, while separate
+types make the read set what the test above checks.
 
 Both derives go in `lifecore-proc-macro`, today an empty stub outside the
-workspace, which joins the workspace.
+workspace. Its directory is renamed `lifecore-derive`, the name its package
+already has, and it joins the workspace.
 
 ### 3.3 Why not serde
 
@@ -308,6 +354,12 @@ trait with a derive is less code than the workaround.
 associated `type Error: std::error::Error`, converted to the `String` of
 `ExecutionFailure` at the `dyn Analyzer` boundary, so tests can assert an
 analyzer's errors structurally as they already assert its findings.
+
+A `PayloadError` stays an execution failure, never a finding. An analyzer may
+assume that payloads fit their declarations, and may fail at a prefix
+TypeCheck rejects (PLANNING decision 53). Under section 3.2 a decode type
+names only fields the declaration rule keeps, so with TypeCheck configured
+that is the only kind of prefix where decoding can fail.
 
 ## 4. Indexes
 
@@ -688,6 +740,16 @@ shapes, the fixtures and `contract.ts` together.
 
 1. **Benchmark.** Add a repeatable generator and benchmark for
    planning-shaped histories at both seal densities, recording the baseline.
+   The benchmark is a `harness = false` bench target in `lifecore-app` (the
+   built-in `#[bench]` harness needs nightly). It times snapshot load and
+   validation, and a check of a one-node proposal under
+   `--default-analyzers`, with `Instant`, as PERFORMANCE §1 does by hand,
+   and prints the table PERFORMANCE records. A statistical harness such as
+   criterion or divan does not fit runs of seconds to minutes. One may come
+   later, for micro-benchmarks of index queries. The generator is library
+   code, so step 2's equivalence helper can run analyzers over the same
+   histories. The core's property tests in `lifecore` need a small generator
+   of their own, because `lifecore` cannot depend on Planning's vocabulary.
 2. **Optional core indexes and incremental validation.** `Indexing` modes, the
    equivalence helper, and the property tests come first, then the indexes.
    Results are unchanged by construction. Measure again.
@@ -708,8 +770,9 @@ it reads payloads. Step 5 cannot change results, by section 4.3. Step 6 is
 where Planning's findings and certificates change. All of this goes before
 acknowledgment (PLAN §2.2), which gives certificates weight.
 
-Housekeeping along the way: make `lifecore-proc-macro` a workspace member in
-step 4. `lifecore-kman` stays as it is.
+Housekeeping along the way: in step 4, rename `lifecore-proc-macro` to
+`lifecore-derive` and make it a workspace member. `lifecore-kman` stays as it
+is.
 
 ## 7. Documents that would change
 

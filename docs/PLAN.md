@@ -184,3 +184,37 @@ workflows.
 - Namespacing in the type system, so that two vocabularies can share a type
   name or an edge label. Planning owns its names outright until then
   ([PLANNING](PLANNING.md#13-design-decisions), decision 35).
+
+### 3.1 Open questions
+
+These are not scheduled work. Each needs a sketch of its own before it
+becomes a backlog item.
+
+- **Protecting the vocabulary an analyzer relies on.** A domain analyzer needs
+  a minimum vocabulary: types, fields with their shapes, and edge permissions.
+  It may also need constraints a declaration cannot express, such as the type
+  at the opposite endpoint of a label. Users may amend declarations freely
+  ([SPEC §6](SPEC.md#6-type-declarations)), so each analyzer re-judges them
+  against its own requirements, as Planning does by hand
+  ([PLANNING §3.4](PLANNING.md#34-amending-the-declarations), decision 36),
+  and checks the rest in its own rules (PLANNING §8, "Left to TypeCheck").
+  Every new domain analyzer would repeat this. Two directions:
+  - **Declared requirements.** At instantiation, an analyzer declares
+    everything it needs: types, fields, label permissions, and endpoint
+    constraints. TypeCheck then enforces these against the user's
+    declarations, so an amendment that breaks one is a type error. This
+    grows the declaration language toward what analyzers check by hand
+    today. It also creates a channel between analyzers, which are
+    independent today: TypeCheck would read the suite's requirements as
+    well as the graph, and requirements become part of an analyzer's
+    contract, fixed by its version and configuration.
+  - **Owned types.** An analyzer supplies declarations that users cannot
+    change, as the built-in metatype is fixed today
+    ([SPEC §6.1](SPEC.md#61-built-in-metatype)). This is simpler, but it
+    loses the user's own fields and labels on those types (PLANNING §3.4)
+    unless a separate extension mechanism adds them back.
+
+  Related: namespacing and a concrete metatype (section 3), and the
+  core round's split between declaration types and decode types, which makes
+  the field half of an analyzer's requirements derivable
+  ([CORE-ROUND §3.2](proposals/core-round/CORE-ROUND.md#32-design)).
