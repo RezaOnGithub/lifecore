@@ -1,8 +1,8 @@
 # Core round: value kinds, typed payloads, and indexes
 
 Status: proposed; steps 1 (the benchmark), 2 (core indexes), 3a (value
-kinds), 3b (their editors), and 4 (typed decoding) of section 6 have landed,
-and the rest is not implemented. This is a design document for core work, not
+kinds), 3b (their editors), 4 (typed decoding), and 5 (index templates) of
+section 6 have landed, and the rest is not implemented. This is a design document for core work, not
 an analyzer proposal, so it has no explainer or harness. As each step of
 section 6 lands, its contracts move into the owning documents listed in
 section 7. When the last one has moved, this directory is removed. It relies
@@ -13,7 +13,6 @@ The planning analyzer motivates most of this round, but it is shelved
 ([AGENTS.md](../../../AGENTS.md#planning-is-shelved)). PLANNING and
 `lifecore-prod` are cited as of `59c702c`, their last state, and "Planning"
 below means that analyzer.
-Section 8, open question 1 asks what shelving it means for step 5.
 
 ## 0. Summary
 
@@ -403,15 +402,16 @@ that is the only kind of prefix where decoding can fail.
 
 ## 4. Indexes
 
-*Sections 4.3 and 4.4 landed in step 2.* Their contracts are owned as
-section 8.1 recommends, option (C): the principle, the core indexes with the
-reference definitions of their queries, the boundary rules, and the admission
-criteria by [SPEC §9.1](../../SPEC.md#91-indexes); `Indexing` and the
+*Sections 4.3 and 4.4 landed in step 2, and section 4.5 in step 5.* Their
+contracts are owned as section 8.1 recommends, option (C): the principle, the
+core indexes and the templates with the reference definitions of their
+queries, the boundary rules, and the admission criteria by
+[SPEC §9.1](../../SPEC.md#91-indexes); `Indexing`, `index_templates`, and the
 equivalence helper by
-[ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization); costs by
-[PERFORMANCE](../../PERFORMANCE.md). Where those and these sections differ,
-they hold, and these sections stay as the design's record. Index templates
-(section 4.5, step 5) are not implemented.
+[ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization); costs and
+the declined template candidates by [PERFORMANCE](../../PERFORMANCE.md).
+Where those and these sections differ, they hold, and these sections stay as
+the design's record.
 
 ### 4.1 Where the cost comes from
 
@@ -889,6 +889,26 @@ the browser.
    whether to derive its declaration rule from it.
 5. **Index templates.** `index_templates` and the two admitted templates
    with their reference scans. Planning reading them moves to step 6.
+   *Landed* (decision 11), with tests as their only users. Its contracts now
+   live in [SPEC §9.1](../../SPEC.md#index-templates),
+   [ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization), and
+   [PERFORMANCE §3, §4](../../PERFORMANCE.md#4-query-costs). Settled while
+   landing: `other` filters by the other endpoint's own `ty_name`, fixed at
+   append, never by the type it resolves to; a lineage template takes any
+   node of the lineage as its key and finds its root by K7; the queries return
+   the listed edges (`&Edge`) rather than bare positions, and `in_range`
+   takes a position range; keys are positions, compared exactly, so no hash
+   narrows them and there is no collision case; each template's reference
+   scan is `IndexTemplate::scan(view)`, a `TemplateScan` with the same four
+   queries, reading `View`'s queries and so the core indexes when present; a
+   view carries templates only beside the core indexes; the runner asks every
+   analyzer for its templates once per run under every mode and builds them
+   only under `All`, after constructing the whole suite, and every analyzer
+   of a run sees every template the suite requested; `Core` strips any
+   templates a view carries. A test analyzer in `lifecore-workload` reads
+   both templates with their scans as fallback over varied histories, so
+   `All` and `Core` differ in what they build and not in output;
+   `varied_history` needed no change.
 6. **Planning round.** A proposal revising PLANNING on the new kinds,
    starting from section 5 and from PLANNING at `59c702c`. Then the owner's
    feedback, implementation (PLANNING, PLANNING-EXPLAINER, the code, and the
@@ -942,14 +962,13 @@ Decided by the owner:
 10. The index catalogue is owned as option (C) of section 8.1, settled when
     step 2 landed: SPEC §9.1, ANALYZERS §1, PERFORMANCE, and one AGENTS.md
     invariant. Step 5 adds the templates to the same places.
+11. Step 5 lands without Planning. Planning was the only consumer of the two
+    templates, and admission criterion 4 of section 4.5 asks for a named
+    consumer today. They land now, with tests as their only users and
+    Planning's rework (step 6) named in advance as their consumer, instead of
+    moving into step 6.
 
-Still open:
-
-1. **Step 5 without Planning.** Planning was the only consumer of the two
-   templates, and admission criterion 4 of section 4.5 asks for a named
-   consumer today. Either they land now, with tests as their only users and
-   Planning's rework as the consumer named in advance, or they move into
-   step 6 and land with it.
+No question is open.
 
 ### 8.1 Owning the index catalogue
 

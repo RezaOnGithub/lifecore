@@ -157,6 +157,36 @@ Not scheduled:
   state handed from prefix to prefix was rejected (CORE-ROUND §4.6).
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
+- Keeping index templates in `LifeCoreList` and extending them on staging,
+  instead of building them per run. Waits for a server cache that keeps lists
+  alive across requests; until then every request loads the snapshot anyway.
+
+Index template candidates considered and not admitted to the catalogue of
+[SPEC §9.1](SPEC.md#index-templates), each with what it waits for. Admitting
+one moves its definition into SPEC §9.1.
+
+- `NodesByField { ty, field }`, a payload value to node positions. Waits for
+  a consumer; the first plausible one is collections (documents by path, in
+  [docs/backlog](backlog/)).
+- The current members of a type at a boundary, an interval or stabbing index.
+  K3 plus staleness enumerates every node of the type ever appended, which at
+  weekly seals is small (about 50,000 tasks × 260 seals ≈ 1.3·10⁷ checks over
+  five years). Waits for a consumer that enumerates current members at every
+  prefix.
+- Sums of a field over a position range. Waits for a consumer; Planning's
+  budget overrun sums over current stances, which is not a position range.
+- Reachability or transitive closure over labels. Blocked by admission
+  criterion 1: it is not fixed at append, since one edge can change the
+  reachability of many pairs and history may hold cycles. DAG Check computes
+  it at the prefixes it judges.
+- A key computed by an analyzer-supplied function. Blocked by criterion 3:
+  it is analyzer state by another name, which the core could neither test
+  against a reference nor share, and it reopens the state handed from prefix
+  to prefix that CORE-ROUND §4.6 rejects. A shape several analyzers need is
+  added to the catalogue instead.
+- Per-entry derived values defined by an analyzer. Parsed declarations were
+  admitted as core index K8, because the parse is core code; there is no
+  analyzer-defined analogue, for the same reason as the previous item.
 
 Caching or incremental checks must reproduce full-prefix results exactly
 ([PREFIX-VALIDITY §5](PREFIX-VALIDITY.md#5-failure-handling-and-cost)), keyed
@@ -187,8 +217,27 @@ of a revision chain.
 | Structural validation of the history | O(n) plus hashing | O(n²) |
 | Staging one entry | O(1) amortized plus hashing | O(n), and O(n²) before step 2 |
 
-The indexes take two lists and a root slot per entry plus one hash-map entry
-per node and per edge. A clone of the graph, which `prepare` makes for its
+The core indexes take two lists and a root slot per entry plus one hash-map
+entry per node and per edge. A clone of the graph, which `prepare` makes for its
 candidate, copies them with the entries. Debug builds also validate the whole
 history at every staged entry, to compare the incremental result with it, so
 staging is linear there.
+
+The index templates of [SPEC §9.1](SPEC.md#index-templates), for a key whose
+list holds `k` edges in the run, of which `r` are returned. Lineage templates
+find the key's root through K7 in O(1). The reference scan, `template.scan`,
+reads `View`'s queries, so its cost depends on whether the view carries the
+core indexes.
+
+| Query | With the template | Reference scan, core indexes | Reference scan, none |
+| --- | --- | --- | --- |
+| `positions` | one hash lookup, O(log k + r) | `EdgesAt`: O(deg) for the key's K2 list; `EdgesAtLineage`: O(e) for the label's K4 list | O(n), and O(n · d) for `EdgesAtLineage` |
+| `count` | one hash lookup, O(log k) | as `positions` | as `positions` |
+| `in_range` | one hash lookup, O(log k + r) | as `positions` | as `positions` |
+| `current` | O(k), checking each listed edge's endpoints by K1 | as `positions` | O(n) per listed edge |
+
+Here `deg` is the key's number of incident edges and `e` the number of edges
+with the label. Building the requested templates is one pass over the run's
+view, O(n) plus one hash lookup per edge and one push per listing, done once
+per run under `Indexing::All` and never otherwise; templates take one
+hash-map entry per key and one position per listed edge.

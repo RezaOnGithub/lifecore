@@ -674,17 +674,19 @@ drawings of a view are an application method, `views.render`
 ### 9.1 Indexes
 
 An index caches a query, so that a question asked at many boundaries need not
-scan the view each time. The rules here govern every index; the core indexes
-are the ones below.
+scan the view each time. The rules here govern every index: the core indexes,
+and the index templates analyzers request.
 
 - **An index caches a query.** Every index has a reference definition: a scan
   of the view that computes the same answer. An index is correct exactly when
   it agrees with its reference at every boundary.
-- **Every index is optional.** A view carries the core indexes or none.
-  `View::without_indexes()` drops them, and a runner under `Indexing::Off`
-  hands its analyzers views without them
+- **Every index is optional.** A view carries no indexes, the core indexes,
+  or the core indexes and the templates its run built.
+  `View::without_indexes()` drops them all, and a runner under `Indexing::Off`
+  hands its analyzers views without any
   ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)).
-  `View::indexes()` returns `Option<Indexes>`.
+  `View::indexes()` returns `Option<Indexes>`, and `View::template(&template)`
+  `Option<TemplateIndex>`.
 - **Users behave identically with or without them.** Structural validation,
   `View`'s queries, TypeCheck, and every analyzer give the same results whether
   they read an index or compute the answer themselves. "The same" covers
@@ -739,6 +741,45 @@ against the indexed history before it, which gives exactly the result of
 validating the whole extended history, the first failure and its error
 included, and `transaction::prepare` does not revalidate its base. The
 unindexed path scans, with the same results.
+
+#### Index templates
+
+An analyzer with a narrower question than the core indexes answer requests
+an **index template**: a parameterized index shape from the catalogue below,
+as data (`lifecore::IndexTemplate`). How an analyzer requests and reads them
+is in [ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization). Equal
+templates are one index, whoever requests them. The runner builds the
+requested templates over its run's view in one pass and narrows them by every
+replayed prefix, by the same boundary rules as the core indexes; templates are
+never stored in `LifeCoreList` or the snapshot. A view carries templates only
+beside the core indexes, whose roots and children they read.
+
+Each template lists edges under a key, in append order:
+
+| Template | Key | Lists every edge of the view that |
+| --- | --- | --- |
+| `EdgesAt { label, end, other }` | A node | is labelled `label`, has the key as its `end` endpoint (`End::From` or `End::To`), and, when `other` is given, whose other endpoint's type name is in `other` |
+| `EdgesAtLineage { label, end, other }` | A node, standing for its lineage | is listed by `EdgesAt` with the same parameters for some node with the key's root (`root_of`): every revision of the lineage, on every branch |
+
+The type name `other` filters by is the other endpoint's own `ty_name`,
+fixed at append, not the declaration it resolves to in a view, and the
+endpoint is the exact one, not its root. A key the view does not hold as a
+node lists nothing, so neither does a key past the boundary. `other: Some`
+of an empty set lists nothing.
+
+The queries of a `TemplateIndex`, and the same ones of its reference scan,
+`template.scan(view)`, a `TemplateScan`, each for a key:
+
+| Query | Reference definition |
+| --- | --- |
+| `positions(key)` | the listed edges |
+| `count(key)` | how many there are |
+| `in_range(key, a..b)` | the listed edges whose positions are in `a..b`, which may reach past the boundary |
+| `current(key)` | the listed edges that are current in the view: neither endpoint has a visible successor |
+
+Currentness is never stored; `current` checks it through K1. Keys are
+positions, compared exactly, so no hash can merge two keys. `TemplateIndex`
+prints its template and the boundary only.
 
 An index, core or one an analyzer declares, is admitted only when it is:
 

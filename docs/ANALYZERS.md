@@ -72,18 +72,33 @@ An analyzer may read the core indexes, through `View`'s queries, which use an
 index when the view carries one and their reference scan otherwise, or through
 `View::indexes()`, with a fallback of its own for `None`. Either way its output
 must not depend on whether indexes are present
-([SPEC §9.1](SPEC.md#91-indexes)). The runner takes
-`Indexing::{All, Core, Off}` through `set_indexing`, `All` by default. `Core`
-hands analyzers views with the core indexes, which the runner builds for the
-run when its view carries none; `Off` hands them views without any; `All`
-will add the index templates a suite declares (CORE-ROUND §4.5) and is `Core`
-until then. No output records the mode. The equivalence helper,
+([SPEC §9.1](SPEC.md#91-indexes)).
+
+An analyzer with a narrower question requests index templates from the
+catalogue of [SPEC §9.1](SPEC.md#index-templates) through
+`index_templates(&self) -> Vec<IndexTemplate>` (on `TypedAnalyzer` too),
+empty by default. The runner asks once, right after constructing the
+analyzer, so the set is a function of version and configuration only, never
+of the view or the evaluation inputs. It is a request: the runner may build
+none of the templates, and a view may also carry templates another analyzer
+of the suite requested. The analyzer reads one through
+`View::template(&template)` and must behave identically when that gives
+`None`; `template.scan(view)` answers the same queries by the reference scan,
+so the fallback is one call, though an analyzer may compute the answer its own
+way instead.
+
+The runner takes `Indexing::{All, Core, Off}` through `set_indexing`, `All` by
+default. `Core` hands analyzers views with the core indexes, which the runner
+builds for the run when its view carries none; `Off` hands them views without
+any; `All` adds the index templates the suite's analyzers request, built for
+the run over its view. No output records the mode. The equivalence helper,
 `analysis::assert_indexing_equivalence(runner, view, suite)`, is test support,
 public so that third-party analyzers' tests can use it, and not for hosts. It
 runs a history
 under every mode, and under `Core` with indexes the runner built, and panics
-unless every run gives the same `AnalysisOutput` or the same failure. Every
-analyzer's tests run their histories through it; the built-ins' tests also
+unless every run gives the same `AnalysisOutput` or the same failure, so an
+analyzer that requests templates is compared with itself reading their
+fallbacks. Every analyzer's tests run their histories through it; the built-ins' tests also
 compare their typed findings at single prefixes with and without indexes.
 
 An observation records `evaluated_view: EvaluatedView`:
