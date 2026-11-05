@@ -1,6 +1,6 @@
 use crate::{
     Body, Edge, Entry, EntryId, Node,
-    index::{CoreIndexes, Indexes},
+    index::{CoreIndexes, IndexTemplate, Indexes, TemplateIndex, TemplateIndexes},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -30,16 +30,22 @@ pub struct View<'a> {
     // query narrows them to `entries` through `Indexes`. A view without them
     // answers every query by its reference scan (SPEC §9.1).
     indexes: Option<&'a CoreIndexes>,
+    // The index templates a run built over its head view, which this view is a
+    // prefix of. Read only beside the core indexes, whose roots and children
+    // they rely on.
+    templates: Option<&'a TemplateIndexes>,
 }
 
-// Debug output omits the indexes: their values can name positions past this
-// view, and whether a view carries them is not part of what it shows.
+// Debug output omits the indexes and templates: their values can name
+// positions past this view, and whether a view carries them is not part of
+// what it shows.
 impl std::fmt::Debug for View<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             database,
             entries,
             indexes: _,
+            templates: _,
         } = self;
         f.debug_struct("View")
             .field("database", database)
@@ -87,13 +93,22 @@ impl<'a> View<'a> {
             database,
             entries,
             indexes,
+            templates: None,
         }
     }
-    /// The same view without indexes: every query answers by its reference
-    /// scan, with the same results (SPEC §9.1).
+    /// The same view without indexes or templates: every query answers by its
+    /// reference scan, with the same results (SPEC §9.1).
     pub fn without_indexes(self) -> Self {
         Self {
             indexes: None,
+            templates: None,
+            ..self
+        }
+    }
+    // The same view with the core indexes only.
+    pub(crate) fn without_templates(self) -> Self {
+        Self {
+            templates: None,
             ..self
         }
     }
@@ -105,10 +120,31 @@ impl<'a> View<'a> {
     {
         View::new(self.database, self.entries, Some(indexes))
     }
+    // The same view with `templates`, which must have been built over entries
+    // this view's entries are a prefix of.
+    pub(crate) fn with_templates<'b>(self, templates: &'b TemplateIndexes) -> View<'b>
+    where
+        'a: 'b,
+    {
+        debug_assert!(templates.len() >= self.len());
+        View {
+            templates: Some(templates),
+            ..self
+        }
+    }
+    pub(crate) fn core_indexes(self) -> Option<&'a CoreIndexes> {
+        self.indexes
+    }
     /// The core indexes narrowed to this view, if it carries them.
     pub fn indexes(self) -> Option<Indexes<'a>> {
         self.indexes
             .map(|indexes| Indexes::new(self.entries, indexes))
+    }
+    /// The index built for `template`, narrowed to this view, if the view
+    /// carries it (SPEC §9.1). Without it, `template.scan(view)` answers the
+    /// same queries.
+    pub fn template(self, template: &IndexTemplate) -> Option<TemplateIndex<'a>> {
+        TemplateIndex::new(self.entries, self.indexes?, self.templates?, template)
     }
     pub fn id(self) -> ViewId {
         ViewId {
@@ -132,7 +168,7 @@ impl<'a> View<'a> {
                 requested: end_exclusive,
                 visible: self.len(),
             })?;
-        Ok(Self::new(self.database, entries, self.indexes))
+        Ok(Self { entries, ..self })
     }
     pub fn get(self, id: EntryId) -> Option<&'a Entry> {
         self.entries

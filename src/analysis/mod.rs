@@ -1,5 +1,6 @@
 use crate::{
-    EntryId, LifeCoreError, LifeCoreList, View, ViewId, index::CoreIndexes,
+    EntryId, IndexTemplate, LifeCoreError, LifeCoreList, View, ViewId,
+    index::{CoreIndexes, TemplateIndexes},
     transaction::EntryChange,
 };
 use semver::Version;
@@ -150,6 +151,10 @@ pub trait TypedAnalyzer: Send + Sync {
     type MSG: InnerMessageType;
     type Error: std::error::Error;
     fn version(&self) -> Version;
+    /// As [`Analyzer::index_templates`].
+    fn index_templates(&self) -> Vec<IndexTemplate> {
+        Vec::new()
+    }
     fn initialize_inner(
         &mut self,
         inputs: &EvaluationInputs,
@@ -168,6 +173,13 @@ pub trait TypedAnalyzer: Send + Sync {
 // Setup receives only frozen inputs; all graph access is through View.
 pub trait Analyzer: Send + Sync {
     fn version(&self) -> Version;
+    /// The index templates this analyzer would read (SPEC §9.1,
+    /// ANALYZERS §1): a function of its version and configuration only, asked
+    /// once after instantiation. A request: the runner may build none of them,
+    /// and the analyzer's output must not depend on which it receives.
+    fn index_templates(&self) -> Vec<IndexTemplate> {
+        Vec::new()
+    }
     fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Message>, String>;
     fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String>;
 }
@@ -175,6 +187,9 @@ pub trait Analyzer: Send + Sync {
 impl<T: TypedAnalyzer> Analyzer for T {
     fn version(&self) -> Version {
         TypedAnalyzer::version(self)
+    }
+    fn index_templates(&self) -> Vec<IndexTemplate> {
+        TypedAnalyzer::index_templates(self)
     }
     fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
         Ok(self
@@ -273,11 +288,12 @@ pub struct AnalysisOutput {
 /// differs, and no output records the mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Indexing {
-    /// The core indexes and the index templates the suite declares. Until
-    /// templates exist (CORE-ROUND §4.5), the same as `Core`.
+    /// The core indexes and the index templates the suite's analyzers
+    /// request, built for the run over its view.
     #[default]
     All,
-    /// The core indexes, built for the run if the view does not carry them.
+    /// The core indexes, built for the run if the view does not carry them,
+    /// and no templates.
     Core,
     /// None: every view the analyzers receive answers by reference scans.
     Off,
@@ -343,17 +359,9 @@ impl AnalysisRunner {
         suite: &SuiteConfig,
         hasher: S,
     ) -> Result<AnalysisOutput, LifeCoreError> {
-        let built;
-        let view = match self.indexing {
-        Indexing::Off => view.without_indexes(),
-        Indexing::Core | Indexing::All if view.indexes().is_none() => {
-            built = CoreIndexes::build(view.entry_slice());
-            view.with_indexes(&built)
-        }
-        Indexing::Core | Indexing::All => view,
-        };
         let mut analyzers = vec![];
         let mut identities = vec![];
+        let mut templates = vec![];
         for config in &suite.0 {
             let factory = self.factory.get_mut(&config.name).ok_or_else(|| {
                 LifeCoreError::AnalyzerNotFound {
@@ -367,8 +375,29 @@ impl AnalysisRunner {
                 configuration: config.configuration.clone(),
             };
             identities.push(identity);
+            templates.extend(analyzer.index_templates());
             analyzers.push(analyzer);
         }
+        // The views the analyzers receive. Templates are built over the run's
+        // head view and narrowed by every prefix of it; an analyzer may also
+        // find templates another analyzer of the suite requested.
+        let core;
+        let view = match self.indexing {
+        Indexing::Off => view.without_indexes(),
+        Indexing::Core | Indexing::All if view.indexes().is_none() => {
+            core = CoreIndexes::build(view.entry_slice());
+            view.with_indexes(&core)
+        }
+        Indexing::Core | Indexing::All => view.without_templates(),
+        };
+        let built;
+        let view = match (self.indexing, view.core_indexes()) {
+        (Indexing::All, Some(core)) => {
+            built = TemplateIndexes::build(view.entry_slice(), core, templates);
+            view.with_templates(&built)
+        }
+        _ => view,
+        };
         let mut report = AnalysisOutput {
             view: view.id(),
             inputs: self.inputs.clone(),

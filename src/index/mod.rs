@@ -1,7 +1,8 @@
-// The core indexes K1 to K8 of SPEC §9.1. Every index caches a query
-// whose reference scan is the unindexed path of the matching `View` method;
-// `View` falls back to that scan whenever a view carries no indexes, and the
-// property tests hold the two to each other at every boundary.
+// The core indexes K1 to K8 of SPEC §9.1, and the index templates in
+// `template`. Every core index caches a query whose reference scan is the
+// unindexed path of the matching `View` method; `View` falls back to that
+// scan whenever a view carries no indexes, and the property tests hold the
+// two to each other at every boundary.
 
 use crate::{Body, Edge, Entry, EntryId, Node, typing::Declaration};
 use std::{
@@ -9,6 +10,10 @@ use std::{
     fmt,
     hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash},
 };
+
+mod template;
+pub(crate) use template::TemplateIndexes;
+pub use template::{End, IndexTemplate, TemplateIndex, TemplateScan};
 
 // Derived from the entries alone and never serialized. Every list holds
 // positions in append order, so a view narrows it with one `partition_point`;

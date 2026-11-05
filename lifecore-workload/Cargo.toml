@@ -13,6 +13,7 @@ lifecore-app = { path = "../lifecore-app" }
 lifecore-dag-check = { path = "../lifecore-dag-check" }
 lifecore-reconnect = { path = "../lifecore-reconnect" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
+semver = "1.0"
 
 [lints]
 workspace = true

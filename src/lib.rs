@@ -18,7 +18,7 @@ pub mod typing;
 
 pub use entries::{Edge, Entry, EntryId, Node};
 pub use graph::{BasicValidationFailure, LifeCoreList};
-pub use index::Indexes;
+pub use index::{End, IndexTemplate, Indexes, TemplateIndex, TemplateScan};
 pub use jiff::{SignedDuration, Timestamp, civil::Date};
 pub use time::OffsetTimestamp;
 pub use values::{Body, Payload, PayloadKind};

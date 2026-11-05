@@ -577,6 +577,7 @@ dependencies = [
  "lifecore-dag-check",
  "lifecore-reconnect",
  "lifecore-typecheck",
+ "semver",
  "serde_json",
  "uuid",
 ]

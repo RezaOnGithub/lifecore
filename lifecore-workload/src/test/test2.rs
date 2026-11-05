@@ -3,9 +3,10 @@ use crate::{
     default_suite, history, varied_history,
 };
 use lifecore::{
-    Entry, EntryId, LifeCoreList, View,
+    End, Entry, EntryId, IndexTemplate, LifeCoreError, LifeCoreList, View,
     analysis::{
-        AnalysisRunner, Config, EvaluationInputs, SuiteConfig, assert_indexing_equivalence,
+        AnalysisRunner, Analyzer, AnalyzerCertificate, AnalyzerFactory, Config, Diagnostic,
+        EvaluationInputs, Message, MessageKind, SuiteConfig, assert_indexing_equivalence,
     },
     typing::Type,
 };
@@ -13,7 +14,13 @@ use lifecore_app::proposal::{self, Format, ProposalEntry};
 use lifecore_dag_check::DagCheckFactory;
 use lifecore_reconnect::ReconnectFactory;
 use lifecore_typecheck::TypeCheckFactory;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 fn generate(entries: usize, review_every: usize) -> LifeCoreList {
     history(
@@ -518,4 +525,202 @@ fn indexed_queries_match_their_scans_at_every_boundary_of_varied_histories() {
     for seed in [5, 6] {
         assert_indexed_queries_match(varied(170, REVIEW_EVERY_TASK, seed).view());
     }
+}
+
+// A test analyzer that asks Planning-shaped questions (CORE-ROUND §4.8)
+// through index templates, with each template's reference scan as its
+// fallback, and turns the answers into findings. Under `Indexing::All` it
+// also checks every answer against the scan, so the varied histories hold
+// each template to its scan at every boundary inside the runner.
+struct TemplateReader {
+    templates: Vec<IndexTemplate>,
+    reads: Arc<AtomicUsize>,
+}
+
+fn names<const N: usize>(names: [&str; N]) -> Option<BTreeSet<String>> {
+    Some(names.into_iter().map(str::to_owned).collect())
+}
+
+// The templates a configuration requests: "items" the per-item questions,
+// "lineages" the questions over every revision, and "all" both, so that a
+// suite holding two configurations requests some templates twice.
+fn reader_templates(configuration: &str) -> Vec<IndexTemplate> {
+    let items = [
+        IndexTemplate::EdgesAt {
+            label: "About".into(),
+            end: End::To,
+            other: names(["Stance", "Done"]),
+        },
+        IndexTemplate::EdgesAt {
+            label: "Helps".into(),
+            end: End::From,
+            other: None,
+        },
+    ];
+    let lineages = [
+        IndexTemplate::EdgesAtLineage {
+            label: "About".into(),
+            end: End::To,
+            other: None,
+        },
+        IndexTemplate::EdgesAtLineage {
+            label: "Enables".into(),
+            end: End::To,
+            other: names(["Task", "Project"]),
+        },
+        IndexTemplate::EdgesAtLineage {
+            label: "Until".into(),
+            end: End::From,
+            other: None,
+        },
+    ];
+    match configuration {
+    "items" => items.into(),
+    "lineages" => lineages.into(),
+    _ => items.into_iter().chain(lineages).collect(),
+    }
+}
+
+// The answers to every query of one template for one key: the listed edges,
+// their count, those among the last ten positions, and the current ones.
+type Answers = (Vec<EntryId>, usize, Vec<EntryId>, Vec<EntryId>);
+
+fn edge_list<'a>(edges: impl Iterator<Item = &'a lifecore::Edge>) -> Vec<EntryId> {
+    edges.map(|edge| edge.id).collect()
+}
+
+impl TemplateReader {
+    fn answers(&self, view: View<'_>, template: &IndexTemplate, key: EntryId) -> Answers {
+        let recent = view.len().saturating_sub(10)..view.len();
+        let scan = template.scan(view);
+        let scanned = (
+            edge_list(scan.positions(key)),
+            scan.count(key),
+            edge_list(scan.in_range(key, recent.clone())),
+            edge_list(scan.current(key)),
+        );
+        let Some(index) = view.template(template) else {
+            return scanned;
+        };
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        let indexed = (
+            edge_list(index.positions(key)),
+            index.count(key),
+            edge_list(index.in_range(key, recent)),
+            edge_list(index.current(key)),
+        );
+        assert_eq!(
+            indexed,
+            scanned,
+            "{template:?} at {key:?} in {:?}",
+            view.id()
+        );
+        indexed
+    }
+}
+
+impl Analyzer for TemplateReader {
+    fn version(&self) -> semver::Version {
+        semver::Version::new(0, 1, 0)
+    }
+    fn index_templates(&self) -> Vec<IndexTemplate> {
+        self.templates.clone()
+    }
+    fn initialize(&mut self, _: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(vec![])
+    }
+    fn analyze(&self, view: View<'_>, _: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        let mut messages = Vec::new();
+        for ty_name in ["Task", "Project", "Habit", "Goal"] {
+            let items = view
+                .nodes_of_type(ty_name)
+                .filter(|node| view.is_stale(node.id) == Some(false));
+            for item in items {
+                for (number, template) in self.templates.iter().enumerate() {
+                    let (listed, count, recent, current) = self.answers(view, template, item.id);
+                    assert_eq!(listed.len(), count);
+                    if count == 0 {
+                        continue;
+                    }
+                    messages.push(Message {
+                        analyzer_certificate: AnalyzerCertificate(format!(
+                            "{number} {}",
+                            item.id.position()
+                        )),
+                        diagnostic: Diagnostic {
+                            subjects: current.iter().copied().chain([item.id]).collect(),
+                            focus: Some(item.id),
+                            message: format!(
+                                "{count} listed, {} recent, {} current, first {:?}",
+                                recent.len(),
+                                current.len(),
+                                listed.first().map(|id| id.position()),
+                            ),
+                            kind: MessageKind::Warning,
+                            sticky: false,
+                        },
+                    });
+                }
+            }
+        }
+        Ok(messages)
+    }
+}
+
+struct TemplateReaderFactory(Arc<AtomicUsize>);
+
+impl AnalyzerFactory for TemplateReaderFactory {
+    fn analyzer_with_config(
+        &mut self,
+        configuration: &str,
+    ) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        Ok(Box::new(TemplateReader {
+            templates: reader_templates(configuration),
+            reads: Arc::clone(&self.0),
+        }))
+    }
+    fn analyzer_name(&self) -> &'static str {
+        "Template_Reader"
+    }
+}
+
+// `Indexing::All` builds templates that `Core` does not, and the output is the
+// same under every mode.
+#[test]
+fn an_analyzer_reading_templates_with_a_fallback_gives_the_same_output_under_every_indexing() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut runner = AnalysisRunner::new(EvaluationInputs::default());
+    runner
+        .register_analyzer_kind(Box::new(TemplateReaderFactory(Arc::clone(&reads))))
+        .unwrap();
+    let suite = SuiteConfig(
+        ["all", "items", "lineages"]
+            .map(|configuration| Config {
+                name: "Template_Reader".into(),
+                configuration: configuration.into(),
+            })
+            .into(),
+    );
+    let mut stale_listed = false;
+    for (entries, review_every, seed) in [
+        (220, REVIEW_EVERY_TASK, 7),
+        (220, MIN_REVIEW_EVERY, 8),
+        (220, 40, 9),
+    ] {
+        let graph = varied(entries, review_every, seed);
+        let before = reads.load(Ordering::Relaxed);
+        let output = assert_indexing_equivalence(&mut runner, graph.view(), &suite).unwrap();
+        // Only the run under `All` reads templates.
+        assert!(reads.load(Ordering::Relaxed) > before);
+        assert!(output.observations().count() > 20);
+        stale_listed |= output.observations().any(|observation| {
+            let message = &observation.diagnostic.message;
+            let mut numbers = message
+                .split(' ')
+                .filter_map(|word| word.parse::<usize>().ok());
+            let (listed, _, current) = (numbers.next(), numbers.next(), numbers.next());
+            current < listed
+        });
+    }
+    assert!(stale_listed, "some listed edge is historical");
 }

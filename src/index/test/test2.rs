@@ -4,17 +4,18 @@
 // histories come from a small generator of its own.
 
 use crate::{
-    BasicValidationFailure, Body, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node, Payload,
-    View,
+    BasicValidationFailure, Body, Edge, End, Entry, EntryId, IndexTemplate, LifeCoreError,
+    LifeCoreList, Node, Payload, View,
     analysis::{
         AnalysisRunner, Analyzer, AnalyzerCertificate, AnalyzerFactory, Config, Diagnostic,
         EvaluationInputs, Indexing, Message, MessageKind, SuiteConfig, assert_indexing_equivalence,
     },
+    index::TemplateIndexes,
     inspection::{Currentness, Direction, EdgeSelection, NodeSelection},
     typing::{Declaration, FieldStatus, Type, ValueType},
 };
 use semver::Version;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 // splitmix64: small, deterministic, and good enough to vary a history.
@@ -705,4 +706,414 @@ fn indexing_modes_choose_what_analyzers_see_and_the_helper_catches_a_difference(
         })
     );
     assert_eq!(empty.indexing(), Indexing::Off);
+}
+
+// Index templates against their reference scans (SPEC §9.1).
+
+fn names<const N: usize>(names: [&str; N]) -> Option<BTreeSet<String>> {
+    Some(names.into_iter().map(str::to_owned).collect())
+}
+
+// Both templates for every label and end, unfiltered and filtered by the
+// other endpoint's type name, including a filter that lists nothing.
+fn templates_for(labels: &[&str], others: &[Option<BTreeSet<String>>]) -> Vec<IndexTemplate> {
+    let mut templates = Vec::new();
+    for &label in labels {
+        for end in [End::From, End::To] {
+            for other in others {
+                let (label, other) = (label.to_owned(), other.clone());
+                templates.push(IndexTemplate::EdgesAt {
+                    label: label.clone(),
+                    end,
+                    other: other.clone(),
+                });
+                templates.push(IndexTemplate::EdgesAtLineage { label, end, other });
+            }
+        }
+    }
+    templates
+}
+
+// Windows for `in_range` at a boundary: everything, ones reaching past it,
+// empty ones, and a reversed one.
+fn windows(end_exclusive: usize) -> [std::ops::Range<usize>; 5] {
+    [
+        0..usize::MAX,
+        end_exclusive / 3..end_exclusive,
+        end_exclusive.saturating_sub(4)..end_exclusive + 4,
+        end_exclusive..end_exclusive + 10,
+        std::ops::Range { start: 5, end: 2 },
+    ]
+}
+
+// Every query of every template at every prefix of `head`, from the index,
+// from its scan with the core indexes, and from its scan without any, for
+// every identity of the head (so also those past each boundary) and every
+// probe.
+fn assert_templates_agree(head: View<'_>, templates: &[IndexTemplate], probes: &[EntryId]) {
+    let core = head.core_indexes().expect("a graph's view carries indexes");
+    // Requested twice and in another order: equal requests share one index.
+    let built = TemplateIndexes::build(
+        head.entry_slice(),
+        core,
+        templates.iter().rev().chain(templates).cloned(),
+    );
+    assert_eq!(built.built.len(), templates.len());
+    let head = head.with_templates(&built);
+    let probes = head
+        .entries()
+        .map(Entry::id)
+        .chain(probes.iter().copied())
+        .collect::<Vec<_>>();
+    for end_exclusive in 0..=head.len() {
+        let view = head.prefix(end_exclusive).unwrap();
+        let scanned = view.without_indexes();
+        assert!(scanned.template(&templates[0]).is_none());
+        assert!(view.without_templates().template(&templates[0]).is_none());
+        for template in templates {
+            let index = view.template(template).expect("a built template");
+            assert_eq!(index.end_exclusive(), end_exclusive);
+            assert_eq!(index.template(), template);
+            let scans = [template.scan(view), template.scan(scanned)];
+            for &key in &probes {
+                let at = || format!("{template:?} at {key:?} in {end_exclusive}");
+                let expected = edge_ids(scans[1].positions(key));
+                assert_eq!(edge_ids(index.positions(key)), expected, "{}", at());
+                assert_eq!(index.positions(key).len(), expected.len(), "{}", at());
+                assert_eq!(edge_ids(index.positions(key).rev()).len(), expected.len());
+                assert_eq!(index.count(key), expected.len(), "{}", at());
+                let current = edge_ids(scans[1].current(key));
+                assert_eq!(edge_ids(index.current(key)), current, "{}", at());
+                for scan in scans {
+                    assert_eq!(edge_ids(scan.positions(key)), expected, "{}", at());
+                    assert_eq!(scan.count(key), expected.len(), "{}", at());
+                    assert_eq!(edge_ids(scan.current(key)), current, "{}", at());
+                }
+                for window in windows(end_exclusive) {
+                    let expected = edge_ids(scans[1].in_range(key, window.clone()));
+                    assert_eq!(
+                        edge_ids(index.in_range(key, window.clone())),
+                        expected,
+                        "{} over {window:?}",
+                        at()
+                    );
+                    assert_eq!(edge_ids(scans[0].in_range(key, window)), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn generated_histories_give_every_template_its_scans_answers_at_every_boundary() {
+    let templates = templates_for(
+        &["x", "y", "Unused"],
+        &[None, names([]), names(["A"]), names(["B", Type::TYPE_NAME])],
+    );
+    let mut listed = 0;
+    for seed in 20..24 {
+        let (graph, probes, _) = generate(seed, 70);
+        let view = graph.view();
+        assert_templates_agree(view, &templates, &probes);
+        // The generated edges are listed, so the comparison is not vacuous.
+        listed += view
+            .entries()
+            .map(Entry::id)
+            .map(|key| {
+                templates
+                    .iter()
+                    .map(|template| template.scan(view).count(key))
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+    }
+    assert!(listed > 100, "{listed}");
+}
+
+// A small history builder with its own payload numbers, so no two nodes
+// duplicate one another.
+struct Lineages {
+    graph: LifeCoreList,
+    origin: Uuid,
+    number: i64,
+}
+
+impl Lineages {
+    fn next_id(&self) -> EntryId {
+        id(self.graph.view().len(), self.origin)
+    }
+    fn node(&mut self, ty_name: &str, predecessor: Option<EntryId>) -> EntryId {
+        self.number += 1;
+        let id = self.next_id();
+        self.graph
+            .stage(Entry::Node(Node {
+                id,
+                ty_name: ty_name.into(),
+                predecessor,
+                payload: Body::from([("n".into(), Payload::Integer(self.number))]),
+            }))
+            .unwrap();
+        id
+    }
+    fn edge(&mut self, label: &str, from: EntryId, to: EntryId) -> EntryId {
+        let id = self.next_id();
+        self.graph
+            .stage(Entry::Edge(Edge {
+                id,
+                ty_name: label.into(),
+                from,
+                to,
+            }))
+            .unwrap();
+        id
+    }
+}
+
+// A habit with a long revision chain, split once with both branches kept
+// revising, its check-ins linked to whichever revision was current, and
+// check-ins and links revised in turn, so edges go stale just before and just
+// after every boundary.
+#[test]
+fn lineage_templates_follow_long_chains_and_splits() {
+    let o = Uuid::from_u128(41);
+    let mut b = Lineages {
+        graph: LifeCoreList::empty(o),
+        origin: o,
+        number: 0,
+    };
+    let root = b.node("A", None);
+    let mut chain = root;
+    let mut branch = None;
+    let mut did = Vec::new();
+    for step in 0..14 {
+        let check_in = b.node("B", None);
+        b.edge("x", check_in, chain);
+        did.push(check_in);
+        if let Some(branch) = branch {
+            let other = b.node(Type::TYPE_NAME, None);
+            b.edge("x", other, branch);
+            b.edge("y", branch, check_in);
+        }
+        if step % 3 == 1 {
+            b.edge("y", chain, check_in);
+        }
+        // The type name changes along the chain, as a transition would.
+        let ty_name = if step % 4 == 3 { "C" } else { "A" };
+        if step == 4 {
+            branch = Some(b.node("A", Some(chain)));
+        }
+        if let Some(previous) = branch.filter(|_| step > 4 && step % 2 == 0) {
+            branch = Some(b.node("A", Some(previous)));
+        }
+        chain = b.node(ty_name, Some(chain));
+        if step % 5 == 2 {
+            // A check-in revised: its lineage then has two `From` nodes.
+            let revised = b.node("B", Some(did[step - 1]));
+            b.edge("x", revised, chain);
+        }
+    }
+    let last = b.node("B", None);
+    b.edge("x", last, chain);
+    let view = b.graph.view();
+    assert!(view.ancestors(chain).count() >= 14);
+    assert_eq!(
+        view.children(view.ancestors(chain).nth(9).unwrap().id)
+            .count(),
+        2
+    );
+    let templates = templates_for(&["x", "y"], &[None, names(["B"]), names(["A", "C"])]);
+    assert_templates_agree(view, &templates, &[id(0, Uuid::from_u128(42))]);
+    // The head's lineage holds every check-in of every revision on both
+    // branches; the current revision only what was linked after it.
+    let core = view.core_indexes().unwrap();
+    let lineage = IndexTemplate::EdgesAtLineage {
+        label: "x".into(),
+        end: End::To,
+        other: names(["B"]),
+    };
+    let at = IndexTemplate::EdgesAt {
+        label: "x".into(),
+        end: End::To,
+        other: names(["B"]),
+    };
+    let built = TemplateIndexes::build(view.entry_slice(), core, [lineage.clone(), at.clone()]);
+    let head = view.with_templates(&built);
+    let lineage = head.template(&lineage).unwrap();
+    let at = head.template(&at).unwrap();
+    let previous = view.node(chain).unwrap().predecessor.unwrap();
+    assert_eq!(lineage.count(chain), 14 + 3 + 1);
+    assert_eq!(lineage.count(root), lineage.count(chain));
+    assert_eq!(lineage.count(branch.unwrap()), lineage.count(chain));
+    assert_eq!(at.count(chain), 1);
+    assert_eq!(at.count(previous), 2);
+    assert_eq!(lineage.current(chain).count(), 1);
+    // A boundary just before and just after the head revision's append.
+    let before = head.prefix(chain.position).unwrap();
+    let after = head.prefix(chain.position + 1).unwrap();
+    // The head revision is past the first boundary, and lists every edge but
+    // the last at the second.
+    for (prefix, current, listed) in [(before, 2, 0), (after, 0, 17)] {
+        let lineage = prefix
+            .template(&IndexTemplate::EdgesAtLineage {
+                label: "x".into(),
+                end: End::To,
+                other: names(["B"]),
+            })
+            .unwrap();
+        assert_eq!(lineage.current(previous).count(), current);
+        assert_eq!(lineage.count(chain), listed);
+    }
+}
+
+// Templates take no part in any channel through which a view is observed,
+// and their own `Debug` shows the template and the boundary only.
+#[test]
+fn templates_are_invisible_to_debug_and_identity() {
+    let (graph, _, _) = generate(21, 50);
+    let view = graph.view();
+    let template = IndexTemplate::EdgesAtLineage {
+        label: "x".into(),
+        end: End::From,
+        other: None,
+    };
+    let built = TemplateIndexes::build(
+        view.entry_slice(),
+        view.core_indexes().unwrap(),
+        [template.clone()],
+    );
+    let head = view.with_templates(&built);
+    for end_exclusive in [0, view.len() / 2, view.len()] {
+        let prefix = head.prefix(end_exclusive).unwrap();
+        assert_eq!(
+            format!("{prefix:?}"),
+            format!("{:?}", prefix.without_indexes())
+        );
+        assert_eq!(prefix.id(), view.prefix(end_exclusive).unwrap().id());
+        assert_eq!(
+            format!("{:?}", prefix.template(&template).unwrap()),
+            format!(
+                "TemplateIndex {{ template: EdgesAtLineage {{ label: \"x\", end: From, other: None }}, end_exclusive: {end_exclusive}, .. }}"
+            )
+        );
+    }
+    // Templates are data: equal values compare, hash, and order as equal.
+    let same = IndexTemplate::EdgesAtLineage {
+        label: "x".into(),
+        end: End::From,
+        other: None,
+    };
+    assert_eq!(BTreeSet::from([template.clone(), same.clone()]).len(), 1);
+    assert_eq!(std::collections::HashSet::from([template, same]).len(), 1);
+}
+
+// A probe that reports whether its view carries the template it requests,
+// and counts how often the runner asks for its templates.
+struct TemplateProbe {
+    asked: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+fn probe_template() -> IndexTemplate {
+    IndexTemplate::EdgesAt {
+        label: "x".into(),
+        end: End::To,
+        other: None,
+    }
+}
+impl Analyzer for TemplateProbe {
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
+    }
+    fn index_templates(&self) -> Vec<IndexTemplate> {
+        self.asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        vec![probe_template()]
+    }
+    fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(vec![])
+    }
+    fn analyze(&self, view: View<'_>, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(view
+            .template(&probe_template())
+            .map(|index| {
+                assert_eq!(index.end_exclusive(), view.len());
+                Message {
+                    analyzer_certificate: AnalyzerCertificate("template".into()),
+                    diagnostic: Diagnostic {
+                        subjects: Default::default(),
+                        focus: None,
+                        message: "template".into(),
+                        kind: MessageKind::Warning,
+                        sticky: false,
+                    },
+                }
+            })
+            .into_iter()
+            .collect())
+    }
+}
+struct TemplateProbeFactory(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+impl AnalyzerFactory for TemplateProbeFactory {
+    fn analyzer_with_config(&mut self, _: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        Ok(Box::new(TemplateProbe {
+            asked: self.0.clone(),
+        }))
+    }
+    fn analyzer_name(&self) -> &'static str {
+        "TemplateProbe"
+    }
+}
+
+#[test]
+fn only_indexing_all_builds_the_templates_a_suite_requests() {
+    let (graph, _, _) = generate(6, 30);
+    let asked = std::sync::Arc::default();
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(TemplateProbeFactory(std::sync::Arc::clone(
+            &asked,
+        ))))
+        .unwrap();
+    runner
+        .register_analyzer_kind(Box::new(IndexProbeFactory))
+        .unwrap();
+    // Two instances request the same template; the core probe requests none.
+    let config = |name: &str| Config {
+        name: name.into(),
+        configuration: String::new(),
+    };
+    let suite = SuiteConfig(vec![
+        config("TemplateProbe"),
+        config("IndexProbe"),
+        config("TemplateProbe"),
+    ]);
+    let probes = |output: crate::analysis::AnalysisOutput| {
+        let mut names = output
+            .observations()
+            .map(|observation| observation.key.analyzer_certificate.0.clone())
+            .collect::<Vec<_>>();
+        names.dedup();
+        names
+    };
+    for (indexing, expected) in [
+        (Indexing::All, &["template", "indexed"][..]),
+        (Indexing::Core, &["indexed"][..]),
+        (Indexing::Off, &[][..]),
+    ] {
+        runner.set_indexing(indexing);
+        for view in [graph.view(), graph.view().without_indexes()] {
+            let before = asked.load(std::sync::atomic::Ordering::Relaxed);
+            let output = runner.run_view(view, &suite).unwrap();
+            assert_eq!(probes(output), expected, "{indexing:?}");
+            // Asked once per instance and run, whatever the mode.
+            assert_eq!(asked.load(std::sync::atomic::Ordering::Relaxed) - before, 2);
+        }
+    }
+    runner.set_indexing(Indexing::All);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_indexing_equivalence(
+            &mut runner,
+            graph.view(),
+            &SuiteConfig(vec![config("TemplateProbe")]),
+        )
+    }));
+    assert!(caught.is_err());
 }
