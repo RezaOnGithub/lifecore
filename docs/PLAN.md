@@ -214,6 +214,27 @@ becomes a backlog item.
   core round's split between declaration types and decode types, which makes
   the field half of an analyzer's requirements derivable
   ([CORE-ROUND §3.2](proposals/core-round/CORE-ROUND.md#32-design)).
+- **Messages as step changes.** A nonsticky message is emitted again at every
+  prefix where its condition holds
+  ([ANALYZERS §3](ANALYZERS.md#3-presentation-and-dismissal)), so an analyzer
+  that emits one must recompute its whole current state at every prefix,
+  which keeps replay quadratic
+  ([PERFORMANCE §3](PERFORMANCE.md#3-backlog)). `sticky` was added as a
+  performance lever against that. The alternative is that every message is
+  sticky by default: emitted once, at the prefix where its cause appears, so
+  analyzers respond to step changes rather than judge the whole signal at
+  every prefix. Recovering the messages that hold at a boundary then means
+  replaying up to it, which a check and `analysis.run` already do. To settle:
+  - Whether any analyzer genuinely needs the whole signal, or every rule can
+    be stated as a response to the entry that changes it.
+  - How a condition that ends is signalled. Today a nonsticky message leaves
+    current reports when it stops being emitted, while non-emission never
+    establishes resolution; a step-change model needs an explicit end, or a
+    report rule that derives one.
+  - What happens to current-state warnings such as TypeCheck's encouraged
+    and deprecated fields, to report selection and history mode, and to
+    dismissal. The inconsistency gate already selects inconsistencies at any
+    boundary, so it is unaffected.
 
 [PLANNING §3.4]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#34-amending-the-declarations
 [PLANNING §8.5]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#85-at-a-seal-sticky-warnings

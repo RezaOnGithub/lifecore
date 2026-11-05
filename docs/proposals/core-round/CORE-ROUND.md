@@ -49,8 +49,8 @@ These are decisions of the owner, not open questions:
   re-pointing rules of Planning are the intended price of revision.
 - The transaction model (`prepare`, `PreparedTransaction`, `Checked`) is not
   reshaped.
-- Every prefix is replayed. A "last N" check comes later, once this design
-  settles (section 4.7).
+- Every prefix is replayed. A "last N" check, which would replay fewer, is a
+  last resort, not planned work (section 4.7).
 - Analyzers do not keep state across calls, and do not declare state of their
   own for the runner to carry. Incremental work lives in core-built indexes
   (section 4).
@@ -454,8 +454,11 @@ A database growing by 1,000 entries a week with one review a week has
 With weekly reviews the quadratic baseline dominates for the first year and
 the seal term takes over in the second. Either way, writes pass the 10-second
 busy window of [STORAGE §4](../../STORAGE.md#4-writers) within about
-ten weeks (about 9,500 entries), so routine writes need "last N"
-regardless (section 4.7).
+ten weeks (about 9,500 entries). Removing the cubic term lets analyzers stay
+plain functions of the view; the quadratic baseline that remains is an
+analyzer's per-prefix work, which should track what changed at each prefix
+([PERFORMANCE §3](../../PERFORMANCE.md#3-backlog)). "Last N" (section 4.7)
+is a last resort.
 Snapshot loading (JSON parsing plus validation) is not in these numbers and
 grows too.
 
@@ -651,11 +654,15 @@ stay functions of the view. What is lost is a seal whose cost tracks the
 open items rather than the planning types' history; at weekly reviews that
 difference is small (section 4.8).
 
-### 4.7 "Last N", sketched
+### 4.7 "Last N", a last resort
 
-Not part of this round. A check replays prefixes `[b − N, head]` instead of
+Not part of this round, and not planned. It changes what a check means: an
+observation that began before the replayed window is cut off, and the full
+check must still run somewhere. It is kept only for the case where an
+analyzer's per-prefix work cannot be made to track what changed at the
+prefix. A check would replay prefixes `[b − N, head]` instead of
 `[0, head]`. Indexes are built over the whole head view either way, so they
-need nothing new. Points to settle when it is designed:
+would need nothing new. Points to settle if it is ever designed:
 
 - **Cut-off observations.** An observation whose range began before `b − N`
   is cut off. Acknowledgment verification (PLAN §2.2) compares against
@@ -664,7 +671,7 @@ need nothing new. Points to settle when it is designed:
 - **Choosing N.** Fixed, or reaching back to the last seal, or to the last
   declaration revision.
 - **Where the full check runs.** In the background, with its output keyed by
-  the exact base, suite, implementations, and inputs (PERFORMANCE §3).
+  the exact base, suite, implementations, and inputs.
 
 ### 4.8 Planning under indexes
 
@@ -907,7 +914,7 @@ the browser.
    feedback, implementation (PLANNING, PLANNING-EXPLAINER, the code, and the
    Plan screen, taken from that commit and reworked), and feedback again. It
    is its own round, after the App and the client take up the new kinds.
-7. **Later:** a "last N" check (section 4.7).
+7. **Not planned:** a "last N" check (section 4.7), a last resort.
 
 Steps 1 to 5 change no analyzer's results: step 5 cannot, by section 4.3,
 and the others touch no analyzer that remains. Step 6 defines Planning's
@@ -940,8 +947,8 @@ Decided by the owner:
 4. The kind is named `offset_timestamp`.
 5. Weeks are ISO weeks, Monday first, not configurable.
 6. Template indexes are built per run, not kept in `LifeCoreList`.
-7. "Last N" and its interaction with acknowledgment are deferred with "last
-   N" itself (section 4.7).
+7. "Last N" is a last resort, not planned work; its interaction with
+   acknowledgment is settled only if it is ever designed (section 4.7).
 8. Day shortfalls in the valuation keep PLANNING decision 32: the valuation
    reads no clock, and a `per = "day"` habit ranks in tier 2 by the short
    days of the latest seal, a result already judged. Rejected: ranking by

@@ -153,10 +153,15 @@ Not scheduled:
   so replay stays quadratic. Its payload check allocates a path part for
   every declared field even when nothing is wrong, and each node looks its
   declaration up by name, which lowers the constant only. Changing the shape
-  needs a check that replays fewer prefixes ("last N", CORE-ROUND §4.7);
-  state handed from prefix to prefix was rejected (CORE-ROUND §4.6).
-- Reuse of base-prefix observations: every check replays the committed base
-  prefixes again.
+  means making TypeCheck's per-prefix work track what changed at the prefix,
+  as its transition rule already does
+  ([SPEC §7.2](SPEC.md#72-successor-type-permission)): judge a node's payload
+  at its own prefix and again only where its type's declaration changes
+  (K3), and an edge's endpoints likewise. Its nonsticky warnings about
+  current state, re-emitted at every prefix, stand in the way
+  ([PLAN §3.1](PLAN.md#31-open-questions)). Replaying fewer prefixes
+  ("last N", CORE-ROUND §4.7) is a last resort, and state handed from prefix
+  to prefix was rejected (CORE-ROUND §4.6).
 - Keeping index templates in `LifeCoreList` and extending them on staging,
   instead of building them per run. Waits for a server cache that keeps lists
   alive across requests; until then every request loads the snapshot anyway.
@@ -188,15 +193,13 @@ one moves its definition into SPEC §9.1.
   admitted as core index K8, because the parse is core code; there is no
   analyzer-defined analogue, for the same reason as the previous item.
 
-Caching or incremental checks must reproduce full-prefix results exactly
-([PREFIX-VALIDITY §5](PREFIX-VALIDITY.md#5-failure-handling-and-cost)), keyed
-by exact base, suite, implementations, and inputs. The server reloads the
-snapshot for every request, so load cost matters there too; a later cache would
-need a freshness check, because dismissal edits change the snapshot without
-rotating the graph revision (see snapshot change detection in the
-[plan's backlog](PLAN.md#3-backlog)). Acknowledgment verification reads
-observations beginning within the committed base from the same replay, so an
-incremental checker must still provide them.
+A cheaper check must reproduce full-prefix results exactly
+([PREFIX-VALIDITY §5](PREFIX-VALIDITY.md#5-failure-handling-and-cost)).
+Caching analysis output across checks is not pursued. The server reloads the
+snapshot for every request, so load cost matters there too; a later server
+cache of loaded lists would need a freshness check, because dismissal edits
+change the snapshot without rotating the graph revision (see snapshot change
+detection in the [plan's backlog](PLAN.md#3-backlog)).
 
 ## 4. Query costs
 
