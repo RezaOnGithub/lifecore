@@ -268,7 +268,7 @@ pub struct AnalysisOutput {
     observations: Vec<Observation>,
 }
 
-/// Which indexes the analyzers of a run may read (SPEC §9, "Indexes"). Every
+/// Which indexes the analyzers of a run may read (SPEC §9.1). Every
 /// mode gives the same `AnalysisOutput`, or the same failure; only cost
 /// differs, and no output records the mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

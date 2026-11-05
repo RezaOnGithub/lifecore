@@ -216,7 +216,7 @@ impl LifeCoreList {
 // Checks `entry` as the next append to `before`, which must be valid. Every
 // reference and duplicate decision uses that prefix alone, through queries
 // that read its indexes when it carries them and scan it otherwise, with the
-// same results (SPEC §9, "Indexes").
+// same results (SPEC §9.1).
 fn check_append(before: View<'_>, entry: &Entry) -> Result<(), BasicValidationFailure> {
     let position = before.len();
     let id = entry.id();

@@ -123,7 +123,7 @@ pub fn check_dag(view: View<'_>, config: &DagCheckConfig) -> DagCheckReport {
 
     let filter = config.filter.as_ref().cloned().unwrap_or_default();
     // A filter's types and labels select their entries by name (core indexes
-    // K3 and K4, SPEC §9 "Indexes"); without one, every current entry is read.
+    // K3 and K4, SPEC §9.1); without one, every current entry is read.
     // Either way the selection is the same, and edges stay in append order.
     let nodes = match &filter.node_types {
     Some(types) => types

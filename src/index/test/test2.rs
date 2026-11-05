@@ -1,4 +1,4 @@
-// Core indexes against their reference scans (SPEC §9, "Indexes"), and
+// Core indexes against their reference scans (SPEC §9.1), and
 // incremental validation against validating the whole history, with and
 // without indexes. `lifecore` cannot depend on the workload crate, so the
 // histories come from a small generator of its own.

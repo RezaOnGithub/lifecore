@@ -194,7 +194,7 @@ pub fn history(shape: Shape, suite: SuiteConfig) -> LifeCoreList {
 }
 
 /// The history of `shape` with variation an index could get wrong, for the
-/// tests that compare indexed and unindexed runs (SPEC §9, "Indexes"):
+/// tests that compare indexed and unindexed runs (SPEC §9.1):
 /// revised and duplicated `Type` declarations, some malformed; revision
 /// chains and splits; `Enables`, `Helps`, `Until`, and `About` edges between
 /// items, left behind with stale endpoints when an item is revised, and

@@ -28,7 +28,7 @@ pub struct View<'a> {
     entries: &'a [Entry],
     // The graph's core indexes, which may cover entries past this view, so every
     // query narrows them to `entries` through `Indexes`. A view without them
-    // answers every query by its reference scan (SPEC §9, "Indexes").
+    // answers every query by its reference scan (SPEC §9.1).
     indexes: Option<&'a CoreIndexes>,
 }
 
@@ -90,7 +90,7 @@ impl<'a> View<'a> {
         }
     }
     /// The same view without indexes: every query answers by its reference
-    /// scan, with the same results (SPEC §9, "Indexes").
+    /// scan, with the same results (SPEC §9.1).
     pub fn without_indexes(self) -> Self {
         Self {
             indexes: None,

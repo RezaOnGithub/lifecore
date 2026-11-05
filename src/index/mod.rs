@@ -1,4 +1,4 @@
-// The core indexes K1 to K8 of SPEC §9 ("Indexes"). Every index caches a query
+// The core indexes K1 to K8 of SPEC §9.1. Every index caches a query
 // whose reference scan is the unindexed path of the matching `View` method;
 // `View` falls back to that scan whenever a view carries no indexes, and the
 // property tests hold the two to each other at every boundary.
@@ -122,7 +122,7 @@ impl CoreIndexes {
     }
 }
 
-/// The core indexes as one view sees them (SPEC §9, "Indexes"). Every query is
+/// The core indexes as one view sees them (SPEC §9.1). Every query is
 /// bounded by the view: positions at or past its boundary are never returned,
 /// a key that occurs only there is indistinguishable from an absent one, and
 /// entry-keyed values are read only through an identity the view holds.

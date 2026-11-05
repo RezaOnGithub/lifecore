@@ -34,24 +34,39 @@ median of three runs. `LIFECORE_BENCH_SIZES` takes other comma-separated
 entry counts, and `LIFECORE_BENCH_RUNS` another number of runs; the median of
 an even number is the mean of the middle two.
 
-The baseline, taken when the benchmark was added on top of `febde6b`, with
-`LIFECORE_BENCH_RUNS=5` on a shared virtual machine with one vCPU:
+Before and after the core indexes (step 2 of the core round), taken on a
+shared virtual machine with one vCPU, where other work ran besides. The two
+builds ran alternately in four rounds within twenty minutes, each run
+starting only once the one-minute load average was below 1.3, with
+`LIFECORE_BENCH_RUNS=5`. Each cell is the median over the four rounds of each
+round's median, before → after. Before is `19f7747`, step 3a; the baseline
+taken when the benchmark was added, on top of `febde6b`, agreed with it
+within the noise (2.1 s for both checks at 4,000 entries).
 
 | Entries | Reviews (1/7) | load (1/7) | check (1/7) | Reviews (1/1,000) | load (1/1,000) | check (1/1,000) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 500 | 70 | 0.0024 s | 0.037 s | 0 | 0.0016 s | 0.037 s |
-| 1,000 | 141 | 0.0050 s | 0.13 s | 0 | 0.0040 s | 0.11 s |
-| 2,000 | 284 | 0.014 s | 0.46 s | 1 | 0.015 s | 0.54 s |
-| 4,000 | 570 | 0.062 s | 2.1 s | 3 | 0.084 s | 2.1 s |
+| 500 | 70 | 0.0017 → 0.0012 s | 0.034 → 0.025 s | 0 | 0.0015 → 0.0011 s | 0.032 → 0.022 s |
+| 1,000 | 141 | 0.0047 → 0.0023 s | 0.12 → 0.10 s | 0 | 0.0041 → 0.0022 s | 0.11 → 0.088 s |
+| 2,000 | 284 | 0.014 → 0.0052 s | 0.48 → 0.40 s | 1 | 0.015 → 0.0045 s | 0.43 → 0.36 s |
+| 4,000 | 570 | 0.053 → 0.0099 s | 1.9 → 1.6 s | 3 | 0.056 → 0.0096 s | 1.9 → 1.5 s |
 
-Times are wall-clock, and on that machine repeated runs differed by up to
-half again at 4,000 entries, so compare runs taken close together on one
-machine. Check grows with the square of history length, about `1.3e-7 · n²`
-seconds, near the `1.1e-7 · n²` CORE-ROUND §4.2 fitted to section 1.2, and
-in line with the 1.8 s measured there at 3,998 entries. Density makes no
-difference yet: neither TypeCheck nor Reconnect reads reviews, so the seal
-terms of CORE-ROUND §4.2 are measured only once an analyzer that seals at
-reviews returns. Load is under a tenth of a second at 4,000 entries.
+Times are wall-clock. On that machine, under load from other work, single
+runs differed by more than a factor of three, and even quiet rounds by a
+quarter at 4,000 entries, so compare only runs taken close together on one machine.
+
+Load is now linear in history length, five times faster at 4,000 entries:
+validation looks duplicates up by hash instead of scanning the prefix before
+each entry. Check is 15 to 25 percent faster and still grows with the square
+of history length, about `1e-7 · n²` seconds. The validation it no longer
+repeats was quadratic but small beside replay, and replay is TypeCheck's:
+callgrind attributes 91 percent of the instructions of a 1,000-entry check to
+it, half to checking each current node's payload against its declaration and
+a quarter to finding that declaration by name. The core indexes removed
+TypeCheck's per-prefix scan for declarations and their parsing, but TypeCheck
+emits every current finding at every prefix, so it still judges every current
+node there (section 3). Density still makes no difference: neither TypeCheck
+nor Reconnect reads reviews, so the seal terms of CORE-ROUND §4.2 are
+measured only once an analyzer that seals at reviews returns.
 
 ### 1.2 Earlier measurements
 
@@ -132,11 +147,14 @@ and 5 MB of memory.
 
 Not scheduled:
 
-- TypeCheck's per-prefix work: every replayed prefix rebuilds the declaration
-  table, from cached parses since the core indexes, and checks every current
-  node's payload and every current edge's endpoints, so replay stays
-  quadratic. Only a check that skips prefixes or keeps state across them
-  would change that, and the latter was rejected (CORE-ROUND §4.6).
+- TypeCheck's per-prefix work, which is nearly all of a check (section 1.1):
+  every replayed prefix rebuilds the declaration table, from cached parses,
+  and checks every current node's payload and every current edge's endpoints,
+  so replay stays quadratic. Its payload check allocates a path part for
+  every declared field even when nothing is wrong, and each node looks its
+  declaration up by name, which lowers the constant only. Changing the shape
+  needs a check that replays fewer prefixes ("last N", CORE-ROUND §4.7);
+  state handed from prefix to prefix was rejected (CORE-ROUND §4.6).
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
 
@@ -149,3 +167,28 @@ rotating the graph revision (see snapshot change detection in the
 [plan's backlog](PLAN.md#3-backlog)). Acknowledgment verification reads
 observations beginning within the committed base from the same replay, so an
 incremental checker must still provide them.
+
+## 4. Query costs
+
+The cost of each query of [SPEC §9.1](SPEC.md#91-indexes) in a view of `n`
+entries, with the core indexes and by its reference scan. `r` is the size of
+the result, `k` the length of the key's list in the index, and `d` the depth
+of a revision chain.
+
+| Query | With core indexes | Reference scan |
+| --- | --- | --- |
+| `is_stale`, a node | O(1) | O(n) |
+| `children`, `edges_of` | O(log k + r) | O(n) |
+| `nodes_of_type`, `edges_labelled` | one hash lookup, O(log k + r) | O(n) |
+| `nodes_with_content`, `edge_between` | one hash, O(log k) plus comparing the bucket | O(n) value comparisons |
+| `root_of` | O(1) | O(d) |
+| `descendants`, `fresh_successors` | O(r log r) | O(n), and O(n · d) for `fresh_successors` |
+| `declarations` | every `Type` node ever appended, no parsing | O(n), parsing each current declaration |
+| Structural validation of the history | O(n) plus hashing | O(n²) |
+| Staging one entry | O(1) amortized plus hashing | O(n), and O(n²) before step 2 |
+
+The indexes take two lists and a root slot per entry plus one hash-map entry
+per node and per edge. A clone of the graph, which `prepare` makes for its
+candidate, copies them with the entries. Debug builds also validate the whole
+history at every staged entry, to compare the incremental result with it, so
+staging is linear there.

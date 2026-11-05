@@ -17,7 +17,7 @@ use lifecore::{
 use std::collections::BTreeSet;
 
 // The report with the view's indexes, which must equal the one by reference
-// scans (SPEC §9, "Indexes").
+// scans (SPEC §9.1).
 fn checked(view: View<'_>, config: &DagCheckConfig) -> DagCheckReport {
     let report = check_dag(view, config);
     assert_eq!(report, check_dag(view.without_indexes(), config));
