@@ -151,3 +151,14 @@ fn the_host_registers_every_analyzer_and_init_can_configure_the_defaults() {
         .unwrap();
     assert_eq!(run.analysis.observations().count(), 0);
 }
+
+// The benchmark and the generated histories check under the suite `init
+// --default-analyzers` stores; `lifecore-workload` spells it without the
+// analyzer crates, so this catches drift on either side.
+#[test]
+fn the_benchmark_suite_is_the_default_suite() {
+    assert_eq!(
+        lifecore_workload::default_suite().0,
+        initial_suite(false, true)
+    );
+}

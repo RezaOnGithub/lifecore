@@ -73,10 +73,10 @@ that finds the lock held retries for a bounded window, then returns a
 structured busy error instead of blocking indefinitely. The window defaults to
 10 seconds, leaving a margin over a competing apply's check under the default
 suite, which takes about two seconds at 4,000 entries and grows roughly
-quadratically ([PERFORMANCE §1](PERFORMANCE.md#1-measurements)). Hosts can change the window
-with `Service::with_busy_retry`. Ordinary operations on a missing database fail
-without creating the snapshot or its lock file, and a refused `init` creates no
-lock file.
+quadratically ([PERFORMANCE §1](PERFORMANCE.md#1-measurements)). Hosts can
+change the window with `Service::with_busy_retry`. Ordinary operations on a
+missing database fail without creating the snapshot or its lock file, and a
+refused `init` creates no lock file.
 
 A mutation acquires writer exclusion, reloads the current snapshot, verifies
 the expected base, checks/prepares the change, and stages any verified

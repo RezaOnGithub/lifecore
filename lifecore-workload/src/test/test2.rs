@@ -1,25 +1,15 @@
 use crate::{
-    DECLARATIONS, MIN_REVIEW_EVERY, REVIEW_EVERY_TASK, REVIEW_WEEKLY, Shape, declarations, history,
+    DECLARATIONS, MIN_REVIEW_EVERY, REVIEW_EVERY_TASK, REVIEW_WEEKLY, Shape, declarations,
+    default_suite, history,
 };
 use lifecore::{
     Entry, EntryId, LifeCoreList,
-    analysis::{AnalysisRunner, Config, EvaluationInputs, SuiteConfig},
+    analysis::{AnalysisRunner, EvaluationInputs},
     typing::Type,
 };
+use lifecore_app::proposal::{self, Format, ProposalEntry};
 use lifecore_reconnect::ReconnectFactory;
 use lifecore_typecheck::TypeCheckFactory;
-
-// The suite `lifecore init --default-analyzers` stores.
-fn default_suite() -> SuiteConfig {
-    SuiteConfig(
-        [TypeCheckFactory::name(), ReconnectFactory::name()]
-            .map(|name| Config {
-                name: name.into(),
-                configuration: "{}".into(),
-            })
-            .into(),
-    )
-}
 
 fn generate(entries: usize, review_every: usize) -> LifeCoreList {
     history(
@@ -99,7 +89,64 @@ fn declarations_open_every_history() {
     assert_eq!(graph.view().len(), DECLARATIONS);
 }
 
-// PERFORMANCE §1's windows: after a five-entry first window, a `Done` and its
+// The three declarations PLANNING §11 prints at `59c702c`, verbatim.
+const PLANNING_DECLARATIONS: &str = r#"
+[[entries]]
+name = "task_type"
+kind = "node"
+ty_name = "Type"
+[entries.payload]
+name = "Task"
+fields = { kind = "record", value = { title = ["mandatory", "text"], note = ["optional", "text"] } }
+outgoing = ["Enables", "Helps"]
+incoming = ["Enables", "Helps", "About", "Until"]
+successors = []
+
+[[entries]]
+name = "stance_type"
+kind = "node"
+ty_name = "Type"
+[entries.payload]
+name = "Stance"
+fields = { kind = "record", value = { kind = ["mandatory", "text"], at = ["mandatory", "timestamp"], cost = ["optional", "integer"], horizon = ["optional", "integer"], reason = ["optional", "text"] } }
+outgoing = ["About", "Until"]
+incoming = []
+successors = []
+
+[[entries]]
+name = "review_type"
+kind = "node"
+ty_name = "Type"
+[entries.payload]
+name = "Review"
+fields = { kind = "record", value = { budget = ["mandatory", "integer"], at = ["mandatory", "timestamp"], note = ["optional", "text"] } }
+outgoing = []
+incoming = []
+successors = []
+"#;
+
+#[test]
+fn declarations_match_the_ones_planning_printed() {
+    let printed = proposal::decode(PLANNING_DECLARATIONS, Format::Toml).unwrap();
+    let declared = declarations();
+    assert_eq!(printed.entries.len(), 3);
+    for entry in printed.entries {
+        let ProposalEntry::Node {
+            ty_name, payload, ..
+        } = entry
+        else {
+            panic!("a declaration is a node");
+        };
+        assert_eq!(ty_name, Type::TYPE_NAME);
+        let ty = Type::from_body(&payload).unwrap();
+        let generated = declared.iter().find(|candidate| candidate.name == ty.name);
+        // Compared as declarations: permissions are sets, which `to_body`
+        // writes sorted rather than in the printed order.
+        assert_eq!(generated, Some(&ty));
+    }
+}
+
+// PERFORMANCE §1.2's windows: after a five-entry first window, a `Done` and its
 // edge, the next task, its revision, its stance and edge, and the review.
 #[test]
 fn every_task_density_has_the_measured_window_shape() {

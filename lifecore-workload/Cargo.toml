@@ -6,9 +6,10 @@ edition.workspace = true
 [dependencies]
 lifecore = { path = "../" }
 serde_json = "1.0.150"
-uuid = "1.24.0"
+uuid = { version = "1.24.0", features = ["serde"] }
 
 [dev-dependencies]
+lifecore-app = { path = "../lifecore-app" }
 lifecore-reconnect = { path = "../lifecore-reconnect" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 

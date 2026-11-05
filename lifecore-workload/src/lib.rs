@@ -1,26 +1,31 @@
 //! Deterministic planning-shaped histories, for the checking benchmark in
-//! `lifecore-app` and for tests that run analyzers over the same histories
-//! (CORE-ROUND §6, steps 1 and 2).
+//! `lifecore-app` (PERFORMANCE §1.1) and for tests that run analyzers over the
+//! same histories.
 //!
-//! The shape is the one PERFORMANCE §1 measured by hand at `59c702c`: the ten
+//! The shape is the one PERFORMANCE §1.2 measured by hand at `59c702c`: the ten
 //! planning declarations of PLANNING §11 at that commit, written here as plain
 //! `Type` nodes with today's value kinds, then windows that each end in a
 //! `Review`. Nothing here implements planning; the vocabulary only gives the
 //! history its size and shape.
 
 use lifecore::{
-    Body, Edge, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp, analysis::SuiteConfig,
+    Body, Edge, Entry, EntryId, LifeCoreList, Node, Payload, Timestamp,
+    analysis::{Config, SuiteConfig},
     typing::Type,
 };
 use serde_json::json;
 use uuid::Uuid;
 
-/// One review per window of seven entries, the density PERFORMANCE §1
+/// The analyzer names of the default suite, TypeCheck then Reconnect, each
+/// with configuration `{}`.
+const DEFAULT_ANALYZERS: [&str; 2] = ["Type_Check", "Reconnect"];
+
+/// One review per window of seven entries, the density PERFORMANCE §1.2
 /// measured: every task is reviewed while it is committed, and its `Done`
 /// opens the next window.
 pub const REVIEW_EVERY_TASK: usize = 7;
 /// One review per 1,000 entries: a weekly review of a database growing by
-/// 1,000 entries a week (CORE-ROUND §4.2).
+/// 1,000 entries a week (PERFORMANCE §1.1).
 pub const REVIEW_WEEKLY: usize = 1_000;
 /// The declarations that open every history.
 pub const DECLARATIONS: usize = 10;
@@ -53,6 +58,21 @@ impl Shape {
         // after the declarations (see `history`).
         (self.entries.saturating_sub(DECLARATIONS) + 2) / self.review_every
     }
+}
+
+/// The suite `lifecore init --default-analyzers` stores, which the benchmark
+/// checks under. This crate depends on no analyzer, so the names are spelled
+/// here; a `lifecore-cli` test compares this suite with the one `init`
+/// stores, and this crate's tests run it with the registered factories.
+pub fn default_suite() -> SuiteConfig {
+    SuiteConfig(
+        DEFAULT_ANALYZERS
+            .map(|name| Config {
+                name: name.into(),
+                configuration: "{}".into(),
+            })
+            .into(),
+    )
 }
 
 /// The ten planning declarations of PLANNING §11 at `59c702c`, in the order

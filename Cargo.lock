@@ -497,6 +497,7 @@ dependencies = [
  "lifecore-reconnect",
  "lifecore-server",
  "lifecore-typecheck",
+ "lifecore-workload",
  "serde",
  "serde_json",
 ]
@@ -560,6 +561,7 @@ name = "lifecore-workload"
 version = "0.1.0"
 dependencies = [
  "lifecore",
+ "lifecore-app",
  "lifecore-reconnect",
  "lifecore-typecheck",
  "serde_json",

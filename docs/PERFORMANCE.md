@@ -19,17 +19,18 @@ Its histories come from `lifecore-workload`, whose crate documentation
 specifies them: planning's ten declarations at `59c702c` as plain types, then
 tasks of six entries each, with a `Review` closing each window. At one review
 per 7 entries they have the shape of the planning measurements in section
-1.2; at one per 1,000 entries, the weekly reviews of the core round's
-estimates
-([CORE-ROUND §4.2](proposals/core-round/CORE-ROUND.md#42-full-check-estimates-at-1000-entries-a-week)).
+1.2. One per 1,000 entries is a database growing by 1,000 entries a week with
+one review a week.
 
 For each size and density, the benchmark writes the snapshot as storage
 publishes it and times `database.describe`, which reads, parses, and validates
 it ("load"), and `check` of a one-node proposal under the suite of `lifecore
-init --default-analyzers`, TypeCheck then Reconnect, which loads the snapshot
-again and replays every prefix ("check"). Each cell is the median of three
-runs. `LIFECORE_BENCH_SIZES` takes other comma-separated entry counts, and
-`LIFECORE_BENCH_RUNS` another number of runs.
+init --default-analyzers`, TypeCheck then Reconnect ("check"). A check loads
+the snapshot again, has `prepare` revalidate the whole graph before staging
+and after the staged entry, and replays every prefix. Each cell is the
+median of three runs. `LIFECORE_BENCH_SIZES` takes other comma-separated
+entry counts, and `LIFECORE_BENCH_RUNS` another number of runs; the median of
+an even number is the mean of the middle two.
 
 The baseline, taken when the benchmark was added on top of `febde6b`, with
 `LIFECORE_BENCH_RUNS=5` on a shared virtual machine with one vCPU:

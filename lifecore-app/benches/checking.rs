@@ -8,10 +8,7 @@
 //! comma-separated entry counts (default `500,1000,2000,4000`), and
 //! `LIFECORE_BENCH_RUNS` the runs per cell (default 3).
 
-use lifecore::{
-    Body, Payload,
-    analysis::{AnalyzerFactory, Config, SuiteConfig},
-};
+use lifecore::{Body, Payload, analysis::AnalyzerFactory};
 use lifecore_app::{
     Service,
     proposal::{Proposal, ProposalEntry},
@@ -21,7 +18,7 @@ use lifecore_app::{
 use lifecore_dag_check::DagCheckFactory;
 use lifecore_reconnect::ReconnectFactory;
 use lifecore_typecheck::TypeCheckFactory;
-use lifecore_workload::{REVIEW_EVERY_TASK, REVIEW_WEEKLY, Shape, history};
+use lifecore_workload::{REVIEW_EVERY_TASK, REVIEW_WEEKLY, Shape, default_suite, history};
 use std::{
     env, fs,
     io::{self, Write},
@@ -35,26 +32,15 @@ const DEFAULT_SIZES: [usize; 4] = [500, 1_000, 2_000, 4_000];
 const DEFAULT_RUNS: usize = 3;
 const DENSITIES: [usize; 2] = [REVIEW_EVERY_TASK, REVIEW_WEEKLY];
 
-// The `lifecore` binary's factories, and the suite `lifecore init
-// --default-analyzers` stores, from `lifecore-cli/src/main.rs`. They live in
-// that binary, so they are mirrored here; keep them in step.
+// The `lifecore` binary's factories, from `lifecore-cli/src/main.rs`, which
+// lives in a binary crate. A factory missing here fails the check of a suite
+// that names it; the suite itself is `lifecore_workload::default_suite`.
 fn factories() -> Vec<Box<dyn AnalyzerFactory>> {
     vec![
         Box::new(TypeCheckFactory),
         Box::new(DagCheckFactory),
         Box::new(ReconnectFactory),
     ]
-}
-
-fn default_suite() -> SuiteConfig {
-    SuiteConfig(
-        [TypeCheckFactory::name(), ReconnectFactory::name()]
-            .map(|name| Config {
-                name: name.into(),
-                configuration: "{}".into(),
-            })
-            .into(),
-    )
 }
 
 fn setting<T: std::str::FromStr>(name: &str, text: &str) -> T {
@@ -112,7 +98,8 @@ fn median(runs: usize, mut run: impl FnMut()) -> Duration {
         })
         .collect::<Vec<_>>();
     times.sort();
-    times[runs / 2]
+    // The mean of the middle two for an even number of runs.
+    (times[(runs - 1) / 2] + times[runs / 2]) / 2
 }
 
 // Two significant digits, as PERFORMANCE records them.
@@ -140,6 +127,12 @@ fn grouped(number: usize) -> String {
 }
 
 fn main() {
+    // `cargo bench` passes `--bench`; `cargo test --benches` or
+    // `--all-targets` runs this target without it, in a debug build, where
+    // the full benchmark would take minutes.
+    if !env::args().any(|argument| argument == "--bench") {
+        return;
+    }
     let (sizes, runs) = (sizes(), runs());
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("checking");
     fs::create_dir_all(&directory).expect("benchmark directory");

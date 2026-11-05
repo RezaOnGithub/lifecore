@@ -21,7 +21,7 @@ before implementing it:
   and [UI](docs/UI.md) (presentation decisions).
 - [docs/backlog](docs/backlog/) keeps the backlogged collection and receipt
   contracts.
-- Proposed, not implemented: the
+- Proposed, landing step by step: the
   [core round](docs/proposals/core-round/CORE-ROUND.md), a design document for
   new value kinds, typed payload decoding, and optional indexes. A proposal
   gets its own directory under `docs/proposals/`; write or revise an analyzer

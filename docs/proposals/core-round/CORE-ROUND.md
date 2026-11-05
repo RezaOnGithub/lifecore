@@ -412,17 +412,18 @@ Measured costs and their causes are in
 
 ### 4.2 Full-check estimates at 1,000 entries a week
 
-Fitted to the 4,000-entry measurements (PERFORMANCE §1), so beyond that an
-order of magnitude only:
+Fitted to the 4,000-entry hand measurements (PERFORMANCE §1.2), so beyond
+that an order of magnitude only:
 
 - Baseline, TypeCheck and Reconnect: about `1.1e-7 · n²` seconds.
 - Planning seals: about `1.2e-9 · n²` seconds each.
 
-The benchmark seals every 7 entries, so it measures `1.7e-10 · n³` in total.
+The hand-measured planning snapshots seal every 7 entries, so they measured
+`1.7e-10 · n³` in total.
 A database growing by 1,000 entries a week with one review a week has
 `n / 1,000` seals, so the seal term is about `1.2e-12 · n³`.
 
-| Age | Entries | Benchmark density, one seal per 7 entries | Weekly reviews, one seal per 1,000 entries |
+| Age | Entries | Hand-measured density, one seal per 7 entries | Weekly reviews, one seal per 1,000 entries |
 | --- | ---: | ---: | ---: |
 | 1 month | 4k | 13 s | 2 s |
 | 3 months | 13k | 6.5 min | 21 s |
@@ -439,9 +440,10 @@ regardless (section 4.7).
 Snapshot loading (JSON parsing plus validation) is not in these numbers and
 grows too.
 
-Step 1 of section 6 added the benchmark, a generator of planning-shaped
-histories at both seal densities, so these estimates can become measurements;
-PERFORMANCE §1 records its baseline, which includes snapshot loading.
+Step 1 of section 6 added a benchmark of planning-shaped histories at both
+seal densities; PERFORMANCE §1.1 records its baseline, which includes
+snapshot loading. Its seal terms become measurements once an analyzer that
+seals at reviews returns.
 
 ### 4.3 Indexes are optional
 
@@ -773,24 +775,19 @@ client work. A step's brief should say so, because the repository's checks
 and the UI stages of PLAN §2 otherwise read as asking for work all the way to
 the browser.
 
-1. **Benchmark.** Add a repeatable generator and benchmark for
-   planning-shaped histories at both seal densities, recording the baseline.
-   The benchmark is a `harness = false` bench target in `lifecore-app` (the
-   built-in `#[bench]` harness needs nightly). It times snapshot load and
-   validation, and a check of a one-node proposal under
-   `--default-analyzers`, with `Instant`, as PERFORMANCE §1 does by hand,
-   and prints the table PERFORMANCE records. With Planning shelved, the
-   defaults are TypeCheck and Reconnect, so the seal terms of section 4.2
-   are measured only once step 6 brings an analyzer back. A statistical
-   harness such as criterion or divan does not fit runs of seconds to
-   minutes. One may come later, for micro-benchmarks of index queries. The generator is library
-   code, so step 2's equivalence helper can run analyzers over the same
-   histories. The core's property tests in `lifecore` need a small generator
-   of their own, because `lifecore` cannot depend on Planning's vocabulary.
-   *Status: landed.* The generator is the `lifecore-workload` crate, which
-   depends only on `lifecore`, so any crate's tests can run analyzers over
-   its histories; `cargo bench -p lifecore-app` runs the benchmark, and
-   PERFORMANCE §1 records the baseline.
+1. **Benchmark.** *Landed.* PERFORMANCE §1.1 describes the benchmark and
+   records its baseline; the `lifecore-workload` crate generates its
+   histories. With Planning shelved, the seal terms of section 4.2 are
+   measured only once step 6 brings an analyzer back. A statistical harness
+   such as criterion or divan does not fit runs of seconds to minutes; one
+   may come later, for micro-benchmarks of index queries. The generated
+   histories are valid and raise no finding, which is not yet enough for
+   step 2's equivalence helper: step 2 extends the generator with the
+   variation an index could get wrong, such as revised declarations, stale
+   endpoints, longer revision chains, the other planning edges, and nodes
+   that raise findings. The core's property tests in `lifecore` need a small
+   generator of their own, because `lifecore` cannot depend on Planning's
+   vocabulary.
 2. **Optional core indexes and incremental validation.** `Indexing` modes, the
    equivalence helper, and the property tests come first, then the indexes.
    Results are unchanged by construction. Measure again.
