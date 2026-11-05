@@ -86,6 +86,12 @@ pub enum AppError {
     InvalidSeeds { refused: Vec<RefusedSeed> },
     #[error("invalid parameters: {message}")]
     InvalidParams { message: String },
+    // `now` was asked for, but the host cannot tell its local offset; an
+    // explicit evaluation time still works. Nothing was evaluated or stored.
+    #[error(
+        "cannot take the local time for `now`: {message}; set TZ or give an explicit evaluation time"
+    )]
+    LocalTimeUnknown { message: String },
     // Raised by a host, not the service: the task running a call ended
     // without a response, for example by panicking. A write it was making may
     // or may not have been published, so this is never a rollback.
@@ -135,6 +141,7 @@ impl AppError {
         Self::GraphvizFailed { .. } => "graphviz_failed",
         Self::InvalidSeeds { .. } => "invalid_seeds",
         Self::InvalidParams { .. } => "invalid_params",
+        Self::LocalTimeUnknown { .. } => "local_time_unknown",
         Self::Backend { .. } => "backend_failure",
         Self::Internal { .. } => "internal",
         }
@@ -154,6 +161,7 @@ impl AppError {
         Self::Busy { .. } => 1006,
         Self::PublicationFailed { .. } => 1007,
         Self::PublicationUncertain { .. } => 1008,
+        Self::LocalTimeUnknown { .. } => 1009,
         Self::MalformedProposal(_) => 2001,
         Self::InvalidProposal { .. } => 2002,
         Self::AcknowledgmentUnsupported => 2003,
@@ -201,7 +209,9 @@ impl AppError {
             json!({ "requested": requested.to_string(), "visible": visible.to_string() })
         }
         Self::CannotDismissInconsistency { key } => json!({ "key": key }),
-        Self::GraphvizUnavailable { message } => json!({ "message": message }),
+        Self::GraphvizUnavailable { message } | Self::LocalTimeUnknown { message } => {
+            json!({ "message": message })
+        }
         Self::GraphvizFailed { cause, stderr } => json!({ "cause": cause, "stderr": stderr }),
         Self::InvalidSeeds { refused } => json!({ "refused": refused }),
         _ => json!({}),

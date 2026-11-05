@@ -595,6 +595,7 @@ export type ApplicationErrorData =
   | { kind: "graphviz_failed"; cause: GraphvizFailure; stderr: string }
   | { kind: "invalid_seeds"; refused: RefusedSeed[] }
   | { kind: "invalid_params" }
+  | { kind: "local_time_unknown"; message: string }
   | { kind: "backend_failure" }
   | { kind: "internal" };
 export type ErrorKind = ApplicationErrorData["kind"];
@@ -610,6 +611,7 @@ export interface ErrorCodes {
   busy: 1006;
   publication_failed: 1007;
   publication_uncertain: 1008;
+  local_time_unknown: 1009;
   malformed_proposal: 2001;
   invalid_proposal: 2002;
   acknowledgment_unsupported: 2003;

@@ -13,11 +13,14 @@ import {
   matchesShape,
   nameError,
   nowTimestamp,
+  OFFSET_TIMESTAMP_HINT,
+  offsetTimestampHint,
   setOwn,
   shapeKind,
   TIMESTAMP_HINT,
   timestampError,
   timestampHint,
+  UNKNOWN_OFFSET_HINT,
   validateCanonicalPayload,
   validateCanonicalValue,
 } from "./values.ts";
@@ -519,5 +522,36 @@ test("an enum is a shape over text, and the new shapes start without a value", (
   ];
   for (const shape of shapes) {
     assert.equal(defaultValue(shape), null, shape.kind);
+  }
+});
+
+test("the evaluation time hint names RFC 3339 with a numeric offset", () => {
+  for (const ok of [
+    "2026-10-15T10:30:00+02:00",
+    "2026-10-15t10:30:00.123456789-05:30",
+    "2026-10-15T10:30:00+00:00",
+    "-000001-12-31T23:00:00-01:00",
+  ]) {
+    assert.equal(offsetTimestampHint(ok), null, ok);
+  }
+  for (const unknown of [
+    "2026-10-15T08:30:00Z",
+    "2026-10-15T08:30:00z",
+    "2026-10-15T08:30:00-00:00",
+    "2026-10-15T08:30:00-0000",
+    "2026-10-15T08:30:00-00",
+  ]) {
+    assert.equal(offsetTimestampHint(unknown), UNKNOWN_OFFSET_HINT, unknown);
+  }
+  for (const other of [
+    "next tuesday",
+    "2026-10-15 10:30:00+02:00",
+    "2026-10-15T10:30+02:00",
+    "20261015T103000+0200",
+    "2026-10-15T10:30:00+02",
+    "2026-10-15T10:30:00+02:00[Europe/Berlin]",
+    "2026-10-15T10:30:00,5+02:00",
+  ]) {
+    assert.equal(offsetTimestampHint(other), OFFSET_TIMESTAMP_HINT, other);
   }
 });

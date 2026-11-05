@@ -4798,7 +4798,7 @@ ty_name = "Stance"
 [entries.payload]
 cost = { kind = "duration", value = "90m" }
 deadline = { kind = "date", value = "2026-11-06" }
-at = { kind = "offset_timestamp", value = "2026-10-29 08:15+01:00" }
+at = { kind = "offset_timestamp", value = "2026-10-29t08:15:00.000+01:00" }
 per = "day"
 decision = { kind = "variant", tag = "committed", value = { cost = { kind = "duration", value = "1h 30m" } } }
 "#;
@@ -4893,5 +4893,51 @@ fn change_files_carry_the_new_kinds_in_both_formats_and_export_them_canonically(
             .unwrap();
         let file = KINDS_TOML.replace(line, text);
         assert!(proposal::decode(&file, Format::Toml).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn now_takes_the_offset_of_a_known_zone_and_refuses_an_unknown_one() {
+    use crate::service::capture_in;
+    use jiff::tz::{Offset, TimeZone};
+    use lifecore::Timestamp;
+    let instant: Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
+    let winter: Timestamp = "2026-01-01T10:00:00Z".parse().unwrap();
+    // A rule with daylight saving: the offset is the one in effect at the
+    // captured instant.
+    let berlin = || TimeZone::posix("CET-1CEST,M3.5.0,M10.5.0/3");
+    let summer = capture_in(berlin(), instant).unwrap();
+    assert_eq!(summer.instant(), instant);
+    assert_eq!(summer.offset(), Offset::constant(2));
+    assert_eq!(summer.to_string(), "2026-07-01T12:00:00+02:00");
+    assert_eq!(
+        capture_in(berlin(), winter).unwrap().offset(),
+        Offset::constant(1)
+    );
+    let india = TimeZone::fixed(Offset::from_seconds(5 * 3600 + 30 * 60).unwrap());
+    assert_eq!(
+        capture_in(Ok(india), instant).unwrap().to_string(),
+        "2026-07-01T15:30:00+05:30"
+    );
+    assert_eq!(
+        capture_in(Ok(TimeZone::UTC), instant).unwrap().to_string(),
+        "2026-07-01T10:00:00+00:00"
+    );
+    // A zone the host cannot determine is not read as UTC, nor is an offset
+    // RFC 3339 cannot write rounded.
+    for zone in [
+        TimeZone::posix("not a rule"),
+        Ok(TimeZone::unknown()),
+        Ok(TimeZone::fixed(Offset::from_seconds(3600 + 30).unwrap())),
+    ] {
+        let error = capture_in(zone, instant).unwrap_err();
+        assert!(
+            matches!(error, AppError::LocalTimeUnknown { .. }),
+            "{error}"
+        );
+        let object = error.to_object();
+        assert_eq!(object.code, 1009);
+        assert_eq!(object.data.as_ref().unwrap()["kind"], "local_time_unknown");
+        assert!(object.data.unwrap()["message"].is_string());
     }
 }

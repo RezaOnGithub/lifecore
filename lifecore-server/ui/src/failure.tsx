@@ -17,6 +17,7 @@ const HEADINGS: Partial<Record<ErrorKind, string>> = {
   graphviz_failed: "Graphviz could not draw this view",
   invalid_seeds: "Query seeds refused",
   invalid_params: "The server did not accept the request",
+  local_time_unknown: "The server cannot tell its local time",
   backend_failure: "The server failed while answering",
   internal: "Internal server error",
 };

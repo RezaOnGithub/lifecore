@@ -351,7 +351,7 @@ fn reject_toml_only_value(
 ) -> Result<(), DecodeError> {
     let message = match value.get_ref() {
     DeValue::Datetime(_) => {
-        "native TOML dates and times are not accepted; write a timestamp payload as { kind = \"timestamp\", value = \"...\" }"
+        "native TOML dates and times are not accepted; write a time payload as an envelope with a quoted value, such as { kind = \"timestamp\", value = \"...\" } or { kind = \"date\", value = \"...\" }"
     }
     DeValue::Integer(integer)
         if integer.as_str().starts_with('-')

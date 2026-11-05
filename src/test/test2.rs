@@ -1869,7 +1869,7 @@ fn durations_accept_jiffs_spellings_and_export_iso_8601() {
 }
 
 #[test]
-fn dates_accept_only_the_extended_calendar_form() {
+fn dates_accept_only_their_canonical_spelling() {
     let date = Payload::Date(jiff::civil::date(2026, 11, 6));
     assert_eq!(
         payload_json(&envelope("date", "2026-11-06")),
@@ -1879,14 +1879,43 @@ fn dates_accept_only_the_extended_calendar_form() {
         serde_json::to_value(&date).unwrap(),
         serde_json::json!({"kind": "date", "value": "2026-11-06"})
     );
-    for edge in ["0000-01-01", "9999-12-31", "2028-02-29"] {
+    // A year before 0000 takes Jiff's signed six-digit form, the only one
+    // four digits cannot write.
+    for edge in [
+        "0000-01-01",
+        "9999-12-31",
+        "2028-02-29",
+        "-000001-12-31",
+        "-002026-11-06",
+        "-009999-01-01",
+    ] {
         let value = payload_json(&envelope("date", edge)).unwrap();
         assert_eq!(serde_json::to_value(&value).unwrap()["value"], edge);
+    }
+    assert_eq!(
+        payload_json(&envelope("date", "-000001-12-31")),
+        Ok(Payload::Date(jiff::civil::date(-1, 12, 31)))
+    );
+    // Every date, built in Rust, exports a spelling that reads back to it.
+    for date in [
+        jiff::civil::Date::MIN,
+        jiff::civil::Date::MAX,
+        jiff::civil::date(-1, 1, 1),
+        jiff::civil::date(0, 12, 31),
+        jiff::civil::date(1, 1, 1),
+        jiff::civil::date(999, 6, 15),
+    ] {
+        let text = serde_json::to_string(&Payload::Date(date)).unwrap();
+        assert_eq!(payload_json(&text), Ok(Payload::Date(date)), "{text}");
     }
     for input in [
         "20261106",
         "+002026-11-06",
-        "-000001-01-01",
+        "-000000-01-01",
+        "+000001-01-01",
+        "-0001-01-01",
+        "-010000-01-01",
+        "002026-11-06",
         "2026-11-06T10:00",
         "2026-11-6",
         "2026-02-30",
@@ -1923,11 +1952,18 @@ fn offset_timestamps_keep_the_observed_offset_and_refuse_unknown_ones() {
     assert_eq!(utc.instant(), berlin.instant());
     assert_ne!(utc, berlin);
     assert_eq!(utc.to_string(), "2026-10-29T07:15:00+00:00");
-    // Jiff's parser decides the rest of the syntax; output re-spells it.
+    // RFC 3339's grammar, read from the text; output re-spells it.
     for (input, canonical) in [
-        ("2026-10-29 08:15+01:00", "2026-10-29T08:15:00+01:00"),
-        ("2026-10-29t08:15:00+01", "2026-10-29T08:15:00+01:00"),
-        ("2026-10-29T08:15:00+01:00:00", "2026-10-29T08:15:00+01:00"),
+        ("2026-10-29t08:15:00+01:00", "2026-10-29T08:15:00+01:00"),
+        ("2026-10-29T08:15:00.0+01:00", "2026-10-29T08:15:00+01:00"),
+        (
+            "2026-10-29T23:59:59.999999999+23:59",
+            "2026-10-29T23:59:59.999999999+23:59",
+        ),
+        (
+            "-000001-12-31T23:00:00-01:00",
+            "-000001-12-31T23:00:00-01:00",
+        ),
         (
             "2026-10-29T08:15:00.123456789-05:30",
             "2026-10-29T08:15:00.123456789-05:30",
@@ -1947,6 +1983,29 @@ fn offset_timestamps_keep_the_observed_offset_and_refuse_unknown_ones() {
         "2026-10-29T08:15:00+01:00[u-ca=iso8601]",
         "2026-10-29T08:15:00[+01:00]",
         "2026-10-29T08:15:00+01:00:30",
+        // A fractional offset second is neither rounded nor dropped.
+        "2026-10-29T08:15:00+01:00:59.6",
+        "2026-10-29T08:15:00+00:59:59.9",
+        "2026-10-29T08:15:00+00:00:00.4",
+        "2026-10-29T08:15:00+01:00:00.000000001",
+        "2026-10-29T08:15:00+01:00:00",
+        "2026-10-29T08:15:00+01:00.5",
+        // Temporal spellings outside RFC 3339.
+        "20261029T081500+0100",
+        "2026-10-29T08:15:00+0100",
+        "2026-10-29T08:15:00+01",
+        "+002026-10-29T08:15:00+01:00",
+        "2026-10-29T08+01:00",
+        "2026-10-29T08:15+01:00",
+        "2026-10-29T08:15:00,5+01:00",
+        "2026-10-29 08:15:00+01:00",
+        "2026-10-29T08:15:00.+01:00",
+        "2026-10-29T08:15:00.1234567890+01:00",
+        // A leap second is refused rather than clamped to :59.
+        "2016-12-31T23:59:60+00:00",
+        "2026-10-29T24:00:00+01:00",
+        "2026-10-29T08:15:00+24:00",
+        "2026-10-29T08:15:00+01:60",
         "2026-10-29T08:15:00",
         "2026-10-29",
         "yesterday",
@@ -1958,9 +2017,9 @@ fn offset_timestamps_keep_the_observed_offset_and_refuse_unknown_ones() {
             "{input}"
         );
     }
-    // The extremes of the instant range at the widest whole-minute offsets
-    // print and read back exactly.
-    let widest = 25 * 3600 + 59 * 60;
+    // The extremes of the instant range at the widest offsets RFC 3339
+    // writes print and read back exactly.
+    let widest = 23 * 3600 + 59 * 60;
     for (instant, seconds) in [
         (crate::Timestamp::MAX, widest),
         (crate::Timestamp::MIN, -widest),
@@ -1970,14 +2029,18 @@ fn offset_timestamps_keep_the_observed_offset_and_refuse_unknown_ones() {
         let value = OffsetTimestamp::new(instant, Offset::from_seconds(seconds).unwrap()).unwrap();
         assert_eq!(at(&value.to_string()), Ok(value));
     }
-    // RFC 3339 cannot write an offset with seconds, so none is constructed.
-    assert!(
-        OffsetTimestamp::new(
-            crate::Timestamp::UNIX_EPOCH,
-            Offset::from_seconds(30).unwrap()
-        )
-        .is_err()
-    );
+    // RFC 3339 cannot write an offset with seconds or beyond ±23:59, so
+    // none is constructed.
+    for seconds in [30, 3601, 24 * 3600, -24 * 3600] {
+        assert!(
+            OffsetTimestamp::new(
+                crate::Timestamp::UNIX_EPOCH,
+                Offset::from_seconds(seconds).unwrap()
+            )
+            .is_err(),
+            "{seconds}"
+        );
+    }
 }
 
 #[test]
@@ -2588,4 +2651,47 @@ fn text_search_reaches_into_variant_bodies_but_not_tags() {
     };
     assert_eq!(found("needle"), 1);
     assert_eq!(found("committed"), 0);
+}
+
+#[test]
+fn rust_built_values_of_every_new_kind_read_back_to_themselves() {
+    use crate::OffsetTimestamp;
+    use jiff::{SignedDuration, civil::Date, tz::Offset};
+    let offset = |seconds| Offset::from_seconds(seconds).unwrap();
+    let at = |instant, seconds| OffsetTimestamp::new(instant, offset(seconds)).unwrap();
+    let mut values = vec![];
+    for duration in [
+        SignedDuration::MIN,
+        SignedDuration::MAX,
+        SignedDuration::ZERO,
+        SignedDuration::new(-1, -1),
+        SignedDuration::from_nanos(1),
+        SignedDuration::from_hours(24 * 400),
+    ] {
+        values.push(Payload::Duration(duration));
+    }
+    for date in [Date::MIN, Date::MAX, jiff::civil::date(-1, 2, 28)] {
+        values.push(Payload::Date(date));
+    }
+    let widest = 23 * 3600 + 59 * 60;
+    for (instant, seconds) in [
+        (crate::Timestamp::MIN, 0),
+        (crate::Timestamp::MIN, -widest),
+        (crate::Timestamp::MAX, widest),
+        (crate::Timestamp::UNIX_EPOCH, -12 * 3600 - 45 * 60),
+        (
+            crate::Timestamp::from_nanosecond(-1).unwrap(),
+            5 * 3600 + 30 * 60,
+        ),
+    ] {
+        values.push(Payload::OffsetTimestamp(at(instant, seconds)));
+    }
+    values.push(Payload::Variant {
+        tag: "".into(),
+        value: Body::from([("inner".into(), Payload::List(values.clone()))]),
+    });
+    for value in values {
+        let text = serde_json::to_string(&value).unwrap();
+        assert_eq!(payload_json(&text), Ok(value), "{text}");
+    }
 }

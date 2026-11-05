@@ -27,6 +27,7 @@ export type Classified =
 // failure of an apply, unknown kinds included, may follow a publication.
 const BEFORE_PUBLICATION: ReadonlySet<ErrorKind> = new Set<ErrorKind>([
   "invalid_params",
+  "local_time_unknown",
   "malformed_proposal",
   "invalid_proposal",
   "acknowledgment_unsupported",

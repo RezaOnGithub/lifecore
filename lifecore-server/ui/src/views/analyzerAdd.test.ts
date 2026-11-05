@@ -141,6 +141,7 @@ test("an add failure is uncertain unless known to come before publication", () =
   });
   for (const kind of [
     "invalid_params",
+    "local_time_unknown",
     "lock_failed",
     "database_missing",
     "database_unreadable",

@@ -363,6 +363,20 @@ export const application = {
       "jsonrpc": "2.0"
     }
   ],
+  "local_time_unknown": [
+    {
+      "error": {
+        "code": 1009,
+        "data": {
+          "kind": "local_time_unknown",
+          "message": "failed to read system time zone from `TZ` environment variable"
+        },
+        "message": "cannot take the local time for `now`: failed to read system time zone from `TZ` environment variable; set TZ or give an explicit evaluation time"
+      },
+      "id": "local_time_unknown",
+      "jsonrpc": "2.0"
+    }
+  ],
   "lock_failed": [
     {
       "error": {

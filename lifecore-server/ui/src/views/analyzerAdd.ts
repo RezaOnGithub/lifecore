@@ -79,6 +79,7 @@ export type AddOutcome =
 // draft's apply (`draft/classify.ts`).
 const BEFORE_PUBLICATION: ReadonlySet<ErrorKind> = new Set<ErrorKind>([
   "invalid_params",
+  "local_time_unknown",
   "rejected",
   "analyzer_failure",
   "busy",

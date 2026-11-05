@@ -273,7 +273,7 @@ contract with the service.
   structured HTTP rejections, and the kinds a method reports before publishing
   change nothing. Those kinds are `invalid_params`, `busy`, `lock_failed`,
   `database_missing`, `database_unreadable`, and `publication_failed` for all
-  three; `rejected` and `analyzer_failure` for apply and analyzer add;
+  three; `local_time_unknown` for apply and analyzer add; `rejected` and `analyzer_failure` for apply and analyzer add;
   `malformed_proposal`, `invalid_proposal`, `acknowledgment_unsupported`, and
   `stale_base` for apply; `foreign_database` for apply and dismissal; and
   `cannot_dismiss_inconsistency` for dismissal. Any other failure may follow a

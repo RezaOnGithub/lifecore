@@ -1250,7 +1250,7 @@ fn task_declaration() -> Value {
 }
 
 // Every application error kind; the recorded fixtures must match it exactly.
-const ERROR_KINDS: [&str; 26] = [
+const ERROR_KINDS: [&str; 27] = [
     "state_path_empty",
     "working_directory",
     "directory_missing",
@@ -1275,6 +1275,7 @@ const ERROR_KINDS: [&str; 26] = [
     "graphviz_failed",
     "invalid_seeds",
     "invalid_params",
+    "local_time_unknown",
     "backend_failure",
     "internal",
 ];
@@ -1307,6 +1308,7 @@ fn listed(error: &AppError) {
     | AppError::GraphvizFailed { .. }
     | AppError::InvalidSeeds { .. }
     | AppError::InvalidParams { .. }
+    | AppError::LocalTimeUnknown { .. }
     | AppError::Backend { .. }
     | AppError::Internal { .. } => {}
     }
@@ -1836,6 +1838,9 @@ fn application_errors(
                 status: "exit status: 1".into(),
             },
             stderr: "Error: <stdin>: syntax error in line 1 near 'x'".into(),
+        },
+        AppError::LocalTimeUnknown {
+            message: "failed to read system time zone from `TZ` environment variable".into(),
         },
         AppError::Internal {
             message: "the result could not be serialized".into(),

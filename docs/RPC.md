@@ -75,6 +75,7 @@ Application errors use codes outside the reserved JSON-RPC range and a stable
 | 1006 | `busy` | Another writer held the lock throughout the retry. |
 | 1007 | `publication_failed` | Failure before replacement; stored state unchanged. |
 | 1008 | `publication_uncertain` | Synchronization failed after replacement; `data.outcome` is the result the call would have returned, such as the new `graph_revision` and report, tagged by `kind` (`initialized`, `applied`, `analyzer_added`, `dismissed`, or `restored`), so the caller can inspect the stored state. |
+| 1009 | `local_time_unknown` | `now` was asked for, but the host cannot determine its time zone, so the local offset is unknown; `data.message` is the reason. Nothing is evaluated or stored; an explicit evaluation time still works. |
 | 2001 | `malformed_proposal` | Decoding failed; `data.decode` has `format` and `message`, plus `path`, `line`, and `column` where known. A JSON `message` is serde_json's own text, which names a position; for a `proposal` parameter that position counts from the start of the member. |
 | 2002 | `invalid_proposal` | Names, references, intent, or structure; `data.location` names the entry and field where known. |
 | 2003 | `acknowledgment_unsupported` | `acknowledges` is present but not yet verified ([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)). |

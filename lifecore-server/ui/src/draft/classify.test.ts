@@ -47,6 +47,7 @@ function kindOf(classified: Classified): string {
 test("an apply failure is uncertain unless known to come before publication", () => {
   const before: [ErrorKind, string][] = [
     ["invalid_params", "problem:failed"],
+    ["local_time_unknown", "problem:failed"],
     ["malformed_proposal", "problem:malformed_proposal"],
     ["invalid_proposal", "problem:invalid_proposal"],
     ["acknowledgment_unsupported", "problem:failed"],

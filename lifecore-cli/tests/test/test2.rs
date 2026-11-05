@@ -215,3 +215,51 @@ fn serve_refuses_port_80() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("port 80 cannot be served"), "{stderr}");
 }
+
+// `--now` reads the zone the process was given: a known one sets the offset
+// of the captured time, one that cannot be determined fails before anything
+// is evaluated, and an empty `TZ` is UTC by Unix convention.
+#[test]
+fn now_takes_the_local_offset_or_refuses_an_unknown_zone() {
+    let scratch = Scratch::new();
+    let state = scratch.0.join("LifeCoreState.json");
+    let run = |tz: &str, args: &[&str]| {
+        Command::new(BINARY)
+            .args(args)
+            .env("LIFECORE_STATE_FILE_PATH", &state)
+            .env("TZ", tz)
+            .output()
+            .unwrap()
+    };
+    assert!(run("", &["init"]).status.success());
+    let empty = scratch.0.join("empty.json");
+    fs::write(&empty, r#"{"entries":[]}"#).unwrap();
+    let empty = empty.to_str().unwrap();
+    let time = |tz: &str| {
+        let output = run(tz, &["check", empty, "--now"]);
+        assert!(output.status.success(), "{output:?}");
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        result["report"]["analysis"]["inputs"]["evaluation_time"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(time("").ends_with("+00:00"));
+    assert!(time("IST-5:30").ends_with("+05:30"));
+    let unknown = run("Nowhere/Fake", &["check", empty, "--now"]);
+    assert!(!unknown.status.success());
+    let error: Value = serde_json::from_slice(&unknown.stdout).unwrap();
+    assert_eq!(error["data"]["kind"], "local_time_unknown", "{error}");
+    assert_eq!(error["code"], 1009);
+    // An explicit time needs no zone.
+    let explicit = run(
+        "Nowhere/Fake",
+        &[
+            "check",
+            empty,
+            "--evaluation-time",
+            "2026-10-29T08:15:00+01:00",
+        ],
+    );
+    assert!(explicit.status.success(), "{explicit:?}");
+}

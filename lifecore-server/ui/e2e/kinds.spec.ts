@@ -94,7 +94,7 @@ const entries: ProposalEntry[] = [
       // Spelled loosely; the server stores the canonical form.
       cost: { kind: "duration", value: "90m" },
       deadline: { kind: "date", value: "2026-11-06" },
-      at: { kind: "offset_timestamp", value: "2026-10-29 08:15+01:00" },
+      at: { kind: "offset_timestamp", value: "2026-10-29t08:15:00.0+01:00" },
       per: "day",
       decision: {
         kind: "variant",

@@ -809,10 +809,16 @@ the browser.
      editor"), and section 2 here is history for them. Settled while
      landing: jiff 0.2.33, the locked version, already has
      `fmt::temporal::Pieces` and refuses days for `SignedDuration`, so no
-     upgrade was needed; `offset_timestamp` refuses every bracketed
-     annotation, not only zones, since Jiff silently drops calendar ones;
-     `OffsetTimestamp` keeps its fields private behind a constructor that
-     refuses offsets with seconds; three more schema errors name what the
+     upgrade was needed, but `offset_timestamp` is read by LifeCore's own
+     RFC 3339 reader rather than `Pieces`, which rounds a fractional offset
+     second, clamps a leap second, drops calendar annotations, and takes
+     Temporal spellings RFC 3339 does not have; every bracketed annotation
+     is refused, not only zones; `OffsetTimestamp` keeps its fields private
+     behind a constructor that refuses offsets with seconds or beyond
+     ±23:59, so every value reads back from its text; a date before year
+     0000 takes Jiff's six-digit form, its only spelling; `now` fails with
+     `local_time_unknown` when the host cannot determine its zone, instead
+     of reading it as UTC; three more schema errors name what the
      section left unnamed (`missing_members` and `missing_tags`, like
      `missing_record_fields`, and `empty_member` for the non-empty rule);
      `variant` counts toward the 64-level depth limit like `record`; and a

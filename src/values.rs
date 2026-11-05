@@ -280,10 +280,17 @@ impl<'de> Visitor<'de> for PayloadVisitor {
             tag: tag.expect("checked above"),
             value,
         }),
-        (kind, value) => Err(A::Error::custom(format!(
-            "a {kind} envelope cannot carry {}",
-            value.describe()
-        ))),
+        (kind, value) => {
+            let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                "an"
+            } else {
+                "a"
+            };
+            Err(A::Error::custom(format!(
+                "{article} {kind} envelope cannot carry {}",
+                value.describe()
+            )))
+        }
         }
     }
 }
@@ -299,6 +306,13 @@ impl EnvelopeValue {
         match self {
         Self::Text(_) => "a string",
         Self::Boolean(_) => "a boolean",
+        // Serde sees a native TOML date or time as a map under this private
+        // key, which the toml crate documents as unstable but has kept.
+        Self::Record(fields)
+            if fields.len() == 1 && fields.contains_key("$__toml_private_datetime") =>
+        {
+            "a native TOML date or time; quote the value as a string"
+        }
         Self::Record(_) => "a record",
         }
     }

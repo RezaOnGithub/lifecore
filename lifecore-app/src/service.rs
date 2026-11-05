@@ -8,7 +8,7 @@ use crate::{
 };
 use lifecore::{
     BasicValidationFailure, Edge, Entry, EntryId, LifeCoreError, LifeCoreList, Node,
-    OffsetTimestamp, View, ViewError, ViewId,
+    OffsetTimestamp, Timestamp, View, ViewError, ViewId,
     analysis::{
         AnalysisOutput, AnalysisRunner, AnalyzerFactory, Config, EvaluationInputs, FindingKey,
         MessageType, SuiteConfig,
@@ -431,16 +431,28 @@ fn evaluation_inputs(
     Ok(EvaluationInputs { evaluation_time })
 }
 
-// The one place that reads the system zone: the instant and the offset in
-// effect at it come from a single reading, so they cannot straddle an
-// offset change. Every offset in use since 1972 is whole minutes; an older
-// zone rule with seconds cannot be written in RFC 3339 and fails here
-// rather than being rounded.
+// The one place that reads the system zone. The instant and the offset in
+// effect at it are taken together, so they cannot straddle an offset change.
 fn capture_now() -> Result<OffsetTimestamp, AppError> {
-    let now = jiff::Zoned::now();
-    OffsetTimestamp::new(now.timestamp(), now.offset()).map_err(|message| AppError::Internal {
-        message: format!("cannot capture the local time: {message}"),
-    })
+    capture_in(jiff::tz::TimeZone::try_system(), Timestamp::now())
+}
+
+// `now` in a zone as the host found it. A zone that cannot be determined
+// is refused rather than read as UTC, which is what `Zoned::now` would do:
+// it would record a known `+00:00` where the offset is unknown. An empty
+// `TZ` is UTC by Unix convention, and stays so. Every offset in use since
+// 1972 is whole minutes within ±23:59; an older rule that RFC 3339 cannot
+// write is refused rather than rounded.
+pub(crate) fn capture_in(
+    zone: Result<jiff::tz::TimeZone, jiff::Error>,
+    now: Timestamp,
+) -> Result<OffsetTimestamp, AppError> {
+    let unknown = |message: String| AppError::LocalTimeUnknown { message };
+    let zone = zone.map_err(|error| unknown(error.to_string()))?;
+    if zone.is_unknown() {
+        return Err(unknown("the system time zone is unknown".into()));
+    }
+    OffsetTimestamp::new(now, zone.to_offset(now)).map_err(unknown)
 }
 
 fn database(graph: &LifeCoreList) -> Uuid {

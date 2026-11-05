@@ -114,12 +114,12 @@ export function timestampHint(text: string): string | null {
   return LOOSE_TIMESTAMP.test(text) ? null : TIMESTAMP_HINT;
 }
 
-// The same for an offset timestamp, such as an evaluation time: RFC 3339
-// with a numeric offset to the minute and no bracketed annotation. `Z` and
-// `-00:00` get their own hint, since they read as an instant but leave the
-// local offset unknown, which the server refuses (FILES §2.1).
-const LOOSE_OFFSET_TIMESTAMP =
-  /^[+-]?\d{4,6}-?\d{2}-?\d{2}[Tt ]\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?[+-]\d{2}(?::?\d{2})?$/;
+// The same for an offset timestamp, such as an evaluation time: RFC 3339's
+// date-time with seconds and a numeric offset to the minute (FILES §2.1).
+// `Z` and `-00:00` get their own hint, since they read as an instant but
+// leave the local offset unknown, which the server refuses.
+const OFFSET_TIMESTAMP_FORM =
+  /^(?:\d{4}|-\d{6})-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?[+-]\d{2}:\d{2}$/;
 
 export const OFFSET_TIMESTAMP_HINT =
   "not an RFC 3339 instant with a numeric offset; Check will report it if the server rejects it";
@@ -128,10 +128,10 @@ export const UNKNOWN_OFFSET_HINT =
   "Z and -00:00 leave the local offset unknown, which the server refuses; write a numeric offset such as +00:00";
 
 export function offsetTimestampHint(text: string): string | null {
-  if (/(?:[Zz]|-00:?00)$/.test(text)) {
+  if (/(?:[Zz]|-00(?::?00)?)$/.test(text)) {
     return UNKNOWN_OFFSET_HINT;
   }
-  return LOOSE_OFFSET_TIMESTAMP.test(text) ? null : OFFSET_TIMESTAMP_HINT;
+  return OFFSET_TIMESTAMP_FORM.test(text) ? null : OFFSET_TIMESTAMP_HINT;
 }
 
 // The instant `Date` knows, at the millisecond precision it has: no digits

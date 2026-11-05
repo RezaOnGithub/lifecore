@@ -186,22 +186,35 @@ re-spells the input, as it does for integers: `90m` is stored and exported as
   (`1d`, `P1D`, `P1W`), as are empty and padded text. Output is Jiff's
   `Display`, ISO 8601 with hours as the largest unit: `PT1H30M`, `PT0S`,
   `-PT2H`, `PT0.000000001S`.
-- **Date** (`jiff::civil::Date`): exactly `YYYY-MM-DD`, a valid day of years
-  `0000` to `9999`. The basic form `20261106`, a signed six-digit year, and a
-  datetime are refused, though Jiff would read them. Output is the same form.
-- **Offset timestamp** (`lifecore::OffsetTimestamp`): an RFC 3339 date and
-  time with a numeric offset, read by Jiff's Temporal parser
-  (`fmt::temporal::Pieces`), so its spellings such as a space for `T`, an
-  omitted second, or `+01` for `+01:00` are accepted and normalized. `Z` and
-  `-00:00` are refused: RFC 9557 reads both as "UTC known, local offset
-  unknown", which is what this kind exists to avoid, while `+00:00` is a known
-  zero offset. A bracketed annotation, a zone such as `[Europe/Berlin]` or any
-  other, is refused rather than dropped, so no input is silently narrowed. An
-  offset with nonzero seconds is refused, as RFC 3339 cannot write it. Output
-  is Jiff's `Timestamp::display_with_offset`: the local date and time, a
-  fraction only when nonzero, and the offset to the minute, as in
-  `2026-10-29T08:15:00.5+01:00`. Known fields such as
-  `EvaluationInputs.evaluation_time` use the same string without an envelope.
+- **Date** (`jiff::civil::Date`): RFC 3339's `full-date`, exactly
+  `YYYY-MM-DD`, a valid day of the years `0000` to `9999`. A year before
+  `0000`, which four digits cannot write, takes the form Jiff prints for it, a
+  minus sign and six digits (`-000001-12-31`), down to `-009999`; that form
+  is refused for any other year. Every date therefore has exactly one accepted
+  spelling, the one exported. A plus sign, the basic form `20261106`, and a
+  datetime are refused, though Jiff would read them.
+- **Offset timestamp** (`lifecore::OffsetTimestamp`): RFC 3339's `date-time`
+  with a numeric offset, read from the text itself:
+  `YYYY-MM-DDTHH:MM:SS[.fraction]±HH:MM`. The date follows the date rule
+  above, so a year before `0000` takes the six-digit form. The separator is
+  `T` or `t`, which RFC 3339's grammar allows, but not the space its prose
+  permits applications to use; seconds are required; a fraction has one to
+  nine digits after a full stop; the offset is at most `±23:59`. Refused,
+  since each would be silently narrowed or is outside RFC 3339: `Z` and
+  `-00:00`, which RFC 9557 reads as "UTC known, local offset unknown", what
+  this kind exists to avoid (`+00:00` is a known zero offset); an offset with
+  seconds or a fraction of a second, rather than rounded; a leap second
+  (`:60`), rather than clamped to `:59`; a bracketed annotation, a zone such
+  as `[Europe/Berlin]` or any other, rather than dropped; and the other
+  spellings of Jiff's Temporal parser, such as the basic format, a signed
+  six-digit year for a year four digits can write, an hour-only or
+  minute-only time, a comma before the fraction, or `+01` for `+01:00`.
+  Output is Jiff's `Timestamp::display_with_offset`: the local date and time,
+  a fraction only when nonzero, and the offset to the minute, as in
+  `2026-10-29T08:15:00.5+01:00`, so the fraction's trailing zeros and a
+  lowercase `t` are re-spelled. Every value prints as text that reads back to
+  it. Known fields such as `EvaluationInputs.evaluation_time` use the same
+  string without an envelope.
 
 #### Variant representation
 
@@ -521,8 +534,10 @@ acknowledgment, and the [backlog](backlog/) those for collections and receipts.
 | Plain timestamp-like text or a native TOML datetime appears | Keep plain strings as text; reject unwrapped native datetime payload syntax. |
 | A duration is written `PT90M`, `90m`, or `1h 30m` | Decode to one value; export `PT1H30M`. Two roots differing only in that spelling are duplicates. |
 | A duration names days or larger (`1d`, `P1D`, `P1W`) | Reject; a day is a civil unit, not elapsed time. |
-| A date is not exactly `YYYY-MM-DD` (`20261106`, `+002026-11-06`, a datetime) or is no valid day | Reject. |
-| An offset timestamp ends in `Z` or `-00:00`, carries a bracketed annotation, or has an offset with seconds | Reject; nothing is dropped or narrowed. `+00:00` is accepted. |
+| A date is not exactly `YYYY-MM-DD` (`20261106`, `+002026-11-06`, a datetime) or is no valid day | Reject; a year before `0000` is accepted only as `-YYYYYY`, as exported. |
+| A date, duration, or offset timestamp built in Rust, such as in a suggestion, at the edges of its range | Export a spelling that reads back to the same value. |
+| An offset timestamp ends in `Z` or `-00:00`, carries a bracketed annotation, has an offset with seconds or a fraction, or a leap second | Reject; nothing is dropped, rounded, clamped, or narrowed. `+00:00` is accepted. |
+| An offset timestamp uses a Temporal spelling outside RFC 3339 (basic format, an extended year, no seconds, a comma fraction, a space for `T`) | Reject. |
 | One instant is written at two offsets | Two different values, each exported at its own offset. |
 | A variant envelope lacks `tag` or `value`, or another envelope carries `tag` | Reject. An empty body is `value = {}`. |
 | A declaration's enum is empty, repeats or empties a member, or a variant declares no tag | Reject the declaration as malformed, at the offending element. |
