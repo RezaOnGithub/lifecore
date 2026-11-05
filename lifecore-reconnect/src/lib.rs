@@ -1,4 +1,7 @@
-use std::collections::{BTreeSet, HashSet};
+use std::{
+    collections::{BTreeSet, HashSet},
+    convert::Infallible,
+};
 
 use lifecore::{
     Entry, EntryId, LifeCoreError, View,
@@ -237,12 +240,16 @@ impl Reconnect {
 
 impl TypedAnalyzer for Reconnect {
     type MSG = LostConnection;
+    type Error = Infallible;
 
     fn version(&self) -> Version {
         Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
     }
 
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+    fn initialize_inner(
+        &mut self,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         Ok(Vec::new())
     }
 
@@ -250,7 +257,7 @@ impl TypedAnalyzer for Reconnect {
         &self,
         view: View<'_>,
         _inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String> {
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         Ok(lost_connections(view, &self.config))
     }
 

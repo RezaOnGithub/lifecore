@@ -8,7 +8,7 @@ use lifecore::{
 };
 use semver::Version;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, convert::Infallible};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum TypeCheckMessage {
@@ -139,17 +139,21 @@ pub struct TypeCheck {}
 
 impl TypedAnalyzer for TypeCheck {
     type MSG = TypeCheckMessage;
+    type Error = Infallible;
     fn version(&self) -> Version {
         Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
     }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+    fn initialize_inner(
+        &mut self,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         Ok(Vec::new())
     }
     fn analyze_inner(
         &self,
         view: View<'_>,
         _inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String> {
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         let mut output = Self::current_state(view);
         // A later schema cannot revoke a past transition. Each successor is judged
         // once, at the prefix it ends, against the view immediately before its

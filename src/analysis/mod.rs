@@ -140,21 +140,28 @@ pub trait InnerMessageType: Clone + Debug + PartialEq + Eq + Hash {
     fn ty(&self) -> MessageType;
 }
 
-// Keep structured domain findings until analyzer-owned conversion. Tests can
-// assert their variants and details independently of presentation wording.
+// Keep structured domain findings and errors until analyzer-owned conversion.
+// Tests can assert their variants and details independently of presentation
+// wording. An analyzer that cannot fail says `type Error = Infallible`.
 pub trait TypedAnalyzer: Send + Sync {
     type MSG: InnerMessageType;
+    type Error: std::error::Error;
     fn version(&self) -> Version;
-    fn initialize_inner(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String>;
+    fn initialize_inner(
+        &mut self,
+        inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error>;
     fn analyze_inner(
         &self,
         view: View<'_>,
         inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String>;
+    ) -> Result<Vec<Self::MSG>, Self::Error>;
     fn convert_message(&self, message: Self::MSG) -> Message;
 }
 
-// Direct object-safe implementations are supported alongside the typed adapter.
+// Direct object-safe implementations are supported alongside the typed adapter,
+// which turns a typed error into its `Display` text, the message of the
+// resulting `ExecutionFailure`.
 // Setup receives only frozen inputs; all graph access is through View.
 pub trait Analyzer: Send + Sync {
     fn version(&self) -> Version;
@@ -168,14 +175,16 @@ impl<T: TypedAnalyzer> Analyzer for T {
     }
     fn initialize(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
         Ok(self
-            .initialize_inner(inputs)?
+            .initialize_inner(inputs)
+            .map_err(|error| error.to_string())?
             .into_iter()
             .map(|message| self.convert_message(message))
             .collect())
     }
     fn analyze(&self, view: View<'_>, inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
         Ok(self
-            .analyze_inner(view, inputs)?
+            .analyze_inner(view, inputs)
+            .map_err(|error| error.to_string())?
             .into_iter()
             .map(|message| self.convert_message(message))
             .collect())

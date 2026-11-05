@@ -1163,17 +1163,21 @@ struct AllChildrenTypeCheck;
 
 impl TypedAnalyzer for AllChildrenTypeCheck {
     type MSG = TypeCheckMessage;
+    type Error = std::convert::Infallible;
     fn version(&self) -> semver::Version {
         TypedAnalyzer::version(&TypeCheck::default())
     }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+    fn initialize_inner(
+        &mut self,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         Ok(Vec::new())
     }
     fn analyze_inner(
         &self,
         view: View<'_>,
         _inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String> {
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         let mut output = TypeCheck::current_state(view);
         output.extend(all_children_transitions(view));
         Ok(output)

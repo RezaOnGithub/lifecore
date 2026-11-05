@@ -24,17 +24,21 @@ struct Probe {
 }
 impl TypedAnalyzer for Probe {
     type MSG = Finding;
+    type Error = std::convert::Infallible;
     fn version(&self) -> Version {
         Version::new(1, 0, 0)
     }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+    fn initialize_inner(
+        &mut self,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         Ok(vec![])
     }
     fn analyze_inner(
         &self,
         view: View<'_>,
         _inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String> {
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         self.observed.lock().unwrap().push(view.id());
         assert!(view.prefix(view.len() + 1).is_err());
         if self.future.position() >= view.len() {
@@ -1313,20 +1317,26 @@ impl AnalyzerFactory for TimedAnalyzer {
         Ok(Box::new(Self::default()))
     }
 }
+// A typed error, asserted structurally; the runner sees only its text.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("evaluation time is required")]
+struct MissingTime;
 impl TimedAnalyzer {
-    fn findings(inputs: &EvaluationInputs) -> Result<Vec<TimeFinding>, String> {
-        let evaluation_time = inputs
-            .evaluation_time
-            .ok_or("evaluation time is required")?;
+    fn findings(inputs: &EvaluationInputs) -> Result<Vec<TimeFinding>, MissingTime> {
+        let evaluation_time = inputs.evaluation_time.ok_or(MissingTime)?;
         Ok(vec![TimeFinding { evaluation_time }])
     }
 }
 impl TypedAnalyzer for TimedAnalyzer {
     type MSG = TimeFinding;
+    type Error = MissingTime;
     fn version(&self) -> Version {
         Version::new(1, 0, 0)
     }
-    fn initialize_inner(&mut self, inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+    fn initialize_inner(
+        &mut self,
+        inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         self.initialization_time = inputs.evaluation_time;
         Self::findings(inputs)
     }
@@ -1334,7 +1344,7 @@ impl TypedAnalyzer for TimedAnalyzer {
         &self,
         _view: View<'_>,
         inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String> {
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         assert_eq!(inputs.evaluation_time, self.initialization_time);
         Self::findings(inputs)
     }
@@ -1375,10 +1385,15 @@ fn time_is_explicit_frozen_and_deterministic_with_distinct_initialization_and_pr
     assert_eq!(error.evaluated_view, EvaluatedView::Initialization);
     assert_eq!(error.inputs.evaluation_time, None);
     assert_eq!(error.message, "evaluation time is required");
-    assert!(
+    assert_eq!(
+        TimedAnalyzer::default().analyze_inner(graph.view(), &EvaluationInputs::default()),
+        Err(MissingTime)
+    );
+    assert_eq!(
         TimedAnalyzer::default()
             .analyze(graph.view(), &EvaluationInputs::default())
-            .is_err()
+            .unwrap_err(),
+        "evaluation time is required"
     );
     let inputs = timed_inputs();
     let mut analyzer = TimedAnalyzer::default();

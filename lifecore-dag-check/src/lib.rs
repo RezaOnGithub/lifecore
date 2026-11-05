@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+};
 
 use lifecore::{
     EntryId, LifeCoreError, View,
@@ -306,11 +309,15 @@ impl DagCheck {
 
 impl TypedAnalyzer for DagCheck {
     type MSG = DagCheckMessage;
+    type Error = Infallible;
 
     fn version(&self) -> Version {
         Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
     }
-    fn initialize_inner(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Self::MSG>, String> {
+    fn initialize_inner(
+        &mut self,
+        _inputs: &EvaluationInputs,
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         Ok(Vec::new())
     }
 
@@ -318,7 +325,7 @@ impl TypedAnalyzer for DagCheck {
         &self,
         view: View<'_>,
         _inputs: &EvaluationInputs,
-    ) -> Result<Vec<Self::MSG>, String> {
+    ) -> Result<Vec<Self::MSG>, Self::Error> {
         let report = check_dag(view, &self.config);
         if !report.checked {
             return Ok(Vec::new());
