@@ -26,8 +26,10 @@ For each size and density, the benchmark writes the snapshot as storage
 publishes it and times `database.describe`, which reads, parses, and validates
 it ("load"), and `check` of a one-node proposal under the suite of `lifecore
 init --default-analyzers`, TypeCheck then Reconnect ("check"). A check loads
-the snapshot again, has `prepare` revalidate the whole graph before staging
-and after the staged entry, and replays every prefix. Each cell is the
+the snapshot again, has `prepare` validate the staged entry against the
+indexed graph ([SPEC §9.1](SPEC.md#91-indexes)), and replays every prefix.
+Until step 2 of the core round, `prepare` revalidated the whole graph before
+staging and after the staged entry, with quadratic duplicate scans. Each cell is the
 median of three runs. `LIFECORE_BENCH_SIZES` takes other comma-separated
 entry counts, and `LIFECORE_BENCH_RUNS` another number of runs; the median of
 an even number is the mean of the middle two.
@@ -130,14 +132,11 @@ and 5 MB of memory.
 
 Not scheduled:
 
-- Incremental `basic_validation`: `prepare` still revalidates the whole graph
-  before staging and after every staged entry; only the appended suffix needs it.
-- Hash-based duplicate checks: node and edge duplicate detection still scans the
-  prefix before each entry.
-- Adjacency indexes: `children`, `edges_of`, `descendants`, and
-  `fresh_successors` still scan the view.
-- TypeCheck type-table or parse caching: every prefix re-parses each current
-  declaration and rebuilds its type table.
+- TypeCheck's per-prefix work: every replayed prefix rebuilds the declaration
+  table, from cached parses since the core indexes, and checks every current
+  node's payload and every current edge's endpoints, so replay stays
+  quadratic. Only a check that skips prefixes or keeps state across them
+  would change that, and the latter was rejected (CORE-ROUND §4.6).
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
 

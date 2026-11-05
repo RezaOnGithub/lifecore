@@ -10,6 +10,7 @@ uuid = { version = "1.24.0", features = ["serde"] }
 
 [dev-dependencies]
 lifecore-app = { path = "../lifecore-app" }
+lifecore-dag-check = { path = "../lifecore-dag-check" }
 lifecore-reconnect = { path = "../lifecore-reconnect" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 

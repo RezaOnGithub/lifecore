@@ -4,7 +4,7 @@ use std::{
 };
 
 use lifecore::{
-    Entry, EntryId, LifeCoreError, View,
+    Entry, EntryId, Indexes, LifeCoreError, View,
     analysis::{
         Analyzer, AnalyzerCertificate, AnalyzerFactory, Diagnostic, EvaluationInputs,
         InnerMessageType, Message, MessageKind, MessageType, TypedAnalyzer,
@@ -199,35 +199,7 @@ pub fn lost_connections(view: View<'_>, config: &ReconnectConfig) -> Vec<LostCon
             (edge, false, edge.from)
         }
     });
-    // Whether a sibling carries the equivalent edge. With indexes, each
-    // question is one lookup of the edge triple (SPEC §9, "Indexes");
-    // without them, one scan collects what every sibling carries, as
-    // (label, whether the near endpoint is `from`, far endpoint), rather
-    // than scanning once per question. Both answer the same.
-    let claimed: Box<dyn Fn(&str, bool, EntryId) -> bool> = match before.indexes() {
-    Some(indexes) => Box::new(move |label, outgoing, other| {
-        siblings.iter().any(|&sibling| {
-            let (from, to) = if outgoing {
-                (sibling, other)
-            } else {
-                (other, sibling)
-            };
-            indexes.edge_between(from, to, label).is_some()
-        })
-    }),
-    None => {
-        let siblings = siblings.into_iter().collect::<HashSet<_>>();
-        let mut carried = HashSet::new();
-        for edge in before.edges() {
-            for (near, outgoing, far) in [(edge.from, true, edge.to), (edge.to, false, edge.from)] {
-                if siblings.contains(&near) {
-                    carried.insert((edge.ty_name.as_str(), outgoing, far));
-                }
-            }
-        }
-        Box::new(move |label, outgoing, other| carried.contains(&(label, outgoing, other)))
-    }
-    };
+    let claims = Claims::new(before, siblings);
     // The equivalent edge on the successor cannot already exist, since the
     // successor is newer than every edge in `before`.
     candidates
@@ -239,7 +211,7 @@ pub fn lost_connections(view: View<'_>, config: &ReconnectConfig) -> Vec<LostCon
                 // Only the equivalent edge claims; another label or direction
                 // does not. An edge to a revision of `other` cannot arise
                 // here, since that revision supersedes `other`.
-                && !claimed(&edge.ty_name, *outgoing, *other)
+                && !claims.contains(&edge.ty_name, *outgoing, *other)
         })
         .map(|(edge, outgoing, other)| LostConnection {
             edge: edge.id,
@@ -250,6 +222,48 @@ pub fn lost_connections(view: View<'_>, config: &ReconnectConfig) -> Vec<LostCon
             outgoing,
         })
         .collect()
+}
+
+// Whether a sibling carries the equivalent of a predecessor's edge. With
+// indexes, each question is one lookup of the edge triple (SPEC §9.1);
+// without them, one scan collects what every sibling carries, as (label,
+// whether the near endpoint is `from`, far endpoint), rather than scanning
+// once per question. Both answer the same.
+enum Claims<'a> {
+    Indexed(Indexes<'a>, Vec<EntryId>),
+    Scanned(HashSet<(&'a str, bool, EntryId)>),
+}
+
+impl<'a> Claims<'a> {
+    fn new(before: View<'a>, siblings: Vec<EntryId>) -> Self {
+        if let Some(indexes) = before.indexes() {
+            return Self::Indexed(indexes, siblings);
+        }
+        let siblings = siblings.into_iter().collect::<HashSet<_>>();
+        let mut carried = HashSet::new();
+        for edge in before.edges() {
+            for (near, outgoing, far) in [(edge.from, true, edge.to), (edge.to, false, edge.from)] {
+                if siblings.contains(&near) {
+                    carried.insert((edge.ty_name.as_str(), outgoing, far));
+                }
+            }
+        }
+        Self::Scanned(carried)
+    }
+
+    fn contains(&self, label: &str, outgoing: bool, other: EntryId) -> bool {
+        match self {
+        Self::Indexed(indexes, siblings) => siblings.iter().any(|&sibling| {
+            let (from, to) = if outgoing {
+                (sibling, other)
+            } else {
+                (other, sibling)
+            };
+            indexes.edge_between(from, to, label).is_some()
+        }),
+        Self::Scanned(carried) => carried.contains(&(label, outgoing, other)),
+        }
+    }
 }
 
 pub struct Reconnect {

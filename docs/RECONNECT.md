@@ -127,18 +127,23 @@ reserves the flag for an advisory about an event judged once, at the prefix
 that event ends, and for conditions too costly to re-judge at every prefix.
 Both apply:
 
-- The supersession is an event. Judging it once at `S`'s prefix costs one scan
-  of `before` for `D`'s current descendants and one scan of the edges in
-  `before`, which finds both `D`'s edges and those its descendants carry,
-  however many descendants there are; full replay judges every supersession
-  exactly once, so Reconnect adds a cost linear in history length per prefix,
-  the same shape as TypeCheck's transition findings
+- The supersession is an event. Judging it once at `S`'s prefix reads `D`'s
+  current descendants and `D`'s edges in `before`, and asks whether a
+  descendant carries each edge's equivalent. With the core indexes
+  ([SPEC §9.1](SPEC.md#91-indexes)) these are lookups, children (K1),
+  incident edges (K2), and one edge triple (K6) per edge and descendant;
+  without them, one scan of `before` finds both `D`'s edges and those its
+  descendants carry, however many descendants there are, with the same
+  result. Full replay judges every supersession exactly once, so Reconnect
+  adds at most a cost linear in history length per prefix, the same shape as
+  TypeCheck's transition findings
   ([PERFORMANCE §1](PERFORMANCE.md#1-measurements)).
 - A nonsticky version would re-emit at every prefix for every current node
-  with a predecessor, scanning the predecessor's edges each time. `edges_of`
-  scans the view ([PERFORMANCE §3](PERFORMANCE.md#3-backlog)), so each prefix
-  costs nodes times edges and replay grows with the cube of history, which is
-  what PERFORMANCE §1 removed. It would also need a rule for when a lost
+  with a predecessor, reading the predecessor's edges each time. Without
+  indexes `edges_of` scans the view, so each prefix costs nodes times edges and
+  replay grows with the cube of history, which is what PERFORMANCE §1
+  removed; with them, replay still re-judges every current revision at every
+  prefix. It would also need a rule for when a lost
   connection stops applying, which is the resolution judgment ANALYZERS §3
   says no analyzer may infer.
 

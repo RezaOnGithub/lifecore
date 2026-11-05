@@ -31,8 +31,9 @@ pub struct LifeCoreList {
     id: Uuid,
     entries: Vec<Entry>,
     suite: SuiteConfig,
+    // Boxed, so that values holding a graph stay small.
     #[serde(skip)]
-    indexes: CoreIndexes,
+    indexes: Box<CoreIndexes>,
 }
 
 // The indexes are derived from `entries`, so they take no part in equality.
@@ -82,9 +83,9 @@ impl<'de> Deserialize<'de> for LifeCoreList {
             id: stored.id,
             entries: stored.entries,
             suite: stored.suite,
-            indexes: CoreIndexes::default(),
+            indexes: Box::default(),
         };
-        graph.indexes = graph.validate().map_err(serde::de::Error::custom)?;
+        graph.indexes = Box::new(graph.validate().map_err(serde::de::Error::custom)?);
         Ok(graph)
     }
 }
@@ -95,7 +96,7 @@ impl Default for LifeCoreList {
             id: Uuid::new_v4(),
             entries: vec![],
             suite: SuiteConfig::default(),
-            indexes: CoreIndexes::default(),
+            indexes: Box::default(),
         }
     }
 }
@@ -120,14 +121,14 @@ impl LifeCoreList {
             id,
             entries,
             suite: SuiteConfig::default(),
-            indexes: CoreIndexes::default(),
+            indexes: Box::default(),
         }
     }
     // Revalidates the whole history with freshly built indexes; the stored ones
     // are not consulted, but debug builds check that they still match.
     pub fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
         let rebuilt = self.validate()?;
-        debug_assert!(rebuilt == self.indexes, "stored indexes diverged");
+        debug_assert!(rebuilt == *self.indexes, "stored indexes diverged");
         Ok(())
     }
     // Staging checks only the appended entry, against the indexed view of the
@@ -157,7 +158,7 @@ impl LifeCoreList {
         self.entries.pop();
         match (full, checked) {
         (Ok(rebuilt), Ok(())) => {
-            let mut extended = self.indexes.clone();
+            let mut extended = (*self.indexes).clone();
             extended.push(entry);
             assert!(rebuilt == extended, "extended indexes diverged");
         }

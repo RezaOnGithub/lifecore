@@ -68,6 +68,22 @@ constructed first, initialized in suite order, then each replays boundaries
 and prefix zero. Missing factories, invalid configuration, execution failures,
 and malformed subject/focus output are errors.
 
+An analyzer may read the core indexes, through `View`'s queries, which use an
+index when the view carries one and their reference scan otherwise, or through
+`View::indexes()`, with a fallback of its own for `None`. Either way its output
+must not depend on whether indexes are present
+([SPEC §9.1](SPEC.md#91-indexes)). The runner takes
+`Indexing::{All, Core, Off}` through `set_indexing`, `All` by default. `Core`
+hands analyzers views with the core indexes, which the runner builds for the
+run when its view carries none; `Off` hands them views without any; `All`
+will add the index templates a suite declares (CORE-ROUND §4.5) and is `Core`
+until then. No output records the mode. The equivalence helper,
+`analysis::assert_indexing_equivalence(runner, view, suite)`, runs a history
+under every mode, and under `Core` with indexes the runner built, and panics
+unless every run gives the same `AnalysisOutput` or the same failure. Every
+analyzer's tests run their histories through it; the built-ins' tests also
+compare their typed findings at single prefixes with and without indexes.
+
 An observation records `evaluated_view: EvaluatedView`:
 `EvaluatedView::Initialization`, or `EvaluatedView::Prefixes { first, last }`,
 the contiguous range of exact prefixes, including zero, at which the analyzer

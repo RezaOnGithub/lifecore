@@ -574,6 +574,7 @@ version = "0.1.0"
 dependencies = [
  "lifecore",
  "lifecore-app",
+ "lifecore-dag-check",
  "lifecore-reconnect",
  "lifecore-typecheck",
  "serde_json",

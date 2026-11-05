@@ -131,9 +131,9 @@ current.
 
 The **current graph** is the graph induced by current nodes and current edges.
 It is derived from history. Current flags, active-edge lists, and cached type
-resolutions are not independent sources of truth. The implementation's staleness
-index ([section 9](#9-inspection-and-queries)) is likewise derived from validated
-history, and it is never serialized or persisted.
+resolutions are not independent sources of truth. The implementation's core
+indexes ([section 9.1](#91-indexes)) are likewise derived from validated
+history, and they are never serialized or persisted.
 
 All leaves of a revision tree may be current simultaneously. There is no
 automatic winner among siblings and no unique "latest version" of a split tree.
@@ -660,20 +660,99 @@ altered contents under the same identity. Private fields and the read-only
 `at_base()` and `at_target()` accessors preserve those invariants.
 Comparisons support committed base/candidate views and reject unrelated sources,
 reversed boundaries, and divergent histories, even if boundary/head IDs match.
-Currentness is answered from a derived staleness index held by the graph: each
-node's slot records the position of its first direct successor. History is
-append-only, so a slot is set once and one index serves every view. A node is
-superseded in a view of length `L` exactly when its recorded position is less than
-`L`; an edge is historical when either endpoint is. A recorded position may lie
-beyond the view, so every query compares it with the view boundary and reveals
-nothing else. The index is never serialized. Deserialization rebuilds it in the
-same pass as structural validation, and `transaction::prepare` extends it for each
-staged entry only after that entry validates, so an invalid entry never affects an
-earlier boundary. Resolved types are not cached.
+Currentness, like the other queries of this section, may be answered from the
+graph's core indexes ([section 9.1](#91-indexes)): a node is superseded in a
+view exactly when one of its direct successors is visible there, and an edge is
+historical when either endpoint is. Resolved types are not cached; only each
+declaration's parse is, which depends on its payload alone.
 
 Inspection requires neither a valid draft nor installed analyzers. Graphviz
 drawings of a view are an application method, `views.render`
 ([RPC §2](RPC.md#2-methods)).
+
+### 9.1 Indexes
+
+An index caches a query, so that a question asked at many boundaries need not
+scan the view each time. The rules here govern every index; the core indexes
+are the ones below.
+
+- **An index caches a query.** Every index has a reference definition: a scan
+  of the view that computes the same answer. An index is correct exactly when
+  it agrees with its reference at every boundary.
+- **Every index is optional.** A view carries the core indexes or none.
+  `View::without_indexes()` drops them, and a runner under `Indexing::Off`
+  hands its analyzers views without them
+  ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)).
+  `View::indexes()` returns `Option<Indexes>`.
+- **Users behave identically with or without them.** Structural validation,
+  `View`'s queries, TypeCheck, and every analyzer give the same results whether
+  they read an index or compute the answer themselves. "The same" covers
+  everything observable: values, order (append order), errors, the position of
+  the first failure, and findings with their ranges. Assuming a correct index,
+  an index changes cost and never behaviour.
+- **Hence indexes are invisible to identity.** They take no part in finding
+  keys, analyzer identity, acceptance, or any serialized output. Building them,
+  or not, is the host's choice and needs no record.
+
+`View`'s queries use an index when the view carries one and their reference
+scan otherwise, so most users never see the `Option`. A user with a fallback
+cheaper in its own context takes `View::indexes()` directly, whose `Indexes`
+answers the same queries bounded by the view. The core indexes and the
+reference definitions of the queries they answer:
+
+| Index | Content | Query: reference definition |
+| --- | --- | --- |
+| K1 children | Each node's direct successors | `children(id)`: the nodes whose predecessor is `id`. `is_stale` of a node: whether it has a child. `descendants` and `fresh_successors` walk K1 |
+| K2 incident edges | Each node's edges, in either direction | `edges_of(id)`: the edges whose `from` or `to` is `id`; `relationships` filters them |
+| K3 nodes by type | Nodes per type name | `nodes_of_type(name)`: the nodes with that type name, current or not; `select_nodes` with a type name, and `declarations` (`Type`) |
+| K4 edges by label | Edges per label | `edges_labelled(label)`: the edges with that label, current or not; `select_edges` with a type name |
+| K5 node content | Nodes per hash of type name, predecessor, and payload | `nodes_with_content(name, predecessor, payload)`: the nodes equal in all three, current or not, which the duplicate-node rule of [section 7.1](#71-append-checks) reads |
+| K6 edge triple | Edges per hash of source, target, and label | `edge_between(from, to, label)`: the edge with exactly those, of which section 7.1 admits at most one |
+| K7 root | Each node's root, fixed at append | `root_of(id)`: the last node of the walk from `id` through its predecessors |
+| K8 parsed declarations | Each `Type` node's parse: its schema or schema error | `declarations`: the parse of each current `Type` node's payload ([section 6.2](#62-name-resolution)) |
+
+Lists are in append order, and every query answers in append order. Queries
+on an identity the view does not hold exactly answer as its reference does:
+empty, or absent.
+
+`LifeCoreList` owns the core indexes. Deserialization builds them in the same
+pass as structural validation, and staging extends them by each entry only
+after it validates, so an invalid entry never reaches any boundary. Debug
+builds compare rebuilt indexes with the maintained ones. Boundary rules:
+
+- **Positions.** Each list is in append order, so a view narrows it by
+  `partition_point(|&p| p < len)`. A view keeps its length and a reference to
+  the indexes, which keeps `View::prefix` constant time.
+- **Entry-keyed values.** K7, K8, and the lists of K1 and K2 are read only
+  through an `EntryId` the view holds.
+- **Hidden channels.** Indexes are never serialized, and are excluded from
+  `Debug`, `PartialEq`, and `Hash` of `LifeCoreList` and `View`; the `Debug`
+  of `Indexes` shows the boundary only. No query enumerates keys, so a key
+  that occurs only past the boundary is indistinguishable from an absent one.
+- **Hash collisions.** K5 and K6 narrow by hash and then compare complete
+  values.
+
+With K5 and K6, structural validation is linear apart from hashing. Every
+`LifeCoreList` holds a valid history, so staging checks only the appended entry
+against the indexed history before it, which gives exactly the result of
+validating the whole extended history, the first failure and its error
+included, and `transaction::prepare` does not revalidate its base. The
+unindexed path scans, with the same results.
+
+An index, core or one an analyzer declares, is admitted only when it is:
+
+1. **Fixed at append.** An entry's contribution is fixed when it is appended.
+   Keys come from the entry's own content, its endpoints, and their roots, all
+   immutable. Nothing is removed or rewritten later, so narrowing is a
+   position comparison. Currentness is never stored; queries check it through
+   staleness, which is monotone.
+2. **Cheap to maintain.** O(1) amortized work per appended entry, besides
+   hashing.
+3. **Declarative.** Parameters are data, and no analyzer code runs inside the
+   core.
+4. **Earned.** It has a named consumer today, with a gain over the existing
+   indexes for that consumer. This is the rule for extending a closed list;
+   [PERFORMANCE](PERFORMANCE.md) records costs and declined candidates.
 
 ## 10. Examples
 

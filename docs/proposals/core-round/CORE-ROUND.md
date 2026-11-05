@@ -1,19 +1,19 @@
 # Core round: value kinds, typed payloads, and indexes
 
-Status: proposed; steps 1 (the benchmark), 3a (value kinds), 3b (their
-editors), and 4 (typed decoding) of section 6 have landed, and the rest is
-not implemented. This is a design document for core work, not an analyzer
-proposal, so it has no explainer or harness. As each step of section 6
-lands, its contracts move into the owning documents listed in section 7.
-When the last one has moved, this directory is removed. It relies on
-[SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
+Status: proposed; steps 1 (the benchmark), 2 (core indexes), 3a (value
+kinds), 3b (their editors), and 4 (typed decoding) of section 6 have landed,
+and the rest is not implemented. This is a design document for core work, not
+an analyzer proposal, so it has no explainer or harness. As each step of
+section 6 lands, its contracts move into the owning documents listed in
+section 7. When the last one has moved, this directory is removed. It relies
+on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
 [FILES](../../FILES.md), and [PERFORMANCE](../../PERFORMANCE.md).
 
 The planning analyzer motivates most of this round, but it is shelved
 ([AGENTS.md](../../../AGENTS.md#planning-is-shelved)). PLANNING and
 `lifecore-prod` are cited as of `59c702c`, their last state, and "Planning"
 below means that analyzer.
-Section 8, question 2 asks what shelving it means for step 5.
+Section 8, open question 1 asks what shelving it means for step 5.
 
 ## 0. Summary
 
@@ -402,6 +402,16 @@ names only fields the declaration rule keeps, so with TypeCheck configured
 that is the only kind of prefix where decoding can fail.
 
 ## 4. Indexes
+
+*Sections 4.3 and 4.4 landed in step 2.* Their contracts are owned as
+section 8.1 recommends, option (C): the principle, the core indexes with the
+reference definitions of their queries, the boundary rules, and the admission
+criteria by [SPEC §9.1](../../SPEC.md#91-indexes); `Indexing` and the
+equivalence helper by
+[ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization); costs by
+[PERFORMANCE](../../PERFORMANCE.md). Where those and these sections differ,
+they hold, and these sections stay as the design's record. Index templates
+(section 4.5, step 5) are not implemented.
 
 ### 4.1 Where the cost comes from
 
@@ -799,7 +809,26 @@ the browser.
    vocabulary.
 2. **Optional core indexes and incremental validation.** `Indexing` modes, the
    equivalence helper, and the property tests come first, then the indexes.
-   Results are unchanged by construction. Measure again.
+   Results are unchanged by construction. Measure again. *Landed.* Its
+   contracts now live where section 4 says, and PERFORMANCE §1.1 records the
+   measurements before and after. `lifecore-workload` gained
+   `varied_history`, whose seed adds the variation step 1 names, and the
+   core's property tests in `lifecore` generate histories of their own,
+   invalid appends included. Settled while landing: K5 and K6 key by a
+   content hash and compare complete values, and K8 is parallel to K3's
+   `Type` list; `Declarations` borrows K8's parses instead of copying them;
+   `Indexes` also answers `descendants`, `has_child`, `declaration`, and
+   `type_declarations`, and `View` gained `nodes_with_content` and
+   `edge_between`, the queries of K5 and K6; `select_nodes`, `select_edges`,
+   and `relationships` read K3, K4, and K2; `Indexing::Core` builds the core
+   indexes for a view that carries none, and `All` equals `Core` until
+   templates exist; `prepare` no longer revalidates its base, because every
+   `LifeCoreList` is valid, and debug builds compare each staged entry with
+   validating the whole history from scratch; TypeCheck reads K8 and K3
+   through `declarations` only, since it emits every current finding at every
+   prefix and so reads every current node anyway; Reconnect uses K1, K2, and
+   K6 and keeps its single scan as its own fallback; DAG Check reads K3 and K4
+   when its filter names types or labels.
 3. **Value kinds,** in two steps (section 2.7):
    - **3a.** Core, TypeCheck, FILES encodings, evaluation inputs with an
      offset (section 2.5), `contract.ts` and the fixtures, and the client's
@@ -910,17 +939,21 @@ Decided by the owner:
    Planning's rework, tested on types of PLANNING's basic shape (section 6,
    step 4). It has been planned since the start, as the long-standing
    `lifecore-derive` stub shows.
+10. The index catalogue is owned as option (C) of section 8.1, settled when
+    step 2 landed: SPEC §9.1, ANALYZERS §1, PERFORMANCE, and one AGENTS.md
+    invariant. Step 5 adds the templates to the same places.
 
 Still open:
 
-1. **Which document owns the index catalogue.** Section 8.1.
-2. **Step 5 without Planning.** Planning was the only consumer of the two
+1. **Step 5 without Planning.** Planning was the only consumer of the two
    templates, and admission criterion 4 of section 4.5 asks for a named
    consumer today. Either they land now, with tests as their only users and
    Planning's rework as the consumer named in advance, or they move into
    step 6 and land with it.
 
 ### 8.1 Owning the index catalogue
+
+*Settled as (C) when step 2 landed (decision 10).*
 
 The "catalogue" is five kinds of content, and they have different readers:
 

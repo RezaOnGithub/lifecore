@@ -112,9 +112,9 @@ most likely to trip, with the owning section.
 - Views are bounded. `View::prefix(end_exclusive)` only narrows `[0, end_exclusive)`;
   lookups require an `EntryId`, not a position; a prefix-bounded value reveals
   nothing past its boundary through any channel, including `Debug`, `Serialize`,
-  `PartialEq`, `Hash`, ordering, and error text. The derived staleness index is
-  never serialized, and every query compares it with the view boundary
-  ([SPEC §9](docs/SPEC.md#9-inspection-and-queries)).
+  `PartialEq`, `Hash`, ordering, and error text. The derived core indexes are
+  never serialized, and every query narrows them to the view boundary
+  ([SPEC §9.1](docs/SPEC.md#91-indexes)).
 - Entry identity is separate from its interpretation in a view. Freshness and
   active declarations depend on the view; never inspect a future suffix or cache
   resolved types without the source and boundary. Edges keep exact endpoints and
@@ -162,6 +162,10 @@ most likely to trip, with the owning section.
   zone name or a precomputed future instant, and nothing but the host's one
   capture for `now` reads the system zone
   ([SPEC §6.4](docs/SPEC.md#64-value-kinds-and-shapes)).
+- Every index is optional, and its users behave identically with and without
+  it, errors and order included; indexes take no part in identity or
+  serialized output. Analyzer tests run through `assert_indexing_equivalence`
+  ([SPEC §9.1](docs/SPEC.md#91-indexes)).
 - Test history-sensitive changes at several boundaries, including before and
   after the relevant append.
 
