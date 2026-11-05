@@ -71,8 +71,9 @@ function ListEditor({
     fitKeys([], items.length),
   );
   // An element being added that has no value yet (an integer, a time, an
-  // enum, or a variant): it is appended once one is typed or chosen. Its key is the one
-  // the appended element takes, so the input keeps focus across that.
+  // enum, or a variant): it is appended once one is typed or chosen. Its
+  // key is the one the appended element takes, so the input keeps focus
+  // across that.
   const [pendingKey, setPendingKey] = useState<number | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const rowKeys = fitKeys(keys, items.length);
@@ -365,8 +366,10 @@ export function ShapeValueEditor({
 
 // A tag select, then the chosen tag's fields as a record's are edited,
 // labelled `decision(committed).cost` as the server's paths read. A body
-// left by switching tags is kept and restored on switching back; a tag
-// the declaration does not have is shown, marked, with its fields as JSON.
+// left by switching tags is kept and restored on switching back. A tag the
+// declaration does not have is shown, marked, with its fields as JSON; the
+// one the editor opened with stays an option for the editor's lifetime, so
+// switching back to it restores it with its body.
 function VariantEditor({
   label,
   tags,
@@ -383,8 +386,12 @@ function VariantEditor({
   const [remembered, setRemembered] = useState<ReadonlyMap<string, Body>>(
     () => new Map(),
   );
+  const [initial] = useState(value?.tag ?? null);
   // Integer-like keys would come first in property order.
   const names = Object.keys(tags).sort(compareCodePoints);
+  const undeclared = [...new Set([initial, value?.tag ?? null])].filter(
+    (tag): tag is string => tag !== null && !Object.hasOwn(tags, tag),
+  );
   const fields = value === null ? undefined : getOwn(tags, value.tag);
   const tagWords = (tag: string) => (tag === "" ? '"" (empty tag)' : tag);
   const choose = (tag: string) => {
@@ -410,11 +417,11 @@ function VariantEditor({
             choose a tag…
           </option>
         )}
-        {value !== null && fields === undefined && (
-          <option value={value.tag}>
-            {tagWords(value.tag)} (undeclared tag)
+        {undeclared.map((tag) => (
+          <option key={`undeclared:${tag}`} value={tag}>
+            {tagWords(tag)} (undeclared tag)
           </option>
-        )}
+        ))}
         {names.map((tag) => (
           <option key={tag} value={tag}>
             {tagWords(tag)}

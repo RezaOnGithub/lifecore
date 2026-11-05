@@ -829,17 +829,11 @@ the browser.
      `variant` counts toward the 64-level depth limit like `record`; and a
      tag in a field path is the part `{"tag": …}`, displayed in parentheses.
    - **3b.** The editors, as a UI stage of its own. Nothing else waits for it;
-     it may come after steps 4 and 5. *Landed.* Its decisions live in
+     it may come after steps 4 and 5. *Landed.* Its decisions, including
+     those settled while landing, live in
      [UI §5](../../UI.md#5-drafts-and-writes) ("Editors for the value kinds"
-     and "Declaration form"), with
-     [CLIENT §3](../../CLIENT.md#3-values); the read-only fallback stays for
-     kinds added later. Settled while landing: the offset timestamp's picker
-     shows a value's own wall clock beside its exact text, which keeps the
-     fraction and offset the picker does not show and takes any spelling; a
-     wall clock the browser's zone skips or repeats is resolved as `Date`
-     does, with a note; an offset with seconds is refused, not rounded; and
-     an enum or variant chosen in the builder waits for its first member or
-     tag, since neither may be empty.
+     and "Declaration form"), with [CLIENT §3](../../CLIENT.md#3-values);
+     the read-only fallback stays for kinds added later.
 4. **`FromPayload`, `FromBody`, and `Declare`.** This lands in this round
    (decided, section 8). Its tests use the basic shape of PLANNING's types at
    `59c702c` (section 5.1): records with mandatory and optional fields, a

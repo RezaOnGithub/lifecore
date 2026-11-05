@@ -200,22 +200,14 @@ export type Resolved =
 
 const PICKER_WALL = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
 
-// The offset timestamp for a wall clock typed in a datetime-local picker,
-// read in the browser's zone: the offset is the one in effect at the
-// instant meant, so a summer date gets the summer offset whatever the
-// season now. `fraction` is kept from the value being edited, since the
-// picker does not show it. An offset in seconds is refused rather than
-// rounded, since rounding would move the instant.
-export function offsetTimestampAt(
-  pickerWall: string,
-  fraction: string,
-  offsetAt: OffsetAt = browserOffsetAt,
-): Resolved {
+// The wall clock a datetime-local picker holds, or null for anything else
+// (incomplete, or a day that does not exist).
+function pickedWall(pickerWall: string): Wall | null {
   const match = PICKER_WALL.exec(pickerWall);
   if (match === null) {
-    return { error: `not a date and time: ${pickerWall}` };
+    return null;
   }
-  const typed = {
+  const wall = {
     year: Number(match[1]),
     month: Number(match[2]),
     day: Number(match[3]),
@@ -223,7 +215,45 @@ export function offsetTimestampAt(
     minute: Number(match[5]),
     second: Number(match[6] ?? "0"),
   };
-  if (!real(typed)) {
+  return real(wall) ? wall : null;
+}
+
+// The year of a picker's value, or null when it holds none. A year typed
+// digit by digit passes through 0002, 0020, and 0202 on its way to 2026.
+export function pickerYear(pickerWall: string): number | null {
+  const match = /^(\d{4})-/.exec(pickerWall);
+  return match === null ? null : Number(match[1]);
+}
+
+// The offset timestamp for a wall clock picked over an existing value,
+// read at that value's own offset: the offset observed when the value was
+// recorded stays (CORE-ROUND §2.2, "store what was observed"), and the
+// instant moves by exactly the change picked. No zone is consulted, so
+// this never meets a gap or an overlap. The fraction is kept as well.
+export function atOwnOffset(
+  pickerWall: string,
+  own: PickerTimestamp,
+): { value: OffsetTimestampString } | { error: string } {
+  const wall = pickedWall(pickerWall);
+  if (wall === null) {
+    return { error: `not a date and time: ${pickerWall}` };
+  }
+  return { value: `${wallTimeText(wall)}${own.fraction}${own.offset}` };
+}
+
+// The offset timestamp for a wall clock read in the browser's zone, for a
+// new value or an explicit "this browser's offset": the offset is the one
+// in effect at the instant meant, so a summer date gets the summer offset
+// whatever the season now. `fraction` is kept from the value being
+// edited, since the picker does not show it. An offset in seconds is refused rather than
+// rounded, since rounding would move the instant.
+export function offsetTimestampAt(
+  pickerWall: string,
+  fraction: string,
+  offsetAt: OffsetAt = browserOffsetAt,
+): Resolved {
+  const typed = pickedWall(pickerWall);
+  if (typed === null) {
     return { error: `not a date and time: ${pickerWall}` };
   }
   const local = wallMs(typed);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  atOwnOffset,
   CALENDAR_UNIT_HINT,
   durationHint,
   nowOffsetTimestamp,
@@ -9,6 +10,7 @@ import {
   offsetTimestampAt,
   pickerDate,
   pickerTimestamp,
+  pickerYear,
 } from "./times.ts";
 
 const fixed =
@@ -165,4 +167,54 @@ test("the duration hint names calendar units in either spelling", () => {
     assert.equal(durationHint(civil), CALENDAR_UNIT_HINT, civil);
   }
   assert.match(durationHint("") ?? "", /PT1H30M/);
+});
+
+// An existing value's pick is read at its own offset, whatever the
+// browser's zone: these are the cases where reading it in the browser's
+// zone moved the instant and dropped the observed offset.
+function repick(value: string, wall: string): string {
+  const own = pickerTimestamp(value);
+  assert.ok(own !== null, value);
+  const kept = atOwnOffset(wall, own);
+  assert.ok("value" in kept, wall);
+  return kept.value;
+}
+
+test("a pick over an existing value keeps the offset it observed", () => {
+  // In Kolkata (+05:30), a minute's correction to a +01:00 value.
+  assert.equal(
+    repick("2026-10-29T08:15:00+01:00", "2026-10-29T08:16"),
+    "2026-10-29T08:16:00+01:00",
+  );
+  // In Berlin, a minute's correction to a -08:00 value late in the day.
+  assert.equal(
+    repick("2026-10-29T23:30:00-08:00", "2026-10-29T23:31"),
+    "2026-10-29T23:31:00-08:00",
+  );
+  // In New York, the second reading of the repeated 01:30 stays the second.
+  assert.equal(
+    repick("2026-11-01T01:30:00-05:00", "2026-11-01T01:30:05"),
+    "2026-11-01T01:30:05-05:00",
+  );
+  // A wall clock New York skips is no gap at the value's own offset.
+  assert.equal(
+    repick("2026-03-08T01:30:00-05:00", "2026-03-08T02:30"),
+    "2026-03-08T02:30:00-05:00",
+  );
+  // The fraction and a zero offset stay as they were.
+  assert.equal(
+    repick("2026-10-29t08:15:00.123456789+00:00", "2026-10-30T08:15"),
+    "2026-10-30T08:15:00.123456789+00:00",
+  );
+  const own = pickerTimestamp("2026-10-29T08:15:00+01:00");
+  assert.ok(own !== null);
+  for (const bad of ["", "2026-02-30T00:00", "2026-10-29"]) {
+    assert.ok("error" in atOwnOffset(bad, own), bad);
+  }
+});
+
+test("a picker's year is read so a year being typed can wait", () => {
+  assert.equal(pickerYear("0020-03-01"), 20);
+  assert.equal(pickerYear("2026-03-01T09:30"), 2026);
+  assert.equal(pickerYear(""), null);
 });

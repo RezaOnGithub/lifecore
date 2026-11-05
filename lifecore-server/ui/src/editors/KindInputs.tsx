@@ -6,11 +6,13 @@ import type {
   Payload,
 } from "../contract.ts";
 import {
+  atOwnOffset,
   durationHint,
   nowOffsetTimestamp,
   offsetTimestampAt,
   pickerDate,
   pickerTimestamp,
+  type Resolved,
 } from "../model/times.ts";
 import { offsetTimestampHint, timeValue } from "../model/values.ts";
 import { liveDraft, type TextDraft } from "./helpers.ts";
@@ -38,9 +40,15 @@ function onLeave(
   }
   return (event) => {
     const next = event.relatedTarget;
-    if (!(next instanceof Node && event.currentTarget.contains(next))) {
-      onAbandon();
+    if (next instanceof Node && event.currentTarget.contains(next)) {
+      return;
     }
+    // A picker that took its text as focus left (a year below 1000) still
+    // holds it; one that refused it has gone back to empty.
+    if (event.target instanceof HTMLInputElement && event.target.value !== "") {
+      return;
+    }
+    onAbandon();
   };
 }
 
@@ -85,7 +93,10 @@ export function DateInput({
 }) {
   const picked = value === null ? null : pickerDate(value);
   const [asText, setAsText] = useState(false);
-  const commit = (text: string) => onChange(timeValue("date", text));
+  const commit = (text: string) => {
+    onChange(timeValue("date", text));
+    return true;
+  };
   if (asText || (value !== null && picked === null)) {
     if (!asText) {
       setAsText(true);
@@ -116,10 +127,30 @@ export function DateInput({
   );
 }
 
-// A datetime-local picker whose wall clock is read in the browser's zone,
-// the offset filled from the browser at that instant, beside the exact
-// text: the picker shows a value's own wall clock to the second, while the
-// text keeps its fraction and offset and takes any other spelling.
+function zoneNote(picked: string, resolved: Resolved): string | null {
+  if ("error" in resolved) {
+    return null;
+  }
+  const [day, time] = picked.split("T");
+  const [, writtenTime] = resolved.wall.split("T");
+  const offset = resolved.value.slice(-6);
+  if (resolved.shifted) {
+    return `${time} does not occur on ${day} in this browser's zone; written as ${writtenTime} at ${offset}`;
+  }
+  return resolved.ambiguous
+    ? `${time} occurs twice on ${day} in this browser's zone; written as the earlier, at ${offset}`
+    : null;
+}
+
+// A datetime-local picker beside the exact text: the picker shows a
+// value's own wall clock to the second, while the text keeps its fraction
+// and offset and takes any other spelling. A pick over an existing value is
+// read at that value's own offset, so the offset observed stays and the
+// instant moves only by the change picked (CORE-ROUND §2.2). The browser's
+// zone fills the offset, at the instant meant, only where nothing was
+// observed: a new value, a picker that could not show the value, "now",
+// and "this browser's offset", which rereads the wall clock shown in the
+// browser's zone and says that it moves the instant.
 export function OffsetTimestampInput({
   label,
   value,
@@ -140,6 +171,24 @@ export function OffsetTimestampInput({
     setFailure(null);
     onChange(timeValue("offset_timestamp", text));
   };
+  // Reads `wall` in the browser's zone, with a note at a gap or an overlap.
+  const inBrowserZone = (wall: string): boolean => {
+    const resolved = offsetTimestampAt(wall, parts?.fraction ?? "");
+    if ("error" in resolved) {
+      setFailure({ text: resolved.error, base: value });
+      return false;
+    }
+    const text = zoneNote(wall, resolved);
+    setNote(text === null ? null : { text, base: resolved.value });
+    commit(resolved.value);
+    return true;
+  };
+  // What "this browser's offset" would write, so it is offered only where
+  // it changes the value.
+  const rezoned =
+    parts === null ? null : offsetTimestampAt(parts.wall, parts.fraction);
+  const rezonable =
+    rezoned !== null && "value" in rezoned && rezoned.value !== value;
   // A refusal stays until the value changes; a note, while the value is
   // the one it explains.
   const refused = liveDraft(failure, value)?.text ?? null;
@@ -155,28 +204,17 @@ export function OffsetTimestampInput({
         step={1}
         value={parts?.wall ?? null}
         onCommit={(wall) => {
-          const resolved = offsetTimestampAt(wall, parts?.fraction ?? "");
-          if ("error" in resolved) {
-            setFailure({ text: resolved.error, base: value });
-            return;
+          if (parts === null) {
+            return inBrowserZone(wall);
           }
-          const [day, time] = wall.split("T");
-          const [, writtenTime] = resolved.wall.split("T");
-          const offset = resolved.value.slice(-6);
-          setNote(
-            resolved.shifted
-              ? {
-                  text: `${time} does not occur on ${day} in this browser's zone; written as ${writtenTime} at ${offset}`,
-                  base: resolved.value,
-                }
-              : resolved.ambiguous
-                ? {
-                    text: `${time} occurs twice on ${day} in this browser's zone; written as the earlier, at ${offset}`,
-                    base: resolved.value,
-                  }
-                : null,
-          );
-          commit(resolved.value);
+          const kept = atOwnOffset(wall, parts);
+          if ("error" in kept) {
+            setFailure({ text: kept.error, base: value });
+            return false;
+          }
+          setNote(null);
+          commit(kept.value);
+          return true;
         }}
       />{" "}
       <ValidatedInput
@@ -205,9 +243,24 @@ export function OffsetTimestampInput({
       >
         now
       </button>
+      {rezonable && parts !== null && (
+        <>
+          {" "}
+          <button
+            type="button"
+            aria-label={`this browser's offset for ${label}`}
+            title={`read ${parts.wall.replace("T", " ")} in this browser's zone instead of at ${parts.offset}; the instant moves by the difference`}
+            onMouseDown={keepFocus}
+            onClick={() => inBrowserZone(parts.wall)}
+          >
+            this browser's offset
+          </button>
+        </>
+      )}
       {value !== null && parts === null && (
         <span className="edit-note">
-          the picker cannot show this value; its text edits it
+          the picker cannot show this value; its text edits it, and a pick takes
+          this browser's offset
         </span>
       )}
       {refused !== null ? (
@@ -219,8 +272,10 @@ export function OffsetTimestampInput({
   );
 }
 
-// The declared members, and the value itself when it is not one of them,
-// so a value the declaration has dropped is shown rather than replaced.
+// The declared members, and a value that is not one of them: the value
+// the editor opened with, kept as an option for the editor's lifetime so a
+// stray choice can be undone, and the current one. Each is marked, so a
+// value the declaration has dropped is shown rather than replaced.
 export function EnumSelect({
   label,
   members,
@@ -234,6 +289,10 @@ export function EnumSelect({
   onChange: (value: Payload) => void;
   onAbandon?: () => void;
 }) {
+  const [initial] = useState(value);
+  const others = [...new Set([initial, value])].filter(
+    (other): other is string => other !== null && !members.includes(other),
+  );
   return (
     <select
       aria-label={label}
@@ -246,9 +305,11 @@ export function EnumSelect({
           choose…
         </option>
       )}
-      {value !== null && !members.includes(value) && (
-        <option value={value}>{value} (not a member)</option>
-      )}
+      {others.map((other) => (
+        <option key={`other:${other}`} value={other}>
+          {other} (not a member)
+        </option>
+      ))}
       {members.map((member) => (
         <option key={member} value={member}>
           {member}

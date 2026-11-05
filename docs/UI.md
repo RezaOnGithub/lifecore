@@ -252,30 +252,42 @@ contract with the service.
 - Editors for the value kinds. A duration is a text input taking either of
   Jiff's spellings, with a hint when the text names days or longer; Check
   judges it, and the stored value is spelled in ISO 8601. A date is a date
-  picker; a date the picker cannot hold (a year outside 0001–9999, or text
-  in another form) is a text input instead, and stays one while the editor
-  is open. An offset timestamp is a datetime-local picker to the second,
-  then its exact text, then "now". The picker shows the value's own wall
-  clock at its own offset. A wall clock picked there is read in the
-  browser's zone and written with the browser's offset at that instant
-  (`getTimezoneOffset` for it, so a summer date gets the summer offset),
-  keeping the fraction of a second the picker does not show; "now" writes
-  the present instant, to the millisecond, at the present offset. A wall
-  clock the zone skips is written as the later one `Date` reads it as, and
-  one the zone repeats as the earlier instant, each with a note. An offset
-  with seconds, as in a zone's local mean time, or beyond ±23:59 is refused
-  with a message rather than rounded, and a zero offset is `+00:00`, never
-  `Z`. The text takes any spelling, offset, and precision, kept as typed,
-  and is the only editor of a value the picker cannot show (another form, a
-  leap second, a year outside 0001–9999), which says so. An enum is a select
-  over its members; a value that is not one is listed too, marked "(not a
-  member)", so it is shown rather than replaced. A variant is a tag select,
-  then that tag's fields edited as a record's are, labelled as the server's
-  paths read (`decision(committed).cost`). Switching tags keeps the body
-  left for switching back while the editor is open; an undeclared tag is
-  listed, marked, with its fields as JSON. Neither an enum nor a variant
-  starts with a choice: made present, each waits for one, as integers and
-  times wait for text, and goes back to absent if focus leaves first.
+  picker; a date the picker cannot hold (a year outside 0001–9999, or text in
+  another form) is a text input instead, and stays one while the editor is
+  open. A year below 1000 in either picker is taken when focus leaves, not
+  while it is typed, since a year typed digit by digit passes through 0002 and
+  0020. An offset timestamp is a datetime-local picker to the second, then its
+  exact text, then "now". The picker shows the value's own wall clock at its
+  own offset, and a pick over an existing value is read at that offset,
+  keeping the offset observed and the fraction of a second the picker does not
+  show ([CORE-ROUND
+  §2.2](proposals/core-round/CORE-ROUND.md#22-the-rule-for-time)): the instant
+  moves only by the change picked. The browser's zone fills the offset only
+  where none was observed: a pick that makes a new value, or one over a value
+  the picker cannot show, takes the browser's offset at the instant meant
+  (`getTimezoneOffset` for it, so a summer date gets the summer offset); "now"
+  writes the present instant, to the millisecond, at the present offset; and
+  "this browser's offset", offered where it would change the value, rereads
+  the wall clock shown in the browser's zone and says in its tooltip that the
+  instant moves. Read in the browser's zone, a wall clock the zone skips is
+  written as the later one `Date` reads it as, and one the zone repeats as the
+  earlier instant, each with a note. An offset with seconds, as in a zone's
+  local mean time, or beyond ±23:59 is refused with a message rather than
+  rounded, and a zero offset is `+00:00`, never `Z`. The text takes any
+  spelling, offset, and precision, kept as typed, and is the only editor of a
+  value the picker cannot show (another form, a leap second, a year outside
+  0001–9999), which says so. An enum is a select over its members; a value
+  that is not one is listed too, marked "(not a member)", so it is shown
+  rather than replaced, and the value the editor opened with stays listed
+  while it is open, so a stray choice can be undone. A variant is a tag
+  select, then that tag's fields edited as a record's are, labelled as the
+  server's paths read (`decision(committed).cost`). Switching tags keeps the
+  body left for switching back while the editor is open; an undeclared tag is
+  listed, marked, with its fields as JSON, and the one the editor opened with
+  stays listed, so switching back restores it with its body. Neither an enum
+  nor a variant starts with a choice: made present, each waits for one, as
+  integers and times wait for text, and goes back to absent if focus leaves
+  first.
 - Declaration form: the builder's select offers every shape word. An enum's
   members are one input each, in code point order; a rename keeps its row
   while the member moves to its place, a new member is added by name, an

@@ -204,12 +204,22 @@ test("a revision edits each kind through its editor", async () => {
   // Either duration spelling; the server keeps ISO 8601.
   await field("cost").fill("2h 15m");
   await field("deadline").fill("2026-12-01");
-  // Typed here, at +05:30: the offset is this browser's, and the fraction
-  // the picker does not show is kept.
+  // Picked here, at +05:30: the value keeps the offset it observed, and
+  // the fraction the picker does not show.
   await field("at").fill("2026-10-30T09:45");
+  await expect(field("at as text")).toHaveValue(
+    "2026-10-30T09:45:00.123456789+01:00",
+  );
+  // Only on request is the wall clock read in this browser's zone.
+  await main()
+    .getByRole("button", { name: "this browser's offset for at" })
+    .click();
   await expect(field("at as text")).toHaveValue(
     "2026-10-30T09:45:00.123456789+05:30",
   );
+  await expect(
+    main().getByRole("button", { name: "this browser's offset for at" }),
+  ).toHaveCount(0);
   await field("per").selectOption("week");
   await field("decision(committed).effort").fill("45m");
   // Switching tags shows the other tag's fields and keeps the body left.
@@ -265,31 +275,78 @@ test("a new node gets each kind through the form", async () => {
   await expect(row).toContainText("committed {effort: PT30M}");
 });
 
-test("an offset timestamp takes the browser's offset at the instant typed", async ({
+test("a new offset timestamp takes the browser's offset at its instant; a repick keeps its own", async ({
   browser,
 }) => {
-  const typed: [string, string, string, RegExp | null][] = [
-    // New York changes offset twice a year: each date gets its own.
-    ["America/New_York", "2026-07-01T09:30", "2026-07-01T09:30:00-04:00", null],
-    ["America/New_York", "2026-12-01T09:30", "2026-12-01T09:30:00-05:00", null],
-    // 02:30 is skipped on 2026-03-08, and 01:30 occurs twice on
-    // 2026-11-01.
-    [
-      "America/New_York",
-      "2026-03-08T02:30",
-      "2026-03-08T03:30:00-04:00",
-      /02:30 does not occur on 2026-03-08/,
-    ],
-    [
-      "America/New_York",
-      "2026-11-01T01:30",
-      "2026-11-01T01:30:00-04:00",
-      /01:30 occurs twice on 2026-11-01/,
+  // Each step picks a wall clock and, where asked, then reads it in the
+  // browser's zone. The first pick makes a new value, which takes the
+  // browser's offset at once; later picks keep the value's own offset.
+  type Step = {
+    wall: string;
+    rezone: boolean;
+    value: string;
+    note: RegExp | null;
+  };
+  const steps: Record<string, Step[]> = {
+    "America/New_York": [
+      // New York changes offset twice a year: each date gets its own.
+      {
+        wall: "2026-07-01T09:30",
+        rezone: false,
+        value: "2026-07-01T09:30:00-04:00",
+        note: null,
+      },
+      {
+        wall: "2026-12-01T09:30",
+        rezone: false,
+        value: "2026-12-01T09:30:00-04:00",
+        note: null,
+      },
+      {
+        wall: "2026-12-01T09:30",
+        rezone: true,
+        value: "2026-12-01T09:30:00-05:00",
+        note: null,
+      },
+      // 01:30 occurs twice on 2026-11-01: read at the value's own offset
+      // it is the second; in this browser's zone, the earlier.
+      {
+        wall: "2026-11-01T01:30",
+        rezone: false,
+        value: "2026-11-01T01:30:00-05:00",
+        note: null,
+      },
+      {
+        wall: "2026-11-01T01:30",
+        rezone: true,
+        value: "2026-11-01T01:30:00-04:00",
+        note: /01:30 occurs twice on 2026-11-01/,
+      },
+      // 02:30 is skipped on 2026-03-08 in this zone, though not at -04:00.
+      {
+        wall: "2026-03-08T02:30",
+        rezone: false,
+        value: "2026-03-08T02:30:00-04:00",
+        note: null,
+      },
+      {
+        wall: "2026-03-08T02:30",
+        rezone: true,
+        value: "2026-03-08T03:30:00-04:00",
+        note: /02:30 does not occur on 2026-03-08/,
+      },
     ],
     // A zero offset is +00:00, a known one, not Z.
-    ["UTC", "2026-07-01T09:30:15", "2026-07-01T09:30:15+00:00", null],
-  ];
-  for (const zone of ["America/New_York", "UTC"]) {
+    UTC: [
+      {
+        wall: "2026-07-01T09:30:15",
+        rezone: false,
+        value: "2026-07-01T09:30:15+00:00",
+        note: null,
+      },
+    ],
+  };
+  for (const [zone, zoneSteps] of Object.entries(steps)) {
     const context = await browser.newContext({ timezoneId: zone });
     const other = await context.newPage();
     await other.goto(launched().page);
@@ -308,8 +365,15 @@ test("an offset timestamp takes the browser's offset at the instant typed", asyn
     await inMain("per present").check();
     await inMain("per").selectOption("week");
     await inMain("at present").check();
-    for (const [, wall, value, note] of typed.filter(([z]) => z === zone)) {
-      await inMain("at").fill(wall);
+    for (const { wall, rezone, value, note } of zoneSteps) {
+      if (rezone) {
+        await other
+          .getByRole("main")
+          .getByRole("button", { name: "this browser's offset for at" })
+          .click();
+      } else {
+        await inMain("at").fill(wall);
+      }
       await expect(inMain("at as text")).toHaveValue(value);
       if (note !== null) {
         await expect(other.getByRole("main").getByText(note)).toBeVisible();
@@ -317,7 +381,6 @@ test("an offset timestamp takes the browser's offset at the instant typed", asyn
     }
     // The gap's note names the wall clock written, which the picker shows.
     if (zone === "America/New_York") {
-      await inMain("at").fill("2026-03-08T02:30");
       await expect(inMain("at")).toHaveValue("2026-03-08T03:30");
     }
     const last = await inMain("at as text").inputValue();
@@ -332,6 +395,77 @@ test("an offset timestamp takes the browser's offset at the instant typed", asyn
     const row = await stanceRow(`Typed in ${zone}`);
     await expect(row).toContainText(last);
   }
+});
+
+test("the form leaves values written in the raw JSON as they were", async () => {
+  await openType("Stance");
+  await main().getByRole("button", { name: "New node of this type" }).click();
+  await main().getByRole("button", { name: "Raw JSON" }).click();
+  // Unspelled time text, an offset other than this browser's, a value the
+  // enum does not have, and a tag the variant does not declare, with a
+  // body.
+  const payload = {
+    title: "Raw",
+    cost: { kind: "duration", value: "90m" },
+    deadline: { kind: "date", value: "2026-11-06" },
+    at: {
+      kind: "offset_timestamp",
+      value: "2026-10-29t08:15:00.123456789-08:00",
+    },
+    per: "month",
+    decision: {
+      kind: "variant",
+      tag: "paused",
+      value: { until: { kind: "date", value: "2027-01-01" } },
+    },
+  };
+  const raw = field("payload JSON");
+  await raw.fill(JSON.stringify(payload, null, 2));
+  await main().getByRole("button", { name: "Form" }).click();
+  await trayButton("Check").click();
+  const report = page.getByTestId("report");
+  await expect(report).toBeVisible();
+  const status = await page.getByTestId("draft-status").textContent();
+  // The tray holds the report and each operation's findings.
+  const checked = (await tray().textContent()) ?? "";
+
+  await expect(field("per")).toHaveValue("month");
+  await expect(field("decision tag")).toHaveValue("paused");
+  for (const label of [
+    "title",
+    "cost",
+    "deadline",
+    "at",
+    "at as text",
+    "per",
+    "decision tag",
+    "decision(paused).until",
+  ]) {
+    await field(label).focus();
+    await field(label).blur();
+  }
+  // A stray choice is undone by choosing the value again: the editors keep
+  // the value they opened with as an option, and the tag's body.
+  await field("per").selectOption("day");
+  await field("per").selectOption("month");
+  await field("decision tag").selectOption("resumed");
+  await expect(field("decision(paused).until")).toHaveCount(0);
+  await field("decision tag").selectOption("paused");
+  await expect(field("decision(paused).until")).toBeVisible();
+
+  await main().getByRole("button", { name: "Raw JSON" }).click();
+  expect(JSON.parse(await raw.inputValue())).toEqual(payload);
+  expect(await raw.inputValue()).toContain(
+    "2026-10-29t08:15:00.123456789-08:00",
+  );
+  await main().getByRole("button", { name: "Form" }).click();
+  await trayButton("Check").click();
+  await expect(page.getByTestId("draft-status")).toHaveText(status ?? "");
+  await expect(report).toBeVisible();
+  await expect(tray()).toHaveText(checked);
+  await trayButton("Clear").click();
+  await trayButton("Clear the whole draft?").click();
+  await expect(page.getByTestId("draft-count")).toHaveText("0 operations");
 });
 
 test("the declaration form builds each new word", async () => {
@@ -453,6 +587,13 @@ test("a revised declaration shows its new words in the builder", async () => {
   await expect(field("decision(committed).effort shape")).toHaveValue(
     "duration",
   );
+  // A rename that moves a member keeps its input, and its focus, while it
+  // is typed.
+  await field("per member 1").selectText();
+  await page.keyboard.type("year");
+  await expect(field("per member 1")).toHaveValue("week");
+  await expect(field("per member 2")).toHaveValue("year");
+  await expect(field("per member 2")).toBeFocused();
   // Choosing enum over another shape and cancelling keeps the shape.
   await field("title shape").selectOption("variant");
   await main()

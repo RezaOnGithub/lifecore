@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { pickerYear } from "../model/times.ts";
 import { lineCount, liveDraft, type TextDraft } from "./helpers.ts";
 
 export function ModeToggle({
@@ -167,11 +168,14 @@ export function ValidatedInput({
 // leaves the input's value empty until the whole is complete, is not
 // overwritten while the input has focus; a committed value that changes
 // (another edit, an undo, or the value `onCommit` wrote) replaces it.
-// Complete input is offered to `onCommit` on each change. When focus
-// leaves, an input holding anything but the committed value goes back to
-// it, with a note as a ValidatedInput has; while nothing is committed
-// (`value` null) it goes back to empty, and the caller decides about the
-// field, since a picker may sit beside another input.
+// Complete input is offered to `onCommit` on each change, which returns
+// whether it took it, except for a year below 1000: a year typed digit by
+// digit passes through 0002, 0020, and 0202, so such a year waits for focus
+// to leave. When focus leaves, input still not taken is offered once
+// more, then the picker goes back to the committed value, with a note as a
+// ValidatedInput has; while nothing is committed (`value` null) it goes
+// back to empty, and the caller decides about the field, since a picker
+// may sit beside another input.
 export function PickerInput({
   label,
   type,
@@ -182,7 +186,7 @@ export function PickerInput({
   label: string;
   type: "date" | "datetime-local";
   value: string | null;
-  onCommit: (text: string) => void;
+  onCommit: (text: string) => boolean;
   step?: number;
 }) {
   const input = useRef<HTMLInputElement>(null);
@@ -206,17 +210,25 @@ export function PickerInput({
         onChange={(event) => {
           const next = event.target.value;
           setNote(null);
-          if (next !== "" && next !== value) {
+          if (
+            next !== "" &&
+            next !== value &&
+            (pickerYear(next) ?? 0) >= 1000
+          ) {
             onCommit(next);
           }
         }}
         onBlur={(event) => {
           const node = event.target;
-          if (node.value !== shown) {
-            node.value = shown;
-            if (value !== null) {
-              setNote({ text: `reverted to ${value}`, base: value });
-            }
+          if (node.value === shown) {
+            return;
+          }
+          if (node.value !== "" && onCommit(node.value)) {
+            return;
+          }
+          node.value = shown;
+          if (value !== null) {
+            setNote({ text: `reverted to ${value}`, base: value });
           }
         }}
       />
@@ -229,7 +241,6 @@ export function PickerInput({
 // in a read-only input, saying where it is edited instead (UI §5, "Kinds
 // without an editor"). `what` names it in shape words, as in "money" or
 // "list of money".
-// week".
 export function NoEditor({
   label,
   json,
