@@ -249,22 +249,59 @@ contract with the service.
   will be refused; the server parses it. While an apply is in flight the draft
   is frozen: no edit, pick, import, or Clear lands. Drafts always apply to
   the current state; under an as-of boundary the tray says so.
-- Kinds without an editor: the form edits text, integers, booleans,
-  timestamps, lists of those, and records; the other value kinds and shapes
-  (duration, date, offset timestamp, enum, and variant, until their editors
-  arrive, and any kind added later) are shown, not edited. Such a field's value
-  is a read-only input holding its JSON as the draft has it (canonical once
-  stored; time text typed in the raw JSON stays as typed until then),
-  labelled `<field> (read-only)`, with a note to edit it in the raw JSON; its
-  presence checkbox is disabled, and adding it by name is refused with the
-  same advice. A list whose
-  element has no editor is read-only as a whole, while a record stays
+- Editors for the value kinds. A duration is a text input taking either of
+  Jiff's spellings, with a hint when the text names days or longer; Check
+  judges it, and the stored value is spelled in ISO 8601. A date is a date
+  picker; a date the picker cannot hold (a year outside 0001–9999, or text
+  in another form) is a text input instead, and stays one while the editor
+  is open. An offset timestamp is a datetime-local picker to the second,
+  then its exact text, then "now". The picker shows the value's own wall
+  clock at its own offset. A wall clock picked there is read in the
+  browser's zone and written with the browser's offset at that instant
+  (`getTimezoneOffset` for it, so a summer date gets the summer offset),
+  keeping the fraction of a second the picker does not show; "now" writes
+  the present instant, to the millisecond, at the present offset. A wall
+  clock the zone skips is written as the later one `Date` reads it as, and
+  one the zone repeats as the earlier instant, each with a note. An offset
+  with seconds, as in a zone's local mean time, or beyond ±23:59 is refused
+  with a message rather than rounded, and a zero offset is `+00:00`, never
+  `Z`. The text takes any spelling, offset, and precision, kept as typed,
+  and is the only editor of a value the picker cannot show (another form, a
+  leap second, a year outside 0001–9999), which says so. An enum is a select
+  over its members; a value that is not one is listed too, marked "(not a
+  member)", so it is shown rather than replaced. A variant is a tag select,
+  then that tag's fields edited as a record's are, labelled as the server's
+  paths read (`decision(committed).cost`). Switching tags keeps the body
+  left for switching back while the editor is open; an undeclared tag is
+  listed, marked, with its fields as JSON. Neither an enum nor a variant
+  starts with a choice: made present, each waits for one, as integers and
+  times wait for text, and goes back to absent if focus leaves first.
+- Declaration form: the builder's select offers every shape word. An enum's
+  members are one input each, in code point order; a rename keeps its row
+  while the member moves to its place, a new member is added by name, an
+  empty or repeated name is refused, and the last member cannot be removed.
+  A variant lists its tags in code point order, each with its name, its
+  removal (not of the last), and its own field declarations under
+  `decision(committed)`; tags are added by name. Choosing enum or variant
+  over another shape asks for the first member or tag before the
+  declaration changes, and Cancel or Escape keeps the shape; the row adding
+  a declaration asks for it beside the shape. The form names tags as it
+  names fields, so an empty tag, which the grammar allows, is written in the
+  raw JSON.
+- Kinds without an editor: a value kind or shape the form does not know,
+  such as one added to the core before its editor arrives, is shown, not
+  edited. Such a field's value is a read-only input holding its JSON as the
+  draft has it (canonical once stored; time text typed in the raw JSON
+  stays as typed until then), labelled `<field> (read-only)`, with a note
+  to edit it in the raw JSON; its presence checkbox is disabled, and adding
+  it by name is refused with the same advice. A list whose element has no
+  editor is read-only as a whole, while a record or a variant stays
   editable field by field. In the declaration form, a field whose shape the
-  builder does not offer keeps its name, presence, and removal, and shows the
-  shape's words read-only the same way; the builder's select offers only the
-  editable words. The raw JSON reaches every shape, so nothing is out of
-  reach, and a value of another kind than declared still falls back to an
-  editable JSON field.
+  builder does not offer keeps its name, presence, and removal, and shows
+  the shape's words read-only the same way; the builder's select offers
+  only the words it edits. The raw JSON reaches every shape, so nothing is
+  out of reach, and a value of another kind than declared still falls back
+  to an editable JSON field.
 - A successful Apply removes the operations it carried, matched by name and
   content, turns references to them into the assigned IDs, records their
   names, lists those IDs and the report's finding counts until dismissed, and

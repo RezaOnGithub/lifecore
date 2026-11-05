@@ -18,13 +18,16 @@ import {
   isBuilderKind,
   lineCount,
   liveDraft,
+  memberNameError,
   moveItem,
   namedKeys,
+  needsFirstName,
   nextKey,
   operationNameError,
   parseTags,
   renameField,
   renameKey,
+  renameMember,
   shapeOfKind,
   typeNames,
   withField,
@@ -379,38 +382,110 @@ test("shape changes keep nested declarations where they can", () => {
   assert.deepEqual(initialShape("boolean"), { kind: "boolean" });
 });
 
-test("the form edits the shapes it has editors for; others are read-only", () => {
+test("the form edits every shape it knows; one it does not is read-only", () => {
   for (const kind of [
     "text",
     "integer",
     "boolean",
     "timestamp",
-    "list",
-    "record",
-  ]) {
-    assert.ok(isBuilderKind(kind), kind);
-  }
-  for (const kind of [
     "duration",
     "date",
     "offset_timestamp",
     "enum",
+    "list",
+    "record",
     "variant",
   ]) {
-    assert.ok(!isBuilderKind(kind), kind);
+    assert.ok(isBuilderKind(kind), kind);
   }
+  assert.ok(!isBuilderKind("money"));
   assert.ok(hasValueEditor({ kind: "timestamp" }));
-  assert.ok(!hasValueEditor({ kind: "duration" }));
-  assert.ok(!hasValueEditor({ kind: "enum", members: ["day"] }));
-  assert.ok(!hasValueEditor({ kind: "variant", tags: { a: {} } }));
-  // A list needs an editor for its elements; a record's fields judge
-  // themselves, so a record is always editable.
-  assert.ok(hasValueEditor({ kind: "list", element: { kind: "text" } }));
-  assert.ok(!hasValueEditor({ kind: "list", element: { kind: "date" } }));
+  assert.ok(hasValueEditor({ kind: "duration" }));
+  assert.ok(hasValueEditor({ kind: "date" }));
+  assert.ok(hasValueEditor({ kind: "offset_timestamp" }));
+  assert.ok(hasValueEditor({ kind: "enum", members: ["day"] }));
+  assert.ok(hasValueEditor({ kind: "variant", tags: { a: {} } }));
+  // A kind added to the contract later, before its editor.
+  const later = { kind: "money" } as unknown as Shape;
+  assert.ok(!hasValueEditor(later));
+  // A list needs an editor for its elements; a record's and a variant's
+  // fields judge themselves, so both are always editable.
+  assert.ok(hasValueEditor({ kind: "list", element: { kind: "date" } }));
+  assert.ok(!hasValueEditor({ kind: "list", element: later }));
   assert.ok(
     hasValueEditor({
       kind: "record",
-      fields: { d: { status: "mandatory", shape: { kind: "date" } } },
+      fields: { d: { status: "mandatory", shape: later } },
     }),
   );
+  assert.ok(
+    hasValueEditor({
+      kind: "variant",
+      tags: { a: { d: { status: "mandatory", shape: later } } },
+    }),
+  );
+});
+
+test("an enum or a variant chosen in the builder starts from its first name", () => {
+  assert.ok(needsFirstName("enum"));
+  assert.ok(needsFirstName("variant"));
+  assert.ok(!needsFirstName("record"));
+  const text: Shape = { kind: "text" };
+  assert.equal(shapeOfKind("enum", text), null);
+  assert.equal(shapeOfKind("variant", text), null);
+  assert.deepEqual(shapeOfKind("enum", text, "day"), {
+    kind: "enum",
+    members: ["day"],
+  });
+  assert.deepEqual(shapeOfKind("variant", text, "committed"), {
+    kind: "variant",
+    tags: { committed: {} },
+  });
+  // Kept or unwrapped as other shapes are, without a first name.
+  const per: Shape = { kind: "enum", members: ["day", "week"] };
+  assert.equal(shapeOfKind("enum", per), per);
+  assert.equal(shapeOfKind("enum", { kind: "list", element: per }), per);
+  assert.deepEqual(shapeOfKind("list", per), { kind: "list", element: per });
+  assert.deepEqual(shapeOfKind("duration", per), { kind: "duration" });
+  assert.deepEqual(initialShape("date"), { kind: "date" });
+  assert.deepEqual(initialShape("enum", "week"), {
+    kind: "enum",
+    members: ["week"],
+  });
+  // A tag is a name like a field's, `__proto__` included.
+  const odd = initialShape("variant", "__proto__");
+  assert.equal(odd.kind, "variant");
+  assert.deepEqual(odd.kind === "variant" && Object.keys(odd.tags), [
+    "__proto__",
+  ]);
+});
+
+test("members and tags are non-empty and distinct; renames keep code point order", () => {
+  const members = ["day", "week"];
+  assert.equal(
+    memberNameError("", members, "day", "member"),
+    "member required",
+  );
+  assert.equal(
+    memberNameError("week", members, "day", "member"),
+    "another member is week",
+  );
+  assert.equal(memberNameError("day", members, "day", "member"), null);
+  assert.equal(memberNameError("month", members, null, "tag"), null);
+  assert.equal(
+    memberNameError("day", members, null, "tag"),
+    "another tag is day",
+  );
+  assert.deepEqual(renameMember(members, "day", "year"), ["week", "year"]);
+  assert.deepEqual(renameMember(members, "day", "week"), members);
+  assert.deepEqual(renameMember(members, "month", "x"), members);
+  assert.deepEqual(renameMember(["a", "\u{1F600}"], "a", "\uE000"), [
+    "\uE000",
+    "\u{1F600}",
+  ]);
+  const tags = { committed: {}, resumed: {} };
+  assert.deepEqual(Object.keys(renameField(tags, "committed", "kept")), [
+    "kept",
+    "resumed",
+  ]);
 });

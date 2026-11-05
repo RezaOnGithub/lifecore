@@ -765,6 +765,33 @@
       .add-decl {
         margin-top: 0.3rem;
       }
+      /* A picker beside its text reads as one value; the fieldset only
+         groups them for focus. */
+      fieldset.kind-input {
+        display: inline;
+        border: 0;
+        margin: 0;
+        padding: 0;
+        min-inline-size: auto;
+      }
+      .members-editor {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 0.2rem 0.6rem;
+        align-items: center;
+      }
+      .members-editor .member {
+        white-space: nowrap;
+      }
+      .tags-editor,
+      .variant-editor {
+        flex-basis: 100%;
+      }
+      .tags-editor .variant-tag {
+        margin: 0.2rem 0 0.2rem 0.5rem;
+        padding-left: 0.5rem;
+        border-left: 2px solid #ddd;
+      }
       /* draft */
       /* A third column for the draft tray; main keeps minmax(0, 1fr) so it
          can shrink and scroll. A failed description spans the first two

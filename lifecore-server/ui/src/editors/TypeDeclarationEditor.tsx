@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   Body,
   FieldDecl,
@@ -20,16 +20,20 @@ import {
   shapeDepth,
   shapeWordList,
 } from "../model/schema.ts";
+import { compareCodePoints, getOwn } from "../model/values.ts";
 import {
   BUILDER_KINDS,
   type BuilderKind,
   initialShape,
   isBuilderKind,
   liveDraft,
+  memberNameError,
   namedKeys,
+  needsFirstName,
   parseTags,
   renameField,
   renameKey,
+  renameMember,
   sameMap,
   shapeOfKind,
   type TextDraft,
@@ -38,6 +42,257 @@ import {
 } from "./helpers.ts";
 import { ModeToggle, NoEditor, ValidatedInput } from "./inputs.tsx";
 import { RawBodyEditor, useRawBody } from "./RawJsonEditor.tsx";
+
+function firstWord(kind: "enum" | "variant"): "member" | "tag" {
+  return kind === "enum" ? "member" : "tag";
+}
+
+// The first member or tag of an enum or variant chosen in the builder,
+// which is not a shape until it has one (FILES §2.6). The input takes
+// focus; Escape or cancel keeps the shape as it was.
+function FirstName({
+  field,
+  kind,
+  onSet,
+  onCancel,
+}: {
+  field: string;
+  kind: "enum" | "variant";
+  onSet: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState("");
+  const word = firstWord(kind);
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+  const submit = () => {
+    if (name !== "") {
+      onSet(name);
+    }
+  };
+  return (
+    <span className="row first-name">
+      <input
+        ref={input}
+        type="text"
+        size={14}
+        aria-label={`${field} first ${word}`}
+        placeholder={`first ${word}`}
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            submit();
+          } else if (event.key === "Escape") {
+            onCancel();
+          }
+        }}
+      />
+      <button
+        type="button"
+        aria-label={`make ${kind} of ${field}`}
+        disabled={name === ""}
+        onClick={submit}
+      >
+        make {kind}
+      </button>
+      <button
+        type="button"
+        aria-label={`cancel ${kind} for ${field}`}
+        onClick={onCancel}
+      >
+        cancel
+      </button>
+    </span>
+  );
+}
+
+// An enum's members, one input each, in code point order as the server's
+// set holds them. A rename keeps the row (and its focus) while the member
+// moves to its place; the last member cannot be removed, since an enum
+// needs one.
+function MembersEditor({
+  field,
+  members,
+  onChange,
+}: {
+  field: string;
+  members: string[];
+  onChange: (members: string[]) => void;
+}) {
+  const [keys, setKeys] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const [name, setName] = useState("");
+  const rowKeys = namedKeys(members, keys);
+  if (!sameMap(rowKeys, keys)) {
+    setKeys(rowKeys);
+  }
+  const error =
+    name === "" ? null : memberNameError(name, members, null, "member");
+  const add = () => {
+    if (name !== "" && error === null) {
+      onChange([...members, name].sort(compareCodePoints));
+      setName("");
+    }
+  };
+  return (
+    <div className="members-editor">
+      {members.map((member, index) => (
+        <span className="member" key={rowKeys.get(member)}>
+          <ValidatedInput
+            label={`${field} member ${index + 1}`}
+            value={member}
+            size={12}
+            validate={(text) =>
+              memberNameError(text, members, member, "member")
+            }
+            onCommit={(text) => {
+              setKeys(renameKey(rowKeys, member, text));
+              onChange(renameMember(members, member, text));
+            }}
+          />
+          <button
+            type="button"
+            aria-label={`remove ${member} from ${field}`}
+            disabled={members.length === 1}
+            title={
+              members.length === 1
+                ? "an enum needs at least one member"
+                : undefined
+            }
+            onClick={() => onChange(members.filter((m) => m !== member))}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <span className="member">
+        <input
+          type="text"
+          size={12}
+          aria-label={`new member of ${field}`}
+          placeholder="new member"
+          value={name}
+          aria-invalid={error !== null}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          type="button"
+          aria-label={`add member to ${field}`}
+          disabled={name === "" || error !== null}
+          onClick={add}
+        >
+          add member
+        </button>
+        {error !== null && <span className="field-error">{error}</span>}
+      </span>
+    </div>
+  );
+}
+
+// A variant's tags in code point order, each with its name and its own
+// field declarations, whose paths read `decision(committed).cost` as the
+// server's do. The last tag cannot be removed, since a variant needs one.
+function TagsEditor({
+  field,
+  tags,
+  onChange,
+}: {
+  field: string;
+  tags: { [tag: string]: FieldDecls };
+  onChange: (tags: { [tag: string]: FieldDecls }) => void;
+}) {
+  const names = Object.keys(tags).sort(compareCodePoints);
+  const [keys, setKeys] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const [name, setName] = useState("");
+  const rowKeys = namedKeys(names, keys);
+  if (!sameMap(rowKeys, keys)) {
+    setKeys(rowKeys);
+  }
+  const error = name === "" ? null : memberNameError(name, names, null, "tag");
+  const add = () => {
+    if (name !== "" && error === null) {
+      onChange(withField(tags, name, {}));
+      setName("");
+    }
+  };
+  return (
+    <div className="tags-editor">
+      {names.map((tag, index) => (
+        <div className="variant-tag" key={rowKeys.get(tag)}>
+          <div className="row">
+            <ValidatedInput
+              label={`${field} tag ${index + 1}`}
+              value={tag}
+              size={14}
+              validate={(text) => memberNameError(text, names, tag, "tag")}
+              onCommit={(text) => {
+                setKeys(renameKey(rowKeys, tag, text));
+                onChange(renameField(tags, tag, text));
+              }}
+            />
+            <button
+              type="button"
+              aria-label={`remove tag ${tag} from ${field}`}
+              disabled={names.length === 1}
+              title={
+                names.length === 1
+                  ? "a variant needs at least one tag"
+                  : undefined
+              }
+              onClick={() => onChange(withoutField(tags, tag))}
+            >
+              remove tag
+            </button>
+          </div>
+          <FieldDeclsTable
+            fields={getOwn(tags, tag) ?? {}}
+            prefix={`${field}(${tag})`}
+            onChange={(fields) => onChange(withField(tags, tag, fields))}
+          />
+        </div>
+      ))}
+      <div className="row">
+        <input
+          type="text"
+          size={14}
+          aria-label={`new tag of ${field}`}
+          placeholder="new tag"
+          value={name}
+          aria-invalid={error !== null}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          type="button"
+          aria-label={`add tag to ${field}`}
+          disabled={name === "" || error !== null}
+          onClick={add}
+        >
+          add tag
+        </button>
+        {error !== null && <span className="field-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
 
 function ShapeBuilder({
   field,
@@ -48,6 +303,9 @@ function ShapeBuilder({
   shape: Shape;
   onChange: (shape: Shape) => void;
 }) {
+  // An enum or variant chosen over another shape, waiting for its first
+  // member or tag; the declaration keeps the old shape until then.
+  const [pending, setPending] = useState<"enum" | "variant" | null>(null);
   // A word the builder does not offer keeps its declaration as it is,
   // shown as its words; the field's name and presence stay editable.
   if (!isBuilderKind(shape.kind)) {
@@ -59,14 +317,22 @@ function ShapeBuilder({
       />
     );
   }
+  const shown = pending ?? shape.kind;
   return (
     <div className="shape-builder">
       <select
         aria-label={`${field} shape`}
-        value={shape.kind}
-        onChange={(event) =>
-          onChange(shapeOfKind(event.target.value as BuilderKind, shape))
-        }
+        value={shown}
+        onChange={(event) => {
+          const kind = event.target.value as BuilderKind;
+          const next = shapeOfKind(kind, shape);
+          if (next === null) {
+            setPending(needsFirstName(kind) ? kind : null);
+          } else {
+            setPending(null);
+            onChange(next);
+          }
+        }}
       >
         {BUILDER_KINDS.map((kind) => (
           <option key={kind} value={kind}>
@@ -74,7 +340,18 @@ function ShapeBuilder({
           </option>
         ))}
       </select>
-      {shape.kind === "list" && (
+      {pending !== null && (
+        <FirstName
+          field={field}
+          kind={pending}
+          onSet={(name) => {
+            setPending(null);
+            onChange(shapeOfKind(pending, shape, name) ?? shape);
+          }}
+          onCancel={() => setPending(null)}
+        />
+      )}
+      {pending === null && shape.kind === "list" && (
         <>
           <span className="muted"> of </span>
           <ShapeBuilder
@@ -84,11 +361,25 @@ function ShapeBuilder({
           />
         </>
       )}
-      {shape.kind === "record" && (
+      {pending === null && shape.kind === "record" && (
         <FieldDeclsTable
           fields={shape.fields}
           prefix={field}
           onChange={(fields) => onChange({ kind: "record", fields })}
+        />
+      )}
+      {pending === null && shape.kind === "enum" && (
+        <MembersEditor
+          field={field}
+          members={shape.members}
+          onChange={(members) => onChange({ kind: "enum", members })}
+        />
+      )}
+      {pending === null && shape.kind === "variant" && (
+        <TagsEditor
+          field={field}
+          tags={shape.tags}
+          onChange={(tags) => onChange({ kind: "variant", tags })}
         />
       )}
     </div>
@@ -111,6 +402,8 @@ function AddDeclaration({
   const [name, setName] = useState("");
   const [status, setStatus] = useState<FieldStatus>("optional");
   const [kind, setKind] = useState<BuilderKind>("text");
+  // An enum's first member or a variant's first tag, which it needs.
+  const [first, setFirst] = useState("");
   const what =
     prefix === null
       ? "new field declaration"
@@ -119,12 +412,15 @@ function AddDeclaration({
     name !== "" && Object.hasOwn(fields, name)
       ? `another field is named ${name}`
       : null;
+  const needsFirst = needsFirstName(kind);
+  const ready = name !== "" && error === null && (!needsFirst || first !== "");
   const submit = () => {
-    if (name === "" || error !== null) {
+    if (!ready) {
       return;
     }
-    onAdd(name, { status, shape: initialShape(kind) });
+    onAdd(name, { status, shape: initialShape(kind, first) });
     setName("");
+    setFirst("");
     input.current?.focus();
   };
   return (
@@ -167,11 +463,23 @@ function AddDeclaration({
           </option>
         ))}
       </select>
-      <button
-        type="button"
-        disabled={name === "" || error !== null}
-        onClick={submit}
-      >
+      {needsFirst && (
+        <input
+          type="text"
+          size={14}
+          aria-label={`${what} first ${firstWord(kind)}`}
+          placeholder={`first ${firstWord(kind)}`}
+          value={first}
+          onChange={(event) => setFirst(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+      )}
+      <button type="button" disabled={!ready} onClick={submit}>
         {prefix === null
           ? "Add field declaration"
           : `Add field declaration to ${prefix}`}

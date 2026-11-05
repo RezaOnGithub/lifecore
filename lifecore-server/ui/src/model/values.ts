@@ -209,8 +209,9 @@ export function matchesShape(value: Payload, shape: Shape): boolean {
 // The value a field gets when it becomes present, or null where no value is
 // neutral: an integer or a time, so the editor waits for one to be typed
 // rather than inventing `0` or the current time, and an enum or a variant,
-// which have no editor yet. A record starts with those of its mandatory
-// fields that have a default.
+// whose editor waits for a member or a tag to be chosen rather than
+// taking the first. A record starts with those of its mandatory fields
+// that have a default.
 export function defaultValue(shape: Shape): Payload | null {
   switch (shape.kind) {
     case "text":

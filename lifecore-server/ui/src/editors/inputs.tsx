@@ -1,4 +1,10 @@
-import { type MouseEvent, useId, useState } from "react";
+import {
+  type MouseEvent,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { lineCount, liveDraft, type TextDraft } from "./helpers.ts";
 
 export function ModeToggle({
@@ -156,9 +162,73 @@ export function ValidatedInput({
   );
 }
 
+// A date or datetime-local picker over a committed value in the picker's
+// own form. It is uncontrolled, so a part being typed or cleared, which
+// leaves the input's value empty until the whole is complete, is not
+// overwritten while the input has focus; a committed value that changes
+// (another edit, an undo, or the value `onCommit` wrote) replaces it.
+// Complete input is offered to `onCommit` on each change. When focus
+// leaves, an input holding anything but the committed value goes back to
+// it, with a note as a ValidatedInput has; while nothing is committed
+// (`value` null) it goes back to empty, and the caller decides about the
+// field, since a picker may sit beside another input.
+export function PickerInput({
+  label,
+  type,
+  value,
+  onCommit,
+  step,
+}: {
+  label: string;
+  type: "date" | "datetime-local";
+  value: string | null;
+  onCommit: (text: string) => void;
+  step?: number;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [note, setNote] = useState<TextDraft<string | null> | null>(null);
+  const shown = value ?? "";
+  useLayoutEffect(() => {
+    const node = input.current;
+    if (node !== null && node.value !== shown) {
+      node.value = shown;
+    }
+  }, [shown]);
+  const shownNote = liveDraft(note, value)?.text ?? null;
+  return (
+    <>
+      <input
+        ref={input}
+        type={type}
+        aria-label={label}
+        defaultValue={shown}
+        {...(step === undefined ? {} : { step })}
+        onChange={(event) => {
+          const next = event.target.value;
+          setNote(null);
+          if (next !== "" && next !== value) {
+            onCommit(next);
+          }
+        }}
+        onBlur={(event) => {
+          const node = event.target;
+          if (node.value !== shown) {
+            node.value = shown;
+            if (value !== null) {
+              setNote({ text: `reverted to ${value}`, base: value });
+            }
+          }
+        }}
+      />
+      {shownNote !== null && <span className="edit-note">{shownNote}</span>}
+    </>
+  );
+}
+
 // A value or declared shape the form has no editor for: its canonical JSON
 // in a read-only input, saying where it is edited instead (UI §5, "Kinds
-// without an editor"). `what` names it, as in "duration" or "enum day |
+// without an editor"). `what` names it in shape words, as in "money" or
+// "list of money".
 // week".
 export function NoEditor({
   label,

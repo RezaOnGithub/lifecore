@@ -179,11 +179,11 @@ export function withoutField<T>(
 // Renames a declared field in place, keeping the table order. A name that
 // is already declared is refused: the fields come back unchanged rather
 // than one declaration overwriting another.
-export function renameField(
-  fields: FieldDecls,
+export function renameField<T>(
+  fields: { [field: string]: T },
   from: string,
   to: string,
-): FieldDecls {
+): { [field: string]: T } {
   if (
     from === to ||
     !Object.hasOwn(fields, from) ||
@@ -191,7 +191,7 @@ export function renameField(
   ) {
     return fields;
   }
-  const renamed: FieldDecls = {};
+  const renamed: { [field: string]: T } = {};
   for (const [field, decl] of Object.entries(fields)) {
     setOwn(renamed, field === from ? to : field, decl);
   }
@@ -240,17 +240,22 @@ export function parseTags(text: string): Tags {
 
 // ---- Declaration shapes ----
 
-// The shape words the builder offers. The others (the time kinds besides
-// `timestamp`, `enum`, and `variant`) have no editor yet: a declaration
-// using them shows that shape read-only and is changed through its raw JSON
+// The shape words the builder offers: every word of FILES §2.6. A word
+// added later stays out until the builder learns it, and a declaration
+// using it shows that shape read-only and is changed through its raw JSON
 // (UI §5, "Kinds without an editor").
 export const BUILDER_KINDS = [
   "text",
   "integer",
   "boolean",
   "timestamp",
+  "duration",
+  "date",
+  "offset_timestamp",
+  "enum",
   "list",
   "record",
+  "variant",
 ] as const;
 export type BuilderKind = (typeof BUILDER_KINDS)[number];
 
@@ -259,15 +264,20 @@ export function isBuilderKind(kind: string): kind is BuilderKind {
 }
 
 // Whether the form can edit a value of this shape: a list only when it can
-// edit its elements, and a record always, since each of its fields judges
-// itself.
+// edit its elements, and a record or a variant always, since each of their
+// fields judges itself. A shape the form does not know is shown read-only.
 export function hasValueEditor(shape: Shape): boolean {
   switch (shape.kind) {
     case "text":
     case "integer":
     case "boolean":
     case "timestamp":
+    case "duration":
+    case "date":
+    case "offset_timestamp":
+    case "enum":
     case "record":
+    case "variant":
       return true;
     case "list":
       return hasValueEditor(shape.element);
@@ -276,36 +286,87 @@ export function hasValueEditor(shape: Shape): boolean {
   }
 }
 
+// `enum` and `variant` cannot be empty (FILES §2.6), so a fresh one needs
+// its first member or tag before it is a shape.
+export function needsFirstName(kind: BuilderKind): kind is "enum" | "variant" {
+  return kind === "enum" || kind === "variant";
+}
+
 // The shape for a kind chosen in the shape builder, keeping what nests:
 // `list` wraps the current shape; a kind matching a list's element unwraps
 // it; a record chosen over a record keeps its fields; a scalar replaces.
-export function shapeOfKind(kind: BuilderKind, previous: Shape): Shape {
+// A fresh enum or variant starts from `first`, its one member or tag, and
+// without one there is no shape yet: null.
+export function shapeOfKind(
+  kind: BuilderKind,
+  previous: Shape,
+  first?: string,
+): Shape | null {
   if (previous.kind === kind) {
     return previous;
   }
   if (previous.kind === "list" && previous.element.kind === kind) {
     return previous.element;
   }
-  switch (kind) {
-    case "list":
-      return { kind, element: previous };
-    case "record":
-      return { kind, fields: {} };
-    default:
-      return { kind };
+  if (kind === "list") {
+    return { kind, element: previous };
   }
+  return first === undefined && needsFirstName(kind)
+    ? null
+    : initialShape(kind, first ?? "");
 }
 
-// A fresh field declaration's shape: a list starts as a list of text.
-export function initialShape(kind: BuilderKind): Shape {
+// A fresh field declaration's shape: a list starts as a list of text, an
+// enum with `first` as its member, a variant with `first` as a tag without
+// fields.
+export function initialShape(kind: BuilderKind, first = ""): Shape {
   switch (kind) {
     case "list":
       return { kind, element: { kind: "text" } };
     case "record":
       return { kind, fields: {} };
+    case "enum":
+      return { kind, members: [first] };
+    case "variant": {
+      const tags: { [tag: string]: FieldDecls } = {};
+      setOwn(tags, first, {});
+      return { kind, tags };
+    }
     default:
       return { kind };
   }
+}
+
+// Why a member or tag name cannot be taken: members and tags are
+// non-empty and distinct. An empty tag is legal (FILES §2.6), but the form
+// names tags as it names fields; the raw JSON writes one.
+export function memberNameError(
+  text: string,
+  taken: readonly string[],
+  current: string | null,
+  what: "member" | "tag",
+): string | null {
+  if (text === "") {
+    return `${what} required`;
+  }
+  return text !== current && taken.includes(text)
+    ? `another ${what} is ${text}`
+    : null;
+}
+
+// An enum's members with `from` renamed, in code point order as the
+// server's set holds them; a name already taken leaves them unchanged.
+export function renameMember(
+  members: readonly string[],
+  from: string,
+  to: string,
+): string[] {
+  if (from === to || members.includes(to) || !members.includes(from)) {
+    return [...members];
+  }
+  return members
+    .map((member) => (member === from ? to : member))
+    .sort(compareCodePoints);
 }
 
 // ---- Text typed over a committed value ----

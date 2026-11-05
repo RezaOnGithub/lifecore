@@ -5,11 +5,14 @@ import type {
   FieldDecls,
   Payload,
   Shape,
+  VariantPayload,
 } from "../contract.ts";
 import { shapeWords } from "../model/payload.ts";
 import {
   boolean,
+  compareCodePoints,
   decimalError,
+  defaultBody,
   defaultValue,
   getOwn,
   integer,
@@ -21,6 +24,7 @@ import {
   timestamp,
   timestampError,
   timestampHint,
+  variant,
 } from "../model/values.ts";
 import { StatusBadge } from "../views/Payload.tsx";
 import { withItem, withMember } from "./collections.ts";
@@ -40,10 +44,17 @@ import {
   TextValueInput,
   ValidatedInput,
 } from "./inputs.tsx";
+import {
+  DateInput,
+  DurationInput,
+  EnumSelect,
+  OffsetTimestampInput,
+} from "./KindInputs.tsx";
 import { RawValueEditor } from "./RawJsonEditor.tsx";
 
-// ShapeValueEditor, ListEditor, and FieldsEditor recurse into each other
-// (a record holds fields, a list holds values), so they share this module.
+// ShapeValueEditor, ListEditor, VariantEditor, and FieldsEditor recurse
+// into each other (a record or a variant holds fields, a list holds
+// values), so they share this module.
 
 function ListEditor({
   label,
@@ -59,8 +70,8 @@ function ListEditor({
   const [keys, setKeys] = useState<readonly number[]>(() =>
     fitKeys([], items.length),
   );
-  // An element being added that has no value yet (an integer or a
-  // timestamp): it is appended once valid text is typed. Its key is the one
+  // An element being added that has no value yet (an integer, a time, an
+  // enum, or a variant): it is appended once one is typed or chosen. Its key is the one
   // the appended element takes, so the input keeps focus across that.
   const [pendingKey, setPendingKey] = useState<number | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -180,9 +191,10 @@ function ListEditor({
 
 const INTEGER_PATTERN = "0|-?[1-9][0-9]*";
 
-// The input for a declared shape. `value` is null for an integer or a
-// timestamp made present without a value yet; nothing is committed until
-// one is typed, and `onAbandon` runs if focus leaves first. A value of
+// The input for a declared shape. `value` is null for a shape without a
+// neutral value (`defaultValue`) made present without a value yet; nothing
+// is committed until one is typed or chosen, and `onAbandon` runs if focus
+// leaves first. A value of
 // another kind than declared cannot be edited by that input, so it falls
 // back to JSON with a note. A shape the form has no editor for shows its
 // value read-only; the draft's raw JSON edits it.
@@ -274,6 +286,59 @@ export function ShapeValueEditor({
           </button>
         </>
       );
+    case "duration":
+      return (
+        <DurationInput
+          label={label}
+          value={
+            value === null ? null : (narrow(value, "duration")?.value ?? "")
+          }
+          onChange={onChange}
+          {...abandon}
+        />
+      );
+    case "date":
+      return (
+        <DateInput
+          label={label}
+          value={value === null ? null : (narrow(value, "date")?.value ?? "")}
+          onChange={onChange}
+          {...abandon}
+        />
+      );
+    case "offset_timestamp":
+      return (
+        <OffsetTimestampInput
+          label={label}
+          value={
+            value === null
+              ? null
+              : (narrow(value, "offset_timestamp")?.value ?? "")
+          }
+          onChange={onChange}
+          {...abandon}
+        />
+      );
+    case "enum":
+      return (
+        <EnumSelect
+          label={label}
+          members={shape.members}
+          value={value === null ? null : (narrow(value, "text") ?? "")}
+          onChange={onChange}
+          {...abandon}
+        />
+      );
+    case "variant":
+      return (
+        <VariantEditor
+          label={label}
+          tags={shape.tags}
+          value={value === null ? null : narrow(value, "variant")}
+          onChange={onChange}
+          {...abandon}
+        />
+      );
     case "list":
       return (
         <ListEditor
@@ -296,6 +361,78 @@ export function ShapeValueEditor({
       // `hasValueEditor` has sent every other shape to `NoEditor`.
       return null;
   }
+}
+
+// A tag select, then the chosen tag's fields as a record's are edited,
+// labelled `decision(committed).cost` as the server's paths read. A body
+// left by switching tags is kept and restored on switching back; a tag
+// the declaration does not have is shown, marked, with its fields as JSON.
+function VariantEditor({
+  label,
+  tags,
+  value,
+  onChange,
+  onAbandon,
+}: {
+  label: string;
+  tags: { [tag: string]: FieldDecls };
+  value: VariantPayload | null;
+  onChange: (value: Payload) => void;
+  onAbandon?: () => void;
+}) {
+  const [remembered, setRemembered] = useState<ReadonlyMap<string, Body>>(
+    () => new Map(),
+  );
+  // Integer-like keys would come first in property order.
+  const names = Object.keys(tags).sort(compareCodePoints);
+  const fields = value === null ? undefined : getOwn(tags, value.tag);
+  const tagWords = (tag: string) => (tag === "" ? '"" (empty tag)' : tag);
+  const choose = (tag: string) => {
+    if (value !== null) {
+      setRemembered(withMember(remembered, value.tag, value.value));
+    }
+    onChange(
+      variant(tag, remembered.get(tag) ?? defaultBody(getOwn(tags, tag) ?? {})),
+    );
+  };
+  return (
+    <div className="variant-editor">
+      <select
+        aria-label={`${label} tag`}
+        value={value?.tag ?? ""}
+        onChange={(event) => choose(event.target.value)}
+        onBlur={
+          value === null && onAbandon !== undefined ? onAbandon : undefined
+        }
+      >
+        {value === null && (
+          <option value="" disabled>
+            choose a tag…
+          </option>
+        )}
+        {value !== null && fields === undefined && (
+          <option value={value.tag}>
+            {tagWords(value.tag)} (undeclared tag)
+          </option>
+        )}
+        {names.map((tag) => (
+          <option key={tag} value={tag}>
+            {tagWords(tag)}
+          </option>
+        ))}
+      </select>
+      {value !== null && (
+        <FieldsEditor
+          // Each tag's rows keep their own pending and remembered state.
+          key={value.tag}
+          body={value.value}
+          fields={fields ?? null}
+          prefix={`${label}(${value.tag})`}
+          onChange={(body) => onChange(variant(value.tag, body))}
+        />
+      )}
+    </div>
+  );
 }
 
 // The rows of one body: every declared field, present or absent, then the

@@ -1,12 +1,12 @@
 # Core round: value kinds, typed payloads, and indexes
 
-Status: proposed; steps 1 (the benchmark), 3a (value kinds), and 4 (typed
-decoding) of section 6 have landed, and the rest is not implemented. This is
-a design document for core work, not an analyzer proposal, so it has no
-explainer or harness. As each step of section 6 lands, its contracts move
-into the owning documents listed in section 7. When the last one has moved,
-this directory is removed. It relies on [SPEC](../../SPEC.md),
-[ANALYZERS](../../ANALYZERS.md),
+Status: proposed; steps 1 (the benchmark), 3a (value kinds), 3b (their
+editors), and 4 (typed decoding) of section 6 have landed, and the rest is
+not implemented. This is a design document for core work, not an analyzer
+proposal, so it has no explainer or harness. As each step of section 6
+lands, its contracts move into the owning documents listed in section 7.
+When the last one has moved, this directory is removed. It relies on
+[SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
 [FILES](../../FILES.md), and [PERFORMANCE](../../PERFORMANCE.md).
 
 The planning analyzer motivates most of this round, but it is shelved
@@ -59,7 +59,7 @@ These are decisions of the owner, not open questions:
 
 ## 2. Value kinds
 
-*Landed in step 3a, except the editors of section 2.7.* The contracts below
+*Landed in steps 3a and 3b.* The contracts below
 are owned by the documents section 6 names for that step; where this section
 and they differ, they hold, and this section stays as the design's record.
 
@@ -829,7 +829,17 @@ the browser.
      `variant` counts toward the 64-level depth limit like `record`; and a
      tag in a field path is the part `{"tag": …}`, displayed in parentheses.
    - **3b.** The editors, as a UI stage of its own. Nothing else waits for it;
-     it may come after steps 4 and 5.
+     it may come after steps 4 and 5. *Landed.* Its decisions live in
+     [UI §5](../../UI.md#5-drafts-and-writes) ("Editors for the value kinds"
+     and "Declaration form"), with
+     [CLIENT §3](../../CLIENT.md#3-values); the read-only fallback stays for
+     kinds added later. Settled while landing: the offset timestamp's picker
+     shows a value's own wall clock beside its exact text, which keeps the
+     fraction and offset the picker does not show and takes any spelling; a
+     wall clock the browser's zone skips or repeats is resolved as `Date`
+     does, with a note; an offset with seconds is refused, not rounded; and
+     an enum or variant chosen in the builder waits for its first member or
+     tag, since neither may be empty.
 4. **`FromPayload`, `FromBody`, and `Declare`.** This lands in this round
    (decided, section 8). Its tests use the basic shape of PLANNING's types at
    `59c702c` (section 5.1): records with mandatory and optional fields, a

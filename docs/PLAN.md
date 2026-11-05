@@ -38,9 +38,9 @@ working around the document.
 
 The [core round](proposals/core-round/CORE-ROUND.md) comes before
 section 2.2. It covers value kinds, typed payload decoding, and optional
-indexes, in the order of its section 6. Its step 3a, the value kinds with
-their read-only display in the client, has landed; step 3b, their editors,
-remains. The App and the client then take up
+indexes, in the order of its section 6. Its steps 3a, the value kinds with
+their read-only display in the client, and 3b, their editors, have landed.
+The App and the client then take up
 the new value kinds, and the planning analyzer is reworked on top of them in
 a round of its own, starting from section 5 of the core round.
 

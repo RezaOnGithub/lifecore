@@ -74,9 +74,11 @@ judge, and re-spell the rest on check. A `variant` is an object with `kind`,
 `tag`, and `value`, the body encoded as a payload is; an `enum` value is a
 plain string, and its shape, `{kind: "enum", members}`, is the only shape
 whose word is not a payload kind. The client reads every value and declared
-shape of [SPEC §6.4](SPEC.md#64-value-kinds-and-shapes); where it has no
-editor for one, it shows it read-only as its canonical JSON
-([UI §5](UI.md#5-drafts-and-writes)), and the draft's raw JSON writes it.
+shape of [SPEC §6.4](SPEC.md#64-value-kinds-and-shapes). Its form edits each
+of them ([UI §5](UI.md#5-drafts-and-writes)) and replaces a kept string only
+with what the user typed or picked; a kind it has no editor for, such as one
+added later, it shows read-only as its canonical JSON, and the draft's raw
+JSON writes it.
 
 ## 4. Drafts, suggestions, and evaluation time
 
