@@ -475,7 +475,9 @@ version = "0.1.0"
 dependencies = [
  "lifecore",
  "lifecore-dag-check",
+ "lifecore-reconnect",
  "lifecore-typecheck",
+ "lifecore-workload",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -551,6 +553,17 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lifecore-workload"
+version = "0.1.0"
+dependencies = [
+ "lifecore",
+ "lifecore-reconnect",
+ "lifecore-typecheck",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

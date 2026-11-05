@@ -1,6 +1,7 @@
 # Core round: value kinds, typed payloads, and indexes
 
-Status: proposed, not implemented. This is a design document for core work,
+Status: proposed; step 1 of section 6 (the benchmark) has landed, and the
+rest is not implemented. This is a design document for core work,
 not an analyzer proposal, so it has no explainer or harness. As each step of
 section 6 lands, its contracts move into the owning documents listed in
 section 7. When the last one has moved, this directory is removed. It relies
@@ -438,9 +439,9 @@ regardless (section 4.7).
 Snapshot loading (JSON parsing plus validation) is not in these numbers and
 grows too.
 
-The first step is the repeatable benchmark already in PERFORMANCE §3: a
-generator for planning-shaped histories at a given seal density, so these
-estimates become measurements.
+Step 1 of section 6 added the benchmark, a generator of planning-shaped
+histories at both seal densities, so these estimates can become measurements;
+PERFORMANCE §1 records its baseline, which includes snapshot loading.
 
 ### 4.3 Indexes are optional
 
@@ -786,6 +787,10 @@ the browser.
    code, so step 2's equivalence helper can run analyzers over the same
    histories. The core's property tests in `lifecore` need a small generator
    of their own, because `lifecore` cannot depend on Planning's vocabulary.
+   *Status: landed.* The generator is the `lifecore-workload` crate, which
+   depends only on `lifecore`, so any crate's tests can run analyzers over
+   its histories; `cargo bench -p lifecore-app` runs the benchmark, and
+   PERFORMANCE §1 records the baseline.
 2. **Optional core indexes and incremental validation.** `Indexing` modes, the
    equivalence helper, and the property tests come first, then the indexes.
    Results are unchanged by construction. Measure again.

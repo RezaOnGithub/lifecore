@@ -11,7 +11,49 @@ quadratic case.
 
 ## 1. Measurements
 
-Measured ad hoc with a release build of `lifecore-cli`. Each snapshot holds a
+### 1.1 Benchmark
+
+`cargo bench -p lifecore-app` runs the checking benchmark,
+`lifecore-app/benches/checking.rs`, in a release build timed with `Instant`.
+Its histories come from `lifecore-workload`, whose crate documentation
+specifies them: planning's ten declarations at `59c702c` as plain types, then
+tasks of six entries each, with a `Review` closing each window. At one review
+per 7 entries they have the shape of the planning measurements in section
+1.2; at one per 1,000 entries, the weekly reviews of the core round's
+estimates
+([CORE-ROUND §4.2](proposals/core-round/CORE-ROUND.md#42-full-check-estimates-at-1000-entries-a-week)).
+
+For each size and density, the benchmark writes the snapshot as storage
+publishes it and times `database.describe`, which reads, parses, and validates
+it ("load"), and `check` of a one-node proposal under the suite of `lifecore
+init --default-analyzers`, TypeCheck then Reconnect, which loads the snapshot
+again and replays every prefix ("check"). Each cell is the median of three
+runs. `LIFECORE_BENCH_SIZES` takes other comma-separated entry counts, and
+`LIFECORE_BENCH_RUNS` another number of runs.
+
+The baseline, taken when the benchmark was added on top of `febde6b`, with
+`LIFECORE_BENCH_RUNS=5` on a shared virtual machine with one vCPU:
+
+| Entries | Reviews (1/7) | load (1/7) | check (1/7) | Reviews (1/1,000) | load (1/1,000) | check (1/1,000) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 500 | 70 | 0.0024 s | 0.037 s | 0 | 0.0016 s | 0.037 s |
+| 1,000 | 141 | 0.0050 s | 0.13 s | 0 | 0.0040 s | 0.11 s |
+| 2,000 | 284 | 0.014 s | 0.46 s | 1 | 0.015 s | 0.54 s |
+| 4,000 | 570 | 0.062 s | 2.1 s | 3 | 0.084 s | 2.1 s |
+
+Times are wall-clock, and on that machine repeated runs differed by up to
+half again at 4,000 entries, so compare runs taken close together on one
+machine. Check grows with the square of history length, about `1.3e-7 · n²`
+seconds, near the `1.1e-7 · n²` CORE-ROUND §4.2 fitted to section 1.2, and
+in line with the 1.8 s measured there at 3,998 entries. Density makes no
+difference yet: neither TypeCheck nor Reconnect reads reviews, so the seal
+terms of CORE-ROUND §4.2 are measured only once an analyzer that seals at
+reviews returns. Load is under a tenth of a second at 4,000 entries.
+
+### 1.2 Earlier measurements
+
+Before the benchmark, measurements were taken by hand with a release build of
+`lifecore-cli`; they are kept as history. In the first, each snapshot holds a
 `Task` type, tasks, revisions, and `DependsOn` edges, with TypeCheck
 configured. The table times `database.describe` through `rpc`, and `check` of a
 one-node proposal, before (`a07483e`) and after the two changes below.
@@ -97,7 +139,6 @@ Not scheduled:
   declaration and rebuilds its type table.
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
-- A repeatable benchmark in the repository, replacing these ad hoc measurements.
 
 Caching or incremental checks must reproduce full-prefix results exactly
 ([PREFIX-VALIDITY §5](PREFIX-VALIDITY.md#5-failure-handling-and-cost)), keyed

@@ -12,9 +12,21 @@ thiserror = "2.0.18"
 toml = "1.1"
 uuid = { version = "1.24.0", features = ["serde", "v4"] }
 
+# `cargo bench` runs the benchmark below, not the unit tests in bench mode.
+[lib]
+bench = false
+
 [dev-dependencies]
 lifecore-dag-check = { path = "../lifecore-dag-check" }
+lifecore-reconnect = { path = "../lifecore-reconnect" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
+lifecore-workload = { path = "../lifecore-workload" }
+
+# Timed with `Instant` rather than the nightly `#[bench]` harness
+# (PERFORMANCE §1).
+[[bench]]
+name = "checking"
+harness = false
 
 [lints]
 workspace = true

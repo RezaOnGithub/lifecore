@@ -6,7 +6,8 @@ members = [
     "lifecore-dag-check",
     "lifecore-reconnect",
     "lifecore-server",
-    "lifecore-typecheck"
+    "lifecore-typecheck",
+    "lifecore-workload"
 ]
 
 [workspace.package]

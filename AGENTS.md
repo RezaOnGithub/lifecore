@@ -70,18 +70,21 @@ Preserve historical correctness under the chosen model and unrelated user work.
 ## Checks
 
 Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-`lifecore-reconnect`, `lifecore-app`, `lifecore-cli`, and
+`lifecore-reconnect`, `lifecore-app`, `lifecore-cli`,
 `lifecore-server` (the Axum adapter behind `lifecore serve`; its `build.rs`
-embeds the React client in `lifecore-server/ui`). Shared checking and atomic
-in-memory commits live in `lifecore::transaction`; persistence belongs to the
-synchronous application service `lifecore_app::service::Service`, shared by
-HTTP and CLI.
+embeds the React client in `lifecore-server/ui`), and `lifecore-workload`
+(deterministic planning-shaped histories for the benchmark and tests).
+Shared checking and atomic in-memory commits live in `lifecore::transaction`;
+persistence belongs to the synchronous application service
+`lifecore_app::service::Service`, shared by HTTP and CLI.
 
 - Tests: `cargo test --workspace` or `cargo test -p <package>`. Where Graphviz
   is installed, `LIFECORE_UI=skip cargo test -p lifecore-app -- --include-ignored`
   also runs the rendering tests that need `dot`.
 - Formatting: `cargo +nightly fmt --check -p <package>`; omit `--check` to format.
 - Lint: `cargo clippy -p <package> --all-targets --no-deps -- -D warnings`.
+- Benchmark, not part of the checks: `cargo bench -p lifecore-app`
+  ([PERFORMANCE §1](docs/PERFORMANCE.md#1-measurements)).
 - Rust-only runs: building `lifecore-server`, and so `lifecore-cli` and the
   workspace, bundles the client and fails until `npm ci` has run in
   `lifecore-server/ui`. Prefix any Cargo command with `LIFECORE_UI=skip` to

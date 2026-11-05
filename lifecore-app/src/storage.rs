@@ -13,9 +13,9 @@ use uuid::Uuid;
 
 pub const STATE_PATH_VARIABLE: &str = "LIFECORE_STATE_FILE_PATH";
 pub const DEFAULT_STATE_FILE: &str = "LifeCoreState.json";
-// A check takes about a second at 4,000 entries and grows roughly quadratically
-// (PERFORMANCE), so a waiting writer must outlast a competing apply rather
-// than a brief write.
+// A check under the default suite takes about two seconds at 4,000 entries
+// and grows roughly quadratically (PERFORMANCE §1), so a waiting writer must
+// outlast a competing apply rather than a brief write.
 pub const DEFAULT_BUSY_RETRY: Duration = Duration::from_secs(10);
 const BUSY_POLL: Duration = Duration::from_millis(20);
 
