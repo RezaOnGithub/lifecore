@@ -318,6 +318,30 @@ fn varied_histories_hold_the_variation_an_index_could_get_wrong() {
             .any(|node| view.ancestors(node.id).count() >= 2 && node.ty_name != Type::TYPE_NAME)
     );
     assert!(view.nodes().any(|node| view.children(node.id).count() >= 2));
+    // A successor carrying its predecessor's edge reversed, and a branch of
+    // that predecessor appended after it, which Reconnect must not count as
+    // carrying the equivalent edge.
+    let reversed = |edge: &lifecore::Edge| {
+        [(edge.to, edge.from, true), (edge.from, edge.to, false)]
+            .into_iter()
+            .find_map(|(successor, other, incoming)| {
+                let predecessor = view.node(successor)?.predecessor?;
+                let (from, to) = if incoming {
+                    (predecessor, other)
+                } else {
+                    (other, predecessor)
+                };
+                view.edge_between(from, to, &edge.ty_name)
+                    .map(|_| predecessor)
+            })
+    };
+    assert!(
+        view.edges()
+            .any(|edge| reversed(edge).is_some_and(|predecessor| {
+                view.children(predecessor)
+                    .any(|branch| branch.id.position() > edge.id.position())
+            }))
+    );
     let labels = view
         .edges()
         .map(|edge| edge.ty_name.as_str())

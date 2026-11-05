@@ -114,15 +114,28 @@ impl LifeCoreList {
     pub(crate) fn staleness(&self) -> Vec<Option<usize>> {
         self.indexes.first_children()
     }
-    // A history that has not been validated, for tests of validation itself.
+    // An empty history under any identity, the nil one included, for tests
+    // that stage entries one by one.
     #[cfg(test)]
-    pub(crate) fn unvalidated(id: Uuid, entries: Vec<Entry>) -> Self {
+    pub(crate) fn empty(id: Uuid) -> Self {
         Self {
             id,
-            entries,
-            suite: SuiteConfig::default(),
-            indexes: Box::default(),
+            ..Self::default()
         }
+    }
+    // Validates a stored history that may be invalid, with indexes and by
+    // reference scans, without ever exposing it as a `LifeCoreList`.
+    #[cfg(test)]
+    pub(crate) fn validate_stored(
+        id: Uuid,
+        entries: Vec<Entry>,
+    ) -> [Result<(), BasicValidationFailure>; 2] {
+        let stored = Self {
+            id,
+            entries,
+            ..Self::default()
+        };
+        [stored.validate().map(drop), stored.validate_with(None)]
     }
     // Revalidates the whole history with freshly built indexes; the stored ones
     // are not consulted, but debug builds check that they still match.
@@ -186,15 +199,8 @@ impl LifeCoreList {
         self.validate_with(Some(&mut indexes))?;
         Ok(indexes)
     }
-    // The reference: every check by its scan of the prefix before the entry.
-    #[cfg(test)]
-    pub(crate) fn validate_without_indexes(&self) -> Result<(), BasicValidationFailure> {
-        self.validate_with(None)
-    }
-    #[cfg(test)]
-    pub(crate) fn validate_with_indexes(&self) -> Result<(), BasicValidationFailure> {
-        self.validate().map(drop)
-    }
+    // `None` is the reference: every check by its scan of the prefix before
+    // the entry.
     fn validate_with(
         &self,
         mut indexes: Option<&mut CoreIndexes>,

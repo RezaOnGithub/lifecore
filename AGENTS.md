@@ -164,8 +164,9 @@ most likely to trip, with the owning section.
   ([SPEC §6.4](docs/SPEC.md#64-value-kinds-and-shapes)).
 - Every index is optional, and its users behave identically with and without
   it, errors and order included; indexes take no part in identity or
-  serialized output. Analyzer tests run through `assert_indexing_equivalence`
-  ([SPEC §9.1](docs/SPEC.md#91-indexes)).
+  serialized output ([SPEC §9.1](docs/SPEC.md#91-indexes)). Analyzer tests run
+  through `assert_indexing_equivalence`
+  ([ANALYZERS §1](docs/ANALYZERS.md#1-execution-and-normalization)).
 - Test history-sensitive changes at several boundaries, including before and
   after the relevant append.
 

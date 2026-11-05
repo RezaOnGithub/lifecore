@@ -186,11 +186,10 @@ fn stage_like_full_validation(
     let view = graph.view();
     let mut entries = view.entries().cloned().collect::<Vec<_>>();
     entries.push(entry.clone());
-    let full = LifeCoreList::unvalidated(view.id().database, entries);
+    let full = LifeCoreList::validate_stored(view.id().database, entries);
     let before = graph.clone();
     let staged = graph.stage(entry);
-    assert_eq!(full.validate_without_indexes(), staged);
-    assert_eq!(full.validate_with_indexes(), staged);
+    assert_eq!(full, [staged.clone(), staged.clone()]);
     if staged.is_err() {
         assert_eq!(*graph, before);
         assert_eq!(graph.staleness(), before.staleness());
@@ -466,6 +465,29 @@ fn edge(position: usize, origin: Uuid, from: EntryId, to: EntryId) -> Entry {
 // the valid history before it.
 #[test]
 fn validation_gives_the_same_first_failure_with_and_without_indexes() {
+    assert_first_failures_agree();
+}
+
+// The same with every content hash colliding, so the duplicate rules and K5
+// and K6 decide by complete values alone.
+#[test]
+fn validation_and_every_index_agree_when_all_content_hashes_collide() {
+    let _colliding = crate::index::Colliding::start();
+    assert_first_failures_agree();
+    let mut seen = BTreeMap::<&str, usize>::new();
+    for seed in [11, 12, 13] {
+        let (graph, probes, outcomes) = generate(seed, 90);
+        for (kind, count) in outcomes {
+            *seen.entry(kind).or_default() += count;
+        }
+        graph.basic_validation().unwrap();
+        assert_queries_agree(graph.view(), &probes);
+    }
+    assert!(seen.contains_key("duplicate node"), "{seen:?}");
+    assert!(seen.contains_key("duplicate edge"), "{seen:?}");
+}
+
+fn assert_first_failures_agree() {
     use BasicValidationFailure::*;
     let o = Uuid::from_u128(7);
     let a = id(0, o);
@@ -517,16 +539,17 @@ fn validation_gives_the_same_first_failure_with_and_without_indexes() {
     for valid in [node(4, o, "A", None), edge(4, o, b, a2)] {
         let mut entries = base();
         entries.push(valid.clone());
-        let full = LifeCoreList::unvalidated(o, entries.clone());
-        assert_eq!(full.validate_with_indexes(), Ok(()));
-        assert_eq!(full.validate_without_indexes(), Ok(()));
-        let mut graph = LifeCoreList::unvalidated(o, vec![]);
+        assert_eq!(
+            LifeCoreList::validate_stored(o, entries.clone()),
+            [Ok(()), Ok(())]
+        );
+        let mut graph = LifeCoreList::empty(o);
         for entry in entries {
             stage_like_full_validation(&mut graph, entry).unwrap();
         }
     }
     for (failing, failure) in cases {
-        let mut graph = LifeCoreList::unvalidated(o, vec![]);
+        let mut graph = LifeCoreList::empty(o);
         for entry in base() {
             stage_like_full_validation(&mut graph, entry).unwrap();
         }
@@ -537,14 +560,17 @@ fn validation_gives_the_same_first_failure_with_and_without_indexes() {
         // Entries after the first failure change nothing.
         let mut entries = base();
         entries.extend([failing, node(5, o, "B", None), edge(6, o, b, b)]);
-        let full = LifeCoreList::unvalidated(o, entries);
-        assert_eq!(full.validate_with_indexes(), Err(failure.clone()));
-        assert_eq!(full.validate_without_indexes(), Err(failure));
+        assert_eq!(
+            LifeCoreList::validate_stored(o, entries),
+            [Err(failure.clone()), Err(failure)]
+        );
     }
     // A nil database fails before any entry, by both paths and on staging.
-    let mut nil = LifeCoreList::unvalidated(Uuid::nil(), vec![]);
-    assert_eq!(nil.validate_with_indexes(), Err(InvalidDatabase));
-    assert_eq!(nil.validate_without_indexes(), Err(InvalidDatabase));
+    assert_eq!(
+        LifeCoreList::validate_stored(Uuid::nil(), vec![]),
+        [Err(InvalidDatabase), Err(InvalidDatabase)]
+    );
+    let mut nil = LifeCoreList::empty(Uuid::nil());
     assert_eq!(
         stage_like_full_validation(&mut nil, node(0, o, "A", None)),
         Err(InvalidDatabase)
@@ -574,10 +600,18 @@ fn indexes_are_invisible_to_debug_equality_and_serialization() {
         stored.as_object().unwrap().keys().collect::<Vec<_>>(),
         ["entries", "id", "suite"]
     );
-    // A history rebuilt without indexes equals the indexed one.
-    let bare = LifeCoreList::unvalidated(view.id().database, view.entries().cloned().collect());
-    assert_eq!(bare, graph);
-    assert_eq!(format!("{bare:?}"), format!("{graph:?}"));
+    // The same history staged with colliding hashes holds other K5 and K6
+    // contents, and is still equal, and prints alike.
+    let colliding = {
+        let _colliding = crate::index::Colliding::start();
+        let mut staged = LifeCoreList::empty(view.id().database);
+        for entry in view.entries() {
+            staged.stage(entry.clone()).unwrap();
+        }
+        staged
+    };
+    assert_eq!(colliding, graph);
+    assert_eq!(format!("{colliding:?}"), format!("{graph:?}"));
 }
 
 // A probe that reports whether its view carries indexes: the one thing an

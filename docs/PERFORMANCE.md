@@ -182,7 +182,7 @@ of a revision chain.
 | `nodes_of_type`, `edges_labelled` | one hash lookup, O(log k + r) | O(n) |
 | `nodes_with_content`, `edge_between` | one hash, O(log k) plus comparing the bucket | O(n) value comparisons |
 | `root_of` | O(1) | O(d) |
-| `descendants`, `fresh_successors` | O(r log r) | O(n), and O(n · d) for `fresh_successors` |
+| `descendants`, `fresh_successors` | O(D log D) for the `D` descendants, stale ones included | O(n), and O(n · d) for `fresh_successors` |
 | `declarations` | every `Type` node ever appended, no parsing | O(n), parsing each current declaration |
 | Structural validation of the history | O(n) plus hashing | O(n²) |
 | Staging one entry | O(1) amortized plus hashing | O(n), and O(n²) before step 2 |

@@ -78,7 +78,9 @@ hands analyzers views with the core indexes, which the runner builds for the
 run when its view carries none; `Off` hands them views without any; `All`
 will add the index templates a suite declares (CORE-ROUND §4.5) and is `Core`
 until then. No output records the mode. The equivalence helper,
-`analysis::assert_indexing_equivalence(runner, view, suite)`, runs a history
+`analysis::assert_indexing_equivalence(runner, view, suite)`, is test support,
+public so that third-party analyzers' tests can use it, and not for hosts. It
+runs a history
 under every mode, and under `Core` with indexes the runner built, and panics
 unless every run gives the same `AnalysisOutput` or the same failure. Every
 analyzer's tests run their histories through it; the built-ins' tests also

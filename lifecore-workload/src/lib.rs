@@ -196,9 +196,10 @@ pub fn history(shape: Shape, suite: SuiteConfig) -> LifeCoreList {
 /// The history of `shape` with variation an index could get wrong, for the
 /// tests that compare indexed and unindexed runs (SPEC §9.1):
 /// revised and duplicated `Type` declarations, some malformed; revision
-/// chains and splits; `Enables`, `Helps`, `Until`, and `About` edges between
-/// items, left behind with stale endpoints when an item is revised, and
-/// sometimes carried over; superseded roots appended again with the same
+/// chains, splits, and late branches of superseded items; `Enables`,
+/// `Helps`, `Until`, and `About` edges between items, left behind with stale
+/// endpoints when an item is revised, and sometimes carried over, as the
+/// equivalent edge or reversed; superseded roots appended again with the same
 /// content; and nodes and edges that raise TypeCheck, Reconnect, and DAG
 /// Check findings.
 ///
@@ -419,6 +420,8 @@ struct Variation {
     // declaration that claims one of their names.
     declarations: Vec<EntryId>,
     spares: Vec<(EntryId, Type)>,
+    // Superseded items, which may be branched again.
+    superseded: Vec<Item>,
     // Superseded roots, which may be appended again with the same content.
     superseded_roots: Vec<(String, Body)>,
     // Every node payload variation writes carries a fresh number, so no two
@@ -433,6 +436,7 @@ impl Variation {
             items: Vec::new(),
             declarations: declarations.into(),
             spares: Vec::new(),
+            superseded: Vec::new(),
             superseded_roots: Vec::new(),
             number: 0,
         }
@@ -476,7 +480,7 @@ impl Variation {
     }
 
     fn event(&mut self, builder: &mut Builder) {
-        match self.rng.below(20) {
+        match self.rng.below(22) {
         0..=4 => self.add_item(builder),
         5..=8 => self.revise(builder),
         9 => self.split(builder),
@@ -484,7 +488,8 @@ impl Variation {
         15..=16 => self.revise_declaration(builder),
         17 => self.add_spare(builder),
         18 => self.repeat_root(builder),
-        _ => self.misfit(builder),
+        19 => self.misfit(builder),
+        _ => self.late_branch(builder),
         }
     }
 
@@ -522,8 +527,10 @@ impl Variation {
             added.push(Item { id, ty_name });
         }
         // Carries some of the predecessor's edges over to the first
-        // successor, whose current far endpoint keeps them valid; the rest
-        // are left behind for Reconnect.
+        // successor, whose current far endpoint keeps them valid, either as
+        // the equivalent edge or reversed, which is not equivalent; the rest
+        // are left behind for Reconnect. A later branch of the predecessor
+        // then finds the first successor carrying them.
         let edges = builder
             .entries
             .iter()
@@ -539,24 +546,19 @@ impl Variation {
                 .any(|node| node.predecessor == Some(id))
         };
         for edge in edges {
-            if !self.rng.one_in(2) {
-                continue;
-            }
-            let (from, to) = if edge.from == item.id {
-                (added[0].id, edge.to)
-            } else {
-                (edge.from, added[0].id)
-            };
-            let other = if edge.from == item.id {
-                edge.to
-            } else {
-                edge.from
+            let outgoing = edge.from == item.id;
+            let other = if outgoing { edge.to } else { edge.from };
+            let (from, to) = match (self.rng.below(4), outgoing) {
+            (0 | 1, _) => continue,
+            (2, true) | (3, false) => (added[0].id, other),
+            _ => (other, added[0].id),
             };
             if current(other, builder) && !builder.edges.contains(&(from, to, edge.ty_name.clone()))
             {
                 builder.edge(&edge.ty_name, from, to);
             }
         }
+        self.superseded.push(item);
         self.items.extend(added);
     }
 
@@ -565,6 +567,21 @@ impl Variation {
         if let Some(index) = self.pick(self.items.len()) {
             self.supersede(builder, index, 1);
         }
+    }
+
+    // A branch of a superseded item, judged by Reconnect against the
+    // item's current descendants and the edges they carry.
+    fn late_branch(&mut self, builder: &mut Builder) {
+        let Some(index) = self.pick(self.superseded.len()) else {
+            return;
+        };
+        let item = self.superseded[index].clone();
+        let payload = self.payload(builder, &item.ty_name);
+        let id = builder.node(&item.ty_name, Some(item.id), payload);
+        self.items.push(Item {
+            id,
+            ty_name: item.ty_name,
+        });
     }
 
     fn split(&mut self, builder: &mut Builder) {

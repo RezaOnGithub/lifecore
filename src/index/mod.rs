@@ -44,7 +44,38 @@ pub(crate) struct CoreIndexes {
 // One deterministic hasher for both content indexes; the hashes are never
 // observable, so determinism only keeps rebuilt and maintained values equal.
 fn content_hash(value: impl Hash) -> u64 {
+    #[cfg(test)]
+    if COLLIDING.with(std::cell::Cell::get) {
+        return 0;
+    }
     BuildHasherDefault::<DefaultHasher>::default().hash_one(value)
+}
+
+// Tests make every content hash collide on their own thread, as the
+// recorder's tests do with a colliding hasher, so that every K5 and K6 lookup
+// must tell contents apart by complete values. Indexes built in this mode
+// are only queried in it.
+#[cfg(test)]
+thread_local! {
+    static COLLIDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) struct Colliding(());
+
+#[cfg(test)]
+impl Colliding {
+    pub(crate) fn start() -> Self {
+        COLLIDING.with(|colliding| colliding.set(true));
+        Self(())
+    }
+}
+
+#[cfg(test)]
+impl Drop for Colliding {
+    fn drop(&mut self) {
+        COLLIDING.with(|colliding| colliding.set(false));
+    }
 }
 
 fn node_hash(ty_name: &str, predecessor: Option<EntryId>, payload: &Body) -> u64 {
@@ -53,6 +84,16 @@ fn node_hash(ty_name: &str, predecessor: Option<EntryId>, payload: &Body) -> u64
 
 fn edge_hash(from: EntryId, to: EntryId, ty_name: &str) -> u64 {
     content_hash((from, to, ty_name))
+}
+
+// Appends to the list of an existing name without allocating its key again.
+fn push_keyed(lists: &mut HashMap<String, Vec<usize>>, name: &str, position: usize) {
+    match lists.get_mut(name) {
+    Some(list) => list.push(position),
+    None => {
+        lists.insert(name.to_owned(), vec![position]);
+    }
+    }
 }
 
 impl CoreIndexes {
@@ -93,10 +134,7 @@ impl CoreIndexes {
             None => position,
             };
             self.roots.push(root);
-            self.nodes_by_type
-                .entry(node.ty_name.clone())
-                .or_default()
-                .push(position);
+            push_keyed(&mut self.nodes_by_type, &node.ty_name, position);
             self.node_content
                 .entry(node_hash(&node.ty_name, node.predecessor, &node.payload))
                 .or_default()
@@ -109,10 +147,7 @@ impl CoreIndexes {
             self.roots.push(position);
             self.incident[edge.from.position].push(position);
             self.incident[edge.to.position].push(position);
-            self.edges_by_label
-                .entry(edge.ty_name.clone())
-                .or_default()
-                .push(position);
+            push_keyed(&mut self.edges_by_label, &edge.ty_name, position);
             self.edge_triple
                 .entry(edge_hash(edge.from, edge.to, &edge.ty_name))
                 .or_default()

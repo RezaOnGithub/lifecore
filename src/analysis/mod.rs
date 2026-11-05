@@ -284,6 +284,7 @@ pub enum Indexing {
 }
 
 impl Indexing {
+    /// Every mode, in the order the equivalence helper runs them.
     pub const EVERY: [Self; 3] = [Self::All, Self::Core, Self::Off];
 }
 
@@ -411,11 +412,15 @@ impl AnalysisRunner {
     }
 }
 
-/// The equivalence helper of ANALYZERS §1, for tests. Runs `suite` over `view`
-/// under every `Indexing` mode, and once more under `Indexing::Core` on the
-/// view without its indexes, so the runner builds them; panics unless every
-/// run gives the same `AnalysisOutput` or the same failure, and returns that
-/// result. The runner's own mode is restored.
+/// Test support: the equivalence helper of ANALYZERS §1, for the tests of
+/// any analyzer, third-party ones included. Not for hosts, since it replays
+/// the history four times and panics on a difference.
+///
+/// Runs `suite` over `view` under every mode of [`Indexing::EVERY`], and once
+/// more under `Indexing::Core` on the view without its indexes, so the runner
+/// builds them. Panics unless every run gives the same `AnalysisOutput` or the
+/// same failure, and otherwise returns that result with the runner's own mode
+/// restored.
 pub fn assert_indexing_equivalence(
     runner: &mut AnalysisRunner,
     view: View<'_>,
@@ -426,16 +431,17 @@ pub fn assert_indexing_equivalence(
         runner.indexing = indexing;
         runner.run_view(view, suite)
     };
-    let expected = run(Indexing::All, view);
-    for (indexing, view, carried) in [
-        (Indexing::Core, view, "carried"),
-        (Indexing::Core, view.without_indexes(), "built"),
-        (Indexing::Off, view, "carried"),
-    ] {
+    let [first, rest @ ..] = Indexing::EVERY;
+    let expected = run(first, view);
+    let runs = rest
+        .into_iter()
+        .map(|indexing| (indexing, view, "carried"))
+        .chain([(Indexing::Core, view.without_indexes(), "built")]);
+    for (indexing, view, indexes) in runs {
         let result = run(indexing, view);
         assert!(
             result == expected,
-            "{indexing:?} with {carried} indexes changed the analysis of {:?}:\n{result:#?}\nagainst All:\n{expected:#?}",
+            "{indexing:?} with {indexes} indexes changed the analysis of {:?}:\n{result:#?}\nagainst {first:?}:\n{expected:#?}",
             view.id(),
         );
     }

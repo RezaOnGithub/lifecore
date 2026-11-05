@@ -539,10 +539,11 @@ invalid endpoint permissions at its creation.
 ### 7.4 Failure and persistence
 
 The libraries own structural validation, analysis, serialization, and atomic
-in-memory transactions. `transaction::prepare` stages one candidate, checks every
-prefix structurally, and replays the analyzers. Node and edge changes are
-`EntryChange` values, the same type a suggestion's actions and a lowered proposal
-use; only `Change` additionally carries a suite change. A node change with a
+in-memory transactions. `transaction::prepare` stages one candidate, checks each
+staged entry structurally against the valid prefix before it, which is every
+prefix the plan adds ([section 9.1](#91-indexes)), and replays the analyzers.
+Node and edge changes are `EntryChange` values, the same type a suggestion's
+actions and a lowered proposal use; only `Change` additionally carries a suite change. A node change with a
 predecessor must state `revise` or `branch`, and a root must omit intent; `revise`
 additionally requires the predecessor to be current immediately before that
 append, including earlier operations of the same plan. Structural, reference,
