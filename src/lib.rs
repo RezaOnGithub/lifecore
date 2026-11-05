@@ -1,3 +1,7 @@
+// The derives of `lifecore-derive` name this crate as `::lifecore`, here as
+// in any dependent.
+extern crate self as lifecore;
+
 mod entries;
 mod graph;
 mod time;
@@ -6,6 +10,7 @@ mod view;
 
 pub mod analysis;
 pub mod decimal;
+pub mod decode;
 pub mod inspection;
 pub mod transaction;
 pub mod typing;

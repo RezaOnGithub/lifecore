@@ -462,10 +462,12 @@ name = "lifecore"
 version = "0.0.1"
 dependencies = [
  "jiff",
+ "lifecore-derive",
  "semver",
  "serde",
  "serde_json",
  "thiserror",
+ "toml",
  "uuid",
 ]
 
@@ -512,6 +514,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "lifecore-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
