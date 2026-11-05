@@ -2,9 +2,9 @@
 
 Status: proposed; steps 1 (the benchmark) and 3a (value kinds) of section 6
 have landed, and the rest is not implemented. This is a design document for
-core work, not an analyzer proposal, so it has no explainer or harness. As each step of
-section 6 lands, its contracts move into the owning documents listed in
-section 7. When the last one has moved, this directory is removed. It relies
+core work, not an analyzer proposal, so it has no explainer or harness. As
+each step of section 6 lands, its contracts move into the owning documents
+listed in section 7. When the last one has moved, this directory is removed. It relies
 on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
 [FILES](../../FILES.md), and [PERFORMANCE](../../PERFORMANCE.md).
 
