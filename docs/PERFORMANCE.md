@@ -238,6 +238,9 @@ core indexes.
 
 Here `deg` is the key's number of incident edges and `e` the number of edges
 with the label. Building the requested templates is one pass over the run's
-view, O(n) plus one hash lookup per edge and one push per listing, done once
-per run under `Indexing::All` and never otherwise; templates take one
-hash-map entry per key and one position per listed edge.
+view: per edge, one hash lookup by its label, then for each of the `t_label`
+distinct templates with that label a lookup of the other endpoint and a
+membership test in `other`, and a push when it is listed, so O(t_label) per
+edge besides hashing. The runner builds them once per run under
+`Indexing::All`, and skips the pass when no analyzer requests a template.
+Templates take one hash-map entry per key and one position per listed edge.

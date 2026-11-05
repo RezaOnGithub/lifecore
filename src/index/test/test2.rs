@@ -759,7 +759,8 @@ fn assert_templates_agree(head: View<'_>, templates: &[IndexTemplate], probes: &
         templates.iter().rev().chain(templates).cloned(),
     );
     assert_eq!(built.built.len(), templates.len());
-    let head = head.with_templates(&built);
+    let granted = built.grant(templates);
+    let head = head.with_templates(&built, &granted);
     let probes = head
         .entries()
         .map(Entry::id)
@@ -779,9 +780,31 @@ fn assert_templates_agree(head: View<'_>, templates: &[IndexTemplate], probes: &
                 let at = || format!("{template:?} at {key:?} in {end_exclusive}");
                 let expected = edge_ids(scans[1].positions(key));
                 assert_eq!(edge_ids(index.positions(key)), expected, "{}", at());
-                assert_eq!(index.positions(key).len(), expected.len(), "{}", at());
-                assert_eq!(edge_ids(index.positions(key).rev()).len(), expected.len());
+                let mut reversed = expected.clone();
+                reversed.reverse();
+                assert_eq!(edge_ids(index.positions(key).rev()), reversed, "{}", at());
                 assert_eq!(index.count(key), expected.len(), "{}", at());
+                // The one-call fallback answers alike from either source.
+                for query in [
+                    view.template_or_scan(template),
+                    scanned.template_or_scan(template),
+                ] {
+                    assert_eq!(edge_ids(query.positions(key)), expected, "{}", at());
+                    assert_eq!(edge_ids(query.positions(key).rev()), reversed, "{}", at());
+                    assert_eq!(query.count(key), expected.len(), "{}", at());
+                    assert_eq!(
+                        edge_ids(query.current(key)),
+                        edge_ids(scans[1].current(key)),
+                        "{}",
+                        at()
+                    );
+                    assert_eq!(
+                        edge_ids(query.in_range(key, 2..end_exclusive)),
+                        edge_ids(scans[1].in_range(key, 2..end_exclusive)),
+                        "{}",
+                        at()
+                    );
+                }
                 let current = edge_ids(scans[1].current(key));
                 assert_eq!(edge_ids(index.current(key)), current, "{}", at());
                 for scan in scans {
@@ -828,6 +851,89 @@ fn generated_histories_give_every_template_its_scans_answers_at_every_boundary()
             .sum::<usize>();
     }
     assert!(listed > 100, "{listed}");
+}
+
+// `other: Some` of an empty set lists nothing for any key, from the index
+// and from either scan, at every boundary (SPEC §9.1), while the same
+// template without a filter lists something.
+#[test]
+fn an_empty_other_set_lists_nothing() {
+    let empty = templates_for(&["x", "y"], &[names([])]);
+    let unfiltered = templates_for(&["x", "y"], &[None]);
+    let (graph, probes, _) = generate(25, 70);
+    let view = graph.view();
+    let built = TemplateIndexes::build(
+        view.entry_slice(),
+        view.core_indexes().unwrap(),
+        empty.iter().chain(&unfiltered).cloned(),
+    );
+    let granted = built.grant(&[empty.clone(), unfiltered.clone()].concat());
+    let head = view.with_templates(&built, &granted);
+    let keys = head
+        .entries()
+        .map(Entry::id)
+        .chain(probes)
+        .collect::<Vec<_>>();
+    let mut listed = 0;
+    for end_exclusive in 0..=head.len() {
+        let view = head.prefix(end_exclusive).unwrap();
+        for &key in &keys {
+            for template in &empty {
+                let at = || format!("{template:?} at {key:?} in {end_exclusive}");
+                assert_eq!(view.template(template).unwrap().count(key), 0, "{}", at());
+                assert_eq!(template.scan(view).count(key), 0, "{}", at());
+                assert_eq!(
+                    template.scan(view.without_indexes()).count(key),
+                    0,
+                    "{}",
+                    at()
+                );
+            }
+            for template in &unfiltered {
+                listed += view.template(template).unwrap().count(key);
+            }
+        }
+    }
+    assert!(listed > 0);
+}
+
+// A view answers only for the templates granted to the analyzer that
+// receives it, though equal requests share one built index.
+#[test]
+fn a_view_answers_only_for_its_granted_templates() {
+    let (graph, _, _) = generate(26, 40);
+    let view = graph.view();
+    let [first, second] = [End::From, End::To].map(|end| IndexTemplate::EdgesAt {
+        label: "x".into(),
+        end,
+        other: None,
+    });
+    let built = TemplateIndexes::build(
+        view.entry_slice(),
+        view.core_indexes().unwrap(),
+        [first.clone(), second.clone()],
+    );
+    let unbuilt = IndexTemplate::EdgesAtLineage {
+        label: "x".into(),
+        end: End::From,
+        other: None,
+    };
+    let granted = built.grant(&[first.clone(), unbuilt.clone(), first.clone()]);
+    assert_eq!(granted, [built.grant(std::slice::from_ref(&first))[0]]);
+    for end_exclusive in [0, view.len()] {
+        let prefix = view
+            .with_templates(&built, &granted)
+            .prefix(end_exclusive)
+            .unwrap();
+        assert!(prefix.template(&first).is_some());
+        assert!(prefix.template(&second).is_none());
+        assert!(prefix.template(&unbuilt).is_none());
+        let none = view
+            .with_templates(&built, &[])
+            .prefix(end_exclusive)
+            .unwrap();
+        assert!(none.template(&first).is_none());
+    }
 }
 
 // A small history builder with its own payload numbers, so no two nodes
@@ -936,8 +1042,10 @@ fn lineage_templates_follow_long_chains_and_splits() {
         end: End::To,
         other: names(["B"]),
     };
-    let built = TemplateIndexes::build(view.entry_slice(), core, [lineage.clone(), at.clone()]);
-    let head = view.with_templates(&built);
+    let requested = [lineage.clone(), at.clone()];
+    let built = TemplateIndexes::build(view.entry_slice(), core, requested.clone());
+    let granted = built.grant(&requested);
+    let head = view.with_templates(&built, &granted);
     let lineage = head.template(&lineage).unwrap();
     let at = head.template(&at).unwrap();
     let previous = view.node(chain).unwrap().predecessor.unwrap();
@@ -981,7 +1089,8 @@ fn templates_are_invisible_to_debug_and_identity() {
         view.core_indexes().unwrap(),
         [template.clone()],
     );
-    let head = view.with_templates(&built);
+    let granted = built.grant(std::slice::from_ref(&template));
+    let head = view.with_templates(&built, &granted);
     for end_exclusive in [0, view.len() / 2, view.len()] {
         let prefix = head.prefix(end_exclusive).unwrap();
         assert_eq!(
@@ -1116,4 +1225,70 @@ fn only_indexing_all_builds_the_templates_a_suite_requests() {
         )
     }));
     assert!(caught.is_err());
+}
+
+// An analyzer that requests nothing but reads the template another analyzer
+// requests: its views must not answer for it, or its output would depend on
+// the rest of the suite.
+struct TemplatePeeker;
+impl Analyzer for TemplatePeeker {
+    fn version(&self) -> Version {
+        Version::new(1, 0, 0)
+    }
+    fn initialize(&mut self, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(vec![])
+    }
+    fn analyze(&self, view: View<'_>, _inputs: &EvaluationInputs) -> Result<Vec<Message>, String> {
+        Ok(view
+            .template(&probe_template())
+            .map(|_| Message {
+                analyzer_certificate: AnalyzerCertificate("peeked".into()),
+                diagnostic: Diagnostic {
+                    subjects: Default::default(),
+                    focus: None,
+                    message: "peeked".into(),
+                    kind: MessageKind::Warning,
+                    sticky: false,
+                },
+            })
+            .into_iter()
+            .collect())
+    }
+}
+struct TemplatePeekerFactory;
+impl AnalyzerFactory for TemplatePeekerFactory {
+    fn analyzer_with_config(&mut self, _: &str) -> Result<Box<dyn Analyzer>, LifeCoreError> {
+        Ok(Box::new(TemplatePeeker))
+    }
+    fn analyzer_name(&self) -> &'static str {
+        "TemplatePeeker"
+    }
+}
+
+#[test]
+fn an_analyzer_never_reads_a_template_another_analyzer_requested() {
+    let (graph, _, _) = generate(7, 30);
+    let mut runner = AnalysisRunner::default();
+    runner
+        .register_analyzer_kind(Box::new(TemplateProbeFactory(std::sync::Arc::default())))
+        .unwrap();
+    runner
+        .register_analyzer_kind(Box::new(TemplatePeekerFactory))
+        .unwrap();
+    let config = |name: &str| Config {
+        name: name.into(),
+        configuration: String::new(),
+    };
+    let peeker = SuiteConfig(vec![config("TemplatePeeker")]);
+    let both = SuiteConfig(vec![config("TemplateProbe"), config("TemplatePeeker")]);
+    let alone = assert_indexing_equivalence(&mut runner, graph.view(), &peeker).unwrap();
+    assert_eq!(alone.observations().count(), 0);
+    runner.set_indexing(Indexing::All);
+    let output = runner.run_view(graph.view(), &both).unwrap();
+    let names = output
+        .observations()
+        .map(|observation| observation.key.analyzer.name.as_str())
+        .collect::<BTreeSet<_>>();
+    // The probe reads its own template; the peeker, beside it, reads none.
+    assert_eq!(names, BTreeSet::from(["TemplateProbe"]));
 }

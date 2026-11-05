@@ -77,15 +77,17 @@ must not depend on whether indexes are present
 An analyzer with a narrower question requests index templates from the
 catalogue of [SPEC §9.1](SPEC.md#index-templates) through
 `index_templates(&self) -> Vec<IndexTemplate>` (on `TypedAnalyzer` too),
-empty by default. The runner asks once, right after constructing the
-analyzer, so the set is a function of version and configuration only, never
-of the view or the evaluation inputs. It is a request: the runner may build
-none of the templates, and a view may also carry templates another analyzer
-of the suite requested. The analyzer reads one through
-`View::template(&template)` and must behave identically when that gives
-`None`; `template.scan(view)` answers the same queries by the reference scan,
-so the fallback is one call, though an analyzer may compute the answer its own
-way instead.
+empty by default. The set must be a function of the analyzer's version and
+configuration only, never of the view or the evaluation inputs; the runner
+asks once per run, right after constructing the analyzer. It is a request:
+the runner may build none of the templates. Equal requests of several
+analyzers share one built index, but each analyzer's views answer only for
+the templates it requested itself, so what it reads never depends on the rest
+of the suite. `View::template(&template)` gives the index, or `None`, and the
+analyzer must behave identically either way. `View::template_or_scan(&template)`
+answers the same queries from the index when there is one and by the
+reference scan, `template.scan(view)`, otherwise, so the fallback is one
+call; an analyzer may compute the answer its own way instead.
 
 The runner takes `Indexing::{All, Core, Off}` through `set_indexing`, `All` by
 default. `Core` hands analyzers views with the core indexes, which the runner
@@ -98,8 +100,9 @@ runs a history
 under every mode, and under `Core` with indexes the runner built, and panics
 unless every run gives the same `AnalysisOutput` or the same failure, so an
 analyzer that requests templates is compared with itself reading their
-fallbacks. Every analyzer's tests run their histories through it; the built-ins' tests also
-compare their typed findings at single prefixes with and without indexes.
+fallbacks. Every analyzer's tests run their histories through it; the
+built-ins' tests also compare their typed findings at single prefixes with and
+without indexes.
 
 An observation records `evaluated_view: EvaluatedView`:
 `EvaluatedView::Initialization`, or `EvaluatedView::Prefixes { first, last }`,

@@ -12,8 +12,8 @@ use std::{
 };
 
 mod template;
-pub(crate) use template::TemplateIndexes;
-pub use template::{End, IndexTemplate, TemplateIndex, TemplateScan};
+pub use template::{End, IndexTemplate, TemplateIndex, TemplateQuery, TemplateScan};
+pub(crate) use template::{TemplateIndexes, Templates};
 
 // Derived from the entries alone and never serialized. Every list holds
 // positions in append order, so a view narrows it with one `partition_point`;

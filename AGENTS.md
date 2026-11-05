@@ -23,12 +23,13 @@ before implementing it:
   contracts.
 - Proposed, landing step by step: the
   [core round](docs/proposals/core-round/CORE-ROUND.md), a design document for
-  new value kinds, typed payload decoding, and optional indexes; its steps 3a
-  (the value kinds in the core, and their read-only display in the client)
-  and 4 (typed decoding) have landed in the owning documents. A proposal
-  gets its own directory under `docs/proposals/`; write or revise an analyzer
-  proposal with the `analyzer-proposal` skill, and give a core change a design
-  document instead.
+  new value kinds, typed payload decoding, and optional indexes; its steps 1
+  (the benchmark), 2 (core indexes), 3a (the value kinds in the core, and
+  their read-only display in the client), 3b (their editors), 4 (typed
+  decoding), and 5 (index templates) have landed in the owning documents.
+  A proposal gets its own directory under `docs/proposals/`; write or revise
+  an analyzer proposal with the `analyzer-proposal` skill, and give a core
+  change a design document instead.
 - Domain analyzer: [RECONNECT](docs/RECONNECT.md) specifies the general
   reconnection analyzer, in `lifecore-reconnect`, with
   [RECONNECT-EXPLAINER](docs/RECONNECT-EXPLAINER.md) as its walkthrough. The
@@ -112,8 +113,10 @@ most likely to trip, with the owning section.
 - Views are bounded. `View::prefix(end_exclusive)` only narrows `[0, end_exclusive)`;
   lookups require an `EntryId`, not a position; a prefix-bounded value reveals
   nothing past its boundary through any channel, including `Debug`, `Serialize`,
-  `PartialEq`, `Hash`, ordering, and error text. The derived core indexes are
-  never serialized, and every query narrows them to the view boundary
+  `PartialEq`, `Hash`, ordering, and error text. The derived core indexes and
+  index templates are never serialized, and every query narrows them to the
+  view boundary; templates are built per run and granted per analyzer, so a
+  view answers only for those its analyzer requested
   ([SPEC §9.1](docs/SPEC.md#91-indexes)).
 - Entry identity is separate from its interpretation in a view. Freshness and
   active declarations depend on the view; never inspect a future suffix or cache

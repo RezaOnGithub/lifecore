@@ -592,30 +592,32 @@ fn edge_list<'a>(edges: impl Iterator<Item = &'a lifecore::Edge>) -> Vec<EntryId
 impl TemplateReader {
     fn answers(&self, view: View<'_>, template: &IndexTemplate, key: EntryId) -> Answers {
         let recent = view.len().saturating_sub(10)..view.len();
-        let scan = template.scan(view);
-        let scanned = (
-            edge_list(scan.positions(key)),
-            scan.count(key),
-            edge_list(scan.in_range(key, recent.clone())),
-            edge_list(scan.current(key)),
+        let query = view.template_or_scan(template);
+        let answers = (
+            edge_list(query.positions(key)),
+            query.count(key),
+            edge_list(query.in_range(key, recent.clone())),
+            edge_list(query.current(key)),
         );
-        let Some(index) = view.template(template) else {
-            return scanned;
-        };
-        self.reads.fetch_add(1, Ordering::Relaxed);
-        let indexed = (
-            edge_list(index.positions(key)),
-            index.count(key),
-            edge_list(index.in_range(key, recent)),
-            edge_list(index.current(key)),
-        );
-        assert_eq!(
-            indexed,
-            scanned,
-            "{template:?} at {key:?} in {:?}",
-            view.id()
-        );
-        indexed
+        // Deliberately, beyond what an analyzer needs: when the template was
+        // granted, its answers must be the scan's.
+        if view.template(template).is_some() {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            let scan = template.scan(view);
+            let scanned = (
+                edge_list(scan.positions(key)),
+                scan.count(key),
+                edge_list(scan.in_range(key, recent)),
+                edge_list(scan.current(key)),
+            );
+            assert_eq!(
+                answers,
+                scanned,
+                "{template:?} at {key:?} in {:?}",
+                view.id()
+            );
+        }
+        answers
     }
 }
 

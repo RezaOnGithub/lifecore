@@ -361,7 +361,7 @@ impl AnalysisRunner {
     ) -> Result<AnalysisOutput, LifeCoreError> {
         let mut analyzers = vec![];
         let mut identities = vec![];
-        let mut templates = vec![];
+        let mut requests = vec![];
         for config in &suite.0 {
             let factory = self.factory.get_mut(&config.name).ok_or_else(|| {
                 LifeCoreError::AnalyzerNotFound {
@@ -375,12 +375,13 @@ impl AnalysisRunner {
                 configuration: config.configuration.clone(),
             };
             identities.push(identity);
-            templates.extend(analyzer.index_templates());
+            requests.push(analyzer.index_templates());
             analyzers.push(analyzer);
         }
         // The views the analyzers receive. Templates are built over the run's
-        // head view and narrowed by every prefix of it; an analyzer may also
-        // find templates another analyzer of the suite requested.
+        // head view, once for the whole suite, and narrowed by every prefix of
+        // it; each analyzer's views answer only for the templates it requested
+        // (see the replay below).
         let core;
         let view = match self.indexing {
         Indexing::Off => view.without_indexes(),
@@ -390,13 +391,15 @@ impl AnalysisRunner {
         }
         Indexing::Core | Indexing::All => view.without_templates(),
         };
-        let built;
-        let view = match (self.indexing, view.core_indexes()) {
-        (Indexing::All, Some(core)) => {
-            built = TemplateIndexes::build(view.entry_slice(), core, templates);
-            view.with_templates(&built)
+        let built = match (self.indexing, view.core_indexes()) {
+        (Indexing::All, Some(core)) if requests.iter().any(|requested| !requested.is_empty()) => {
+            Some(TemplateIndexes::build(
+                view.entry_slice(),
+                core,
+                requests.iter().flatten().cloned(),
+            ))
         }
-        _ => view,
+        _ => None,
         };
         let mut report = AnalysisOutput {
             view: view.id(),
@@ -422,7 +425,19 @@ impl AnalysisRunner {
         }
         // Preserve suite order and full replay, including the empty prefix.
         // Deduplication never skips an invocation or the inconsistency gate.
-        for (analyzer, identity) in analyzers.iter().zip(&report.implementations) {
+        for ((analyzer, identity), requested) in
+            analyzers.iter().zip(&report.implementations).zip(&requests)
+        {
+            // Granted once per analyzer: what its views answer for depends on
+            // its own requests only, never on the rest of the suite.
+            let granted;
+            let view = match &built {
+            Some(built) => {
+                granted = built.grant(requested);
+                view.with_templates(built, &granted)
+            }
+            None => view,
+            };
             for end_exclusive in 0..=view.len() {
                 let prefix = view.prefix(end_exclusive).expect("bounded replay prefix");
                 let output = analyzer.analyze(prefix, &self.inputs).map_err(|message| {

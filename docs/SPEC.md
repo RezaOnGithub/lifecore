@@ -686,7 +686,8 @@ and the index templates analyzers request.
   hands its analyzers views without any
   ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)).
   `View::indexes()` returns `Option<Indexes>`, and `View::template(&template)`
-  `Option<TemplateIndex>`.
+  `Option<TemplateIndex>`; `View::template_or_scan(&template)` answers from
+  the index when there is one and by the reference scan otherwise.
 - **Users behave identically with or without them.** Structural validation,
   `View`'s queries, TypeCheck, and every analyzer give the same results whether
   they read an index or compute the answer themselves. "The same" covers
@@ -748,7 +749,8 @@ An analyzer with a narrower question than the core indexes answer requests
 an **index template**: a parameterized index shape from the catalogue below,
 as data (`lifecore::IndexTemplate`). How an analyzer requests and reads them
 is in [ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization). Equal
-templates are one index, whoever requests them. The runner builds the
+templates are one index, whoever requests them, though each analyzer's views
+answer only for its own requests. The runner builds the
 requested templates over its run's view in one pass and narrows them by every
 replayed prefix, by the same boundary rules as the core indexes; templates are
 never stored in `LifeCoreList` or the snapshot. A view carries templates only

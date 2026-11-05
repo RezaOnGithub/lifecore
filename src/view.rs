@@ -1,6 +1,9 @@
 use crate::{
     Body, Edge, Entry, EntryId, Node,
-    index::{CoreIndexes, IndexTemplate, Indexes, TemplateIndex, TemplateIndexes},
+    index::{
+        CoreIndexes, IndexTemplate, Indexes, TemplateIndex, TemplateIndexes, TemplateQuery,
+        Templates,
+    },
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -31,9 +34,9 @@ pub struct View<'a> {
     // answers every query by its reference scan (SPEC §9.1).
     indexes: Option<&'a CoreIndexes>,
     // The index templates a run built over its head view, which this view is a
-    // prefix of. Read only beside the core indexes, whose roots and children
-    // they rely on.
-    templates: Option<&'a TemplateIndexes>,
+    // prefix of, granted to the one analyzer that receives it. Read only
+    // beside the core indexes, whose roots and children they rely on.
+    templates: Option<Templates<'a>>,
 }
 
 // Debug output omits the indexes and templates: their values can name
@@ -120,12 +123,17 @@ impl<'a> View<'a> {
     {
         View::new(self.database, self.entries, Some(indexes))
     }
-    // The same view with `templates`, which must have been built over entries
-    // this view's entries are a prefix of.
-    pub(crate) fn with_templates<'b>(self, templates: &'b TemplateIndexes) -> View<'b>
+    // The same view answering for the `granted` templates of `built`, which
+    // must have been built over entries this view's entries are a prefix of.
+    pub(crate) fn with_templates<'b>(
+        self,
+        built: &'b TemplateIndexes,
+        granted: &'b [usize],
+    ) -> View<'b>
     where
         'a: 'b,
     {
+        let templates = Templates::new(built, granted);
         debug_assert!(templates.len() >= self.len());
         View {
             templates: Some(templates),
@@ -141,10 +149,16 @@ impl<'a> View<'a> {
             .map(|indexes| Indexes::new(self.entries, indexes))
     }
     /// The index built for `template`, narrowed to this view, if the view
-    /// carries it (SPEC §9.1). Without it, `template.scan(view)` answers the
-    /// same queries.
+    /// carries it (SPEC §9.1): only for a template the receiving analyzer
+    /// requested, and only when the runner built it. Without it,
+    /// `template.scan(view)` answers the same queries.
     pub fn template(self, template: &IndexTemplate) -> Option<TemplateIndex<'a>> {
         TemplateIndex::new(self.entries, self.indexes?, self.templates?, template)
+    }
+    /// The queries of `template`, from its index when [`View::template`] gives
+    /// one and by its reference scan otherwise, with the same results.
+    pub fn template_or_scan<'t>(self, template: &'t IndexTemplate) -> TemplateQuery<'a, 't> {
+        TemplateQuery::new(self, template)
     }
     pub fn id(self) -> ViewId {
         ViewId {

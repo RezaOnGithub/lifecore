@@ -5,7 +5,7 @@
 // boundary.
 
 use super::CoreIndexes;
-use crate::{Edge, Entry, EntryId, View};
+use crate::{Edge, Entry, EntryId, View, view::Either};
 use std::{
     collections::{BTreeSet, HashMap},
     fmt,
@@ -63,9 +63,10 @@ impl IndexTemplate {
         }
     }
 
-    // Whether the template lists `edge` under some key, given the type name
-    // of its other endpoint: the node's own `ty_name`, fixed at append, not
-    // the type it resolves to in a view.
+    // Whether the build lists `edge` under some key, given the type name of
+    // its other endpoint: the node's own `ty_name`, fixed at append, not the
+    // type it resolves to in a view. `TemplateScan` states the same filter
+    // on its own, so that a mistake here cannot hide in the reference too.
     fn lists(&self, edge: &Edge, other_ty_name: &str) -> bool {
         let (label, _, other, _) = self.parts();
         edge.ty_name == label && other.is_none_or(|other| other.contains(other_ty_name))
@@ -74,6 +75,8 @@ impl IndexTemplate {
     /// The reference scan of this template over `view` (SPEC §9.1): the same
     /// queries as [`TemplateIndex`], computed from `view`'s own queries, so it
     /// is an analyzer's fallback when `View::template` gives `None`.
+    /// To read the template when the view carries it and scan otherwise, use
+    /// `View::template_or_scan`.
     pub fn scan<'a, 't>(&'t self, view: View<'a>) -> TemplateScan<'a, 't> {
         TemplateScan {
             view,
@@ -139,18 +142,50 @@ impl TemplateIndexes {
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.len
-    }
-
-    fn get(
-        &self,
-        template: &IndexTemplate,
-    ) -> Option<&(IndexTemplate, HashMap<usize, Vec<usize>>)> {
+    fn find(&self, template: &IndexTemplate) -> Option<usize> {
         self.built
             .binary_search_by(|(built, _)| built.cmp(template))
             .ok()
-            .map(|index| &self.built[index])
+    }
+
+    // The built templates one analyzer requested, sorted, for its
+    // `Templates`. Equal requests of several analyzers name one built index.
+    pub(crate) fn grant(&self, requested: &[IndexTemplate]) -> Vec<usize> {
+        let mut granted = requested
+            .iter()
+            .filter_map(|template| self.find(template))
+            .collect::<Vec<_>>();
+        granted.sort_unstable();
+        granted.dedup();
+        granted
+    }
+}
+
+// The templates one analyzer's views answer for: the run's built templates,
+// narrowed to those it requested, so that what it reads never depends on
+// what another analyzer of the suite requested.
+#[derive(Clone, Copy)]
+pub(crate) struct Templates<'a> {
+    built: &'a TemplateIndexes,
+    granted: &'a [usize],
+}
+
+impl<'a> Templates<'a> {
+    pub(crate) fn new(built: &'a TemplateIndexes, granted: &'a [usize]) -> Self {
+        Self { built, granted }
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.built.len
+    }
+
+    fn get(
+        self,
+        template: &IndexTemplate,
+    ) -> Option<&'a (IndexTemplate, HashMap<usize, Vec<usize>>)> {
+        let index = self.built.find(template)?;
+        self.granted.binary_search(&index).ok()?;
+        Some(&self.built.built[index])
     }
 }
 
@@ -181,7 +216,7 @@ impl<'a> TemplateIndex<'a> {
     pub(crate) fn new(
         entries: &'a [Entry],
         core: &'a CoreIndexes,
-        templates: &'a TemplateIndexes,
+        templates: Templates<'a>,
         template: &IndexTemplate,
     ) -> Option<Self> {
         debug_assert!(templates.len() >= entries.len(), "templates cover the view");
@@ -230,7 +265,7 @@ impl<'a> TemplateIndex<'a> {
     fn edges_at(
         self,
         positions: &'a [usize],
-    ) -> impl DoubleEndedIterator<Item = &'a Edge> + ExactSizeIterator + use<'a> {
+    ) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a> {
         let entries = self.entries;
         positions
             .iter()
@@ -244,34 +279,32 @@ impl<'a> TemplateIndex<'a> {
             .is_some_and(|&child| child < self.entries.len())
     }
 
-    /// Every edge the template lists under `key` in the view.
-    pub fn positions(
-        self,
-        key: EntryId,
-    ) -> impl DoubleEndedIterator<Item = &'a Edge> + ExactSizeIterator + use<'a> {
+    /// Returns the edges the template lists under `key` in the view, in
+    /// append order.
+    pub fn positions(self, key: EntryId) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a> {
         self.edges_at(self.visible(key))
     }
 
-    /// How many edges the template lists under `key` in the view.
+    /// Returns how many edges the template lists under `key` in the view.
     pub fn count(self, key: EntryId) -> usize {
         self.visible(key).len()
     }
 
-    /// The edges the template lists under `key` whose positions are in
-    /// `range`, which may reach past the view.
+    /// Returns the edges the template lists under `key` whose positions are
+    /// in `range`, which may reach past the view, in append order.
     pub fn in_range(
         self,
         key: EntryId,
         range: Range<usize>,
-    ) -> impl DoubleEndedIterator<Item = &'a Edge> + ExactSizeIterator + use<'a> {
+    ) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a> {
         let positions = self.visible(key);
         let start = positions.partition_point(|&p| p < range.start);
         let end = positions.partition_point(|&p| p < range.end).max(start);
         self.edges_at(&positions[start..end])
     }
 
-    /// The edges the template lists under `key` that are current in the view:
-    /// neither endpoint has a successor in it.
+    /// Returns the edges the template lists under `key` that are current in
+    /// the view, where neither endpoint has a successor, in append order.
     pub fn current(self, key: EntryId) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a> {
         self.positions(key)
             .filter(move |edge| !self.is_stale_node(edge.from) && !self.is_stale_node(edge.to))
@@ -288,13 +321,18 @@ pub struct TemplateScan<'a, 't> {
 }
 
 impl<'a, 't> TemplateScan<'a, 't> {
-    /// Every edge the template lists under `key` in the view.
+    /// Returns the edges the template lists under `key` in the view, in
+    /// append order.
     pub fn positions(
         self,
         key: EntryId,
     ) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a, 't> {
         let Self { view, template } = self;
-        let (label, end, _, lineage) = template.parts();
+        // The definition of SPEC §9.1, stated without the build's helpers.
+        let (label, end, other, lineage) = match template {
+        IndexTemplate::EdgesAt { label, end, other } => (label.as_str(), *end, other, false),
+        IndexTemplate::EdgesAtLineage { label, end, other } => (label.as_str(), *end, other, true),
+        };
         // A key the view does not hold as a node lists nothing; a lineage is
         // named by any of its nodes.
         let root = view.node(key).and_then(|_| {
@@ -310,26 +348,34 @@ impl<'a, 't> TemplateScan<'a, 't> {
         Some(_) => view.edges_of(key).collect(),
         };
         candidates.into_iter().filter(move |edge| {
-            let at = end.of(edge);
+            let (at, far) = match end {
+            End::From => (edge.from, edge.to),
+            End::To => (edge.to, edge.from),
+            };
             let at_key = if lineage {
                 view.root_of(at) == root
             } else {
                 Some(at) == root
             };
-            let other = view
-                .node(end.opposite().of(edge))
+            let far = view
+                .node(far)
                 .expect("an edge's endpoint is a node of its view");
-            at_key && template.lists(edge, &other.ty_name)
+            edge.ty_name == label
+                && at_key
+                && match other {
+                None => true,
+                Some(names) => names.contains(&far.ty_name),
+                }
         })
     }
 
-    /// How many edges the template lists under `key` in the view.
+    /// Returns how many edges the template lists under `key` in the view.
     pub fn count(self, key: EntryId) -> usize {
         self.positions(key).count()
     }
 
-    /// The edges the template lists under `key` whose positions are in
-    /// `range`.
+    /// Returns the edges the template lists under `key` whose positions are
+    /// in `range`, in append order.
     pub fn in_range(
         self,
         key: EntryId,
@@ -339,10 +385,74 @@ impl<'a, 't> TemplateScan<'a, 't> {
             .filter(move |edge| range.contains(&edge.id.position))
     }
 
-    /// The edges the template lists under `key` that are current in the view.
+    /// Returns the edges the template lists under `key` that are current in
+    /// the view, in append order.
     pub fn current(self, key: EntryId) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a, 't> {
         let view = self.view;
         self.positions(key)
             .filter(move |edge| view.is_stale(edge.id) == Some(false))
+    }
+}
+
+/// A template's queries answered from its index when the view carries it and
+/// by its reference scan otherwise, with the same results: the one-call
+/// fallback of SPEC §9.1, from `View::template_or_scan`.
+#[derive(Clone, Copy, Debug)]
+pub struct TemplateQuery<'a, 't>(Source<'a, 't>);
+
+#[derive(Clone, Copy, Debug)]
+enum Source<'a, 't> {
+    Index(TemplateIndex<'a>),
+    Scan(TemplateScan<'a, 't>),
+}
+
+impl<'a, 't> TemplateQuery<'a, 't> {
+    pub(crate) fn new(view: View<'a>, template: &'t IndexTemplate) -> Self {
+        Self(match view.template(template) {
+        Some(index) => Source::Index(index),
+        None => Source::Scan(template.scan(view)),
+        })
+    }
+
+    /// Returns the edges the template lists under `key` in the view, in
+    /// append order.
+    pub fn positions(
+        self,
+        key: EntryId,
+    ) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a, 't> {
+        match self.0 {
+        Source::Index(index) => Either::Left(index.positions(key)),
+        Source::Scan(scan) => Either::Right(scan.positions(key)),
+        }
+    }
+
+    /// Returns how many edges the template lists under `key` in the view.
+    pub fn count(self, key: EntryId) -> usize {
+        match self.0 {
+        Source::Index(index) => index.count(key),
+        Source::Scan(scan) => scan.count(key),
+        }
+    }
+
+    /// Returns the edges the template lists under `key` whose positions are
+    /// in `range`, in append order.
+    pub fn in_range(
+        self,
+        key: EntryId,
+        range: Range<usize>,
+    ) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a, 't> {
+        match self.0 {
+        Source::Index(index) => Either::Left(index.in_range(key, range)),
+        Source::Scan(scan) => Either::Right(scan.in_range(key, range)),
+        }
+    }
+
+    /// Returns the edges the template lists under `key` that are current in
+    /// the view, in append order.
+    pub fn current(self, key: EntryId) -> impl DoubleEndedIterator<Item = &'a Edge> + use<'a, 't> {
+        match self.0 {
+        Source::Index(index) => Either::Left(index.current(key)),
+        Source::Scan(scan) => Either::Right(scan.current(key)),
+        }
     }
 }

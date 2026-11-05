@@ -1,12 +1,12 @@
 # Core round: value kinds, typed payloads, and indexes
 
-Status: proposed; steps 1 (the benchmark), 2 (core indexes), 3a (value
-kinds), 3b (their editors), 4 (typed decoding), and 5 (index templates) of
-section 6 have landed, and the rest is not implemented. This is a design document for core work, not
-an analyzer proposal, so it has no explainer or harness. As each step of
-section 6 lands, its contracts move into the owning documents listed in
-section 7. When the last one has moved, this directory is removed. It relies
-on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
+Status: proposed; steps 1 (the benchmark), 2 (core indexes), 3a (value kinds),
+3b (their editors), 4 (typed decoding), and 5 (index templates) of section 6
+have landed, and the rest is not implemented. This is a design document for
+core work, not an analyzer proposal, so it has no explainer or harness. As
+each step of section 6 lands, its contracts move into the owning documents
+listed in section 7. When the last one has moved, this directory is removed.
+It relies on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
 [FILES](../../FILES.md), and [PERFORMANCE](../../PERFORMANCE.md).
 
 The planning analyzer motivates most of this round, but it is shelved
@@ -890,24 +890,17 @@ the browser.
 5. **Index templates.** `index_templates` and the two admitted templates
    with their reference scans. Planning reading them moves to step 6.
    *Landed* (decision 11), with tests as their only users. Its contracts now
-   live in [SPEC §9.1](../../SPEC.md#index-templates),
-   [ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization), and
+   live in [SPEC §9.1](../../SPEC.md#index-templates) (the templates, their
+   queries and scans, and the choices settled while landing: `other` by the
+   other endpoint's own `ty_name`, lineage keys through K7, edges returned in
+   append order, exact position keys), in
+   [ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization)
+   (requesting, the per-analyzer grant, and the one-call fallback
+   `View::template_or_scan`), and in
    [PERFORMANCE §3, §4](../../PERFORMANCE.md#4-query-costs). Settled while
-   landing: `other` filters by the other endpoint's own `ty_name`, fixed at
-   append, never by the type it resolves to; a lineage template takes any
-   node of the lineage as its key and finds its root by K7; the queries return
-   the listed edges (`&Edge`) rather than bare positions, and `in_range`
-   takes a position range; keys are positions, compared exactly, so no hash
-   narrows them and there is no collision case; each template's reference
-   scan is `IndexTemplate::scan(view)`, a `TemplateScan` with the same four
-   queries, reading `View`'s queries and so the core indexes when present; a
-   view carries templates only beside the core indexes; the runner asks every
-   analyzer for its templates once per run under every mode and builds them
-   only under `All`, after constructing the whole suite, and every analyzer
-   of a run sees every template the suite requested; `Core` strips any
-   templates a view carries. A test analyzer in `lifecore-workload` reads
+   landing and not owned there: a test analyzer in `lifecore-workload` reads
    both templates with their scans as fallback over varied histories, so
-   `All` and `Core` differ in what they build and not in output;
+   `All` and `Core` differ in what they build and not in output, and
    `varied_history` needed no change.
 6. **Planning round.** A proposal revising PLANNING on the new kinds,
    starting from section 5 and from PLANNING at `59c702c`. Then the owner's
