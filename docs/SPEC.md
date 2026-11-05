@@ -365,7 +365,7 @@ it, each with a derive of the same name from `lifecore-derive`, which
 | `Timestamp` | timestamp | `timestamp` |
 | `OffsetTimestamp` | offset_timestamp | `offset_timestamp` |
 | `SignedDuration` | duration | `duration` |
-| `civil::Date` | date | `date` |
+| `lifecore::Date` | date | `date` |
 | `Vec<T>` | list | `list` and the element's shape |
 | struct, `#[derive(FromBody)]` | record, or a node's body | `record` |
 | unit-only enum, `#[derive(FromPayload)]` | text | `enum` |
@@ -396,10 +396,10 @@ A failure is one `DecodeError { path, problem }`. `path` leads from the
 decoded value to the failing part with the parts of a field path
 ([§6.4](#64-value-kinds-and-shapes)), so a variant's field is reported under
 its tag, as in `decision(committed).cost`. `problem` is one of `Missing` (a
-field read as `T` is absent), `WrongKind { expected, found }` (an enum
-expects text), `NotAMember { value }` (text naming no variant of a unit-only
-enum), and `UnknownTag { tag }` (a tag naming no variant; its body is not
-read). `Node::decode` returns a `PayloadError`: the decode error with the
+field read as `T` is absent), `WrongKind { expected, found }` (a value of
+another kind; an enum expects text), `NotAMember { value }` (text naming no
+variant of a unit-only enum), and `UnknownTag { tag }` (a tag naming no
+variant; its body is not read). `Node::decode` returns a `PayloadError`: the decode error with the
 node's `EntryId` and `ty_name`, which only serves the message.
 [ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization) says how an
 analyzer reports it.
@@ -426,18 +426,30 @@ shapes come from `FromPayload::shape`, so a `Declare` type needs no
 `FromBody`, and since it is never constructed it needs `allow(dead_code)`.
 Its names are defaults, not identity: decoding never reads them.
 
-A decode type fits a declaration when every field of its `fields()` is
-declared with the same shape, and every field it reads as `T` is declared
-`mandatory`; a field read as `Option<T>` may have any policy. Those are also
-the field requirements a reader's declarations must keep for its decoding to
-succeed wherever TypeCheck accepts the payload.
+A decode type fits a declaration when its `fields()` fit the declared fields,
+where fitting is what decoding accepts:
+
+- **Fields:** every field read is declared; one read as `T` is declared
+  `mandatory`, one read as `Option<T>` may have any policy; and each read
+  shape fits its declared shape.
+- **Records:** their fields fit, as above, at any depth.
+- **Enums:** every declared member is a member of the decode type.
+- **Variants:** every declared tag is a tag of the decode type, and the
+  decoded tag's fields fit the declared tag's.
+- **Lists:** the element shapes fit.
+- **Other shapes:** equal.
+
+A decode type may thus read fewer fields and know more members and tags than
+are declared. Fitting is the requirement a reader's declarations must keep
+for its decoding to succeed wherever TypeCheck accepts the payload.
 
 The derives reject misuse at compile time: generics, unions, tuple fields,
-an empty enum, a duplicate name, an empty member or tag, a presence
-attribute on a field that is not `Option<T>`, and `Declare` without `type`
-or claiming `Type`. A recursive type has no finite shape. The generated code names `lifecore`
-through the absolute path `::lifecore`; a crate depending on it under another
-name says `#[lifecore(crate = "path")]`.
+an empty enum, a duplicate or empty name, a presence attribute on a field
+that is not `Option<T>`, and `Declare` without `type` or claiming `Type`. A recursive type has no finite shape: its `shape()`,
+`fields()`, and `declaration()` overflow the stack, while decoding works,
+bounded by the payload. The generated code names `lifecore` through the
+absolute path `::lifecore`; a crate depending on it under another name says
+`#[lifecore(crate = "path")]`.
 
 ## 7. Mandatory validation
 

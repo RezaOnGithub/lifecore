@@ -1,11 +1,12 @@
 # Core round: value kinds, typed payloads, and indexes
 
 Status: proposed; steps 1 (the benchmark), 3a (value kinds), and 4 (typed
-decoding) of section 6 have landed, and the rest is not implemented. This is a design document for
-core work, not an analyzer proposal, so it has no explainer or harness. As
-each step of section 6 lands, its contracts move into the owning documents
-listed in section 7. When the last one has moved, this directory is removed. It relies
-on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
+decoding) of section 6 have landed, and the rest is not implemented. This is
+a design document for core work, not an analyzer proposal, so it has no
+explainer or harness. As each step of section 6 lands, its contracts move
+into the owning documents listed in section 7. When the last one has moved,
+this directory is removed. It relies on [SPEC](../../SPEC.md),
+[ANALYZERS](../../ANALYZERS.md),
 [FILES](../../FILES.md), and [PERFORMANCE](../../PERFORMANCE.md).
 
 The planning analyzer motivates most of this round, but it is shelved
@@ -849,8 +850,10 @@ the browser.
    also implements `FromPayload` as a record, and `#[derive(FromPayload)]`
    on a struct is refused in its favour; a unit variant in an enum with
    fields is a tag with no fields; generic types are refused; and the
-   subset check of section 3.2 is a test helper, not an API, until Planning
-   chooses whether to derive its declaration rule from it.
+   subset check of section 3.2 became a recursive fit (a decode type may
+   read fewer fields, at any depth, and know more members and tags than
+   declared), and is a test helper, not an API, until Planning chooses
+   whether to derive its declaration rule from it.
 5. **Index templates.** `index_templates` and the two admitted templates
    with their reference scans. Planning reading them moves to step 6.
 6. **Planning round.** A proposal revising PLANNING on the new kinds,

@@ -112,6 +112,13 @@ fn field_attributes_are_checked() {
         ),
         "unknown field attribute; expected `rename`, `encouraged`, or `deprecated`"
     );
+    assert_eq!(
+        error(
+            from_body,
+            parse_quote! { struct Habit { #[lifecore(rename = "")] quota: i64 } }
+        ),
+        "a field name cannot be empty"
+    );
 }
 
 #[test]
@@ -161,6 +168,20 @@ fn type_attributes_are_checked() {
             parse_quote! { #[lifecore(name = "Stance")] struct S {} }
         ),
         "unknown type attribute; expected `crate`, `type`, `incoming`, `outgoing`, or `successors`"
+    ); // An enum takes no `Declare` keys, so the message does not offer them.
+    assert_eq!(
+        error(
+            from_payload,
+            parse_quote! { #[lifecore(rename_all = "snake_case")] enum Per { Day } }
+        ),
+        "unknown type attribute; expected `crate`"
+    );
+    assert_eq!(
+        error(
+            from_body,
+            parse_quote! { #[lifecore(crate = "not a path")] struct S {} }
+        ),
+        "`crate` takes the path of the `lifecore` crate, such as \"::my_lifecore\""
     );
 }
 

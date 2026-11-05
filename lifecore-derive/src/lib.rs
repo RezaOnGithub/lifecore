@@ -45,7 +45,7 @@ fn expand(input: TokenStream, derive: fn(&DeriveInput) -> syn::Result<Tokens>) -
 }
 
 fn from_body(input: &DeriveInput) -> syn::Result<Tokens> {
-    let container = Container::parse(&input.attrs)?;
+    let container = Container::parse(&input.attrs, true)?;
     let fields = named_fields(input, "FromBody", "derive `FromPayload` for an enum")?;
     let krate = &container.krate;
     let name = &input.ident;
@@ -81,7 +81,7 @@ fn from_body(input: &DeriveInput) -> syn::Result<Tokens> {
 }
 
 fn from_payload(input: &DeriveInput) -> syn::Result<Tokens> {
-    let container = Container::parse(&input.attrs)?;
+    let container = Container::parse(&input.attrs, false)?;
     container.only_crate("FromPayload")?;
     no_generics(input, "FromPayload")?;
     let data = match &input.data {
@@ -207,7 +207,7 @@ fn from_payload(input: &DeriveInput) -> syn::Result<Tokens> {
 }
 
 fn declare(input: &DeriveInput) -> syn::Result<Tokens> {
-    let container = Container::parse(&input.attrs)?;
+    let container = Container::parse(&input.attrs, true)?;
     let fields = named_fields(
         input,
         "Declare",
@@ -298,12 +298,15 @@ impl Field {
     // `ident: <read>`, with errors under the tag when inside a variant.
     fn read(&self, krate: &Path, tag: Option<&String>) -> Tokens {
         let Self { ident, key, ty, .. } = self;
-        let read = match &self.option {
-        Some(inner) => quote_spanned! {ty.span()=>
-            #krate::decode::optional_field::<#inner>(body, #key)
-        },
-        None => quote_spanned! {ty.span()=> #krate::decode::field::<#ty>(body, #key) },
+        // Only the path takes the type's span, so an unmet bound is reported
+        // at the type. `body` keeps the derive's own context: a type from a
+        // `macro_rules!` fragment carries that macro's hygiene, under which
+        // `body` would not resolve.
+        let function = match &self.option {
+        Some(inner) => quote_spanned! {ty.span()=> #krate::decode::optional_field::<#inner> },
+        None => quote_spanned! {ty.span()=> #krate::decode::field::<#ty> },
         };
+        let read = quote! { #function(body, #key) };
         match tag {
         None => quote! { #ident: #read? },
         Some(tag) => quote! {
@@ -323,10 +326,16 @@ fn field_infos(named: &FieldsNamed) -> syn::Result<Vec<Field>> {
     for field in &named.named {
         let ident = field.ident.clone().expect("named field");
         let attrs = FieldAttrs::parse(&field.attrs)?;
-        let key = attrs
-            .rename
-            .as_ref()
-            .map_or_else(|| ident.unraw().to_string(), LitStr::value);
+        let key = match &attrs.rename {
+        Some(rename) if rename.value().is_empty() => {
+            return Err(syn::Error::new_spanned(
+                rename,
+                "a field name cannot be empty",
+            ));
+        }
+        Some(rename) => rename.value(),
+        None => ident.unraw().to_string(),
+        };
         names.insert(&key, ident.span(), "field name")?;
         let option = option_inner(&field.ty).cloned();
         let status = match (&option, attrs.presence) {
@@ -376,7 +385,15 @@ fn field_decls(krate: &Path, fields: &[Field]) -> Tokens {
     quote! { ::std::collections::BTreeMap::from([#(#entries)*]) }
 }
 
-fn option_inner(ty: &Type) -> Option<&Type> {
+fn option_inner(mut ty: &Type) -> Option<&Type> {
+    // A `$t:ty` fragment of `macro_rules!` arrives as an invisible group.
+    loop {
+        match ty {
+        Type::Group(group) => ty = &group.elem,
+        Type::Paren(paren) => ty = &paren.elem,
+        _ => break,
+        }
+    }
     let Type::Path(path) = ty else { return None };
     if path.qself.is_some() {
         return None;
@@ -431,7 +448,9 @@ struct Container {
 }
 
 impl Container {
-    fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
+    // `declare` says whether the derive is on a struct, where `Declare`'s
+    // keys may appear, for the message about an unknown key.
+    fn parse(attrs: &[Attribute], declare: bool) -> syn::Result<Self> {
         let mut krate = None;
         let mut ty = None;
         let mut incoming = None;
@@ -450,7 +469,13 @@ impl Container {
                     if krate.is_some() {
                         return Err(duplicate());
                     }
-                    krate = Some(meta.value()?.parse::<LitStr>()?.parse::<Path>()?);
+                    let path = meta.value()?.parse::<LitStr>()?;
+                    krate = Some(path.parse::<Path>().map_err(|_| {
+                        syn::Error::new_spanned(
+                            &path,
+                            "`crate` takes the path of the `lifecore` crate, such as \"::my_lifecore\"",
+                        )
+                    })?);
                 }
                 "type" => {
                     if ty.is_some() {
@@ -478,11 +503,12 @@ impl Container {
                     *slot = Some(string_list(&meta.value()?.parse::<ExprArray>()?)?);
                     declare_key.get_or_insert(key);
                 }
-                _ => {
+                _ if declare => {
                     return Err(meta.error(
                         "unknown type attribute; expected `crate`, `type`, `incoming`, `outgoing`, or `successors`",
                     ));
                 }
+                _ => return Err(meta.error("unknown type attribute; expected `crate`")),
                 }
                 Ok(())
             })?;

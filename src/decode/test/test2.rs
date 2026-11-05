@@ -272,24 +272,62 @@ fn fixtures() -> Vec<(Type, &'static str, BTreeMap<String, FieldDecl>)> {
     ]
 }
 
-// The subset rule of SPEC 6.5: every field a decode type reads is declared
-// with the same shape, and one it reads as `T` is mandatory.
+// The fit of SPEC 6.5: what a decode type reads, against the declaration.
+// Each unmet requirement names its place, with `[]` for a list's elements.
 fn unmet(read: &BTreeMap<String, FieldDecl>, declaration: &Type) -> Vec<String> {
-    read.iter()
-        .filter_map(|(name, field)| match declaration.fields.get(name) {
-        None => Some(format!("{name} is not declared")),
-        Some(declared) if declared.shape != field.shape => {
-            Some(format!("{name} has another shape"))
+    let mut problems = vec![];
+    body_unmet(read, &declaration.fields, "", &mut problems);
+    problems
+}
+
+fn body_unmet(
+    read: &BTreeMap<String, FieldDecl>,
+    declared: &BTreeMap<String, FieldDecl>,
+    at: &str,
+    problems: &mut Vec<String>,
+) {
+    for (name, field) in read {
+        let at = if at.is_empty() {
+            name.clone()
+        } else {
+            format!("{at}.{name}")
+        };
+        match declared.get(name) {
+        None => problems.push(format!("{at} is not declared")),
+        Some(declared) => {
+            if field.status == FieldStatus::Mandatory && declared.status != FieldStatus::Mandatory {
+                problems.push(format!("{at} is read as mandatory"));
+            }
+            shape_unmet(&field.shape, &declared.shape, &at, problems);
         }
-        Some(declared)
-            if field.status == FieldStatus::Mandatory
-                && declared.status != FieldStatus::Mandatory =>
-        {
-            Some(format!("{name} is read as mandatory"))
         }
-        Some(_) => None,
-        })
-        .collect()
+    }
+}
+
+fn shape_unmet(read: &ValueType, declared: &ValueType, at: &str, problems: &mut Vec<String>) {
+    match (read, declared) {
+    (ValueType::List { element: read }, ValueType::List { element: declared }) => {
+        shape_unmet(read, declared, &format!("{at}[]"), problems)
+    }
+    (ValueType::Record { fields: read }, ValueType::Record { fields: declared }) => {
+        body_unmet(read, declared, at, problems)
+    }
+    (ValueType::Enum { members: read }, ValueType::Enum { members: declared }) => {
+        for member in declared.difference(read) {
+            problems.push(format!("{at} does not decode member {member:?}"));
+        }
+    }
+    (ValueType::Variant { tags: read }, ValueType::Variant { tags: declared }) => {
+        for (tag, declared) in declared {
+            match read.get(tag) {
+            None => problems.push(format!("{at} does not decode tag {tag:?}")),
+            Some(read) => body_unmet(read, declared, &format!("{at}({tag})"), problems),
+            }
+        }
+    }
+    (read, declared) if read == declared => {}
+    _ => problems.push(format!("{at} has another shape")),
+    }
 }
 
 #[test]
@@ -340,6 +378,293 @@ fn the_subset_rule_rejects_reads_the_declaration_does_not_keep() {
             "deadline has another shape",
             "horizon is not declared",
         ]
+    );
+}
+
+// Which shapes fit is what decoding accepts: a decode type may know more
+// members and tags than are declared, and read fewer fields, at any depth.
+#[test]
+fn a_fit_is_recursive() {
+    #[derive(FromPayload)]
+    #[allow(dead_code)]
+    enum Wider {
+        Window,
+        Day,
+        Week,
+        Month,
+    }
+    #[derive(FromPayload)]
+    #[allow(dead_code)]
+    enum Narrower {
+        Day,
+        Week,
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct WiderHabit {
+        per: Wider,
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct NarrowerHabit {
+        per: Narrower,
+    }
+    assert_eq!(
+        unmet(&WiderHabit::fields(), &HabitDeclaration::declaration()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unmet(&NarrowerHabit::fields(), &HabitDeclaration::declaration()),
+        [r#"per does not decode member "window""#]
+    );
+
+    // Fewer fields in a tag fit; fewer tags do not.
+    #[derive(FromPayload)]
+    #[allow(dead_code)]
+    enum Lean {
+        Committed {},
+        Deferred { horizon: i64 },
+        Waiting {},
+        Resumed {},
+        Sufficient {},
+        Abandoned {},
+        Postponed { until: Date },
+    }
+    #[derive(FromPayload)]
+    #[allow(dead_code)]
+    enum Few {
+        Committed { cost: SignedDuration },
+        Deferred { horizon: Option<i64> },
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct LeanStance {
+        decision: Lean,
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct FewStance {
+        decision: Few,
+    }
+    assert_eq!(
+        unmet(&LeanStance::fields(), &StanceDeclaration::declaration()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unmet(&FewStance::fields(), &StanceDeclaration::declaration()),
+        [
+            r#"decision does not decode tag "abandoned""#,
+            r#"decision does not decode tag "resumed""#,
+            r#"decision does not decode tag "sufficient""#,
+            r#"decision does not decode tag "waiting""#,
+        ]
+    );
+
+    // A nested record may read fewer fields, an `Option<T>` under any
+    // policy, and a field read as `T` only where it is mandatory.
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct Label {
+        label: String,
+        #[lifecore(deprecated)]
+        took: Option<SignedDuration>,
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct Took {
+        took: SignedDuration,
+        done: Option<bool>,
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct Labels {
+        steps: Vec<Label>,
+        outcome: Option<Outcome>,
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct Durations {
+        steps: Vec<Took>,
+        tags: Vec<String>,
+    }
+    assert_eq!(
+        unmet(&Labels::fields(), &ChecklistDeclaration::declaration()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unmet(&Durations::fields(), &ChecklistDeclaration::declaration()),
+        [
+            "steps[].took is read as mandatory",
+            "tags[] has another shape"
+        ]
+    );
+    #[derive(FromPayload)]
+    #[allow(dead_code)]
+    enum StrictOutcome {
+        Skipped,
+        #[lifecore(rename = "done")]
+        Finished {
+            note: String,
+        },
+    }
+    #[derive(FromBody)]
+    #[allow(dead_code)]
+    struct Strict {
+        outcome: Option<StrictOutcome>,
+    }
+    assert_eq!(
+        unmet(&Strict::fields(), &ChecklistDeclaration::declaration()),
+        ["outcome(done).note is read as mandatory"]
+    );
+}
+
+// Types written through `macro_rules!` fragments carry that macro's hygiene,
+// and a `ty` fragment reaches the derive as an invisible group.
+macro_rules! body_tt {
+    ($name:ident, $($t:tt)*) => {
+        #[derive(Debug, PartialEq, FromBody)]
+        struct $name {
+            a: $($t)*
+        }
+    };
+}
+macro_rules! body_ty {
+    ($name:ident, $t:ty) => {
+        #[derive(Debug, PartialEq, FromBody)]
+        struct $name {
+            a: $t,
+        }
+    };
+}
+macro_rules! declare_ty {
+    ($name:ident, $t:ty) => {
+        #[derive(Declare)]
+        #[lifecore(type = "Made")]
+        #[allow(dead_code)]
+        struct $name {
+            a: $t,
+        }
+    };
+}
+macro_rules! variant_tt {
+    ($name:ident, $($t:tt)*) => {
+        #[derive(Debug, PartialEq, FromPayload)]
+        enum $name {
+            Made { a: $($t)* },
+        }
+    };
+}
+macro_rules! variant_ty {
+    ($name:ident, $t:ty) => {
+        #[derive(Debug, PartialEq, FromPayload)]
+        enum $name {
+            Made { a: $t },
+        }
+    };
+}
+body_tt!(TtInteger, i64);
+body_tt!(TtOptional, Option<i64>);
+body_ty!(TyInteger, i64);
+body_ty!(TyOptional, Option<i64>);
+declare_ty!(DeclaredInteger, i64);
+declare_ty!(DeclaredOptional, Option<i64>);
+variant_tt!(TtTag, Option<i64>);
+variant_ty!(TyTag, Option<i64>);
+variant_ty!(TyMandatoryTag, i64);
+
+#[test]
+fn derives_work_inside_macro_rules() {
+    let some = body("a = 1");
+    let none = body("b = 1");
+    assert_eq!(TtInteger::from_body(&some), Ok(TtInteger { a: 1 }));
+    assert_eq!(TyInteger::from_body(&some), Ok(TyInteger { a: 1 }));
+    assert_eq!(TtOptional::from_body(&none), Ok(TtOptional { a: None }));
+    assert_eq!(TyOptional::from_body(&none), Ok(TyOptional { a: None }));
+    assert_eq!(TyOptional::from_body(&some), Ok(TyOptional { a: Some(1) }));
+    assert_eq!(
+        TyInteger::from_body(&none).unwrap_err().problem,
+        DecodeProblem::Missing
+    );
+    let status = |fields: BTreeMap<String, FieldDecl>| fields["a"].status;
+    assert_eq!(status(TtOptional::fields()), FieldStatus::Optional);
+    assert_eq!(status(TyOptional::fields()), FieldStatus::Optional);
+    assert_eq!(status(TyInteger::fields()), FieldStatus::Mandatory);
+    assert_eq!(
+        status(DeclaredOptional::declaration().fields),
+        FieldStatus::Optional
+    );
+    assert_eq!(
+        status(DeclaredInteger::declaration().fields),
+        FieldStatus::Mandatory
+    );
+    assert_eq!(
+        DeclaredOptional::declaration().fields["a"].shape,
+        ValueType::Integer
+    );
+
+    let empty = Payload::Variant {
+        tag: "made".into(),
+        value: Body::new(),
+    };
+    assert_eq!(TtTag::from_payload(&empty), Ok(TtTag::Made { a: None }));
+    assert_eq!(TyTag::from_payload(&empty), Ok(TyTag::Made { a: None }));
+    assert_eq!(
+        TyMandatoryTag::from_payload(&empty).unwrap_err().path,
+        [
+            PathPart::Tag { tag: "made".into() },
+            PathPart::Field("a".into())
+        ]
+    );
+}
+
+// `crate = …` names the crate through another path; here an alias of this
+// crate's root, as a dependent would name a renamed dependency.
+mod renamed {
+    use crate as core_db;
+    use core_db::decode::{Declare, FromBody, FromPayload};
+
+    #[derive(Debug, PartialEq, FromPayload)]
+    #[lifecore(crate = "core_db")]
+    pub enum Per {
+        Day,
+    }
+
+    #[derive(Debug, PartialEq, FromPayload)]
+    #[lifecore(crate = "core_db")]
+    pub enum Decision {
+        Committed { cost: core_db::SignedDuration },
+    }
+
+    #[derive(Debug, PartialEq, FromBody)]
+    #[lifecore(crate = "core_db")]
+    pub struct Habit {
+        pub per: Per,
+        pub decision: Option<Decision>,
+    }
+
+    #[derive(Declare)]
+    #[lifecore(crate = "core_db", type = "Habit", incoming = ["About"])]
+    #[allow(dead_code)]
+    pub struct HabitDeclaration {
+        per: Per,
+        decision: Option<Decision>,
+    }
+}
+
+#[test]
+fn a_renamed_crate_path_compiles_and_decodes() {
+    assert_eq!(
+        node("Habit", r#"per = "day""#).decode::<renamed::Habit>(),
+        Ok(renamed::Habit {
+            per: renamed::Per::Day,
+            decision: None
+        })
+    );
+    let declaration = renamed::HabitDeclaration::declaration();
+    assert_eq!(declaration.incoming.len(), 1);
+    assert_eq!(
+        unmet(&renamed::Habit::fields(), &declaration),
+        Vec::<String>::new()
     );
 }
 
