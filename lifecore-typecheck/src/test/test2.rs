@@ -4,7 +4,7 @@ use lifecore::{
     analysis::{
         AnalysisOutput, AnalysisRunner, Analyzer, AnalyzerFactory, Config, EvaluatedView,
         EvaluationInputs, FindingKey, InnerMessageType, Message, MessageType, SuiteConfig,
-        TypedAnalyzer,
+        TypedAnalyzer, assert_indexing_equivalence,
         presentation::{Dismissals, ReportOptions, ReportSelection},
     },
     transaction::{
@@ -41,6 +41,8 @@ fn node(
         intent: predecessor.map(|_| RevisionIntent::Branch),
     }))
 }
+// Commits without checking, so a test can build a history TypeCheck rejects,
+// then replays TypeCheck over the result under every indexing mode.
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut AnalysisRunner::default())
         .unwrap()
@@ -48,15 +50,28 @@ fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
         .unwrap();
     let ids = plan.added().to_vec();
     plan.commit(graph).unwrap();
+    assert_indexing_equivalence(&mut runner(), graph.view(), &typecheck_suite()).unwrap();
     ids
 }
+fn typecheck_suite() -> SuiteConfig {
+    SuiteConfig(vec![Config {
+        name: TypeCheckFactory::name().into(),
+        configuration: String::new(),
+    }])
+}
+// The findings at one prefix, which must not depend on its indexes.
 fn findings(graph: &LifeCoreList, end_exclusive: usize) -> Vec<TypeCheckMessage> {
-    TypeCheck::default()
-        .analyze_inner(
-            graph.view().prefix(end_exclusive).unwrap(),
-            &Default::default(),
-        )
-        .unwrap()
+    let view = graph.view().prefix(end_exclusive).unwrap();
+    let findings = TypeCheck::default()
+        .analyze_inner(view, &Default::default())
+        .unwrap();
+    assert_eq!(
+        TypeCheck::default()
+            .analyze_inner(view.without_indexes(), &Default::default())
+            .unwrap(),
+        findings
+    );
+    findings
 }
 fn has_error(findings: &[TypeCheckMessage]) -> bool {
     findings
@@ -618,7 +633,7 @@ fn runner_combines_typed_warnings_and_inconsistencies_without_filtering() {
         name: TypeCheckFactory::name().into(),
         configuration: String::new(),
     }]);
-    let output = runner().run_view(graph.view(), &suite).unwrap();
+    let output = assert_indexing_equivalence(&mut runner(), graph.view(), &suite).unwrap();
     assert_eq!(output.errors().count(), 1);
     assert_eq!(output.warnings().count(), 1);
     assert_eq!(
@@ -686,7 +701,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             configuration: raw.into(),
         }])
     };
-    let report = runner().run_view(graph.view(), &config(" ")).unwrap();
+    let report = assert_indexing_equivalence(&mut runner(), graph.view(), &config(" ")).unwrap();
     let mut dismissals = Dismissals::default();
     let groups = report.groups(&dismissals, ReportOptions::default());
     assert_eq!(groups.len(), 2);
@@ -718,7 +733,8 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             Some("known field".into()),
         )
         .unwrap();
-    let equivalent = runner().run_view(graph.view(), &config(" { } ")).unwrap();
+    let equivalent =
+        assert_indexing_equivalence(&mut runner(), graph.view(), &config(" { } ")).unwrap();
     assert_ne!(report, equivalent);
     assert_eq!(
         report.warnings().next().unwrap().key.analyzer_certificate,
@@ -735,7 +751,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             .len(),
         2
     );
-    let replay = runner().run_view(graph.view(), &config(" ")).unwrap();
+    let replay = assert_indexing_equivalence(&mut runner(), graph.view(), &config(" ")).unwrap();
     assert_eq!(report, replay);
     assert_eq!(
         replay.groups(&dismissals, ReportOptions::default()).len(),
@@ -752,7 +768,7 @@ fn normalized_field_findings_group_across_boundaries_and_survive_dismissal_repla
             Some(Existing(ids[1])),
         )],
     );
-    let after = runner().run_view(graph.view(), &config(" ")).unwrap();
+    let after = assert_indexing_equivalence(&mut runner(), graph.view(), &config(" ")).unwrap();
     assert!(
         after
             .groups(&dismissals, ReportOptions::default())
@@ -788,6 +804,7 @@ fn apply_checked(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
         .unwrap();
     let ids = plan.added();
     plan.commit(graph).unwrap();
+    assert_indexing_equivalence(&mut runner(), graph.view(), graph.analysis_suite()).unwrap();
     ids
 }
 fn certificate(key: &FindingKey) -> serde_json::Value {
@@ -914,7 +931,8 @@ fn revising_a_declaration_later_does_not_revoke_an_earlier_transition() {
     revoke.accepted().unwrap().commit(&mut graph).unwrap();
     // The recorded transition at position 3 stays valid under full replay, but
     // a new one is judged under the revised declaration.
-    let accepted = runner().run(&graph).unwrap();
+    let accepted =
+        assert_indexing_equivalence(&mut runner(), graph.view(), graph.analysis_suite()).unwrap();
     assert!(!accepted.has_error());
     let checked = prepare(
         &graph,
@@ -989,9 +1007,12 @@ fn analyze_inner_judges_only_the_newest_entry_of_the_selected_prefix() {
         configuration: String::new(),
     }]);
     for end_exclusive in [5, 6] {
-        let output = runner()
-            .run_view(graph.view().prefix(end_exclusive).unwrap(), &suite)
-            .unwrap();
+        let output = assert_indexing_equivalence(
+            &mut runner(),
+            graph.view().prefix(end_exclusive).unwrap(),
+            &suite,
+        )
+        .unwrap();
         let errors = output.errors().collect::<Vec<_>>();
         assert_eq!(errors.len(), 1);
         assert_eq!(boundaries(errors[0].evaluated_view), Some((5, 5)));
@@ -1049,9 +1070,9 @@ fn a_warning_that_holds_until_the_head_is_one_observation_per_subject() {
         name: TypeCheckFactory::name().into(),
         configuration: String::new(),
     }]);
-    let output = runner()
-        .run_view(committed.view().prefix(11).unwrap(), &suite)
-        .unwrap();
+    let output =
+        assert_indexing_equivalence(&mut runner(), committed.view().prefix(11).unwrap(), &suite)
+            .unwrap();
     let ranges = output
         .warnings()
         .map(|o| boundaries(o.evaluated_view))
@@ -1251,7 +1272,7 @@ fn assert_replay_matches_all_children(graph: &LifeCoreList) -> usize {
             expected,
             "boundary {end_exclusive}"
         );
-        let newest = runner().run_view(view, &suite).unwrap();
+        let newest = assert_indexing_equivalence(&mut runner(), view, &suite).unwrap();
         let reference = reference_runner.run_view(view, &suite).unwrap();
         assert_eq!(first_emissions(&newest), first_emissions(&reference));
         assert_eq!(newest.has_error(), reference.has_error());

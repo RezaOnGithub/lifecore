@@ -189,24 +189,48 @@ pub fn lost_connections(view: View<'_>, config: &ReconnectConfig) -> Vec<LostCon
         .descendants(predecessor)
         .filter(|node| before.is_stale(node.id) == Some(false))
         .map(|node| node.id)
-        .collect::<HashSet<_>>();
-    // One scan collects the predecessor's edges and what its siblings carry,
-    // each as (label, whether the near endpoint is `from`, far endpoint).
-    let mut candidates = Vec::new();
-    let mut claimed = HashSet::new();
-    for edge in before.edges() {
-        for (near, outgoing, far) in [(edge.from, true, edge.to), (edge.to, false, edge.from)] {
-            if near == predecessor {
-                candidates.push((edge, outgoing, far));
-            } else if siblings.contains(&near) {
-                claimed.insert((edge.ty_name.as_str(), outgoing, far));
+        .collect::<Vec<_>>();
+    // The predecessor's edges, each as (edge, whether the predecessor is
+    // `from`, far endpoint), in append order.
+    let candidates = before.edges_of(predecessor).map(|edge| {
+        if edge.from == predecessor {
+            (edge, true, edge.to)
+        } else {
+            (edge, false, edge.from)
+        }
+    });
+    // Whether a sibling carries the equivalent edge. With indexes, each
+    // question is one lookup of the edge triple (SPEC §9, "Indexes");
+    // without them, one scan collects what every sibling carries, as
+    // (label, whether the near endpoint is `from`, far endpoint), rather
+    // than scanning once per question. Both answer the same.
+    let claimed: Box<dyn Fn(&str, bool, EntryId) -> bool> = match before.indexes() {
+    Some(indexes) => Box::new(move |label, outgoing, other| {
+        siblings.iter().any(|&sibling| {
+            let (from, to) = if outgoing {
+                (sibling, other)
+            } else {
+                (other, sibling)
+            };
+            indexes.edge_between(from, to, label).is_some()
+        })
+    }),
+    None => {
+        let siblings = siblings.into_iter().collect::<HashSet<_>>();
+        let mut carried = HashSet::new();
+        for edge in before.edges() {
+            for (near, outgoing, far) in [(edge.from, true, edge.to), (edge.to, false, edge.from)] {
+                if siblings.contains(&near) {
+                    carried.insert((edge.ty_name.as_str(), outgoing, far));
+                }
             }
         }
+        Box::new(move |label, outgoing, other| carried.contains(&(label, outgoing, other)))
     }
+    };
     // The equivalent edge on the successor cannot already exist, since the
     // successor is newer than every edge in `before`.
     candidates
-        .into_iter()
         .filter(|(edge, outgoing, other)| {
             config.includes_edge(&edge.ty_name)
                 // A superseded other endpoint would fail the endpoint check,
@@ -215,7 +239,7 @@ pub fn lost_connections(view: View<'_>, config: &ReconnectConfig) -> Vec<LostCon
                 // Only the equivalent edge claims; another label or direction
                 // does not. An edge to a revision of `other` cannot arise
                 // here, since that revision supersedes `other`.
-                && !claimed.contains(&(edge.ty_name.as_str(), *outgoing, *other))
+                && !claimed(&edge.ty_name, *outgoing, *other)
         })
         .map(|(edge, outgoing, other)| LostConnection {
             edge: edge.id,

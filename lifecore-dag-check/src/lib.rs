@@ -69,20 +69,6 @@ pub struct SubgraphFilter {
     pub edge_types: Option<BTreeSet<String>>,
 }
 
-impl SubgraphFilter {
-    fn includes_node(&self, ty_name: &str) -> bool {
-        self.node_types
-            .as_ref()
-            .is_none_or(|types| types.contains(ty_name))
-    }
-
-    fn includes_edge(&self, ty_name: &str) -> bool {
-        self.edge_types
-            .as_ref()
-            .is_none_or(|types| types.contains(ty_name))
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndexRange {
@@ -136,17 +122,32 @@ pub fn check_dag(view: View<'_>, config: &DagCheckConfig) -> DagCheckReport {
     }
 
     let filter = config.filter.as_ref().cloned().unwrap_or_default();
-    let nodes = view
-        .fresh_nodes()
-        .filter(|node| filter.includes_node(&node.ty_name))
+    // A filter's types and labels select their entries by name (core indexes
+    // K3 and K4, SPEC §9 "Indexes"); without one, every current entry is read.
+    // Either way the selection is the same, and edges stay in append order.
+    let nodes = match &filter.node_types {
+    Some(types) => types
+        .iter()
+        .flat_map(|ty_name| view.nodes_of_type(ty_name))
+        .filter(|node| view.is_stale(node.id) == Some(false))
         .map(|node| node.id)
-        .collect::<BTreeSet<_>>();
-    let edges = view
-        .fresh_edges()
+        .collect::<BTreeSet<_>>(),
+    None => view.fresh_nodes().map(|node| node.id).collect(),
+    };
+    let mut edges = match &filter.edge_types {
+    Some(labels) => labels
+        .iter()
+        .flat_map(|label| view.edges_labelled(label))
+        .collect::<Vec<_>>(),
+    None => view.edges().collect(),
+    };
+    edges.sort_unstable_by_key(|edge| edge.id.position());
+    let edges = edges
+        .into_iter()
         .filter(|edge| {
-            filter.includes_edge(&edge.ty_name)
-                && nodes.contains(&edge.from)
+            nodes.contains(&edge.from)
                 && nodes.contains(&edge.to)
+                && view.is_stale(edge.id) == Some(false)
         })
         .map(|edge| SelectedEdge {
             index: edge.id,

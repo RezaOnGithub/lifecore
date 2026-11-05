@@ -1,11 +1,12 @@
 use crate::{
-    CycleDisposition, CyclicComponent, DagCheck, DagCheckConfig, DagCheckFactory, IndexRange,
-    SelectedEdge, SubgraphFilter, check_dag, cyclic_components,
+    CycleDisposition, CyclicComponent, DagCheck, DagCheckConfig, DagCheckFactory, DagCheckReport,
+    IndexRange, SelectedEdge, SubgraphFilter, check_dag, cyclic_components,
 };
 use lifecore::{
-    Body, EntryId, LifeCoreList,
+    Body, EntryId, LifeCoreList, View,
     analysis::{
         AnalysisRunner, Analyzer, AnalyzerFactory, Config, EvaluatedView, MessageType, SuiteConfig,
+        assert_indexing_equivalence,
     },
     transaction::{
         Change, EntryChange, NewEdge, NewNode,
@@ -15,6 +16,13 @@ use lifecore::{
 };
 use std::collections::BTreeSet;
 
+// The report with the view's indexes, which must equal the one by reference
+// scans (SPEC §9, "Indexes").
+fn checked(view: View<'_>, config: &DagCheckConfig) -> DagCheckReport {
+    let report = check_dag(view, config);
+    assert_eq!(report, check_dag(view.without_indexes(), config));
+    report
+}
 fn config() -> DagCheckConfig {
     DagCheckConfig {
         filter: None,
@@ -81,14 +89,14 @@ fn strict_json_configuration_preserves_set_and_inclusive_range_semantics() {
 fn checker_groups_cycles_and_algorithm_handles_self_loops() {
     let (graph, ids) = graph();
     assert_eq!(
-        check_dag(graph.view(), &config()).components,
+        checked(graph.view(), &config()).components,
         vec![CyclicComponent {
             nodes: ids[..3].to_vec(),
             edges: ids[3..].to_vec()
         }]
     );
     assert!(
-        check_dag(graph.view().prefix(5).unwrap(), &config())
+        checked(graph.view().prefix(5).unwrap(), &config())
             .components
             .is_empty()
     );
@@ -113,12 +121,12 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
         node_types: Some(BTreeSet::from(["A".into(), "B".into()])),
         edge_types: None,
     });
-    assert!(check_dag(graph.view(), &filtered).components.is_empty());
+    assert!(checked(graph.view(), &filtered).components.is_empty());
     filtered.filter = Some(SubgraphFilter {
         node_types: None,
         edge_types: Some(BTreeSet::new()),
     });
-    assert!(check_dag(graph.view(), &filtered).components.is_empty());
+    assert!(checked(graph.view(), &filtered).components.is_empty());
     prepare(
         &graph,
         &[Change::Entry(EntryChange::Node(NewNode {
@@ -134,9 +142,9 @@ fn filters_select_an_induced_graph_and_stale_endpoints_remove_cycles() {
     .unwrap()
     .commit(&mut graph)
     .unwrap();
-    assert!(check_dag(graph.view(), &config()).components.is_empty());
+    assert!(checked(graph.view(), &config()).components.is_empty());
     assert_eq!(
-        check_dag(graph.view().prefix(6).unwrap(), &config())
+        checked(graph.view().prefix(6).unwrap(), &config())
             .components
             .len(),
         1
@@ -151,9 +159,9 @@ fn index_range_selects_prefixes_without_cropping_membership() {
         from: Some(5),
         through: Some(5),
     });
-    assert!(!check_dag(graph.view().prefix(5).unwrap(), &config).checked);
-    assert_eq!(check_dag(graph.view(), &config).components.len(), 1);
-    assert!(!check_dag(graph.view().prefix(0).unwrap(), &config).checked);
+    assert!(!checked(graph.view().prefix(5).unwrap(), &config).checked);
+    assert_eq!(checked(graph.view(), &config).components.len(), 1);
+    assert!(!checked(graph.view().prefix(0).unwrap(), &config).checked);
 }
 
 #[test]
@@ -194,12 +202,15 @@ fn factory_and_replay_respect_the_supplied_view() {
         configuration: r#"{"on_cycle":"inconsistency"}"#.into(),
     }]);
     assert!(
-        !runner
-            .run_view(graph.view().prefix(5).unwrap(), &suite)
+        !assert_indexing_equivalence(&mut runner, graph.view().prefix(5).unwrap(), &suite)
             .unwrap()
             .has_error()
     );
-    assert!(runner.run_view(graph.view(), &suite).unwrap().has_error());
+    assert!(
+        assert_indexing_equivalence(&mut runner, graph.view(), &suite)
+            .unwrap()
+            .has_error()
+    );
 }
 
 #[test]
@@ -263,15 +274,18 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     runner
         .register_analyzer_kind(Box::new(DagCheckFactory))
         .unwrap();
-    let plain = runner
-        .run_view(graph.view(), &config(r#"{"on_cycle":"warning"}"#))
-        .unwrap();
-    let normalized = runner
-        .run_view(
-            graph.view(),
-            &config(r#"{ "range": {}, "filter": {}, "on_cycle": "warning" }"#),
-        )
-        .unwrap();
+    let plain = assert_indexing_equivalence(
+        &mut runner,
+        graph.view(),
+        &config(r#"{"on_cycle":"warning"}"#),
+    )
+    .unwrap();
+    let normalized = assert_indexing_equivalence(
+        &mut runner,
+        graph.view(),
+        &config(r#"{ "range": {}, "filter": {}, "on_cycle": "warning" }"#),
+    )
+    .unwrap();
     assert_ne!(plain, normalized);
     assert_eq!(
         plain.warnings().next().unwrap().key.analyzer_certificate,
@@ -327,18 +341,18 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
             .groups(&dismissals, ReportOptions::default())
             .is_empty()
     );
-    let filtered = runner
-        .run_view(
-            graph.view(),
-            &config(r#"{"on_cycle":"warning","filter":{"node_types":["C","A","B","A"]}}"#),
-        )
-        .unwrap();
-    let filtered_again = runner
-        .run_view(
-            graph.view(),
-            &config(r#"{"filter":{"node_types":["A","B","C"]},"on_cycle":"warning"}"#),
-        )
-        .unwrap();
+    let filtered = assert_indexing_equivalence(
+        &mut runner,
+        graph.view(),
+        &config(r#"{"on_cycle":"warning","filter":{"node_types":["C","A","B","A"]}}"#),
+    )
+    .unwrap();
+    let filtered_again = assert_indexing_equivalence(
+        &mut runner,
+        graph.view(),
+        &config(r#"{"filter":{"node_types":["A","B","C"]},"on_cycle":"warning"}"#),
+    )
+    .unwrap();
     assert_ne!(filtered, filtered_again);
     assert_eq!(
         filtered.warnings().next().unwrap().key.analyzer_certificate,
@@ -365,9 +379,12 @@ fn cycle_keys_preserve_configuration_and_group_observations_without_inventing_re
     .unwrap()
     .commit(&mut graph)
     .unwrap();
-    let after = runner
-        .run_view(graph.view(), &config(r#"{"on_cycle":"warning"}"#))
-        .unwrap();
+    let after = assert_indexing_equivalence(
+        &mut runner,
+        graph.view(),
+        &config(r#"{"on_cycle":"warning"}"#),
+    )
+    .unwrap();
     assert!(dismissals.restore(&key));
     assert!(
         after

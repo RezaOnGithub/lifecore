@@ -6,7 +6,7 @@ use lifecore::{
     BasicValidationFailure, Body, EntryId, LifeCoreError, LifeCoreList,
     analysis::{
         AnalysisOutput, AnalysisRunner, Analyzer, AnalyzerFactory, Diagnostic, EvaluatedView,
-        FindingKey, MessageKind, Observation,
+        FindingKey, MessageKind, Observation, assert_indexing_equivalence,
         presentation::{DismissalReason, Dismissals, ReportOptions},
         suggestion::{self, prepare_suggestion},
     },
@@ -42,6 +42,7 @@ fn database() -> LifeCoreList {
     append(&mut graph, &[configure(ReconnectFactory::name(), "")]);
     graph
 }
+// Replays the committed history under every indexing mode.
 fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
     let plan = prepare(graph, changes, &mut runner())
         .unwrap()
@@ -49,6 +50,7 @@ fn append(graph: &mut LifeCoreList, changes: &[Change]) -> Vec<EntryId> {
         .unwrap();
     let ids = plan.added();
     plan.commit(graph).unwrap();
+    analysis(graph);
     ids
 }
 fn append_one(graph: &mut LifeCoreList, change: Change) -> EntryId {
@@ -114,10 +116,14 @@ fn judged_with(
     newest: EntryId,
     config: &ReconnectConfig,
 ) -> Vec<LostConnection> {
-    lost_connections(graph.view().prefix(newest.position() + 1).unwrap(), config)
+    let view = graph.view().prefix(newest.position() + 1).unwrap();
+    let lost = lost_connections(view, config);
+    // Siblings' edges are read through the edge-triple index or by one scan.
+    assert_eq!(lost_connections(view.without_indexes(), config), lost);
+    lost
 }
 fn analysis(graph: &LifeCoreList) -> AnalysisOutput {
-    runner().run(graph).unwrap()
+    assert_indexing_equivalence(&mut runner(), graph.view(), graph.analysis_suite()).unwrap()
 }
 fn certificate(edge: EntryId, successor: EntryId) -> String {
     serde_json::to_string(&LostEdge { edge, successor }).unwrap()

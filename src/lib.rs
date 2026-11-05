@@ -4,6 +4,7 @@ extern crate self as lifecore;
 
 mod entries;
 mod graph;
+mod index;
 mod time;
 mod values;
 mod view;
@@ -17,12 +18,15 @@ pub mod typing;
 
 pub use entries::{Edge, Entry, EntryId, Node};
 pub use graph::{BasicValidationFailure, LifeCoreList};
+pub use index::Indexes;
 pub use jiff::{SignedDuration, Timestamp, civil::Date};
 pub use time::OffsetTimestamp;
 pub use values::{Body, Payload, PayloadKind};
 pub use view::{View, ViewError, ViewId};
 
-#[derive(Debug, thiserror::Error)]
+// Equality lets tests compare failures, such as the runs of one history under
+// every indexing mode.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LifeCoreError {
     #[error(transparent)]
     BasicValidationFailure(#[from] BasicValidationFailure),

@@ -1,6 +1,7 @@
-use crate::{Body, EntryId, Payload, PayloadKind, View};
+use crate::{Body, EntryId, Node, Payload, PayloadKind, View, view::Either};
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fmt,
 };
@@ -257,6 +258,19 @@ pub enum Declaration {
 }
 
 impl Declaration {
+    // The parse of a `Type` node's payload, which core index K8 caches.
+    pub(crate) fn of(node: &Node) -> Self {
+        match Type::from_body(&node.payload) {
+        Ok(schema) => Self::Parsed {
+            declaration: node.id,
+            schema,
+        },
+        Err(error) => Self::Malformed {
+            declaration: node.id,
+            error,
+        },
+        }
+    }
     pub fn id(&self) -> EntryId {
         match self {
         Self::Parsed { declaration, .. } | Self::Malformed { declaration, .. } => *declaration,
@@ -291,11 +305,12 @@ pub enum TypeResolution {
 }
 
 // The current declarations of one view, indexed by the name each claims.
-// Derived from that view alone; nothing caches or serializes it.
+// Derived from that view alone; nothing serializes it. Each parse is borrowed
+// from core index K8 when the view carries it, and computed otherwise.
 #[derive(Clone, Debug)]
 pub struct Declarations<'a> {
     // Append order, each with the `name` text it claims, if any.
-    all: Vec<(Option<&'a str>, Declaration)>,
+    all: Vec<(Option<&'a str>, Cow<'a, Declaration>)>,
     // Indexes into `all`, in append order. A declaration without a text
     // `name` claims nothing, so it is never filed under `""`, which is a
     // legal type name.
@@ -306,14 +321,14 @@ impl<'a> Declarations<'a> {
     pub fn iter(&self) -> impl Iterator<Item = (Option<&'a str>, &Declaration)> {
         self.all
             .iter()
-            .map(|(name, declaration)| (*name, declaration))
+            .map(|(name, declaration)| (*name, &**declaration))
     }
     // Every claimed name in order, including a claimed `Type`.
     pub fn names(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.claims.keys().copied()
     }
     pub fn claimants(&self, name: &str) -> impl Iterator<Item = &Declaration> {
-        self.claimed(name).iter().map(|&i| &self.all[i].1)
+        self.claimed(name).iter().map(|&i| &*self.all[i].1)
     }
     pub fn nameless(&self) -> impl Iterator<Item = &Declaration> {
         self.iter()
@@ -331,7 +346,7 @@ impl<'a> Declarations<'a> {
         }
         match self.claimed(name) {
         [] => TypeResolution::Missing,
-        [only] => match &self.all[*only].1 {
+        [only] => match &*self.all[*only].1 {
         Declaration::Parsed {
             declaration,
             schema,
@@ -355,7 +370,7 @@ impl<'a> Declarations<'a> {
             return None;
         }
         match self.claimed(name) {
-        [only] => match &self.all[*only].1 {
+        [only] => match &*self.all[*only].1 {
         Declaration::Parsed {
             declaration,
             schema,
@@ -377,25 +392,25 @@ impl<'a> View<'a> {
             all: vec![],
             claims: BTreeMap::new(),
         };
-        for node in self
-            .fresh_nodes()
-            .filter(|node| node.ty_name == Type::TYPE_NAME)
-        {
+        let current = match self.indexes() {
+        Some(indexes) => Either::Left(
+            indexes
+                .type_declarations()
+                .filter(move |(node, _)| self.is_stale(node.id) == Some(false))
+                .map(|(node, declaration)| (node, Cow::Borrowed(declaration))),
+        ),
+        None => Either::Right(
+            self.fresh_nodes()
+                .filter(|node| node.ty_name == Type::TYPE_NAME)
+                .map(|node| (node, Cow::Owned(Declaration::of(node)))),
+        ),
+        };
+        for (node, declaration) in current {
             // The claim reads the `name` text alone, so a declaration whose
             // other keys do not parse still claims its name.
             let name = match node.payload.get("name") {
             Some(Payload::Text(name)) => Some(name.as_str()),
             _ => None,
-            };
-            let declaration = match Type::from_body(&node.payload) {
-            Ok(schema) => Declaration::Parsed {
-                declaration: node.id,
-                schema,
-            },
-            Err(error) => Declaration::Malformed {
-                declaration: node.id,
-                error,
-            },
             };
             if let Some(name) = name {
                 index.claims.entry(name).or_default().push(index.all.len());

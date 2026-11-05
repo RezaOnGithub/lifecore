@@ -192,9 +192,9 @@ pub fn prepare(
     changes: &[Change],
     runner: &mut AnalysisRunner,
 ) -> Result<Checked, Error> {
-    graph
-        .basic_validation()
-        .map_err(LifeCoreError::BasicValidationFailure)?;
+    // Every `LifeCoreList` is valid, and staging checks each appended entry
+    // against the indexed history before it, so the base is not revalidated.
+    debug_assert_eq!(graph.basic_validation(), Ok(()));
     let mut candidate = graph.clone();
     let origin = uuid::Uuid::new_v4();
     let mut operations = Vec::<Option<EntryId>>::new();

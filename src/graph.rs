@@ -1,6 +1,7 @@
 use crate::{
     Entry, EntryId, View,
     analysis::{Config, SuiteConfig},
+    index::CoreIndexes,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,68 +23,46 @@ pub enum BasicValidationFailure {
 }
 
 // Fields stay private to this module: entries and the suite change only
-// through the staging methods below, which keep the derived index in step.
+// through the staging methods below, which keep the derived indexes in step.
+// Every `LifeCoreList` holds a valid history: loading validates it, and
+// staging admits only entries that pass against it.
 #[derive(Clone, Serialize)]
 pub struct LifeCoreList {
     id: Uuid,
     entries: Vec<Entry>,
     suite: SuiteConfig,
     #[serde(skip)]
-    staleness: StalenessIndex,
+    indexes: CoreIndexes,
 }
 
-// The staleness index is derived from `entries`, so it takes no part in equality.
+// The indexes are derived from `entries`, so they take no part in equality.
 impl PartialEq for LifeCoreList {
     fn eq(&self, other: &Self) -> bool {
         let Self {
             id,
             entries,
             suite,
-            staleness: _,
+            indexes: _,
         } = self;
         *id == other.id && *entries == other.entries && *suite == other.suite
     }
 }
 impl Eq for LifeCoreList {}
 
-// Debug prints the stored history only, as it did before the derived index.
+// Debug prints the stored history only, as it did before the derived indexes.
 impl std::fmt::Debug for LifeCoreList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             id,
             entries,
             suite,
-            staleness: _,
+            indexes: _,
         } = self;
         f.debug_struct("LifeCoreList")
             .field("id", id)
             .field("entries", entries)
             .field("suite", suite)
             .finish()
-    }
-}
-
-// Derived and never serialized: one slot per entry, holding the position of that
-// node's first child. History is append-only, so a slot is set at most once and
-// one index serves every prefix view and candidate clone; `View` compares each
-// value with its own length. Only entries already validated against the prefix
-// before them are indexed, so an invalid parent never marks an earlier node stale.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct StalenessIndex(Vec<Option<usize>>);
-
-impl StalenessIndex {
-    fn as_slice(&self) -> &[Option<usize>] {
-        &self.0
-    }
-    fn push_validated(&mut self, entry: &Entry) {
-        let position = self.0.len();
-        if let Some(predecessor) = entry.as_node().and_then(|node| node.predecessor) {
-            let first_child = &mut self.0[predecessor.position];
-            if first_child.is_none() {
-                *first_child = Some(position);
-            }
-        }
-        self.0.push(None);
     }
 }
 
@@ -103,9 +82,9 @@ impl<'de> Deserialize<'de> for LifeCoreList {
             id: stored.id,
             entries: stored.entries,
             suite: stored.suite,
-            staleness: StalenessIndex::default(),
+            indexes: CoreIndexes::default(),
         };
-        graph.staleness = graph.validate().map_err(serde::de::Error::custom)?;
+        graph.indexes = graph.validate().map_err(serde::de::Error::custom)?;
         Ok(graph)
     }
 }
@@ -116,101 +95,163 @@ impl Default for LifeCoreList {
             id: Uuid::new_v4(),
             entries: vec![],
             suite: SuiteConfig::default(),
-            staleness: StalenessIndex::default(),
+            indexes: CoreIndexes::default(),
         }
     }
 }
 
 impl LifeCoreList {
     pub fn view(&self) -> View<'_> {
-        View::new(self.id, &self.entries, self.staleness.as_slice())
+        View::new(self.id, &self.entries, Some(&self.indexes))
     }
     pub fn analysis_suite(&self) -> &SuiteConfig {
         &self.suite
     }
+    // The first-child position of each entry, as the staleness index held it
+    // before the core indexes generalized it.
     #[cfg(test)]
-    pub(crate) fn staleness(&self) -> &[Option<usize>] {
-        self.staleness.as_slice()
+    pub(crate) fn staleness(&self) -> Vec<Option<usize>> {
+        self.indexes.first_children()
     }
-    // Revalidates the whole history with a freshly built index; the stored one is
-    // not consulted, but debug builds check that it still matches.
+    // A history that has not been validated, for tests of validation itself.
+    #[cfg(test)]
+    pub(crate) fn unvalidated(id: Uuid, entries: Vec<Entry>) -> Self {
+        Self {
+            id,
+            entries,
+            suite: SuiteConfig::default(),
+            indexes: CoreIndexes::default(),
+        }
+    }
+    // Revalidates the whole history with freshly built indexes; the stored ones
+    // are not consulted, but debug builds check that they still match.
     pub fn basic_validation(&self) -> Result<(), BasicValidationFailure> {
         let rebuilt = self.validate()?;
-        debug_assert_eq!(rebuilt, self.staleness, "stored staleness index diverged");
+        debug_assert!(rebuilt == self.indexes, "stored indexes diverged");
         Ok(())
     }
-    // Staging appends one entry, validates the resulting history, and indexes the
-    // entry only after it passes. A failure leaves the receiver unchanged.
+    // Staging checks only the appended entry, against the indexed view of the
+    // history before it, which is valid. That gives the result validating the
+    // whole extended history would: every earlier entry passes, so the first
+    // failure, if any, is this entry's. The entry is indexed only after it
+    // passes, and a failure leaves the receiver unchanged.
     pub(crate) fn stage(&mut self, entry: Entry) -> Result<(), BasicValidationFailure> {
+        let checked = self.check_next(&entry);
+        #[cfg(debug_assertions)]
+        self.assert_staged_like_full_validation(&entry, &checked);
+        checked?;
+        self.indexes.push(&entry);
         self.entries.push(entry);
-        let rebuilt = match self.validate() {
-        Ok(rebuilt) => rebuilt,
-        Err(failure) => {
-            self.entries.pop();
-            return Err(failure);
-        }
-        };
-        self.staleness
-            .push_validated(self.entries.last().expect("staged entry"));
-        debug_assert_eq!(rebuilt, self.staleness, "extended staleness index diverged");
         Ok(())
+    }
+    // Debug builds compare incremental validation with validating the extended
+    // history from scratch: the same result, and on success the same indexes.
+    #[cfg(debug_assertions)]
+    fn assert_staged_like_full_validation(
+        &mut self,
+        entry: &Entry,
+        checked: &Result<(), BasicValidationFailure>,
+    ) {
+        self.entries.push(entry.clone());
+        let full = self.validate();
+        self.entries.pop();
+        match (full, checked) {
+        (Ok(rebuilt), Ok(())) => {
+            let mut extended = self.indexes.clone();
+            extended.push(entry);
+            assert!(rebuilt == extended, "extended indexes diverged");
+        }
+        (Err(full), Err(staged)) => assert_eq!(&full, staged, "staged validation diverged"),
+        (full, staged) => panic!(
+            "staged validation diverged: {staged:?} against {:?}",
+            full.map(|_| ())
+        ),
+        }
     }
     // Staging appends one configuration to the suite; it adds no entry.
     pub(crate) fn stage_analyzer(&mut self, config: Config) {
         self.suite.0.push(config);
     }
-    // Validation and indexing share one pass: each entry is checked against the
-    // prefix before it, whose index holds only entries that already passed.
-    fn validate(&self) -> Result<StalenessIndex, BasicValidationFailure> {
+    fn check_next(&self, entry: &Entry) -> Result<(), BasicValidationFailure> {
         if self.id.is_nil() {
             return Err(BasicValidationFailure::InvalidDatabase);
         }
-        let mut staleness = StalenessIndex::default();
-        for (position, entry) in self.entries.iter().enumerate() {
-            let id = entry.id();
-            if id.position != position || id.origin.is_nil() {
-                return Err(BasicValidationFailure::InvalidIdentity { position });
-            }
-            // Every reference and duplicate decision uses the prefix immediately before
-            // this entry.
-            let before = View::new(self.id, &self.entries[..position], staleness.as_slice());
-            let require_node = |target| {
-                before
-                    .node(target)
-                    .ok_or(BasicValidationFailure::InvalidReference { entry: id, target })
-            };
-            match entry {
-            Entry::Node(n) => {
-                if let Some(predecessor) = n.predecessor {
-                    require_node(predecessor)?;
-                }
-                if before.fresh_nodes().any(|old| {
-                    old.ty_name == n.ty_name
-                        && old.predecessor == n.predecessor
-                        && old.payload == n.payload
-                }) {
-                    return Err(BasicValidationFailure::Duplicate { entry: id });
-                }
-            }
-            Entry::Edge(e) => {
-                require_node(e.from)?;
-                require_node(e.to)?;
-                if e.from == e.to {
-                    return Err(BasicValidationFailure::SelfEdge { entry: id });
-                }
-                if before.is_stale(e.from) == Some(true) || before.is_stale(e.to) == Some(true) {
-                    return Err(BasicValidationFailure::StaleEndpoint { entry: id });
-                }
-                if before
-                    .edges()
-                    .any(|old| old.from == e.from && old.to == e.to && old.ty_name == e.ty_name)
-                {
-                    return Err(BasicValidationFailure::Duplicate { entry: id });
-                }
-            }
-            }
-            staleness.push_validated(entry);
-        }
-        Ok(staleness)
+        check_append(self.view(), entry)
     }
+    // Validation and indexing share one pass: each entry is checked against the
+    // prefix before it, whose indexes hold only entries that already passed.
+    fn validate(&self) -> Result<CoreIndexes, BasicValidationFailure> {
+        let mut indexes = CoreIndexes::default();
+        self.validate_with(Some(&mut indexes))?;
+        Ok(indexes)
+    }
+    // The reference: every check by its scan of the prefix before the entry.
+    #[cfg(test)]
+    pub(crate) fn validate_without_indexes(&self) -> Result<(), BasicValidationFailure> {
+        self.validate_with(None)
+    }
+    #[cfg(test)]
+    pub(crate) fn validate_with_indexes(&self) -> Result<(), BasicValidationFailure> {
+        self.validate().map(drop)
+    }
+    fn validate_with(
+        &self,
+        mut indexes: Option<&mut CoreIndexes>,
+    ) -> Result<(), BasicValidationFailure> {
+        if self.id.is_nil() {
+            return Err(BasicValidationFailure::InvalidDatabase);
+        }
+        for (position, entry) in self.entries.iter().enumerate() {
+            let before = View::new(self.id, &self.entries[..position], indexes.as_deref());
+            check_append(before, entry)?;
+            if let Some(indexes) = indexes.as_deref_mut() {
+                indexes.push(entry);
+            }
+        }
+        Ok(())
+    }
+}
+
+// Checks `entry` as the next append to `before`, which must be valid. Every
+// reference and duplicate decision uses that prefix alone, through queries
+// that read its indexes when it carries them and scan it otherwise, with the
+// same results (SPEC §9, "Indexes").
+fn check_append(before: View<'_>, entry: &Entry) -> Result<(), BasicValidationFailure> {
+    let position = before.len();
+    let id = entry.id();
+    if id.position != position || id.origin.is_nil() {
+        return Err(BasicValidationFailure::InvalidIdentity { position });
+    }
+    let require_node = |target| {
+        before
+            .node(target)
+            .ok_or(BasicValidationFailure::InvalidReference { entry: id, target })
+    };
+    match entry {
+    Entry::Node(n) => {
+        if let Some(predecessor) = n.predecessor {
+            require_node(predecessor)?;
+        }
+        if before
+            .nodes_with_content(&n.ty_name, n.predecessor, &n.payload)
+            .any(|old| before.is_stale(old.id) == Some(false))
+        {
+            return Err(BasicValidationFailure::Duplicate { entry: id });
+        }
+    }
+    Entry::Edge(e) => {
+        require_node(e.from)?;
+        require_node(e.to)?;
+        if e.from == e.to {
+            return Err(BasicValidationFailure::SelfEdge { entry: id });
+        }
+        if before.is_stale(e.from) == Some(true) || before.is_stale(e.to) == Some(true) {
+            return Err(BasicValidationFailure::StaleEndpoint { entry: id });
+        }
+        if before.edge_between(e.from, e.to, &e.ty_name).is_some() {
+            return Err(BasicValidationFailure::Duplicate { entry: id });
+        }
+    }
+    }
+    Ok(())
 }

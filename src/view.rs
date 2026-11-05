@@ -1,4 +1,7 @@
-use crate::{Edge, Entry, EntryId, Node};
+use crate::{
+    Body, Edge, Entry, EntryId, Node,
+    index::{CoreIndexes, Indexes},
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -23,19 +26,20 @@ pub struct View<'a> {
     database: Uuid,
     // Store only the visible slice. No analyzer operation can expand into a future suffix.
     entries: &'a [Entry],
-    // The staleness index narrowed to the same slice. A stored first-child position
-    // may lie beyond this view, so queries only compare it with `len()`.
-    first_child: &'a [Option<usize>],
+    // The graph's core indexes, which may cover entries past this view, so every
+    // query narrows them to `entries` through `Indexes`. A view without them
+    // answers every query by its reference scan (SPEC §9, "Indexes").
+    indexes: Option<&'a CoreIndexes>,
 }
 
-// Debug output omits the staleness index: its values can name positions past
-// this view, and printing them would expose the future suffix.
+// Debug output omits the indexes: their values can name positions past this
+// view, and whether a view carries them is not part of what it shows.
 impl std::fmt::Debug for View<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             database,
             entries,
-            first_child: _,
+            indexes: _,
         } = self;
         f.debug_struct("View")
             .field("database", database)
@@ -44,17 +48,67 @@ impl std::fmt::Debug for View<'_> {
     }
 }
 
+// One of two iterators, such as the indexed and the reference answer to a
+// query, as one type.
+pub(crate) enum Either<I, S> {
+    Left(I),
+    Right(S),
+}
+
+impl<T, I: Iterator<Item = T>, S: Iterator<Item = T>> Iterator for Either<I, S> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        match self {
+        Self::Left(i) => i.next(),
+        Self::Right(s) => s.next(),
+        }
+    }
+}
+
+impl<T, I: DoubleEndedIterator<Item = T>, S: DoubleEndedIterator<Item = T>> DoubleEndedIterator
+    for Either<I, S>
+{
+    fn next_back(&mut self) -> Option<T> {
+        match self {
+        Self::Left(i) => i.next_back(),
+        Self::Right(s) => s.next_back(),
+        }
+    }
+}
+
 impl<'a> View<'a> {
     pub(crate) fn new(
         database: Uuid,
         entries: &'a [Entry],
-        first_child: &'a [Option<usize>],
+        indexes: Option<&'a CoreIndexes>,
     ) -> Self {
+        debug_assert!(indexes.is_none_or(|indexes| indexes.len() >= entries.len()));
         Self {
             database,
             entries,
-            first_child: &first_child[..entries.len()],
+            indexes,
         }
+    }
+    /// The same view without indexes: every query answers by its reference
+    /// scan, with the same results (SPEC §9, "Indexes").
+    pub fn without_indexes(self) -> Self {
+        Self {
+            indexes: None,
+            ..self
+        }
+    }
+    // The same view with `indexes`, which must have been built from entries
+    // this view's entries are a prefix of.
+    pub(crate) fn with_indexes<'b>(self, indexes: &'b CoreIndexes) -> View<'b>
+    where
+        'a: 'b,
+    {
+        View::new(self.database, self.entries, Some(indexes))
+    }
+    /// The core indexes narrowed to this view, if it carries them.
+    pub fn indexes(self) -> Option<Indexes<'a>> {
+        self.indexes
+            .map(|indexes| Indexes::new(self.entries, indexes))
     }
     pub fn id(self) -> ViewId {
         ViewId {
@@ -78,7 +132,7 @@ impl<'a> View<'a> {
                 requested: end_exclusive,
                 visible: self.len(),
             })?;
-        Ok(Self::new(self.database, entries, self.first_child))
+        Ok(Self::new(self.database, entries, self.indexes))
     }
     pub fn get(self, id: EntryId) -> Option<&'a Entry> {
         self.entries
@@ -94,6 +148,9 @@ impl<'a> View<'a> {
     pub fn edge(self, id: EntryId) -> Option<&'a Edge> {
         self.get(id)?.as_edge()
     }
+    pub(crate) fn entry_slice(self) -> &'a [Entry] {
+        self.entries
+    }
     pub fn entries(self) -> impl DoubleEndedIterator<Item = &'a Entry> {
         self.entries.iter()
     }
@@ -103,12 +160,14 @@ impl<'a> View<'a> {
     pub fn edges(self) -> impl DoubleEndedIterator<Item = &'a Edge> {
         self.entries.iter().filter_map(Entry::as_edge)
     }
+    // A node is stale exactly when one of its children is visible; an edge when
+    // either endpoint is.
     pub fn is_stale(self, id: EntryId) -> Option<bool> {
         match self.get(id)? {
-        // A node is stale exactly when its first child is visible.
-        Entry::Node(_) => {
-            Some(self.first_child[id.position].is_some_and(|child| child < self.len()))
-        }
+        Entry::Node(_) => Some(match self.indexes() {
+        Some(indexes) => indexes.has_child(id)?,
+        None => self.children(id).next().is_some(),
+        }),
         Entry::Edge(e) => Some(self.is_stale(e.from)? || self.is_stale(e.to)?),
         }
     }
@@ -121,10 +180,56 @@ impl<'a> View<'a> {
             .filter(move |e| self.is_stale(e.id) == Some(false))
     }
     pub fn edges_of(self, id: EntryId) -> impl Iterator<Item = &'a Edge> {
-        self.edges().filter(move |e| e.from == id || e.to == id)
+        match self.indexes() {
+        Some(indexes) => Either::Left(indexes.edges_of(id)),
+        None => Either::Right(self.edges().filter(move |e| e.from == id || e.to == id)),
+        }
     }
     pub fn children(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
-        self.nodes().filter(move |n| n.predecessor == Some(id))
+        match self.indexes() {
+        Some(indexes) => Either::Left(indexes.children(id)),
+        None => Either::Right(self.nodes().filter(move |n| n.predecessor == Some(id))),
+        }
+    }
+    /// The nodes of this view whose type name is `ty_name`, current or not.
+    pub fn nodes_of_type(self, ty_name: &str) -> impl DoubleEndedIterator<Item = &'a Node> {
+        match self.indexes() {
+        Some(indexes) => Either::Left(indexes.nodes_of_type(ty_name)),
+        None => Either::Right(self.nodes().filter(move |n| n.ty_name == ty_name)),
+        }
+    }
+    /// The edges of this view labelled `ty_name`, current or not.
+    pub fn edges_labelled(self, ty_name: &str) -> impl DoubleEndedIterator<Item = &'a Edge> {
+        match self.indexes() {
+        Some(indexes) => Either::Left(indexes.edges_labelled(ty_name)),
+        None => Either::Right(self.edges().filter(move |e| e.ty_name == ty_name)),
+        }
+    }
+    /// The nodes of this view with exactly this type name, predecessor, and
+    /// payload, current or not: the candidates of the duplicate-node rule
+    /// (SPEC §7.1).
+    pub fn nodes_with_content<'q>(
+        self,
+        ty_name: &'q str,
+        predecessor: Option<EntryId>,
+        payload: &'q Body,
+    ) -> impl DoubleEndedIterator<Item = &'a Node> + use<'a, 'q> {
+        match self.indexes() {
+        Some(indexes) => Either::Left(indexes.nodes_with_content(ty_name, predecessor, payload)),
+        None => Either::Right(self.nodes().filter(move |n| {
+            n.ty_name == ty_name && n.predecessor == predecessor && n.payload == *payload
+        })),
+        }
+    }
+    /// The edge of this view from `from` to `to` labelled `ty_name`, current or
+    /// not; validation admits at most one (SPEC §7.1).
+    pub fn edge_between(self, from: EntryId, to: EntryId, ty_name: &str) -> Option<&'a Edge> {
+        match self.indexes() {
+        Some(indexes) => indexes.edge_between(from, to, ty_name),
+        None => self
+            .edges()
+            .find(|e| e.from == from && e.to == to && e.ty_name == ty_name),
+        }
     }
     // Roots and current endpoints need an inclusive walk; public ancestry starts
     // at the parent so a node is never its own ancestor.
@@ -137,11 +242,25 @@ impl<'a> View<'a> {
         self.lineage(id).skip(1)
     }
     pub fn root_of(self, id: EntryId) -> Option<EntryId> {
-        self.lineage(id).last().map(|n| n.id)
+        match self.indexes() {
+        Some(indexes) => indexes.root_of(id),
+        None => self.lineage(id).last().map(|n| n.id),
+        }
     }
     pub fn fresh_successors(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
-        self.fresh_nodes()
-            .filter(move |node| self.lineage(node.id).any(|n| n.id == id))
+        match self.indexes() {
+        // The start, when current, and its current descendants, in append order.
+        Some(indexes) => Either::Left(
+            self.node(id)
+                .into_iter()
+                .chain(indexes.descendants(id))
+                .filter(move |node| indexes.has_child(node.id) == Some(false)),
+        ),
+        None => Either::Right(
+            self.fresh_nodes()
+                .filter(move |node| self.lineage(node.id).any(|n| n.id == id)),
+        ),
+        }
     }
     pub fn relative_degree(self, a: EntryId, b: EntryId) -> Option<usize> {
         for (left, ancestor) in self.ancestors(a).enumerate() {

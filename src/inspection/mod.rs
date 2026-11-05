@@ -1,6 +1,7 @@
 use crate::{
     Edge, Entry, EntryId, Node, Payload, View, ViewError, ViewId,
     typing::{Declarations, TypeResolution},
+    view::Either,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -111,9 +112,12 @@ impl<'a> View<'a> {
     where
         'a: 's,
     {
-        self.nodes().filter(move |node| {
-            selection.ty_name.is_none_or(|name| name == node.ty_name)
-                && selection.currentness.includes(self, node.id)
+        let candidates = match selection.ty_name {
+        Some(name) => Either::Left(self.nodes_of_type(name)),
+        None => Either::Right(self.nodes()),
+        };
+        candidates.filter(move |node| {
+            selection.currentness.includes(self, node.id)
                 && selection.fields.iter().all(|filter| match filter {
                 FieldFilter::Present(name) => node.payload.contains_key(*name),
                 FieldFilter::Absent(name) => !node.payload.contains_key(*name),
@@ -134,10 +138,11 @@ impl<'a> View<'a> {
     where
         'a: 's,
     {
-        self.edges().filter(move |edge| {
-            selection.ty_name.is_none_or(|name| name == edge.ty_name)
-                && selection.currentness.includes(self, edge.id)
-        })
+        let candidates = match selection.ty_name {
+        Some(name) => Either::Left(self.edges_labelled(name)),
+        None => Either::Right(self.edges()),
+        };
+        candidates.filter(move |edge| selection.currentness.includes(self, edge.id))
     }
 
     pub fn relationships<'s>(
@@ -149,12 +154,15 @@ impl<'a> View<'a> {
     where
         'a: 's,
     {
-        self.select_edges(selection)
-            .filter(move |edge| match direction {
-            Direction::Incoming => edge.to == node,
-            Direction::Outgoing => edge.from == node,
-            Direction::Both => edge.from == node || edge.to == node,
-            })
+        self.edges_of(node).filter(move |edge| {
+            selection.ty_name.is_none_or(|name| name == edge.ty_name)
+                && selection.currentness.includes(self, edge.id)
+                && match direction {
+                Direction::Incoming => edge.to == node,
+                Direction::Outgoing => edge.from == node,
+                Direction::Both => true,
+                }
+        })
     }
 
     // Ancestors and descendants exclude the starting revision. Fresh successors
@@ -162,23 +170,28 @@ impl<'a> View<'a> {
     // A predecessor precedes its successors, so one pass in append order meets
     // each member of the tree below `id` after its predecessor.
     pub fn descendants(self, id: EntryId) -> impl Iterator<Item = &'a Node> {
+        if let Some(indexes) = self.indexes() {
+            return Either::Left(indexes.descendants(id));
+        }
         let start = self.node(id);
         let mut members = start
             .map(|start| start.id)
             .into_iter()
             .collect::<HashSet<_>>();
-        self.entries()
-            .skip(start.map_or(self.len(), |start| start.id.position() + 1))
-            .filter_map(Entry::as_node)
-            .filter(move |node| {
-                let member = node
-                    .predecessor
-                    .is_some_and(|predecessor| members.contains(&predecessor));
-                if member {
-                    members.insert(node.id);
-                }
-                member
-            })
+        Either::Right(
+            self.entries()
+                .skip(start.map_or(self.len(), |start| start.id.position() + 1))
+                .filter_map(Entry::as_node)
+                .filter(move |node| {
+                    let member = node
+                        .predecessor
+                        .is_some_and(|predecessor| members.contains(&predecessor));
+                    if member {
+                        members.insert(node.id);
+                    }
+                    member
+                }),
+        )
     }
 
     pub fn resolve(self, id: EntryId) -> Option<Resolution<'a>> {

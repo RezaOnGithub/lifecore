@@ -1,4 +1,7 @@
-use crate::{EntryId, LifeCoreError, LifeCoreList, View, ViewId, transaction::EntryChange};
+use crate::{
+    EntryId, LifeCoreError, LifeCoreList, View, ViewId, index::CoreIndexes,
+    transaction::EntryChange,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 use std::{
@@ -265,10 +268,30 @@ pub struct AnalysisOutput {
     observations: Vec<Observation>,
 }
 
+/// Which indexes the analyzers of a run may read (SPEC §9, "Indexes"). Every
+/// mode gives the same `AnalysisOutput`, or the same failure; only cost
+/// differs, and no output records the mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Indexing {
+    /// The core indexes and the index templates the suite declares. Until
+    /// templates exist (CORE-ROUND §4.5), the same as `Core`.
+    #[default]
+    All,
+    /// The core indexes, built for the run if the view does not carry them.
+    Core,
+    /// None: every view the analyzers receive answers by reference scans.
+    Off,
+}
+
+impl Indexing {
+    pub const EVERY: [Self; 3] = [Self::All, Self::Core, Self::Off];
+}
+
 #[derive(Default)]
 pub struct AnalysisRunner {
     factory: BTreeMap<String, Box<dyn AnalyzerFactory>>,
     inputs: EvaluationInputs,
+    indexing: Indexing,
 }
 
 impl AnalysisRunner {
@@ -280,6 +303,12 @@ impl AnalysisRunner {
     }
     pub fn inputs(&self) -> &EvaluationInputs {
         &self.inputs
+    }
+    pub fn indexing(&self) -> Indexing {
+        self.indexing
+    }
+    pub fn set_indexing(&mut self, indexing: Indexing) {
+        self.indexing = indexing;
     }
     pub fn register_analyzer_kind(
         &mut self,
@@ -313,6 +342,15 @@ impl AnalysisRunner {
         suite: &SuiteConfig,
         hasher: S,
     ) -> Result<AnalysisOutput, LifeCoreError> {
+        let built;
+        let view = match self.indexing {
+        Indexing::Off => view.without_indexes(),
+        Indexing::Core | Indexing::All if view.indexes().is_none() => {
+            built = CoreIndexes::build(view.entry_slice());
+            view.with_indexes(&built)
+        }
+        Indexing::Core | Indexing::All => view,
+        };
         let mut analyzers = vec![];
         let mut identities = vec![];
         for config in &suite.0 {
@@ -371,6 +409,38 @@ impl AnalysisRunner {
         report.observations = recorder.observations;
         Ok(report)
     }
+}
+
+/// The equivalence helper of ANALYZERS §1, for tests. Runs `suite` over `view`
+/// under every `Indexing` mode, and once more under `Indexing::Core` on the
+/// view without its indexes, so the runner builds them; panics unless every
+/// run gives the same `AnalysisOutput` or the same failure, and returns that
+/// result. The runner's own mode is restored.
+pub fn assert_indexing_equivalence(
+    runner: &mut AnalysisRunner,
+    view: View<'_>,
+    suite: &SuiteConfig,
+) -> Result<AnalysisOutput, LifeCoreError> {
+    let mode = runner.indexing;
+    let mut run = |indexing, view| {
+        runner.indexing = indexing;
+        runner.run_view(view, suite)
+    };
+    let expected = run(Indexing::All, view);
+    for (indexing, view, carried) in [
+        (Indexing::Core, view, "carried"),
+        (Indexing::Core, view.without_indexes(), "built"),
+        (Indexing::Off, view, "carried"),
+    ] {
+        let result = run(indexing, view);
+        assert!(
+            result == expected,
+            "{indexing:?} with {carried} indexes changed the analysis of {:?}:\n{result:#?}\nagainst All:\n{expected:#?}",
+            view.id(),
+        );
+    }
+    runner.indexing = mode;
+    expected
 }
 
 // Collects observations in emission order. A diagnostic re-emitted at the
