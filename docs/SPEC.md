@@ -1,7 +1,8 @@
 # LifeCore Lite Specification
 
 Status: core contract for the simplified LifeCore model, implemented by the
-`lifecore` crate, with the type rules in `lifecore-typecheck`.
+`lifecore` crate, with the type rules in `lifecore-typecheck` and the derives
+of typed decoding in `lifecore-derive`.
 
 This document specifies a typed graph with explicit replacement history. Every entry
 prefix must be valid and inspectable; an ordered plan commits atomically.
@@ -340,6 +341,103 @@ A value of another kind than its shape is a type mismatch. Because every
 current node must satisfy the resulting declaration
 ([§6.2](#62-name-resolution)), removing an enum member or a variant tag that a
 current node uses is a type error, exactly like removing a field it uses.
+
+### 6.5 Typed decoding
+
+`lifecore::decode` reads payloads into Rust types and derives canonical
+declarations from them, so an analyzer neither hand-writes payload readers
+nor keeps its declarations in step with its code by hand. Three traits carry
+it, each with a derive of the same name from `lifecore-derive`, which
+`lifecore::decode` re-exports:
+
+- `FromPayload`: `shape() -> ValueType`, the shape a field of the type is
+  declared with, and `from_payload(&Payload)`.
+- `FromBody`: `fields()`, the field declarations it reads, and
+  `from_body(&Body)`. `Node::decode::<T: FromBody>()` decodes a node's
+  payload.
+- `Declare`: `declaration() -> Type`, a canonical declaration.
+
+| Rust | Payload | Declared as |
+| --- | --- | --- |
+| `String` | text | `text` |
+| `i64` | integer | `integer` |
+| `bool` | boolean | `boolean` |
+| `Timestamp` | timestamp | `timestamp` |
+| `OffsetTimestamp` | offset_timestamp | `offset_timestamp` |
+| `SignedDuration` | duration | `duration` |
+| `civil::Date` | date | `date` |
+| `Vec<T>` | list | `list` and the element's shape |
+| struct, `#[derive(FromBody)]` | record, or a node's body | `record` |
+| unit-only enum, `#[derive(FromPayload)]` | text | `enum` |
+| other enum, `#[derive(FromPayload)]` | variant | `variant` |
+| `Option<T>`, as a struct field only | absent or `T` | `optional`, or `encouraged` or `deprecated` by attribute |
+
+In an enum with fields, each variant is a tag and its named fields are the
+tag's fields; a unit variant there is a tag with no fields. A field read as
+`T` is declared `mandatory`. A field read as `Option<T>` is `None` exactly
+when absent, since there is no null; a present value must decode.
+
+Decoding follows four rules:
+
+- **Strict about kinds.** A value decodes only from its own kind: a `String`
+  field never accepts a timestamp, and a `Timestamp` field never accepts text
+  that looks like one.
+- **Lenient about fields.** Decoding ignores every field the Rust type does
+  not name, in a body, a record, or a variant's tag. Rejecting undeclared
+  fields is TypeCheck's job ([§6](#6-type-declarations)), not decoding's.
+- **Names** are a field's identifier and a variant's in snake case
+  (`OffsetTimestamp` is `offset_timestamp`), or what
+  `#[lifecore(rename = "…")]` gives.
+- **Bodies only.** Decoding reads a body and nothing else: never a node's
+  `ty_name`, its edges, or a declaration. The caller chooses which nodes to
+  decode.
+
+A failure is one `DecodeError { path, problem }`. `path` leads from the
+decoded value to the failing part with the parts of a field path
+([§6.4](#64-value-kinds-and-shapes)), so a variant's field is reported under
+its tag, as in `decision(committed).cost`. `problem` is one of `Missing` (a
+field read as `T` is absent), `WrongKind { expected, found }` (an enum
+expects text), `NotAMember { value }` (text naming no variant of a unit-only
+enum), and `UnknownTag { tag }` (a tag naming no variant; its body is not
+read). `Node::decode` returns a `PayloadError`: the decode error with the
+node's `EntryId` and `ty_name`, which only serves the message.
+[ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization) says how an
+analyzer reports it.
+
+A decode type names only the fields its reader reads. A user may change or
+remove any field of a declaration that the reader does not read, so decoding
+such a field could fail on a payload TypeCheck accepts. A canonical
+declaration therefore comes from a separate type that lists every canonical
+field, with `#[derive(Declare)]` and these type attributes:
+
+```rust
+#[derive(Declare)]
+#[lifecore(type = "Stance", outgoing = ["About", "Until"])]
+struct StanceDeclaration { decision: Decision, at: OffsetTimestamp, reason: Option<String> }
+
+#[derive(FromBody)]
+struct Stance { decision: Decision }
+```
+
+`type` is required; `incoming`, `outgoing`, and `successors` are string
+lists, each the empty set when omitted. They feed `Declare` and nothing else:
+edges carry no payload, so decoding has nothing to check on them. Field
+shapes come from `FromPayload::shape`, so a `Declare` type needs no
+`FromBody`, and since it is never constructed it needs `allow(dead_code)`.
+Its names are defaults, not identity: decoding never reads them.
+
+A decode type fits a declaration when every field of its `fields()` is
+declared with the same shape, and every field it reads as `T` is declared
+`mandatory`; a field read as `Option<T>` may have any policy. Those are also
+the field requirements a reader's declarations must keep for its decoding to
+succeed wherever TypeCheck accepts the payload.
+
+The derives reject misuse at compile time: generics, unions, tuple fields,
+an empty enum, a duplicate name, an empty member or tag, a presence
+attribute on a field that is not `Option<T>`, and `Declare` without `type`
+or claiming `Type`. A recursive type has no finite shape. The generated code names `lifecore`
+through the absolute path `::lifecore`; a crate depending on it under another
+name says `#[lifecore(crate = "path")]`.
 
 ## 7. Mandatory validation
 

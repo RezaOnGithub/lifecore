@@ -15,9 +15,21 @@ analyzer's state and configuration. Direct third-party `dyn Analyzer`
 implementations return `Vec<Message>` and are also supported. There is no shared
 `Output` wrapper, `InnerOutput` trait, or associated output container.
 
-Keep domain findings structured and assert their variants and details in analyzer
-tests; presentation text cannot substitute for that evidence. Factories and
-domain findings remain in their analyzer packages. Shared `Message` output pairs
+A `TypedAnalyzer` fails with its own `type Error: std::error::Error`, from
+initialization and analysis alike; one that cannot fail uses
+`std::convert::Infallible`. The adapter turns the error into its `Display`
+text, which becomes the `message` of the `ExecutionFailure`, so the text must
+stand alone. A `dyn Analyzer` returns that `String` directly. An analyzer
+reading node payloads through typed decoding
+([SPEC §6.5](SPEC.md#65-typed-decoding)) may assume that they fit their
+declarations: a `PayloadError` is an execution failure, never a finding. With
+TypeCheck configured and a decode type that reads only fields the analyzer's
+declarations keep, decoding can fail only at a prefix TypeCheck rejects.
+
+Keep domain findings and errors structured and assert their variants and
+details in analyzer tests; presentation text cannot substitute for that
+evidence. Factories and domain findings remain in their analyzer packages.
+Shared `Message` output pairs
 an opaque `analyzer_certificate: AnalyzerCertificate` with a `Diagnostic`: the
 exact subject set, an optional focus entry, text, `MessageKind`, and
 `sticky: bool`. The same `Diagnostic` is carried unchanged into the observation.

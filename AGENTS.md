@@ -23,9 +23,9 @@ before implementing it:
   contracts.
 - Proposed, landing step by step: the
   [core round](docs/proposals/core-round/CORE-ROUND.md), a design document for
-  new value kinds, typed payload decoding, and optional indexes; its step 3a
+  new value kinds, typed payload decoding, and optional indexes; its steps 3a
   (the value kinds in the core, and their read-only display in the client)
-  has landed in the owning documents. A proposal
+  and 4 (typed decoding) have landed in the owning documents. A proposal
   gets its own directory under `docs/proposals/`; write or revise an analyzer
   proposal with the `analyzer-proposal` skill, and give a core change a design
   document instead.
@@ -71,8 +71,9 @@ Preserve historical correctness under the chosen model and unrelated user work.
 
 ## Checks
 
-Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-`lifecore-reconnect`, `lifecore-app`, `lifecore-cli`,
+Active workspace: `lifecore` (root), `lifecore-derive` (the derives of
+`lifecore::decode`, re-exported there), `lifecore-typecheck`,
+`lifecore-dag-check`, `lifecore-reconnect`, `lifecore-app`, `lifecore-cli`,
 `lifecore-server` (the Axum adapter behind `lifecore serve`; its `build.rs`
 embeds the React client in `lifecore-server/ui`), and `lifecore-workload`
 (deterministic planning-shaped histories for the benchmark and tests).

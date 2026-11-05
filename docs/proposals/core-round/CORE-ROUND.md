@@ -1,7 +1,7 @@
 # Core round: value kinds, typed payloads, and indexes
 
-Status: proposed; steps 1 (the benchmark) and 3a (value kinds) of section 6
-have landed, and the rest is not implemented. This is a design document for
+Status: proposed; steps 1 (the benchmark), 3a (value kinds), and 4 (typed
+decoding) of section 6 have landed, and the rest is not implemented. This is a design document for
 core work, not an analyzer proposal, so it has no explainer or harness. As
 each step of section 6 lands, its contracts move into the owning documents
 listed in section 7. When the last one has moved, this directory is removed. It relies
@@ -241,6 +241,10 @@ values correctly, without being able to edit them.
 - `variant`: a tag select followed by the tag's fields.
 
 ## 3. Typed payload decoding
+
+*Landed in step 4.* The contracts below are owned by the documents section 6
+names for that step; where this section and they differ, they hold, and this
+section stays as the design's record.
 
 ### 3.1 Problem
 
@@ -832,7 +836,21 @@ the browser.
    `Stance.decision`, each with a `Declare` type and a narrower decode type,
    their declarations compared with TOML the tests hold. These are test
    fixtures, not an analyzer. Porting Planning's payload reads and its error
-   type moves to step 6.
+   type moves to step 6. *Landed.* Decoding and `Declare` now live in
+   [SPEC §6.5](../../SPEC.md#65-typed-decoding), the analyzer error type and
+   the rule that a `PayloadError` is an execution failure in
+   [ANALYZERS §1](../../ANALYZERS.md#1-execution-and-normalization), and the
+   fixtures in `src/decode/test/test2.rs`. Settled while landing:
+   `from_payload` takes only the value and returns a `DecodeError` whose path
+   is relative to it, which a caller extends at the front, instead of
+   threading a `&mut Vec<PathPart>`; `Declare` is a trait, and the derives
+   are re-exported from `lifecore::decode` beside the traits, with
+   `#[lifecore(crate = "…")]` for a renamed dependency; `#[derive(FromBody)]`
+   also implements `FromPayload` as a record, and `#[derive(FromPayload)]`
+   on a struct is refused in its favour; a unit variant in an enum with
+   fields is a tag with no fields; generic types are refused; and the
+   subset check of section 3.2 is a test helper, not an API, until Planning
+   chooses whether to derive its declaration rule from it.
 5. **Index templates.** `index_templates` and the two admitted templates
    with their reference scans. Planning reading them moves to step 6.
 6. **Planning round.** A proposal revising PLANNING on the new kinds,
@@ -854,9 +872,9 @@ member. `lifecore-kman` stays as it is.
 
 | Document | Change |
 | --- | --- |
-| SPEC §6, §9 | New shapes; a subsection "Indexes": the optional-index principle, boundary rules, reference definitions of core queries and templates, admission criteria (section 8.1) |
+| SPEC §6, §9 | New shapes; typed decoding (§6.5); a subsection "Indexes": the optional-index principle, boundary rules, reference definitions of core queries and templates, admission criteria (section 8.1) |
 | FILES §2.1, §2.6, §4 | Encodings, declaration words, acceptance scenarios for the new kinds |
-| ANALYZERS §1 | `index_templates`; results independent of indexes (section 4.3) |
+| ANALYZERS §1 | The analyzer error type, and decode errors as execution failures (section 3.4); `index_templates`; results independent of indexes (section 4.3) |
 | RPC, CLIENT §3 | Evaluation inputs with offset; client value handling |
 | UI | The read-only fallback (step 3a); editors for the new kinds (step 3b) |
 | PERFORMANCE | New measurements; the benchmark; query costs; declined template candidates as backlog (section 8.1) |

@@ -92,8 +92,9 @@ compares key and diagnostic; grouping and dismissal compare whole finding keys.
 Neither comparison treats a hash collision as equality.
 
 Missing factories and invalid configuration return errors. If an analyzer
-returns `Err(String)`, the runner creates an `ExecutionFailure` with analyzer
-identity, inputs, evaluated view and error text, wrapped in
+returns `Err(String)`, which the typed adapter makes from the `Display` text
+of a `TypedAnalyzer`'s own error, the runner creates an `ExecutionFailure`
+with analyzer identity, inputs, evaluated view and error text, wrapped in
 `LifeCoreError::AnalyzerExecution`. These failures do not become observations.
 Any execution or normalization error aborts the run without returning a partial
 `AnalysisOutput`. Emitting an inconsistency is different: replay continues and
