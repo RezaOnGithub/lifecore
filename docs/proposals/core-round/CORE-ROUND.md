@@ -197,11 +197,34 @@ instant. Nothing in the core or an analyzer reads the system zone.
 
 ### 2.7 Client
 
-New kinds touch `contract.ts`, `model/values.ts`, `model/payload.ts`,
-`model/schema.ts`, `model/columns.ts`, `editors/ValueEditor.tsx`, and
-`editors/TypeDeclarationEditor.tsx`, with their tests and the recorded
-fixtures. As with timestamps today, the client keeps canonical strings
-verbatim and lets Rust validate on check. Editors:
+The client takes the new kinds in two stages (section 6, steps 3a and 3b), so
+the core step does not wait for editors.
+
+**Showing them (step 3a).** The contract and every reader learn the new
+shapes, and the client shows any value or field shape it has no editor for
+read-only, as its canonical JSON. This touches `contract.ts`,
+`model/values.ts`, `model/payload.ts`, `model/schema.ts`, and
+`model/columns.ts`, with their tests and the recorded fixtures:
+
+- **Values.** As with timestamps today, the client keeps canonical strings
+  verbatim and lets Rust validate on check. The raw-JSON reader accepts the
+  new envelopes, including `variant`'s third key, `tag`.
+- **Declarations.** The declaration reader accepts the new words of section
+  2.4, so a type that uses them still has a table, columns, and an
+  inspector outline.
+- **Authoring.** A form field whose shape has no editor is read-only and
+  says so. Its value is written through the draft's raw JSON, which already
+  reaches every shape, and a declaration using the new words likewise.
+- **Fixtures.** The recorded fixtures include at least one value and one
+  declaration of each new kind, so the type-check covers what Rust emits.
+
+The fallback stays after step 3b. A kind added later shows the same way until
+it gets an editor, so a core change is complete once the client can show its
+values correctly, without being able to edit them.
+
+**Editing them (step 3b),** a UI stage in `editors/ValueEditor.tsx` and
+`editors/TypeDeclarationEditor.tsx`, with UI's decisions recorded in
+[UI](../../UI.md):
 
 - `duration`: a text input accepting either spelling; the canonical spelling
   comes back from check.
@@ -743,7 +766,11 @@ duration such as `"168h"`; days match how the nudge reads.
 ## 6. Order of work
 
 Each step lands with its tests, its documents, and, for client-visible
-shapes, the fixtures and `contract.ts` together.
+shapes, the fixtures and `contract.ts` together. Only step 3 changes a
+client-visible shape; steps 1, 2, 4, and 5 stay inside Rust, with no
+client work. A step's brief should say so, because the repository's checks
+and the UI stages of PLAN §2 otherwise read as asking for work all the way to
+the browser.
 
 1. **Benchmark.** Add a repeatable generator and benchmark for
    planning-shaped histories at both seal densities, recording the baseline.
@@ -753,17 +780,22 @@ shapes, the fixtures and `contract.ts` together.
    `--default-analyzers`, with `Instant`, as PERFORMANCE §1 does by hand,
    and prints the table PERFORMANCE records. With Planning shelved, the
    defaults are TypeCheck and Reconnect, so the seal terms of section 4.2
-   are measured only once step 6 brings an analyzer back. A statistical harness such as
-   criterion or divan does not fit runs of seconds to minutes. One may come
-   later, for micro-benchmarks of index queries. The generator is library
+   are measured only once step 6 brings an analyzer back. A statistical
+   harness such as criterion or divan does not fit runs of seconds to
+   minutes. One may come later, for micro-benchmarks of index queries. The generator is library
    code, so step 2's equivalence helper can run analyzers over the same
    histories. The core's property tests in `lifecore` need a small generator
    of their own, because `lifecore` cannot depend on Planning's vocabulary.
 2. **Optional core indexes and incremental validation.** `Indexing` modes, the
    equivalence helper, and the property tests come first, then the indexes.
    Results are unchanged by construction. Measure again.
-3. **Value kinds.** Core, TypeCheck, FILES encodings, client values and
-   editors, fixtures.
+3. **Value kinds,** in two steps (section 2.7):
+   - **3a.** Core, TypeCheck, FILES encodings, evaluation inputs with an
+     offset (section 2.5), `contract.ts` and the fixtures, and the client's
+     read-only display of the new kinds. Done when the client shows every
+     new value and declaration correctly and authors them through raw JSON.
+   - **3b.** The editors, as a UI stage of its own. Nothing else waits for it;
+     it may come after steps 4 and 5.
 4. **`FromPayload`, `FromBody`, and `Declare`.** This lands in this round
    (decided, section 8). Its tests use the basic shape of PLANNING's types at
    `59c702c` (section 5.1): records with mandatory and optional fields, a
@@ -797,7 +829,7 @@ member. `lifecore-kman` stays as it is.
 | FILES §2.1, §2.6, §4 | Encodings, declaration words, acceptance scenarios for the new kinds |
 | ANALYZERS §1 | `index_templates`; results independent of indexes (section 4.3) |
 | RPC, CLIENT §3 | Evaluation inputs with offset; client value handling |
-| UI | Editors for the new kinds |
+| UI | The read-only fallback (step 3a); editors for the new kinds (step 3b) |
 | PERFORMANCE | New measurements; the benchmark; query costs; declined template candidates as backlog (section 8.1) |
 | PLANNING, PLANNING-EXPLAINER | Section 5, when step 6 brings them back |
 | AGENTS.md | Two invariants: arithmetic stays within the exact or the civil domain and crosses only through a stored or input offset; every index is optional, and its users behave identically with and without it, linking SPEC §9 |
