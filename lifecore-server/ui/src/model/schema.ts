@@ -261,11 +261,6 @@ const KIND_WORDS: { [K in PayloadKind]: string } = {
   record: "a record",
 };
 
-// "an integer", as declaration errors and the valuation's failure say it.
-export function kindWord(kind: PayloadKind): string {
-  return KIND_WORDS[kind];
-}
-
 export function schemaErrorMessage(error: SchemaErrorKind): string {
   switch (error.kind) {
     case "missing_field":

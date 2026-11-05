@@ -73,10 +73,7 @@ that finds the lock held retries for a bounded window, then returns a
 structured busy error instead of blocking indefinitely. The window defaults to
 10 seconds, leaving a margin over a competing apply's check under TypeCheck,
 which takes about a second at 4,000 entries and grows roughly quadratically
-([PERFORMANCE](PERFORMANCE.md)). Under Planning, a check grows with the cube
-of history length and outlasts the window at about 4,000 entries, so a
-competing writer gets the busy error
-([PERFORMANCE §1](PERFORMANCE.md#1-measurements)). Hosts can change the window
+([PERFORMANCE](PERFORMANCE.md)). Hosts can change the window
 with `Service::with_busy_retry`. Ordinary operations on a missing database fail
 without creating the snapshot or its lock file, and a refused `init` creates no
 lock file.

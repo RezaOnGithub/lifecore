@@ -665,16 +665,3 @@ is part of the analyzer's identity, so this suite entry and a plain
 `Reconnect` entry produce findings with different keys, and dismissals under
 one do not carry to the other. An unknown field such as `"filters"` is an
 `InvalidAnalyzerConfiguration` error, not an ignored key.
-
-## 13. Where planning comes in
-
-[PLANNING](PLANNING.md) revises items, stances, and events the same way this
-walk revised notes, and its `About` edge from a stance or `Did` to a revised
-item is an ordinary incoming edge of the predecessor, exactly like `reading`
-citing `exact` in section 3. That is why planning has no re-point suggestion
-of its own ([RECONNECT §8](RECONNECT.md#8-planning-analyzer),
-[decision 1](RECONNECT.md#9-design-decisions)): a planning database runs
-Reconnect in its suite, and planning keeps only its seal-time
-dropped-connection warning, which judges a connection against any current
-successor at a window's close. That is a planning rule about windows, not a
-general rule about supersession.

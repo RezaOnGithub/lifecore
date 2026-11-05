@@ -1,6 +1,6 @@
 use super::super::{Cli, factories, initial_suite, run_rpc};
 use clap::Parser;
-use lifecore::analysis::{Config, MessageType};
+use lifecore::analysis::Config;
 use lifecore_app::{
     AppError, Service,
     service::{AnalysisRunRequest, NoParams},
@@ -121,9 +121,9 @@ fn the_host_registers_every_analyzer_and_init_can_configure_the_defaults() {
     assert_eq!(names(&initial_suite(true, false)), Vec::<&str>::new());
     assert_eq!(
         names(&initial_suite(false, true)),
-        ["Type_Check", "Reconnect", "Planning"]
+        ["Type_Check", "Reconnect"]
     );
-    // Planning assumes TypeCheck in its suite, so the defaults need it.
+    // The default suite starts with TypeCheck.
     assert!(
         Cli::try_parse_from(["lifecore", "init", "--default-analyzers", "--no-typecheck"]).is_err()
     );
@@ -142,18 +142,12 @@ fn the_host_registers_every_analyzer_and_init_can_configure_the_defaults() {
     let described = scratch.service().describe(NoParams {}).unwrap();
     assert_eq!(
         described.registered,
-        ["DAG_Check", "Planning", "Reconnect", "Type_Check"]
+        ["DAG_Check", "Reconnect", "Type_Check"]
     );
-    // An empty database holds no inconsistency under the defaults; Planning
-    // suggests each of its ten canonical declarations.
+    // An empty database holds nothing for the defaults to report.
     let run = scratch
         .service()
         .run_analysis(AnalysisRunRequest::default())
         .unwrap();
-    let observations = run.analysis.observations().collect::<Vec<_>>();
-    assert_eq!(observations.len(), 10);
-    assert!(observations.iter().all(|observation| {
-        observation.key.analyzer.name == "Planning"
-            && observation.key.kind == MessageType::Suggestion
-    }));
+    assert_eq!(run.analysis.observations().count(), 0);
 }

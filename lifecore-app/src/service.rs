@@ -17,7 +17,6 @@ use lifecore::{
     inspection::{Currentness, EdgeSelection, NodeSelection},
     transaction::{self, Change, Checked},
 };
-use lifecore_prod::{Valuation, ValuationOptions};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     collections::{BTreeSet, HashSet},
@@ -139,17 +138,6 @@ pub struct AnalysisRunRequest {
     pub evaluation_time: Option<Timestamp>,
     #[serde(default)]
     pub now: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ValuationRequest {
-    #[serde(default, deserialize_with = "boundary")]
-    pub as_of: Option<usize>,
-    // A valuation option, not analyzer configuration (PLANNING §12); omitted,
-    // it keeps `ValuationOptions`' default. A small count, so a JSON number.
-    #[serde(default, deserialize_with = "present")]
-    pub deadline_sample_windows: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -764,19 +752,6 @@ impl Service {
             analysis,
             dismissals,
         })
-    }
-
-    // The planning ranking at the selected boundary (PLANNING §9): a read of
-    // one snapshot, without the writer lock, that never consults the suite,
-    // so it ranks whether or not Planning is configured (PLANNING §12).
-    pub fn valuation(&self, request: ValuationRequest) -> Result<Valuation, AppError> {
-        let snapshot = storage::read(&self.state)?;
-        let view = as_of(&snapshot.graph, request.as_of)?;
-        let mut options = ValuationOptions::default();
-        if let Some(windows) = request.deadline_sample_windows {
-            options.deadline_sample_windows = windows;
-        }
-        lifecore_prod::valuation(view, &options).map_err(AppError::Valuation)
     }
 
     // Dismissal edits reread under writer exclusion and publish with the

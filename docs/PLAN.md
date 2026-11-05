@@ -25,19 +25,22 @@ working around the document.
   ([CLIENT §5](CLIENT.md#5-prototype-scope)).
 - Checking cost reduced from worse than cubic to roughly quadratic in history
   length ([PERFORMANCE](PERFORMANCE.md)).
-- Domain analyzers: Reconnect ([RECONNECT](RECONNECT.md)) and Planning
-  ([PLANNING](PLANNING.md)) registered beside TypeCheck and DAG Check, and
-  configured together after TypeCheck by `lifecore init --default-analyzers`
-  ([INTERFACES §2](INTERFACES.md#2-cli-surface)). The planning valuation is
-  printed by `lifecore valuation`, served by `planning.valuation`, and shown
-  by the client's Plan screen ([UI §7](UI.md#7-planning-valuation)).
+- Domain analyzer: Reconnect ([RECONNECT](RECONNECT.md)), registered beside
+  TypeCheck and DAG Check and configured after TypeCheck by
+  `lifecore init --default-analyzers`
+  ([INTERFACES §2](INTERFACES.md#2-cli-surface)).
+- Shelved: the planning analyzer, its valuation, `planning.valuation`,
+  `lifecore valuation`, and the client's Plan screen, built up to `59c702c`
+  and removed after it, until the planning round reworks them
+  ([AGENTS.md](../AGENTS.md#planning-is-shelved)).
 
 ## 2. Remaining work
 
 The [core round](proposals/core-round/CORE-ROUND.md) comes before
 section 2.2. It covers value kinds, typed payload decoding, and optional
-indexes, followed by a separate PLANNING round, in the order of its
-section 6.
+indexes, in the order of its section 6. The App and the client then take up
+the new value kinds, and the planning analyzer is reworked on top of them in
+a round of its own, starting from section 5 of the core round.
 
 Each UI stage runs UI → API → UI: sketch the screens against existing methods,
 add or reshape the methods they turn out to need, then finish the screens.
@@ -119,17 +122,7 @@ workflows.
 - [Durable application receipts](backlog/RECEIPTS.md): recognizing completed
   retries and recovering from uncertain publication. Tokens alone provide no
   retry recovery.
-- Checking-cost work ([PERFORMANCE §3](PERFORMANCE.md#3-backlog)). Planning's
-  seal judging comes first: replay under Planning grows with the cube of
-  history length, so at about 4,000 entries a check under
-  `lifecore init --default-analyzers` takes longer than the writer's busy
-  window ([PERFORMANCE §1](PERFORMANCE.md#1-measurements),
-  [STORAGE §4](STORAGE.md#4-writers)).
-- Planning's open questions 22 to 24
-  ([PLANNING §14](PLANNING.md#14-open-questions)): how the valuation ranks
-  fresh stances, where `Starved` starts counting, and a deferral waiting on
-  both halves of a split target. The implementation follows the decisions as
-  written until they are settled.
+- Checking-cost work ([PERFORMANCE §3](PERFORMANCE.md#3-backlog)).
 - Result limits and paging for list and query methods. The prototype returns
   complete results.
 - Browser tests in Chromium. Firefox is the tested browser for now.
@@ -159,9 +152,8 @@ workflows.
   ([SPEC §6.1](SPEC.md#61-built-in-metatype)). The built-in metatype fixes the
   declaration payload and gives `Type` no edge permissions, so a user cannot
   annotate declarations with fields of their own or link them to other nodes:
-  the same customization problem
-  [PLANNING §3.4](PLANNING.md#34-amending-the-declarations) addresses for
-  planning's types. This revisits the AGENTS.md invariant that TypeCheck has a
+  the same customization problem the shelved planning analyzer addressed for
+  its types ([PLANNING §3.4]). This revisits the AGENTS.md invariant that TypeCheck has a
   fixed built-in metatype and no bootstrap node.
 - Pooled failure reporting. Analyzer inconsistencies are already collected in
   full, but two paths report only the first failure: `transaction::prepare`
@@ -172,18 +164,19 @@ workflows.
   failure a check can find instead.
 - An `info` message kind beside `inconsistency`, `warning`, and `suggestion`
   ([ANALYZERS §2](ANALYZERS.md#2-finding-identity-and-observations)), for
-  notices that need no action. Planning's Grace period notice
-  ([PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings)) is a sticky
-  warning until then. It touches ANALYZERS, [MESSAGES](MESSAGES.md),
+  notices that need no action. The shelved planning analyzer's Grace period
+  notice ([PLANNING §8.5]) was a sticky
+  warning for lack of one. It touches ANALYZERS, [MESSAGES](MESSAGES.md),
   [RPC](RPC.md), the client contract and its fixtures
   ([CLIENT §2](CLIENT.md#2-contract-and-fixtures)), and [UI](UI.md).
 - State in [ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization) that an
   analyzer reports failure by returning `Err` and never panics. A panic
   crashes the CLI, or the server request on its blocking task, and the rule
-  applies to every analyzer, not only to planning.
+  applies to every analyzer.
 - Namespacing in the type system, so that two vocabularies can share a type
-  name or an edge label. Planning owns its names outright until then
-  ([PLANNING](PLANNING.md#13-design-decisions), decision 35).
+  name or an edge label. The shelved planning analyzer owned its names
+  outright for lack of it ([PLANNING §13],
+  decision 35).
 
 ### 3.1 Open questions
 
@@ -195,9 +188,10 @@ becomes a backlog item.
   It may also need constraints a declaration cannot express, such as the type
   at the opposite endpoint of a label. Users may amend declarations freely
   ([SPEC §6](SPEC.md#6-type-declarations)), so each analyzer re-judges them
-  against its own requirements, as Planning does by hand
-  ([PLANNING §3.4](PLANNING.md#34-amending-the-declarations), decision 36),
-  and checks the rest in its own rules (PLANNING §8, "Left to TypeCheck").
+  against its own requirements, as the shelved planning analyzer did by hand
+  ([PLANNING §3.4], decision 36),
+  and checks the rest in its own rules
+  ([PLANNING §8], "Left to TypeCheck").
   Every new domain analyzer would repeat this. Two directions:
   - **Declared requirements.** At instantiation, an analyzer declares
     everything it needs: types, fields, label permissions, and endpoint
@@ -218,3 +212,8 @@ becomes a backlog item.
   core round's split between declaration types and decode types, which makes
   the field half of an analyzer's requirements derivable
   ([CORE-ROUND §3.2](proposals/core-round/CORE-ROUND.md#32-design)).
+
+[PLANNING §3.4]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#34-amending-the-declarations
+[PLANNING §8.5]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#85-at-a-seal-sticky-warnings
+[PLANNING §13]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#13-design-decisions
+[PLANNING §8]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#8-findings

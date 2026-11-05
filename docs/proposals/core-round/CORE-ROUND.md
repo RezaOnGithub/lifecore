@@ -7,6 +7,12 @@ section 7. When the last one has moved, this directory is removed. It relies
 on [SPEC](../../SPEC.md), [ANALYZERS](../../ANALYZERS.md),
 [FILES](../../FILES.md), and [PERFORMANCE](../../PERFORMANCE.md).
 
+The planning analyzer motivates most of this round, but it is shelved
+([AGENTS.md](../../../AGENTS.md#planning-is-shelved)). PLANNING and
+`lifecore-prod` are cited as of `59c702c`, their last state, and "Planning"
+below means that analyzer.
+Section 8, question 2 asks what shelving it means for steps 4 and 5.
+
 ## 0. Summary
 
 The planning analyzer was built against a core that could not express what it
@@ -266,7 +272,7 @@ Rules:
   `Timestamp` field never accepts text that looks like one.
 - **Lenient about extra fields.** Decoding ignores fields the Rust type does
   not name, because users may add fields to an analyzer's types
-  ([PLANNING §3.4](../../PLANNING.md#34-amending-the-declarations)).
+  ([PLANNING §3.4]).
   TypeCheck, not decoding, rejects undeclared fields.
 - **Names.** Snake case by default, `#[lifecore(rename = "…")]` otherwise.
 - **Bodies only.** Decoding reads a body and nothing else. It never looks at
@@ -275,7 +281,7 @@ Rules:
   `PayloadError` only serves the message.
 - **A decode type names only the fields the analyzer reads.** A user may
   change or remove any canonical field the analyzer does not read
-  ([PLANNING §3.4](../../PLANNING.md#34-amending-the-declarations)), so
+  ([PLANNING §3.4]), so
   decoding such a field could fail on a payload TypeCheck accepted. The
   canonical declaration therefore comes from a separate type.
 
@@ -319,9 +325,10 @@ Edge and successor attributes:
   edge against the user's stored declarations
   ([SPEC §7.3](../../SPEC.md#73-resulting-view-checks), step 4), and an
   analyzer's own declaration rule checks that the stored declarations still
-  permit what it relies on (PLANNING §3.4, today `unmet` in
-  `lifecore-prod/src/declarations.rs`). After step 4 that rule compares with
-  `declaration()` instead of the hand-written `PlanningType::canonical()`.
+  permit what it relies on (PLANNING §3.4, `unmet` in
+  `lifecore-prod/src/declarations.rs`). Reworked in step 6, that rule
+  compares with `declaration()` instead of the hand-written
+  `PlanningType::canonical()`.
 - **An omitted `incoming`, `outgoing`, or `successors` is the empty set.**
 
 The names in `Declare` (the type name and the labels) are defaults, not
@@ -744,7 +751,9 @@ shapes, the fixtures and `contract.ts` together.
    built-in `#[bench]` harness needs nightly). It times snapshot load and
    validation, and a check of a one-node proposal under
    `--default-analyzers`, with `Instant`, as PERFORMANCE §1 does by hand,
-   and prints the table PERFORMANCE records. A statistical harness such as
+   and prints the table PERFORMANCE records. With Planning shelved, the
+   defaults are TypeCheck and Reconnect, so the seal terms of section 4.2
+   are measured only once step 6 brings an analyzer back. A statistical harness such as
    criterion or divan does not fit runs of seconds to minutes. One may come
    later, for micro-benchmarks of index queries. The generator is library
    code, so step 2's equivalence helper can run analyzers over the same
@@ -755,20 +764,21 @@ shapes, the fixtures and `contract.ts` together.
    Results are unchanged by construction. Measure again.
 3. **Value kinds.** Core, TypeCheck, FILES encodings, client values and
    editors, fixtures.
-4. **`FromPayload`, `FromBody`, and `Declare`.** Then port Planning's payload
-   reads and its error type, with its vocabulary unchanged.
-5. **Index templates.** `index_templates`, the two admitted templates with
-   their reference scans, and Planning reading them. Measure again.
+4. **`FromPayload`, `FromBody`, and `Declare`.** Porting Planning's payload
+   reads and its error type moves to step 6.
+5. **Index templates.** `index_templates` and the two admitted templates
+   with their reference scans. Planning reading them moves to step 6.
 6. **Planning round.** A proposal revising PLANNING on the new kinds,
-   starting from section 5. Then the owner's feedback, implementation
-   (PLANNING, PLANNING-EXPLAINER, the code, and the Plan screen), and
-   feedback again. It is its own round and does not block steps 1 to 5.
+   starting from section 5 and from PLANNING at `59c702c`. Then the owner's
+   feedback, implementation (PLANNING, PLANNING-EXPLAINER, the code, and the
+   Plan screen, taken from that commit and reworked), and feedback again. It
+   is its own round, after the App and the client take up the new kinds.
 7. **Later:** a "last N" check (section 4.7).
 
-Steps 4 and 5 leave Planning's behaviour unchanged. Step 4 only changes how
-it reads payloads. Step 5 cannot change results, by section 4.3. Step 6 is
-where Planning's findings and certificates change. All of this goes before
-acknowledgment (PLAN §2.2), which gives certificates weight.
+Steps 1 to 5 change no analyzer's results: step 5 cannot, by section 4.3,
+and the others touch no analyzer that remains. Step 6 defines Planning's
+findings and certificates anew. All of this goes before acknowledgment
+(PLAN §2.2), which gives certificates weight.
 
 Housekeeping along the way: in step 4, rename `lifecore-proc-macro` to
 `lifecore-derive` and make it a workspace member. `lifecore-kman` stays as it
@@ -784,7 +794,7 @@ is.
 | RPC, CLIENT §3 | Evaluation inputs with offset; client value handling |
 | UI | Editors for the new kinds |
 | PERFORMANCE | New measurements; the benchmark; query costs; declined template candidates as backlog (section 8.1) |
-| PLANNING, PLANNING-EXPLAINER | Section 5 |
+| PLANNING, PLANNING-EXPLAINER | Section 5, when step 6 brings them back |
 | AGENTS.md | Two invariants: arithmetic stays within the exact or the civil domain and crosses only through a stored or input offset; every index is optional, and its users behave identically with and without it, linking SPEC §9 |
 
 ## 8. Decisions and open questions
@@ -809,6 +819,11 @@ Decided by the owner:
 Still open:
 
 1. **Which document owns the index catalogue.** Section 8.1.
+2. **Steps 4 and 5 without Planning.** Planning was the only consumer of both
+   typed decoding and the two templates, and admission criterion 4 of
+   section 4.5 asks for a named consumer today. Either they land now, with
+   tests as their only users and Planning's rework as the consumer named in
+   advance, or they move into step 6 and land with it.
 
 ### 8.1 Owning the index catalogue
 
@@ -876,3 +891,5 @@ Under (C), each reader has one place to look:
 
 Section 7's table changes accordingly: SPEC §9 gains the catalogue, and
 PERFORMANCE keeps only costs and the declined candidates.
+
+[PLANNING §3.4]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#34-amending-the-declarations

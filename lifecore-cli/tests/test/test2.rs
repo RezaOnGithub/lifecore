@@ -101,55 +101,6 @@ fn check_exits_nonzero_for_a_proposal_that_is_not_accepted() {
     }
 }
 
-// `init --default-analyzers` stores the default suite, and `valuation` prints
-// the ranking's JSON on stdout, or the error object with a nonzero status.
-#[test]
-fn init_configures_the_default_analyzers_and_valuation_prints_json() {
-    let scratch = Scratch::new();
-    let state = scratch.0.join("LifeCoreState.json");
-    let run = |args: &[&str]| {
-        Command::new(BINARY)
-            .args(args)
-            .env("LIFECORE_STATE_FILE_PATH", &state)
-            .output()
-            .unwrap()
-    };
-    let refused = run(&["init", "--default-analyzers", "--no-typecheck"]);
-    assert!(!refused.status.success());
-    assert!(!state.exists());
-    let init = run(&["init", "--default-analyzers"]);
-    assert!(init.status.success(), "{init:?}");
-    let initialized: Value = serde_json::from_slice(&init.stdout).unwrap();
-    let names = initialized["suite"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|config| {
-            (
-                config["name"].as_str().unwrap(),
-                config["configuration"].as_str().unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        names,
-        [
-            ("Type_Check", "{}"),
-            ("Reconnect", "{}"),
-            ("Planning", "{}")
-        ]
-    );
-    let valuation = run(&["valuation", "--deadline-sample-windows", "3"]);
-    assert!(valuation.status.success(), "{valuation:?}");
-    let ranked: Value = serde_json::from_slice(&valuation.stdout).unwrap();
-    assert_eq!(ranked["boundary"]["end_exclusive"], "0");
-    assert_eq!(ranked["ranked"], Value::Array(vec![]));
-    let beyond = run(&["valuation", "--as-of", "1"]);
-    assert!(!beyond.status.success());
-    let error: Value = serde_json::from_slice(&beyond.stdout).unwrap();
-    assert_eq!(error["data"]["kind"], "beyond_boundary");
-}
-
 // Sends one HTTP/1.1 request and returns the status line and body.
 fn post(port: u16, headers: &[String], body: &str) -> (String, Value) {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();

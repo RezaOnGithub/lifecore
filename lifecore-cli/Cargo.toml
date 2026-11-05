@@ -11,7 +11,6 @@ path = "src/main.rs"
 lifecore = { path = "../" }
 lifecore-app = { path = "../lifecore-app" }
 lifecore-dag-check = { path = "../lifecore-dag-check" }
-lifecore-prod = { path = "../lifecore-prod" }
 lifecore-reconnect = { path = "../lifecore-reconnect" }
 lifecore-server = { path = "../lifecore-server" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }

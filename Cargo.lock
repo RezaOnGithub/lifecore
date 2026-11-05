@@ -475,7 +475,6 @@ version = "0.1.0"
 dependencies = [
  "lifecore",
  "lifecore-dag-check",
- "lifecore-prod",
  "lifecore-typecheck",
  "serde",
  "serde_json",
@@ -493,7 +492,6 @@ dependencies = [
  "lifecore",
  "lifecore-app",
  "lifecore-dag-check",
- "lifecore-prod",
  "lifecore-reconnect",
  "lifecore-server",
  "lifecore-typecheck",
@@ -506,20 +504,6 @@ name = "lifecore-dag-check"
 version = "0.1.0"
 dependencies = [
  "lifecore",
- "semver",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "lifecore-prod"
-version = "0.1.0"
-dependencies = [
- "jiff",
- "lifecore",
- "lifecore-dag-check",
- "lifecore-typecheck",
  "semver",
  "serde",
  "serde_json",
@@ -548,7 +532,6 @@ dependencies = [
  "lifecore",
  "lifecore-app",
  "lifecore-dag-check",
- "lifecore-prod",
  "lifecore-typecheck",
  "semver",
  "serde",

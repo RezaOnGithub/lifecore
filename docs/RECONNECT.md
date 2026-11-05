@@ -2,15 +2,15 @@
 
 Status: the analyzer is implemented in `lifecore-reconnect` and registered
 by the application, but the export marks of section 4 are not implemented
-([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)). Section 8 is
-implemented: PLANNING has no Re-point suggestion and keeps Dropped
-connection, the application registers both analyzers, and
-`lifecore init --default-analyzers` configures them together
-([INTERFACES §2](INTERFACES.md#2-cli-surface)). This
+([PLAN §2.2](PLAN.md#22-suggestions-and-acknowledgment)).
+`lifecore init --default-analyzers` configures it
+([INTERFACES §2](INTERFACES.md#2-cli-surface)). The planning analyzer of
+section 8 is shelved ([AGENTS.md](../AGENTS.md#planning-is-shelved)). This
 document owns the contract of a general-purpose analyzer, provisionally named
 Reconnect, packaged as `lifecore-reconnect` and registered as `Reconnect`. It
 relies on [SPEC](SPEC.md), [ANALYZERS](ANALYZERS.md), and [SUGGESTIONS](SUGGESTIONS.md),
-and replaces the Re-point suggestion of [PLANNING §8.6](PLANNING.md#86-suggestions).
+and replaced the Re-point suggestion of the planning analyzer
+([PLANNING §8.6]).
 [RECONNECT-EXPLAINER](RECONNECT-EXPLAINER.md) walks through the same rules
 with one running example written as change files.
 
@@ -227,14 +227,15 @@ encoding or the eligibility rule requires a version change.
 
 ## 8. Planning analyzer
 
-PLANNING's Re-point suggestion is superseded by this analyzer
+The planning analyzer is shelved; this section records how the two divided
+the work up to `59c702c`, as input for its rework. PLANNING's Re-point
+suggestion was superseded by this analyzer
 ([decision 1](#9-design-decisions)). Reconnect covers
 every case it covered, including the `About` edge from an existing stance or
 `Did` to a revised item, which is an eligible incoming edge of the predecessor.
-The application registers both factories, and a planning database configures
-both in its suite; planning drops section 8.6's Re-point
-and keeps the Dropped-connection warning of
-[PLANNING §8.5](PLANNING.md#85-at-a-seal-sticky-warnings) as its own seal-time
+A planning database configured both in its suite; planning dropped its
+Re-point suggestion and kept the Dropped-connection warning of
+[PLANNING §8.5] as its own seal-time
 rule, since judging a connection at a window's close against any current
 successor is planning's domain semantics, not a general one.
 
@@ -412,3 +413,6 @@ the relevant append.
 14. Siblings and the filter: under `node_types` excluding the sibling's type,
     the sibling still claims; under `edge_types` excluding `e1`'s label, `e1`
     is not considered at all, claimed or not.
+
+[PLANNING §8.6]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#86-suggestions
+[PLANNING §8.5]: https://github.com/RezaOnGithub/lifecore/blob/59c702c/docs/PLANNING.md#85-at-a-seal-sticky-warnings

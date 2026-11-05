@@ -17,7 +17,6 @@ import * as analyzers_add from "./analyzers.add.ts";
 import * as analysis_run from "./analysis.run.ts";
 import * as findings_dismiss from "./findings.dismiss.ts";
 import * as findings_restore from "./findings.restore.ts";
-import * as planning_valuation from "./planning.valuation.ts";
 
 export const methods = {
   "database.describe": database_describe,
@@ -36,5 +35,4 @@ export const methods = {
   "analysis.run": analysis_run,
   "findings.dismiss": findings_dismiss,
   "findings.restore": findings_restore,
-  "planning.valuation": planning_valuation,
 } satisfies { [M in Method]: MethodFixture<M> };

@@ -4,7 +4,8 @@ Status: measurements and remaining work. Checking replays every prefix of a
 candidate under the configured suite
 ([ANALYZERS §1](ANALYZERS.md#1-execution-and-normalization)), so its cost grows
 with history length; it is now roughly quadratic under TypeCheck and
-Reconnect, and roughly cubic once Planning is configured. The writer's
+Reconnect. The planning analyzer, now shelved (AGENTS.md), made it roughly
+cubic (section 1). The writer's
 busy-retry window ([STORAGE §4](STORAGE.md#4-writers)) is sized against the
 quadratic case.
 
@@ -44,8 +45,8 @@ appends two more nodes is rejected by both: the baseline reports three
 the new code one at 502, under the same key apart from the provisional entry
 origin.
 
-The domain analyzers were measured the same way, on snapshots shaped like a
-plan: the ten planning declarations, then windows of seven entries each, a
+The domain analyzers were measured the same way at `59c702c`, before the
+planning analyzer was shelved, on snapshots shaped like a plan: the ten planning declarations, then windows of seven entries each, a
 task, its revision, a `committed` stance about the revision with its `About`
 edge, a review, and, in the next window, a `Done` about the revision with its
 `About` edge. Each cell is the median of three `check` runs of a one-node
@@ -94,11 +95,6 @@ Not scheduled:
   `fresh_successors` still scan the view.
 - TypeCheck type-table or parse caching: every prefix re-parses each current
   declaration and rebuilds its type table.
-- Planning's seal judging: index the current `Enables`, `Helps`, `About`, and
-  `Until` edges by endpoint once per seal instead of scanning the view for
-  each item, so that a seal costs time linear in its prefix and replay under
-  Planning becomes quadratic ([section 1](#1-measurements)). The valuation
-  shares those questions and would become linear too.
 - Reuse of base-prefix observations: every check replays the committed base
   prefixes again.
 - A repeatable benchmark in the repository, replacing these ad hoc measurements.

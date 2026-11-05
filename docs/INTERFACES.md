@@ -67,7 +67,7 @@ inconsistency gate ([SPEC §7](SPEC.md#7-mandatory-validation),
 
 | Command | Responsibility |
 | --- | --- |
-| `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out, and `--default-analyzers` also appends Reconnect and Planning. This operation is outside RPC. |
+| `lifecore init` | Explicitly create the selected database without clobbering an existing one. Add TypeCheck by default; `--no-typecheck` opts out, and `--default-analyzers` also appends Reconnect. This operation is outside RPC. |
 | `lifecore serve` | Serve the embedded React client and HTTP RPC endpoint for the selected database, which must already be readable; otherwise print the error object and exit nonzero. Print the client URL as the only line on stdout ([section 4](#4-server-access)). `--port <port>` selects the loopback port, default 0 for one the system chooses; port 80 is refused at startup, because browsers omit it from `Host` and `Origin`, which the access checks require. `--ui-dir <dir>` serves the client from disk instead ([CLIENT §6](CLIENT.md#6-build-and-tests)). |
 | `lifecore rpc` | Read one request line from stdin, execute it locally, print one response line, exit. |
 | `lifecore check FILE` | Decode a JSON/TOML proposal and call shared proposal checking. |
@@ -75,10 +75,9 @@ inconsistency gate ([SPEC §7](SPEC.md#7-mandatory-validation),
 | `lifecore plan-id` | Mint a token for the selected current database/base without changing history. |
 | `lifecore export FILE --format json\|toml` | Serialize a proposal document in the chosen format, preserving `plan_id` and `acknowledges`. |
 | `lifecore add-analyzer NAME [CONFIGURATION]` | Append a registered analyzer with its configuration string, default `{}`, to the ordered suite. |
-| `lifecore valuation` | Print the planning valuation of `planning.valuation` ([PLANNING §12](PLANNING.md#12-delivery-without-a-core-change)) at the head, or before `--as-of <position>`, with `--deadline-sample-windows <n>` when given. It reads the database as a preview and stores nothing. |
 
 These conveniences call the same operations and use the same data as RPC.
-`init`, `check`, `apply`, `plan-id`, `add-analyzer`, and `valuation` print the
+`init`, `check`, `apply`, `plan-id`, and `add-analyzer` print the
 corresponding RPC result or error object as JSON on stdout, adding a one-line diagnostic on
 stderr for errors, and exit zero on success, nonzero on rejection or error.
 `check` of a proposal that is not accepted prints its result and exits nonzero.
@@ -100,13 +99,9 @@ invalidates outstanding plan IDs. There is no removal or reconfiguration.
 Default initialization stores the registered `Type_Check` analyzer with the
 original configuration string `"{}"`. The opt-out omits that suite entry; it does
 not weaken structural validation or silently skip other configured analyzers.
-`--default-analyzers` stores `Reconnect` and then `Planning` after it, each with
-`"{}"`, which a planning database needs together
-([RECONNECT §8](RECONNECT.md#8-planning-analyzer)). Planning assumes TypeCheck
-in its suite ([PLANNING §8](PLANNING.md#8-findings)), so the flag cannot be
-combined with `--no-typecheck`. A database adopting Planning later appends
-Reconnect with `add-analyzer` as well; the host registers TypeCheck, DAG Check,
-Reconnect, and Planning.
+`--default-analyzers` stores `Reconnect` after it, with `"{}"`. The default
+suite starts with TypeCheck, so the flag cannot be combined with
+`--no-typecheck`. The host registers TypeCheck, DAG Check, and Reconnect.
 The core remains configurable. Missing configured implementations remain errors
 when checking or applying changes.
 

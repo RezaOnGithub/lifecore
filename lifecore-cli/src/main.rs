@@ -7,11 +7,10 @@ use lifecore_app::{
     AppError, Service,
     proposal::{self, Format, Proposal},
     rpc,
-    service::{AddAnalyzerRequest, NoParams, ProposalRequest, ValuationRequest},
+    service::{AddAnalyzerRequest, NoParams, ProposalRequest},
     storage::StatePath,
 };
 use lifecore_dag_check::DagCheckFactory;
-use lifecore_prod::{PlanningFactory, ValuationOptions};
 use lifecore_reconnect::ReconnectFactory;
 use lifecore_server::{Options, Ui};
 use lifecore_typecheck::TypeCheckFactory;
@@ -42,7 +41,7 @@ enum Command {
         no_typecheck: bool,
         #[arg(
             long,
-            help = "Also configure Reconnect and Planning after Type_Check, each with configuration {}"
+            help = "Also configure Reconnect after Type_Check, with configuration {}"
         )]
         default_analyzers: bool,
     },
@@ -91,24 +90,6 @@ enum Command {
         #[command(flatten)]
         evaluation: Evaluation,
     },
-    #[command(
-        about = "Print the planning valuation of the selected database as JSON, without storing anything"
-    )]
-    Valuation {
-        #[arg(
-            long,
-            value_name = "POSITION",
-            help = "Rank the prefix before this position instead of the whole history"
-        )]
-        as_of: Option<usize>,
-        #[arg(
-            long,
-            value_name = "N",
-            default_value_t = ValuationOptions::default().deadline_sample_windows,
-            help = "Estimate deadlines from the last N windows between reviews"
-        )]
-        deadline_sample_windows: usize,
-    },
 }
 
 #[derive(Args)]
@@ -144,15 +125,13 @@ fn factories() -> Vec<Box<dyn AnalyzerFactory>> {
         Box::new(TypeCheckFactory),
         Box::new(DagCheckFactory),
         Box::new(ReconnectFactory),
-        Box::new(PlanningFactory),
     ]
 }
 
-// The suite `init` stores. Planning assumes TypeCheck in the same suite
-// (PLANNING §8), which is why `--default-analyzers` conflicts with
-// `--no-typecheck`, and Reconnect comes with it, because Planning names a
-// connection a revision dropped only at the seal and never suggests
-// re-pointing it (RECONNECT §8). DAG Check has no default configuration.
+// The suite `init` stores. The default suite starts with TypeCheck, so
+// `--default-analyzers` conflicts with `--no-typecheck`. DAG Check has no
+// default configuration. The planning analyzer is shelved (AGENTS.md) and
+// no longer registered.
 fn initial_suite(no_typecheck: bool, default_analyzers: bool) -> Vec<Config> {
     let configured = |name: &str| Config {
         name: name.into(),
@@ -164,7 +143,6 @@ fn initial_suite(no_typecheck: bool, default_analyzers: bool) -> Vec<Config> {
     }
     if default_analyzers {
         suite.push(configured(ReconnectFactory::name()));
-        suite.push(configured(PlanningFactory::name()));
     }
     suite
 }
@@ -385,15 +363,6 @@ fn main() -> ExitCode {
             configuration,
             evaluation_time: evaluation.evaluation_time,
             now: evaluation.now,
-        })
-    })),
-    Command::Valuation {
-        as_of,
-        deadline_sample_windows,
-    } => emit(service().and_then(|service| {
-        service.valuation(ValuationRequest {
-            as_of,
-            deadline_sample_windows: Some(deadline_sample_windows),
         })
     })),
     }

@@ -144,27 +144,6 @@ test("Explore steps differ by the query they ran, and the last one is kept", () 
   assert.equal(back.explore, first);
 });
 
-test("the Plan screen is one place that keeps its sample across a detour", () => {
-  const plan: Screen = { kind: "valuation" };
-  const opened = open(initialNavigation, plan);
-  const sampled = navigate(opened, {
-    kind: "edit",
-    step: opened.current.id,
-    edit: (screen) =>
-      screen.kind === "valuation"
-        ? { ...screen, view: { windows: "3x", applied: 3 } }
-        : screen,
-  });
-  // The sidebar's link reopens it without a step, keeping the sample.
-  assert.equal(open(sampled, plan), sampled);
-  const back = navigate(open(sampled, inspector), { kind: "back" });
-  assert.deepEqual(back.current.screen, {
-    kind: "valuation",
-    view: { windows: "3x", applied: 3 },
-  });
-  assert.deepEqual(screens(back).history, [{ kind: "database" }]);
-});
-
 test("a rendered graph's links name entries by origin and position", () => {
   assert.deepEqual(
     inspectHref("#inspect/00000000-0000-4000-8000-000000000005/12"),

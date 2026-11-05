@@ -17,7 +17,6 @@ tokio-util = { version = "0.7.20", features = ["rt"] }
 lifecore = { path = "../" }
 futures-util = "0.3"
 lifecore-dag-check = { path = "../lifecore-dag-check" }
-lifecore-prod = { path = "../lifecore-prod" }
 lifecore-typecheck = { path = "../lifecore-typecheck" }
 semver = "1.0"
 tokio = { version = "1.53.3", features = ["io-util", "time"] }

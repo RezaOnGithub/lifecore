@@ -74,21 +74,6 @@ export const defaultExploreView: ExploreView = {
   tables: {},
 };
 
-// The planning valuation's screen remembers the deadline sample as typed,
-// empty for the server's default, and the sample its ranking was last read
-// with, null for the default. They differ while typing pauses and while
-// what is typed is not a number, so a step returned to reads with the
-// sample it showed.
-export interface ValuationView {
-  windows: string;
-  applied: number | null;
-}
-
-export const defaultValuationView: ValuationView = {
-  windows: "",
-  applied: null,
-};
-
 export type ExploreScreen = {
   kind: "explore";
   view: ExploreView;
@@ -100,7 +85,6 @@ export type Screen =
   | { kind: "inspector"; id: EntryId; view?: InspectorView }
   | ExploreScreen
   | { kind: "findings" }
-  | { kind: "valuation"; view?: ValuationView }
   // A draft operation, by its name; a renamed one is a different screen.
   | { kind: "operation"; name: string }
   | { kind: "import" };

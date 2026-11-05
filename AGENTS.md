@@ -23,26 +23,39 @@ before implementing it:
   contracts.
 - Proposed, not implemented: the
   [core round](docs/proposals/core-round/CORE-ROUND.md), a design document for
-  new value kinds, typed payload decoding, and optional indexes, with input
-  for the next PLANNING round. A proposal gets its own directory under
-  `docs/proposals/`; write or revise an analyzer proposal with the
-  `analyzer-proposal` skill, and give a core change a design document
-  instead.
-- Domain analyzers, registered by the application beside TypeCheck and
-  DAG Check (the `lifecore` binary's factories), and configured together by
-  `lifecore init --default-analyzers`:
-  [PLANNING](docs/PLANNING.md) specifies the planning analyzer and its
-  valuation, in `lifecore-prod` and served by `planning.valuation`, with
-  [PLANNING-EXPLAINER](docs/PLANNING-EXPLAINER.md) as its walkthrough; and
-  [RECONNECT](docs/RECONNECT.md) specifies the general reconnection analyzer
-  planning relies on, in `lifecore-reconnect`, with
-  [RECONNECT-EXPLAINER](docs/RECONNECT-EXPLAINER.md) as its walkthrough.
+  new value kinds, typed payload decoding, and optional indexes. A proposal
+  gets its own directory under `docs/proposals/`; write or revise an analyzer
+  proposal with the `analyzer-proposal` skill, and give a core change a design
+  document instead.
+- Domain analyzer: [RECONNECT](docs/RECONNECT.md) specifies the general
+  reconnection analyzer, in `lifecore-reconnect`, with
+  [RECONNECT-EXPLAINER](docs/RECONNECT-EXPLAINER.md) as its walkthrough. The
+  application registers it beside TypeCheck and DAG Check (the `lifecore`
+  binary's factories), and `lifecore init --default-analyzers` configures it.
 
 Keep the graph/analyzer libraries and the application service synchronous.
 Persistence belongs to the shared application layer; async HTTP belongs to the
 Rust server adapter, which runs each request on a blocking task without a
 queue. HTTP, the CLI, and JSON/TOML change files share one set of Serde
 requests, results, errors, and proposals. The frontend is React/TypeScript.
+
+## Planning is shelved
+
+The planning analyzer, its valuation, `planning.valuation`, `lifecore
+valuation`, and the client's Plan screen were removed after `59c702c` (the tip
+of `rust-sketch02`), where `lifecore-prod`, `docs/PLANNING.md`, and
+`docs/PLANNING-EXPLAINER.md` remain intact. Planning is reworked on the core
+round's value kinds, decoding, and indexes in a round of its own, starting
+from that commit and section 5 of the core round. Until then:
+
+- Do not build, test, restore, or port planning code, and do not design core
+  changes to fit its current rules. Section 5 of the core round records the
+  directions already settled for its rework.
+- Read planning's documents only at that commit
+  (`git show 59c702c:docs/PLANNING.md`), and cite them as such. Elsewhere,
+  planning appears only as the motivation of a design or as history.
+- Where a document still names the planning analyzer as present, treat it as a
+  stale reference and correct it in the change that touches it.
 
 ## Compatibility
 
@@ -57,7 +70,7 @@ Preserve historical correctness under the chosen model and unrelated user work.
 ## Checks
 
 Active workspace: `lifecore` (root), `lifecore-typecheck`, `lifecore-dag-check`,
-`lifecore-reconnect`, `lifecore-prod`, `lifecore-app`, `lifecore-cli`, and
+`lifecore-reconnect`, `lifecore-app`, `lifecore-cli`, and
 `lifecore-server` (the Axum adapter behind `lifecore serve`; its `build.rs`
 embeds the React client in `lifecore-server/ui`). Shared checking and atomic
 in-memory commits live in `lifecore::transaction`; persistence belongs to the

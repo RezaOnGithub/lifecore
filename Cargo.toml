@@ -4,7 +4,6 @@ members = [
     "lifecore-app",
     "lifecore-cli",
     "lifecore-dag-check",
-    "lifecore-prod",
     "lifecore-reconnect",
     "lifecore-server",
     "lifecore-typecheck"

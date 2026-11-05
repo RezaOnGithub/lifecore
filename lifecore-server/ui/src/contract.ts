@@ -393,45 +393,6 @@ export interface RestoreResult {
   dismissals: Dismissal[];
   restored: boolean;
 }
-// The planning valuation (PLANNING §9): the revisions that press at
-// `boundary`, ordered by tier and the tier's keys. It has no identity and no
-// dismissal; only an appended entry moves a row.
-export interface Valuation {
-  boundary: ViewId;
-  ranked: Ranked[];
-}
-export interface Ranked {
-  revision: EntryId;
-  // 0, what the next seal would reject, through 5, the rest in play.
-  tier: 0 | 1 | 2 | 3 | 4 | 5;
-  reasons: RenderedReason[];
-}
-// A structured reason with the text the server rendered for it.
-export interface RenderedReason {
-  reason: Reason;
-  text: string;
-}
-export type StanceKind =
-  | "committed"
-  | "deferred"
-  | "waiting"
-  | "resumed"
-  | "sufficient"
-  | "abandoned";
-// Seal and event counts are JSON numbers, bounded by the history's length;
-// what a payload integer bounds (`quota`, and `seals_left` through a stance's
-// `horizon`) and the deadline estimate are decimal strings.
-export type Reason =
-  | { name: "undecided" }
-  | { name: "broken_plan" }
-  | { name: "open_for"; seals: number }
-  | { name: "standing"; kind: StanceKind; seals_left: DecimalString }
-  | { name: "lapses_at_next_seal" }
-  | { name: "deadline_in"; reviews: DecimalString }
-  | { name: "deadline_passed" }
-  | { name: "starved"; seals: number }
-  | { name: "shortfall"; have: number; quota: DecimalString }
-  | { name: "new" };
 export type RenderFormat = "dot" | "svg";
 export interface Rendered {
   format: RenderFormat;
@@ -501,11 +462,6 @@ export interface DismissParams {
 export interface RestoreParams {
   key: FindingKey;
 }
-export interface ValuationParams extends AsOfParams {
-  // How many recent windows between reviews estimate deadlines; omitted,
-  // the server's default (PLANNING §10).
-  deadline_sample_windows?: number;
-}
 export interface ViewRenderParams {
   query: ViewQueryParams;
   format: RenderFormat;
@@ -528,7 +484,6 @@ export interface Methods {
   "analysis.run": { params: AnalysisRunParams; result: AnalysisRun };
   "findings.dismiss": { params: DismissParams; result: DismissalList };
   "findings.restore": { params: RestoreParams; result: RestoreResult };
-  "planning.valuation": { params: ValuationParams; result: Valuation };
 }
 export type Method = keyof Methods;
 export type Params<M extends Method> = Methods[M]["params"];
@@ -553,10 +508,6 @@ export interface RefusedSeed {
   id: EntryId;
   reason: "absent" | "edge";
 }
-// Why the valuation could not read a field of a planning node.
-export type PayloadProblem =
-  | { kind: "missing" }
-  | { kind: "wrong_kind"; expected: PayloadKind; found: PayloadKind };
 // Why `dot` failed after it started. Durations are in milliseconds.
 export type GraphvizFailure =
   | { kind: "pipe_thread"; message: string }
@@ -599,13 +550,6 @@ export type ApplicationErrorData =
   | { kind: "graphviz_unavailable"; message: string }
   | { kind: "graphviz_failed"; cause: GraphvizFailure; stderr: string }
   | { kind: "invalid_seeds"; refused: RefusedSeed[] }
-  | {
-      kind: "valuation_failed";
-      entry: EntryId;
-      ty_name: string;
-      field: string;
-      problem: PayloadProblem;
-    }
   | { kind: "invalid_params" }
   | { kind: "backend_failure" }
   | { kind: "internal" };
@@ -635,7 +579,6 @@ export interface ErrorCodes {
   graphviz_unavailable: 4004;
   graphviz_failed: 4005;
   invalid_seeds: 4006;
-  valuation_failed: 4007;
   invalid_params: -32602;
   backend_failure: 5001;
   internal: -32603;

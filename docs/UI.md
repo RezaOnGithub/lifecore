@@ -28,8 +28,7 @@ contract with the service.
   the trail, seed chips, and sidebar places name it by `@position` alone.
 - A failed read shows a heading and a sentence for the error kinds a reader
   meets (an entry not in the view, a boundary past the end, refused query
-  seeds, a planning payload the valuation cannot read, whose entry links to
-  the inspector), else the server's message; the method, code, kind, and
+  seeds), else the server's message; the method, code, kind, and
   data wait behind "Details".
 
 ## 2. Navigation and places
@@ -41,8 +40,7 @@ contract with the service.
 - A step remembers its screen's state: a table's currentness, text,
   relationship toggle, sort, open cells, and rows shown; the inspector's
   expanded outline rows, toggled groups, historical toggles, filters, and raw
-  JSON; Explore's form, query, and display choices; the Plan screen's
-  deadline sample, as typed and as last applied. Returning restores the main
+  JSON; Explore's form, query, and display choices. Returning restores the main
   pane's scroll offset once the content is tall enough, unless the user
   scrolls, clicks, or types there first.
 - The last result of each call is cached (40 calls), so a screen returned to
@@ -373,38 +371,3 @@ contract with the service.
   publication says the analyzer may have been added and keeps Add off until
   Refresh re-reads the suite, which then says whether it holds one more copy of
   the analyzer. The form and the last outcome survive a detour.
-
-## 7. Planning valuation
-
-- The Plan screen, under Findings in the sidebar, shows the planning
-  valuation ([PLANNING §9](PLANNING.md#9-valuation)) at the top bar's as-of.
-  The valuation is a cheap read, so unlike Findings it waits for no Run: it
-  is read on opening and on every refresh or boundary change, through the
-  result cache, and shows the `boundary` view its answer names, as tables
-  do. The note on the Findings screen before its first run links to it.
-- A heading per tier, in tier order, names the tier after PLANNING §9, with
-  its row count and a line on its members and order. Rows keep the server's
-  order; the client never re-ranks. Tiers without rows get no heading and
-  are named together in one line after the last. With no rows at all, the
-  screen says that no item of planning's types is in play or deferred in the
-  view.
-- A row reads `label @position type`, the label linking to the inspector,
-  then each reason's server-rendered `text`. The structured reason only
-  adds emphasis: `undecided`, `broken_plan`, and `deadline_passed` in bold
-  red, `lapses_at_next_seal` in italic amber. Each row's left edge goes from
-  red at tier 0 to gray at tier 5. Rows have no identity, dismissal, or
-  filter.
-- Labels are read at the valuation's boundary as Findings reads them (§6),
-  keeping only each row's label and type. A read that succeeded stays with
-  its answer, so an identical answer names its rows at once. Until a new
-  answer's labels arrive, the last read names the rows it covers, since a
-  revision's label and type are the same at every boundary that holds it;
-  before any read, rows wait rather than show by position.
-- The deadline sample is a field, empty for the server's default
-  ([PLANNING §10](PLANNING.md#10-time)), applied 300 ms after the last
-  keystroke. Text that is not a whole number is marked invalid, says so,
-  sends nothing, and leaves the last applied sample, also for a step
-  returned to.
-- A suite without Planning adds a note that no review is judged and that the
-  ranking is the same either way, since the valuation never reads the
-  suite.

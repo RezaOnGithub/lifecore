@@ -38,7 +38,6 @@ import {
   applyExploreStep,
   defaultInspectorView,
   defaultTableScreenView,
-  defaultValuationView,
   exploreScreen,
   initialNavigation,
   navigate,
@@ -53,7 +52,6 @@ import { FindingsScreen } from "./screens/Findings.tsx";
 import { InspectorScreen } from "./screens/Inspector.tsx";
 import { OperationScreen } from "./screens/Operation.tsx";
 import { TableScreen } from "./screens/Table.tsx";
-import { ValuationScreen } from "./screens/Valuation.tsx";
 import { ImportView } from "./views/Import.tsx";
 import { Sidebar } from "./views/Sidebar.tsx";
 import { TopBar } from "./views/TopBar.tsx";
@@ -370,13 +368,6 @@ function Shell({
                             )}
                             {screen.kind === "import" && <ImportView />}
                             {screen.kind === "findings" && <FindingsScreen />}
-                            {screen.kind === "valuation" && (
-                              <ValuationScreen
-                                key={step.id}
-                                view={screen.view ?? defaultValuationView}
-                                suite={described?.suite ?? null}
-                              />
-                            )}
                           </EditContext>
                           <div hidden={screen.kind !== "explore"}>
                             <EditContext value={editExplore}>
